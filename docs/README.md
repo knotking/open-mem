@@ -67,6 +67,12 @@ can be filled three different ways.
 | [operations/technology.md](operations/technology.md) | Role → product, with swap cost |
 | [operations/deployment-variants.md](operations/deployment-variants.md) | Local, GKE and cloud |
 
+## Narrative
+
+| Document | Covers |
+|----------|--------|
+| [presentation/blog.md](presentation/blog.md) | Long-form article — the whole story, from the bug that started it to what we'd tell someone starting over |
+
 ## Market
 
 | Document | Covers |
