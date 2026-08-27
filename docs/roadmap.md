@@ -85,13 +85,14 @@ So each concern below appears twice: what must exist now, and what deliberately 
 |---------|-----------------------------------|------------------------|
 | **Tenancy** | `org_id` / `project_id` **populated** · membership with roles · **every query scoped** | Invite flows · role management UI · org switcher |
 | **Access** | `shared_with` holds **principals** · `public` renamed **`org`** · groups table + query-time resolution · **derived artifacts inherit strictest source** | Groups UI · share links with expiry · public-share inventory · ethical walls |
+| **Memories** <span title="P0">P0</span> | **Type registry** with TTL and `on_expiry` · **`memory_key`** unique per (project, type), upsert on write · many-to-many membership with `added_by` · **`memory_links`** · both mapping directions · expiry as **`orphan_delete`** | Type editor · memory browser · compression · richer routing rules · derived correlation as a retrieval signal |
 | **Privacy** | **Audit record written on every read** · **provenance as a source *list* on every derived artifact** · encryption at rest failing closed · classification flag at ingest | DSAR tooling · export · break-glass · access-history view · delete cascade |
 | **Model config** | Engine registration, encrypted, failing closed · assignment per purpose · **`model_id` and `generator_version` recorded per artifact** | Curated catalog · model cards · hardware feasibility · staleness-impact preview |
 | **Admin** | Platform grants **orthogonal** to org roles · admin sees metadata, **never content** · global unscoped key retired | Platform console · usage reporting · support tooling |
 | **Settings** | Precedence user → project → org → platform, with **lock** semantics | Full settings surface · policy editor |
 | **Telemetry** | `write.*` counters by producer and reason · **`producer.seconds_since_last_item`** · **`embed.distinct_models_per_index`** · ingest→searchable | Dashboards · alerting · full catalogue |
 
-Seven rows, not forty-four items. Each left-hand cell is something that becomes a migration — or,
+Eight rows, not forty-four items. Each left-hand cell is something that becomes a migration — or,
 for audit, becomes *impossible* — if deferred. Each right-hand cell can be built against existing
 data whenever it is wanted.
 
