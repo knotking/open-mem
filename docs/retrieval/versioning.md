@@ -81,14 +81,98 @@ The concrete deliverable — what makes W7 targetable rather than a full-corpus 
 
 | Field | Purpose |
 |-------|---------|
-| `source_id`, `source_version` | which content produced it |
-| `generator_id`, `generator_version` | which prompt / model / schema / parser / chunker |
+| `source_id`, `source_version` | which content produced it — a **list** where several sources contributed |
+| `generator_version` | what was **intended** — FK to the immutable generator registry |
+| `served_by_model`, `fallback_depth` | what **actually ran**, because the chain may have substituted |
 | `produced_at` | transaction time |
-| `status` | `current` · `stale` · `failed` |
+| `status` | `current` · `superseded` · `stale` · `failed` |
 
 An artifact is stale when either version moves. A sweep marks affected rows; W7 rebuilds by
 priority. Without this, "we changed the summarization prompt" means either re-running the entire
 corpus or living with permanent inconsistency — and at 50M rows the first option is not available.
+
+## The fingerprint is a change detector, not a record
+
+`generator_version = sha256(canonical_json({prompt, model_id, schema, parser_version, ...}))` tells
+you *that* two artifacts were produced differently. It cannot tell you *how*.
+
+Knowing an artifact came from `a3f2…` and another from `b7c1…` does not let you debug a bad
+summary, reproduce a result, roll back a regression, or answer "what instructions produced this
+clinical summary?" — which is a real question in a regulated context.
+
+### A generator registry
+
+Immutable and append-only, keyed by the fingerprint:
+
+```
+generator_versions
+  generator_version      PK — the fingerprint
+  agent_id
+  prompt_text            the actual prompt, not a reference to a mutable one
+  model_id, provider     the CONFIGURED model
+  output_schema
+  parser_version, chunker_version, embedder_id
+  processing_flags
+  created_at, created_by
+```
+
+Every derived artifact holds a foreign key into it. The full configuration that produced any
+artifact in the corpus is always reconstructible, and a prompt change is a new row rather than an
+edit — a mutable prompt breaks the guarantee the fingerprint exists to provide.
+
+---
+
+## The bug: the fingerprint records intent, not what happened
+
+This one matters more than it looks.
+
+The fingerprint is computed from the **configured** model. But the fallback chain may have served a
+**different** one — a busy local GPU falls through to a cloud provider, and the artifact is written
+as though nothing happened.
+
+```
+generator_version = a3f2…    ← says "gemma, medium tier"
+actually served   = a cloud model, two hops down the chain
+recorded          = nothing
+```
+
+So two artifacts with **identical fingerprints** can have been produced by different models. That
+breaks the core assumption of the staleness model: that equal fingerprints imply equivalent
+provenance.
+
+The usage record already captures `serving_model` — but on the *inference event*, not on the
+*artifact*. The artifact is what survives, and it is what a rebuild decision reads.
+
+### Fix
+
+Record both on the artifact:
+
+| Field | Meaning |
+|-------|---------|
+| `generator_version` | What was **intended** — the fingerprint, FK to the registry |
+| `served_by_model` | What **actually ran** |
+| `fallback_depth` | `0` means the primary served it |
+| `under_fallback` | Derived — `served_by_model ≠ configured` |
+
+This makes "artifacts produced under fallback" a **selector for reprocess**, which is a genuinely
+useful cleanup: after an outage, rebuild exactly the artifacts that degraded, and nothing else.
+
+---
+
+## Derived artifacts need history, not just current state
+
+Reprocess overwrites. That is the obvious implementation and it loses three things:
+
+- **Rollback.** A prompt change that made output worse cannot be undone
+- **Comparison.** Evaluating whether a change helped requires old and new side by side
+- **The regulated question.** "What did the system say in March?" has no answer
+
+Keep the **previous** version of each derived artifact by default, with retention configurable per
+artifact type. Reprocess writes a new version and demotes the old rather than replacing it.
+
+Storage is the objection, and it is real at fifty million rows — so make it a policy: summaries and
+claims keep history, chunk embeddings do not. The expensive ones to regenerate are the cheap ones
+to keep.
 
 ## Two more leaks
 
@@ -103,3 +187,19 @@ corpus or living with permanent inconsistency — and at 50M rows the first opti
 Hard deletion breaks version history; soft deletion fails erasure requests. The workable split is
 to **hard-delete content and retain a metadata-only tombstone** — id, versions, timestamps,
 reason — so lineage stays intact and no user content survives.
+
+---
+
+## Requirements
+
+- **FR-VER-1** Every derived artifact MUST record the complete configuration fingerprint that
+  produced it, as a reference to an **immutable** generator registry.
+- **FR-VER-2** The generator registry MUST store the full configuration — prompt text, model,
+  schema, parser and chunker versions — so any artifact's provenance is reconstructible. Registry
+  entries MUST NOT be edited; a change is a new entry.
+- **FR-VER-3** Every derived artifact MUST record the model that **actually served** it, not only
+  the one configured, together with the fallback depth reached.
+- **FR-VER-4** Artifacts produced under fallback MUST be identifiable as a selector for reprocess.
+- **FR-VER-5** Derived artifacts MUST retain at least the previous version, with retention
+  configurable per artifact type.
+- **FR-VER-6** Reprocess MUST write a new version and supersede the old, not overwrite it.
