@@ -824,12 +824,16 @@ Every feature in the platform, with the phase that ships it and whether it is in
 | W6 stream worker | Persistent socket sources | 5 | ○ |
 | W7 reprocess worker | Config or schema change re-runs derived work | 2 | ◐ |
 | W8 mutate worker | Upstream revision → new version, never in place | 2 | ○ |
-| W9 retract worker | Delete and erasure cascade | 1 | ◐ single item |
+| W9 retract worker | Delete and erasure cascade | 1 | ● |
+| **Selector-based delete** | Deletion by query, as a resumable job, **with a mandatory preview** | 1 | ● |
+| **Account data deletion** | **Revoke first**, then cascade · `personal` deleted, `shared` retained with attribution removed | 1 | ● |
 | **W10 standing query** | Match new writes against saved selectors, deliver to a target | — | △ |
 | Source adapters | `resolve` / `materialise` / `export` / `read` per source family | 3 | ○ |
 | Connector catalog | 300+ documented, ~900 reachable through the credential broker | 3 | ○ |
 | Direct upload | Text, file, URL, camera, voice, video | 4 | ○ |
-| Bulk operations | Dry-run, per-item results, resumable runs | 4 | ○ |
+| **The run entity** | Checkpointed, resumable, dry-run, per-item results — shared by five operations | 1 | ● |
+| **Bulk write at scale** | Same verb, more items; queue-depth admission control, `enrich: false` default | 1 | ● |
+| Bulk export | Portability and offboarding — needs an artifact graph worth exporting | 8 | ○ |
 | Format handling | 60+ types; PDF, Docs via `export`, media gated on cost | 4 | ◐ text only |
 | Fan-out | One reference expands to N independently retryable jobs | 4 | ○ |
 | Per-provider rate limits | Token buckets keyed `(provider, user)`; backfill deprioritised | 5 | ○ |
@@ -907,7 +911,7 @@ Every feature in the platform, with the phase that ships it and whether it is in
 | Credential proxy | Workers receive references, never secrets | 2 | ◐ |
 | Encryption failing closed | Never store a provider key in plaintext with a warning | 1 | ● |
 | **Audit on every read** | Impossible to retrofit — March cannot be reconstructed | 1 | ● |
-| Deletion cascade | Chunks, embeddings, blobs, entity contributions, summaries | 1 | ◐ single item |
+| Deletion cascade | Chunks, embeddings, blobs, entity contributions, summaries — **grows as the artifacts do** | 1 | ● |
 | Provenance as a source **list** | What makes erasure through compression possible | 1 | ● |
 | Legal hold | Suppresses expiry; refuses erasure **with a reason** | 7 | ○ |
 | DSAR tooling · export | Data subject requests end to end | 8 | ○ |
@@ -989,8 +993,6 @@ load-bearing in the positioning. But the path back is now a base URL, not an int
 **The `△` rows are decisions, not backlog.** W10 standing queries, redaction, validation policy,
 custom worker code and `derive` are designed but not scoped. Each has a recommendation in
 roadmap.md.
-
----
 
 ---
 
@@ -2509,11 +2511,12 @@ badly served. Different intents, different behaviour, one API with a `mode`.
 | A selection | `POST /api/v1/deletions` with a selector |
 | Everything in a project | `DELETE /api/v1/projects/{id}?purge=true` |
 | Everything for a subject | `POST /api/v1/deletions` with `subject` |
+| **An account's data** | `DELETE /api/v1/users/{id}/data` — see below |
 | Org offboarding | `DELETE /api/v1/organizations/{id}?purge=true` |
 
 Beyond a single item, **deletion is a job, not a request** — cascading across embeddings, chunks,
 entities, graph facts, summaries and blobs takes time and must survive a worker restart. It reuses
-the run entity from [bulk operations](#bulk-operations): checkpointed, resumable, pausable, with
+the run entity from bulk operations: checkpointed, resumable, pausable, with
 per-item errors.
 
 #### The selector
@@ -2538,9 +2541,69 @@ impossible rather than merely documented.
 `producer_id` is the one people reach for after a mistake: a crawler misconfigured and ingested the
 wrong site, and the fix is "remove everything that producer wrote."
 
+### Deleting an account's data
+
+Distinct from a project purge and from org offboarding, because the boundary is a **person**, not
+a container — and a person's data is scattered across containers that must survive them. This is
+the GDPR Art 17 case and the employee-offboarding case, and they are the same operation.
+
+Three things make it different from any other scoped delete.
+
+#### Revoke first, then delete — the ordering is not cosmetic
+
+An account with live connections is **still ingesting** while its data is being deleted. Delete
+first and the cascade races the pipeline: items arrive behind the checkpoint, the run completes
+successfully, and the account is left partially deleted and quietly re-populating.
+
+```
+1. Revoke   API keys, sessions, OAuth connections, webhook producers   ← the account stops producing
+2. Verify   no producer belonging to this account is still admitted
+3. Delete   the cascade, as a resumable run
+4. Verify   re-query by account scope, expect zero
+```
+
+Step 1 must be **synchronous and complete** before step 3 begins. It is also the step that makes
+the operation safe to interrupt: a revoked account that is half-deleted is inert, whereas a live
+account that is half-deleted is a leak that regenerates.
+
+#### Connection scope already decides what gets taken
+
+The hard question in a team context is *"a departing employee wrote 4,000 messages in a shared
+channel — whose are they?"* Deleting them erases the organisation's own record; keeping them
+ignores an erasure request.
+
+**The mechanism that answers this already exists.** A connection carries a scope, and it is the
+same scope that decided the ACL at write time:
+
+| Connection scope | On account deletion |
+|------------------|---------------------|
+| `personal` — their own mail, their own files | **Deleted.** It was only ever theirs |
+| `shared` — a team Slack, a shared drive | **Retained by the project**, with the account's link removed |
+
+This is the entity problem in another
+costume: remove the **contribution**, not the thing. The record stays with the org that owns it;
+what goes is the identity attached to it, along with anything derived that identified them.
+
+> **This must be shown, not assumed.** The dry-run states it plainly — *"3,180 items deleted,
+> 4,002 retained by shared projects with your attribution removed"* — because a person exercising
+> an erasure right is entitled to know which of those two things happened to their data, and an
+> organisation is entitled to know before it agrees.
+
+#### What deliberately survives
+
+Two categories, and both are refusals the caller must see rather than silent omissions:
+
+| Survives | Why |
+|----------|-----|
+| **The audit record of the deletion itself** | You cannot evidence *"we deleted it"* if the evidence is inside what you deleted. The record retains the account id, the scope, the counts and the timestamp — never the content |
+| **Anything under legal hold** | Hold beats erasure, and the response is a partial completion **with the reason stated**, not a quiet skip |
+
+The first is the one that surprises people: an account deletion is not complete erasure of every
+row mentioning the account, and claiming otherwise would make the deletion unprovable.
+
 ### Dry-run is mandatory for scoped deletes
 
-Same pattern as [crawler configs](#crawlers), for the same reason:
+Same pattern as crawler configs, for the same reason:
 
 ```json
 POST /api/v1/deletions   { "selector": {...}, "dry_run": true }
@@ -2563,7 +2626,7 @@ project- and org-scoped purges, dry-run plus explicit confirmation is **required
 | Chunks, embeddings | Deleted |
 | Blobs | Deleted from the object store |
 | **Entities** | **Reference-counted.** An entity mentioned by fifty documents is not deleted because one is — only its contribution is removed |
-| **Memory membership** | Removed. An item held by another memory survives — see [memories](#memories) |
+| **Memory membership** | Removed. An item held by another memory survives — see memories |
 | **Graph facts** | Facts sourced solely from the item are deleted; facts with other sources have that source removed |
 | **Summaries** | **Marked stale and rebuilt**, not deleted — see below |
 | Derived indexes | Deleted with their source |
@@ -2580,7 +2643,7 @@ contains the erased content in prose. Deleting the summary loses value; leaving 
 failure. The right answer reuses machinery that already exists: **mark it stale and let reprocess
 rebuild it from the surviving members.** That is exactly why derived artifacts must record their
 source set as a *list* from the first row — see
-[privacy foundations](#privacy-foundations).
+privacy foundations.
 
 Without that list, a summary is unerasable, because nothing records that the paragraph someone
 wants removed came from the document they are asking about.
@@ -2616,6 +2679,7 @@ one, and the result belongs in the audit record.
 |-------|----------|
 | Own item | owner |
 | Selection within a project | `member` for own data, `admin` for others' |
+| **Own account data** | the account holder, or `admin` |
 | Project purge | `admin` |
 | Org purge | `owner`, plus typed confirmation |
 | Subject erasure | `admin`, or an authenticated compliance process |
@@ -2631,6 +2695,7 @@ POST   /api/v1/deletions                     job — selector, mode, dry_run
 GET    /api/v1/deletions/{job_id}            progress, counts, withheld, errors
 POST   /api/v1/deletions/{job_id}/confirm    required for project and org scope
 POST   /api/v1/deletions/{job_id}/cancel     cleanup mode only, within the grace window
+DELETE /api/v1/users/{id}/data               revoke, then cascade, as a run
 DELETE /api/v1/projects/{id}?purge=true      convenience over the job API
 DELETE /api/v1/organizations/{id}?purge=true offboarding
 ```
@@ -2644,6 +2709,14 @@ what is held, progress while it runs, and the result with what was withheld and 
   (immediate, verified).
 - **FR-DEL-2** Deletion beyond a single item MUST be a checkpointed, resumable job.
 - **FR-DEL-3** A selector `time_range` MUST name which clock it applies to.
+- **FR-DEL-10** Account data deletion MUST revoke keys, sessions, connections and producers
+  **before** the cascade begins, and MUST verify the account is no longer producing.
+- **FR-DEL-11** Account data deletion MUST delete data from `personal`-scoped connections and
+  MUST retain data from `shared`-scoped connections, removing the account's attribution instead.
+- **FR-DEL-12** The dry-run MUST state both counts separately — deleted, and retained with
+  attribution removed.
+- **FR-DEL-13** The audit record of a deletion MUST survive that deletion, carrying scope, counts
+  and timestamp but never content.
 - **FR-DEL-4** Scoped deletion MUST support dry-run, and project- and org-scoped purges MUST
   require it plus explicit confirmation.
 - **FR-DEL-5** The cascade MUST reach chunks, embeddings, blobs, derived indexes, entity
@@ -2657,19 +2730,6 @@ what is held, progress while it runs, and the result with what was withheld and 
   and MUST re-queue on release.
 - **FR-DEL-10** Erasure MUST run a verification pass, and the result MUST be recorded in the audit
   trail.
-
-
-
-
-
-*Who can see what, and what we can prove*
-
-
----
-
-# Part IV · Ingestion at scale
-
-*Every producer that uses the write path, and how far it bends*
 
 ---
 
@@ -4285,6 +4345,17 @@ connection and the single most valuable alert.
 
 ## Bulk Operations
 
+> **Phase 1, not Phase 4.** The run entity, bulk write at scale, selector-based delete and account
+> data deletion all land in the first slice — because the sandbox ships in
+> Phase 1 and its core interaction (*upload a dataset, watch the staircase, see per-item results*)
+> **is** a run. Building it once as a sandbox one-off and again properly later is the worse version
+> of the same work. Bulk reprocess, bulk update and bulk export stay later, because their subjects
+> — derived artifacts, an artifact graph — do not exist yet.
+>
+> The condition that moves with it: **dry-run and preview are Phase 1 too.** A selector delete
+> without a preview, on a corpus the user just uploaded and is still learning the shape of, removes
+> the guardrail while keeping the feature.
+
 A batch endpoint sounds like an API convenience. It is actually a capacity control, because
 **the write is the cheap part**.
 
@@ -4321,7 +4392,7 @@ Idempotency-Key: 9f2c...
 ```
 
 There is no separate batch endpoint — bulk is the same verb with more items. See
-[write-api.md](#the-write-api).
+write-api.md.
 
 ```json
 207 Multi-Status
@@ -4424,7 +4495,7 @@ The same job machinery serves the others, which is the main argument for buildin
 
 #### Bulk delete deserves specific attention
 
-> Full treatment in [deletion.md](#deletion).
+> Full treatment in deletion.md.
 
 
 An erasure request touching 50,000 items is not a `DELETE`. It is a cascading job across data
@@ -4445,19 +4516,6 @@ See `FR-EXT-5` and the `FR-CRAWL` series in
 functional-requirements.md — bulk import reuses the crawl run
 contract, so `FR-CRAWL-7` (checkpointed and resumable), `FR-CRAWL-13` (pause/resume/cancel with
 checkpoint preserved) and `FR-CRAWL-20` (heartbeat and reclaim) apply unchanged.
-
-
-
-
-
-*Indexes, models, and keeping derived data honest*
-
-
----
-
-# Part V · Models and the sandbox
-
-*Choosing what runs, and proving it works on your data*
 
 ---
 
@@ -7854,7 +7912,7 @@ the embedding-model column from the first commit, so those defects have nowhere 
 ---
 
 > **Where to actually start** — the step-by-step build order to the first milestone is in
-> [operations/implementation.md](#implementation-plan-stack).
+> operations/implementation.md.
 
 ### The plan at a glance
 
@@ -7870,7 +7928,7 @@ the embedding-model column from the first commit, so those defects have nowhere 
 | **7 · Team &amp; cases** | Sharing and correlation | A patient timeline assembles across sources, ordered by event time |
 | **8 · Scale &amp; compliance** | Enterprise-addressable | Erasure completes and verifies; soak holds at target |
 
-**Every exit is a test, not a demo** — see [operations/testing.md](#testing).
+**Every exit is a test, not a demo** — see operations/testing.md.
 
 ### Capabilities that span phases
 
@@ -7896,7 +7954,7 @@ can never be ahead of the API**. That sequences it automatically.
 
 | Slice | What the UI gains | Why then |
 |-------|------------------|----------|
-| **1 · Spine** | The **sandbox**, in its first form: upload a dataset, watch the readiness staircase, search, and **inspect the retrieval trace**. No chat yet | You cannot judge retrieval quality from a JSON body — and if retrieval is wrong, chat cannot be right, so a chat layer would let you ship without noticing. See The Sandbox |
+| **1 · Spine** | The **sandbox**, in its first form: upload a dataset, watch the readiness staircase, search, and **inspect the retrieval trace**. No chat yet | You cannot judge retrieval quality from a JSON body — and if retrieval is wrong, chat cannot be right, so a chat layer would let you ship without noticing. See ui-sandbox.md |
 | **2 · Depth** | Enrichment inspector — viewpoint, entities, classification layer reached; **prompt override editor with test-before-save and staleness preview** | You cannot tune a prompt without seeing what the last one produced, or what changing it invalidates |
 | **3 · Connectors** | **Connect flows**, connection health, reauthorise | **On the critical path** — see below |
 | **4 · Uploads** | Drag-and-drop, progress, per-item results | Uploads are inherently a browser feature |
@@ -7928,7 +7986,7 @@ path has moved.
 #### It is also a reference implementation
 
 Hosts embedding the platform build their own surfaces, and the
-[ephemeral-token pattern](#api-contract-surfaces) exists so they can do so without holding durable credentials.
+ephemeral-token pattern exists so they can do so without holding durable credentials.
 Our UI is therefore the reference client as much as it is the product — which is a useful
 discipline, because anything it can do only by reaching past the API is a bug in the API.
 
@@ -7972,7 +8030,63 @@ So each concern below appears twice: what must exist now, and what deliberately 
 | **Read** | `GET /data/{id}` · `POST /api/v1/retrieve` — vector, lexical, hybrid |
 | **Memories** | Type registry with TTL and expiry policy · many-to-many membership · both mapping directions |
 | **Delete** | `DELETE /data/{id}` — single item, cascade over its own derived artifacts |
+| **Bulk** | **The run entity** — checkpointed, resumable, dry-run, per-item results · bulk write at scale with admission control on queue depth · `enrich: false` default for bulk · **selector-based delete as a job** |
+| **Account deletion** | `DELETE /users/{id}/data` — **revoke first**, then cascade as a run · `personal` connections deleted, `shared` retained with attribution removed · the deletion's own audit record survives it |
 | **Auth** | `TokenVerifier` seam, API-key verifier behind it |
+
+#### Bulk is in Phase 1 because the sandbox already needs it
+
+Bulk was previously Phase 4. Moving it forward is less of an addition than it looks: **the run
+entity was already latent in Phase 1 and simply unnamed.**
+
+The sandbox ships in Phase 1 and its core interaction is *upload a dataset, watch
+the readiness staircase, see per-item results*. That is a run — a durable job with progress,
+checkpointing and per-item outcomes. Building it as a one-off for the sandbox and then rebuilding
+it properly in Phase 4 is the worse version of the same work.
+
+And the write verb is **already** bulk: `items[]` with a `207` from the first commit. What Phase 1
+adds is the machinery around many items rather than a second endpoint for them.
+
+| Operation | Lands in Phase 1? | Why |
+|-----------|:-----------------:|-----|
+| **The run entity** | **Yes** | Shared by five operations; the sandbox needs it regardless |
+| **Bulk write at scale** | **Yes** | The verb already takes `items[]`; this adds queue-depth admission control and an `enrich: false` default |
+| **Selector-based delete** | **Yes** | Erasure becomes real from day one, which is what family E being "built early" actually means |
+| **Account data deletion** | **Yes** | A selector delete with a revoke step in front. GDPR Art 17 and employee offboarding are the same operation, and both are asked for early |
+| Bulk reprocess (W7) | No — Phase 2 | There are no derived artifacts to rebuild yet |
+| Bulk update / retag | No — Phase 2 | ACL changes must re-check derived artifacts, which do not exist yet |
+| Bulk export | No — Phase 8 | Needs a portability format and the full artifact graph |
+
+**The last three are not deferrals, they are empty boxes.** Their subjects do not exist in Phase 1,
+so moving them forward would move nothing.
+
+> **The condition: dry-run moves with it, not after.**
+>
+> Selector-based delete without a preview is the most dangerous thing that could be put in Phase 1
+> — *"delete everything matching X"* on a system where the user is still learning what X matches,
+> against a corpus they just uploaded. The preview-and-confirm component is
+> therefore Phase 1 scope too, computed against real data: **how many items, how many held by no
+> other memory, what cascades.**
+>
+> Shipping the selector without the preview removes the guardrail while keeping the feature — the
+> same failure the crawler dry-run exists to prevent.
+
+Account deletion rides on the same run entity, with one addition that is **not** optional:
+**revoke keys, sessions, connections and producers before the cascade starts.** Delete first and
+the cascade races the pipeline — items land behind the checkpoint, the run reports success, and the
+account is left half-deleted and quietly re-populating. A revoked account that is half-deleted is
+inert; a live one is a leak that regenerates.
+
+It also inherits the answer to the question that otherwise blocks it: *a departing employee wrote
+4,000 messages in a shared channel — whose are they?* **Connection scope already decided that at
+write time.** `personal` data is deleted; `shared` data stays with the project and loses the
+account's attribution. No new mechanism, and the dry-run states both counts separately.
+
+**Honest cost:** this is real scope added to a phase whose discipline is that it stays a slice. The
+run entity, checkpointing, a preview and the revoke path are perhaps a week to ten days Phase 1 did
+not have. The trade is that **erasure works from the first release** — which matters more than
+usual here, because family E was always meant to be built early and this is what "early" means in
+practice — and four later phases inherit the machinery instead of each inventing a job runner.
 
 #### 1b · Write-time facts — column and enforcement only
 
@@ -7985,6 +8099,7 @@ So each concern below appears twice: what must exist now, and what deliberately 
 | **Model config** | Engine registration, encrypted, failing closed · assignment per purpose · **`model_id` and `generator_version` recorded per artifact** | Curated catalog · model cards · hardware feasibility · staleness-impact preview |
 | **Admin** | Platform grants **orthogonal** to org roles · admin sees metadata, **never content** · global unscoped key retired | Platform console · usage reporting · support tooling |
 | **Settings** | Precedence user → project → org → platform, with **lock** semantics | Full settings surface · policy editor |
+| **Customization** | **Write phase order fixed, ACL assigned before any hook point** · security fields **read-only** in the item envelope · **`handler_digest` in the `generator_version` input set**, constant for built-ins | Normalization schema editor · redaction rules · validation policy · custom worker handlers · all of it |
 | **Telemetry** | `write.*` counters by producer and reason · **`producer.seconds_since_last_item`** · **`embed.distinct_models_per_index`** · ingest→searchable | Dashboards · alerting · full catalogue |
 
 Eight rows, not forty-four items. Each left-hand cell is something that becomes a migration — or,
@@ -7997,7 +8112,10 @@ An SDK call writes an item **into a project, owned by an org, with an access lev
 search **scoped to that project** finds it; the response cites it; the read is **audited**; and the
 row records **which model embedded it**.
 
-Expressed as tests rather than a demo — see [operations/testing.md](#testing).
+And it can be taken back: **a selector deletes a set after showing what it would delete, and an
+account deletion revokes, cascades, and reports what it retained.**
+
+Expressed as tests rather than a demo — see operations/testing.md.
 
 #### Deliberately absent
 
@@ -8063,9 +8181,11 @@ Both are producer shapes the spine already anticipates.
 | Presigned upload flow | `Stored` content; bytes never traverse the API |
 | Local upload signer | Filesystem storage has no signer — same API shape, local token |
 | MIME sniffing server-side | Declared type is a hint, never the router |
-| Bulk writes at scale | Same verb, more items; admission control on queue depth |
-| `enrich: false` default for bulk | Full enrichment must be asked for and budgeted |
-| **Selector-based deletion as a job** | Same run entity as bulk import — checkpointed, dry-run, per-item errors |
+| Bulk **export** | Portability and workspace offboarding — long-running, resumable, produces an archive |
+
+**Bulk write, the run entity and selector-based delete moved to Phase 1** — see
+above. What remains here is the upload
+half, plus export once there is an artifact graph worth exporting.
 
 **Exit:** drag a 500 MB file into the UI and it ingests; push ten thousand records and the platform
 stays responsive.
@@ -8101,7 +8221,7 @@ The seams from Phase 1 are what make this cheap rather than a fork.
 | **Cloud** | Managed queue behind the existing abstraction · hosted auth as another verifier · pooling audit · Secret Manager · crawl runs as jobs | Single-tenant prod, SaaS-ready |
 
 **Gate:** run the credential-broker request-scoped-lifecycle spike before committing to the cloud
-topology. Four more spikes are in [operations/implementation.md](#implementation-plan-stack); one
+topology. Four more spikes are in operations/implementation.md; one
 could *remove* work — the broker's own sync engine may replace part of Phase 5.
 
 ---
@@ -8130,7 +8250,7 @@ workspace count.
 
 ---
 
-> **Every phase gate is a test, not a demo.** See [operations/testing.md](#testing)
+> **Every phase gate is a test, not a demo.** See operations/testing.md
 > for the per-phase gates and the invariant suite.
 
 ### Two sequencing risks
@@ -8164,6 +8284,7 @@ the audit record, costs a question that can never be answered.
 | Auth provider? | **Firebase for login; user-created API keys validated at the gateway; both resolved to one identity.** Air-gap is served by a local password verifier behind the same seam — so **air-gapped operation is a self-hosted capability, not a property of the hosted product** |
 | Inbound authentication? | **The same user-created keys** where the provider can present one; signature or URL secret otherwise, declared per producer |
 | Separate batch endpoint? | **No** — one write verb, `items[]` |
+| Which models in MVP? | **Gemini Flash for generation and Gemini embeddings for RAG, plus Ollama Cloud (token-authenticated) as a second generation engine.** **Embeddings stay on one engine — not negotiable**, since mixed vectors corrupt an index silently. No tiering policy yet. **All versions pinned, never a rolling alias**, or `generator_version` lies. Two engines exercises the catalog seam, and Ollama Cloud's local twin speaks the same protocol — so restoring air-gap later is a base-URL change against an adapter already in production |
 
 #### Still open
 
@@ -8172,8 +8293,8 @@ the audit record, costs a question that can never be answered.
 
 | **Add write phase 5 — transform / redact?** | The one customization request the design cannot serve at all. Not-storing beats storing-then-erasing on every axis. Recommend yes; cost is a declarative rule type and the discipline that it never calls a model inline |
 | **Allow `reject` as a validation policy?** | Recommend yes, but **blocked for webhook producers** — enabling it there converts a compliance preference into silent data loss |
-| **Scope W10 standing queries?** | Four published use cases need push; media monitoring is *only* a push product. Recommend scoping W10 with media monitoring and stating the deferral for the rest |
-| **`compress` → `derive`?** | Study guides, flashcards, obligation extracts and customer briefings are one operation with different output schemas. Recommend yes — reuses the existing generator registry |
+| **Scope W10 standing queries?** | Four published use cases need push; media monitoring is *only* a push product, so shipping it without delivery ships nothing. Recommend scoping W10 with media monitoring and stating the deferral for the rest |
+| **`compress` → `derive`?** | Study guides, flashcards, obligation extracts and customer briefings are one operation with different output schemas. Recommend yes — reuses the existing generator registry, and the endpoint has no clients yet |
 | **Materialisation policy** | Always store (recommended) / threshold / derived-only |
 | **Default ACL for a team upload** | Private-by-default is consistent; users dragging into a *team* space often expect team visibility |
 | **Is media in scope for v1?** | Transcription infrastructure, and the largest cost exposure of any format group |
@@ -8183,10 +8304,7 @@ the audit record, costs a question that can never be answered.
 ---
 
 Stack choices and per-variant realisation are in
-[operations/implementation.md](#implementation-plan-stack).
-
-
----
+operations/implementation.md.
 
 ---
 
