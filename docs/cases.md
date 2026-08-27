@@ -11,7 +11,7 @@ Nothing in the current model expresses that.
 | Candidate | Why not |
 |-----------|---------|
 | **Project** | Designed as a workspace; the hierarchy is org → project. A hospital is not 100,000 projects, and the capacity plan targets ~1,000 |
-| **Memory** | Closest fit — it already contains data items — but memory types are *lifecycle* concepts (TTL, expiry, compression). No stable external identifier, no typed attributes, no membership provenance |
+| **[Memory](memories.md)** | Closest fit — it already contains data items — but memory types are *lifecycle* concepts (TTL, expiry, compression). No stable external identifier, no typed attributes, no membership provenance |
 | **Tags** | No identity, no attributes, no access control, no lifecycle |
 | **Graph entity** | **The dangerous one.** Entities are *extracted*, and entity resolution actively tries to merge similar ones. Two patients with the same name must never merge. Authoritative subjects cannot be probabilistic |
 

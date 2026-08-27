@@ -15,6 +15,7 @@ can be filled three different ways.
 |----------|-------------|
 | [use-cases.md](use-cases.md) | The five families in scope, how their conflicts resolve, and build order |
 | [design-principles.md](design-principles.md) | The central bet, cross-cutting invariants, capability ownership |
+| [memories.md](memories.md) | Typed lifecycle containers — configurable types, TTL, expiry policy, data mapping |
 | [cases.md](cases.md) | Correlating information around a subject — patient timelines, legal matters, asset histories |
 | [roadmap.md](roadmap.md) | Phased plan across local, GKE and cloud — plus open decisions |
 

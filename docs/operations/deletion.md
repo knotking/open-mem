@@ -80,6 +80,7 @@ project- and org-scoped purges, dry-run plus explicit confirmation is **required
 | Chunks, embeddings | Deleted |
 | Blobs | Deleted from the object store |
 | **Entities** | **Reference-counted.** An entity mentioned by fifty documents is not deleted because one is — only its contribution is removed |
+| **Memory membership** | Removed. An item held by another memory survives — see [memories](../memories.md) |
 | **Graph facts** | Facts sourced solely from the item are deleted; facts with other sources have that source removed |
 | **Summaries** | **Marked stale and rebuilt**, not deleted — see below |
 | Derived indexes | Deleted with their source |

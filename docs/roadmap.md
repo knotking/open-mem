@@ -75,6 +75,7 @@ So each concern below appears twice: what must exist now, and what deliberately 
 | **Async boundary** | Queue abstraction with the **in-process** implementation |
 | **Index** | Chunk · embed · lexical index |
 | **Read** | `GET /data/{id}` · `POST /api/v1/retrieve` — vector, lexical, hybrid |
+| **Memories** | Type registry with TTL and expiry policy · many-to-many membership · both mapping directions |
 | **Delete** | `DELETE /data/{id}` — single item, cascade over its own derived artifacts |
 | **Auth** | `TokenVerifier` seam, API-key verifier behind it |
 
