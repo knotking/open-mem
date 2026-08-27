@@ -97,6 +97,8 @@ ending in a test rather than a demo.
 
 **Part VIII · How we implement it**
 
+- [Where Metadata Lives](#where-metadata-lives)
+- [Blob Store Layout](#blob-store-layout)
 - [Technology Choices](#technology-choices)
 - [Deployment Variants](#deployment-variants)
 - [Telemetry](#telemetry)
@@ -824,7 +826,8 @@ Every feature in the platform, with the phase that ships it and whether it is in
 | W6 stream worker | Persistent socket sources | 5 | ○ |
 | W7 reprocess worker | Config or schema change re-runs derived work | 2 | ◐ |
 | W8 mutate worker | Upstream revision → new version, never in place | 2 | ○ |
-| W9 retract worker | Delete and erasure cascade | 1 | ● |
+| W9 retract worker | Delete and erasure cascade — **fully async**, tombstone is the only sync part | 1 | ● |
+| **`deleted_at` / `purged_at`** | Two timestamps; the erasure certificate is issued against the second | 1 | ● |
 | **Selector-based delete** | Deletion by query, as a resumable job, **with a mandatory preview** | 1 | ● |
 | **Account data deletion** | **Revoke first**, then cascade · `personal` deleted, `shared` retained with attribution removed | 1 | ● |
 | **W10 standing query** | Match new writes against saved selectors, deliver to a target | — | △ |
@@ -2618,6 +2621,98 @@ POST /api/v1/deletions   { "selector": {...}, "dry_run": true }
 A destructive operation whose blast radius is only visible afterwards is not a safe operation. For
 project- and org-scoped purges, dry-run plus explicit confirmation is **required**, not advisory.
 
+### Deletion is asynchronous — but its *effect* is not
+
+Every deletion, including a single item, runs as an async pipeline. The synchronous part is
+deliberately tiny.
+
+```
+SYNCHRONOUS  ── one transaction, returns immediately
+  1. tombstone      deleted_at = now() on the root row
+  2. audit          who, what, scope, why — written in the same transaction
+  3. enqueue        a deletion run
+
+ASYNCHRONOUS ── W9, resumable, idempotent
+  4. chunks · embeddings · lexical rows
+  5. artifact_sources · entity_contributions   ← contributions, not the entities
+  6. normalized_records · versions
+  7. blobs                                     ← the network call that can fail
+  8. graph facts, where a graph exists
+  9. purged_at = now(), and ONLY NOW remove the root row
+```
+
+#### Why the effect must still be immediate
+
+An erasure request cannot wait in a queue to take effect. But a cascade across Postgres, pgvector,
+an object store and possibly a graph store **cannot** complete inside a request — it is several
+network calls to systems with independent failure modes, and a synchronous version either times out
+under load or swallows failures to avoid doing so.
+
+The tombstone resolves it: **visibility is transactional, reclamation is eventual.**
+
+| | When | Guaranteed by |
+|---|------|--------------|
+| **Invisible to every read** | Immediately, at commit | The `deleted_at` predicate, applied in the query alongside the ACL predicate |
+| **Physically reclaimed** | Eventually, minutes | The W9 run, resumable and monitored |
+
+Because the filter lives *inside* the retrieval query — the same place the ACL predicate lives — there is no window where a deleted item is returnable. It stops
+being visible at the same instant the caller gets their response.
+
+#### A tombstone is not an erasure, and the difference must be recorded
+
+This is the failure the design exists to prevent: a record that **looks** deleted, is invisible to
+every query, and whose bytes are still in the object store because the cascade failed at step 7 and
+nobody looked.
+
+So **"deleted" has two timestamps, and both are stored:**
+
+```
+deleted_at    the tombstone — when it became invisible
+purged_at     when the last derived artifact and blob were actually gone
+```
+
+> **An erasure certificate is issued at `purged_at`, never at `deleted_at`.** Reporting the first as
+> though it were the second is how an organisation certifies an erasure that did not happen — in
+> good faith, from a screen that said "deleted".
+
+`deletion.oldest_pending_purge` is the metric, and it is the usual shape: nothing errors, the UI is
+correct, and the only signal that anything is wrong is a number nobody is watching.
+
+#### The root row is deleted last, because it is the map
+
+Step 9 is not stylistic ordering. **`data_items` is what tells the cascade which chunks, which
+blobs, which contributions belong to this item.** Remove it first and a cascade that fails halfway
+has lost the ability to find what it did not finish — the remaining artifacts become orphans with
+no path back to a request that would clean them up.
+
+Delete the dependents, then the map. The same logic applies at every level of the cascade.
+
+#### Cleanup and erasure are the same pipeline with a different delay
+
+The two operations wearing one word need no separate
+machinery:
+
+| | Tombstone | Cascade enqueued | Cancellable |
+|---|---|---|---|
+| **Cleanup** | Immediately | **After the grace window** | Yes, until the cascade starts |
+| **Erasure** | Immediately | Immediately | **No** |
+
+A grace period is a delay before enqueueing, not a different code path — which is what keeps
+"restore from the bin" and "irrevocably gone" from drifting apart in behaviour.
+
+#### What the async pipeline inherits for free
+
+It runs on the run entity, so it already has what it needs:
+
+- **Resumable** — a cascade interrupted at step 7 restarts at step 7, not step 1
+- **Idempotent** — every step is `DELETE … WHERE data_id = $1`, safe to re-run
+- **Per-item errors** — a single-item delete is a run of one, so the reporting is uniform
+- **Backpressure** — a 50,000-item erasure does not starve ingestion; it is a queue with a priority
+
+And the orphan sweep is the backstop beneath all of it: if a blob delete fails
+permanently and the run gives up, the object still carries its `data_id` in metadata, and the sweep
+finds it with no row behind it.
+
 ### What the cascade actually touches
 
 | Artifact | Behaviour |
@@ -2709,6 +2804,16 @@ what is held, progress while it runs, and the result with what was withheld and 
   (immediate, verified).
 - **FR-DEL-2** Deletion beyond a single item MUST be a checkpointed, resumable job.
 - **FR-DEL-3** A selector `time_range` MUST name which clock it applies to.
+- **FR-DEL-14** All deletion MUST be asynchronous. The synchronous portion MUST be limited to the
+  tombstone, the audit record and enqueueing the run, in one transaction.
+- **FR-DEL-15** A tombstoned item MUST be invisible to every read immediately, enforced by a
+  predicate inside the retrieval query.
+- **FR-DEL-16** `deleted_at` and `purged_at` MUST both be recorded, and an erasure certificate MUST
+  be issued against `purged_at`.
+- **FR-DEL-17** The root row MUST be deleted last, after every dependent artifact.
+- **FR-DEL-18** Cleanup and erasure MUST use the same pipeline, differing only in the delay before
+  the cascade is enqueued.
+- **FR-DEL-19** Un-purged tombstones MUST be reported as a metric.
 - **FR-DEL-10** Account data deletion MUST revoke keys, sessions, connections and producers
   **before** the cascade begins, and MUST verify the account is no longer producing.
 - **FR-DEL-11** Account data deletion MUST delete data from `personal`-scoped connections and
@@ -6472,6 +6577,490 @@ layer over an uninspected retrieval path would let you ship without noticing.
 
 ---
 
+## Where Metadata Lives
+
+**All of it is in Postgres.** The blob store holds bytes and nothing else.
+
+This assembles the schema that the rest of the documentation has been specifying piecemeal —
+`memory_members` in memories.md, `access_log` in
+privacy-foundations.md, `redaction_events` in
+write-customization.md, and so on. Phase 1 *is* this
+migration, so it is worth having in one place.
+
+---
+
+### The tables
+
+#### Tenancy and identity
+
+| Table | Holds |
+|-------|-------|
+| `organizations` | The billing and policy boundary |
+| `projects` | The isolation boundary every query is scoped to |
+| `users` · `identities` | A person, and the several ways they authenticate |
+| `memberships` | user × org, with role |
+| `groups` · `group_members` | Principals for sharing |
+| `api_keys` | **Capability-scoped**, with expiry and last-used |
+| `producers` | `whk_` / `crw_` / `key_` / `upl_` — nothing writes anonymously |
+| `connections` | An authorised link to a source, carrying **`scope: personal \| shared`** |
+
+`connections.scope` is small and load-bearing: it decides the ACL at write time, and it decides
+what an account deletion takes.
+
+#### Data
+
+`data_items` is the core row, and most of its columns exist because they cannot be backfilled.
+
+```
+data_items
+  data_id            ULID — the first 10 chars ARE the creation timestamp
+  org_id             ─┐ cannot be backfilled — no way to reconstruct
+  project_id         ─┤ which org owned a row after the fact
+  producer_id        ─┘
+  connection_id      nullable — null for uploads and direct writes
+  external_id        caller's natural key; unique per (project, producer)
+
+  access_level       private | org | shared | public
+  shared_with        principals — jsonb
+
+  content_text       ─┐  the three ContentRef cases,
+  storage_ref        ─┤  exactly one non-null
+  pending_ref        ─┘  jsonb: provider, resource_id, hints
+  mime_type · size_bytes · checksum
+
+  event_time         when the thing happened
+  ingested_at        when we learned about it
+  state              stored | searchable | enriched
+
+  identifiers        text[] — MRN, docket, serial, VIN
+  normalization_status · schema_version
+
+  created_at · updated_at
+  deleted_at         tombstone — invisible from this instant
+  purged_at          cascade complete — the erasure certificate is issued against THIS
+```
+
+#### The identifier already carries a timestamp
+
+Every id in the system is a ULID, and a ULID is **not** a random string. It is a 48-bit millisecond
+timestamp followed by 80 bits of randomness, Crockford-base32 encoded:
+
+```
+data_01JQRS3M4X 7Y8Z9A0B1C2D3E
+     └────┬────┘└──────┬──────┘
+   48-bit ms time   80-bit random
+   (10 chars)       (16 chars)
+```
+
+Three properties fall out, and they are the reason for the choice:
+
+| Property | What it buys |
+|----------|-------------|
+| **Lexicographically sortable by time** | `ORDER BY data_id` is chronological. A range scan over an id prefix is a time-range scan |
+| **Creation time recoverable without a lookup** | Decode the first 10 characters. Useful in logs, in blob keys, and during recovery when the database is what is unavailable |
+| **Generated client- or server-side without coordination** | No sequence, no round trip, no collision risk at our volume |
+
+**So there is no separate timestamp column to add** — `data_id` carries creation time, and
+`ingested_at` stores it explicitly for querying. The two agree by construction because both are set
+at insert.
+
+> **`event_time` is a different thing and must stay a column.** It is when the event *happened*,
+> which may precede the id by years and is **correctable** afterwards. It cannot be derived from an
+> identifier, and it must never be encoded in one — a corrected `event_time` would otherwise mean a
+> changed primary key.
+
+That is the whole `event_time` / `ingested_at` distinction expressed in the identifier: **the id
+tells you when we learned about it; only the column tells you when it happened.**
+
+Two schema-level rules that are easy to lose:
+
+- **`is_downloaded` is not a column.** It is derived — `content_text IS NOT NULL OR storage_ref IS
+  NOT NULL`. A field kept in sync by hand is a field that drifts, and drifting was the original
+  defect.
+- **`event_time` and `ingested_at` are both required.** One column cannot carry both, and a
+  timeline built on the wrong one renders perfectly while being wrong.
+
+| Table | Holds |
+|-------|-------|
+| `data_versions` | Every revision, with a diff. Nothing is mutated in place |
+| `chunks` | Text spans, with offsets back into the source |
+| `embeddings` | `chunk_id`, the vector, **`model_id`**, `generator_version` |
+| — | The lexical index is a `tsvector` **column on `chunks`**, not a table |
+
+**`embeddings.model_id` is the single most important column in this schema.** Without it, a mixed
+index cannot be identified, let alone repaired — you know ranking is wrong and cannot tell which
+rows caused it.
+
+#### Four different "types", and where each one lives
+
+The word *type* does four jobs in this system. Conflating two of them caused the original routing
+defect — `source_type=DOCUMENT` with `mime_type=text/plain` reaching the PDF agent — so they are
+separate columns with a stated precedence.
+
+| Field | Question it answers | Where it lives | Authority |
+|-------|--------------------|----------------|-----------|
+| **`mime_type`** | What are these bytes? | `data_items` | **Authoritative** — server-sniffed |
+| `source_type` | What did the producer call it? | `data_items` | **Hint only** — it can lie |
+| **`data_type`** | What kind of thing is it? | `data_items` | Output of the classification cascade — decides which agent runs |
+| **`target_type`** | What domain object is it? | `normalized_records` | Output of normalization — `Person`, `Message`, `Transaction` |
+
+> **`mime_type` outranks `source_type`, and that ordering is the fix.** MIME is detected
+> server-side from the bytes; a client-declared type is an injection vector that chooses which
+> agent runs. `source_type` survives only as layer 2 of the
+> classification cascade, below explicit caller intent and above
+> payload heuristics.
+
+The `kind` segment in the blob path — `raw` / `text` / `derived` — is a fifth
+use of the word and is **not** a database field. It classifies the artifact, not the content.
+
+#### The normalized projection
+
+```
+normalized_records
+  data_id           the item this projects
+  target_type       Person | Message | Transaction | <user-defined>
+  schema_version    which schema produced it — never mutated in place
+  payload           jsonb — the canonical object
+  identifiers       text[] — extracted here, mirrored onto data_items
+  status            ok | failed
+  failure_reason    why, when status is failed
+```
+
+**A projection is a derived view, not a replacement.** `data_items` keeps the original; this table
+holds what normalization made of it. That separation is what allows a schema to change and the
+corpus to be re-projected without re-running enrichment — and it is why a normalization failure
+lands the record raw with a reason rather than rejecting the write.
+
+Two consequences worth being explicit about:
+
+- **`target_type` is what makes entity extraction structural rather than inferred.** If a Salesforce
+  record projects to a canonical `Person`, no model needs to guess that a person is present. That
+  is the argument for normalization being its own stage rather than living inside the agents.
+- **`identifiers` is extracted during normalization and mirrored onto `data_items`**, because
+  correlation joins on it and the join must not require a second table. The
+  projection is the source; the column on `data_items` is the index.
+
+#### Memories and cases
+
+| Table | Holds |
+|-------|-------|
+| `memory_types` | name, `ttl`, `on_expiry`, scope, lock state |
+| `memories` | `mem_<ulid>`, mutable `type`, optional `memory_key` unique per (project, type) |
+| `memory_members` | memory × data, `added_at`, **`added_by`** — explicit / routed / agent |
+| `memory_links` | `part_of` / `derived_from` / `about` / `continues` / `supersedes` |
+| `cases` · `case_members` | Declared subjects; membership records **asserted vs inferred** |
+
+> **`memory_members` has no `expires_at`, and `data_items` has no `expires_at`.** Effective expiry
+> is the *maximum* TTL across an item's memberships, and membership is mutable — so any stored
+> answer is wrong the moment someone adds or removes a member. The sweeper computes it. This is a
+> schema-level enforcement of a design rule, and adding the column back would silently break
+> `orphan_delete`.
+
+#### Derived artifacts, and the provenance join
+
+| Table | Holds |
+|-------|-------|
+| `artifacts` | Viewpoints, summaries, extractions — with `model_id`, `generator_version`, `served_by_model` |
+| **`artifact_sources`** | `artifact_id`, `data_id`, `span_start`, `span_end` |
+| `entities` · `entity_contributions` | An entity, and each item that contributed to it |
+| `generators` | Immutable registry — prompt, model, schema, parser, chunker, handler digest |
+
+**`artifact_sources` is a join table rather than an array column, and that is deliberate.** The
+requirement is that erasure can ask *"which summaries absorbed this item?"* — an indexed reverse
+lookup on `data_id`. An array column makes that a scan, and a scan is what gets skipped under time
+pressure, which is how content survives inside a summary after the source is deleted.
+
+The `span_start` / `span_end` columns are what let a citation open at the sentence, and what keeps
+citations working after compression archives the originals.
+
+`entity_contributions` exists for the same reason in a different shape: deleting an item removes
+its **contribution** to an entity, not the entity.
+
+#### Governance and operations
+
+| Table | Holds |
+|-------|-------|
+| `access_log` | **Append-only.** Who read what, when, under which principal and key |
+| `runs` · `run_items` | The shared run entity — bulk write, selector delete, account delete, reprocess |
+| `redaction_events` | rule id and version, action, **match count** — never the content |
+| `engines` | Registered models with **encrypted** credentials, failing closed |
+| `model_assignments` | Which model per purpose |
+| `usage_records` | Tokens per user, model and agent — estimate against actual |
+| `budgets` | Enforced at **user and project** scope |
+
+`access_log` is separate from everything else because its volume, retention and access pattern all
+differ: it is written on every read, never updated, queried rarely and by time range, and it must
+**survive the deletion of what it describes** — you cannot evidence "we deleted it" if the evidence
+was inside the deletion. Partition it by month.
+
+---
+
+### Why the indexes live in the record store too
+
+`pgvector` and `tsvector` are Postgres, not separate systems. That is
+the central bet, and its payoff is visible in the schema:
+
+```sql
+SELECT c.data_id, c.text, e.embedding <=> $1 AS distance
+FROM   embeddings e
+JOIN   chunks c   ON c.chunk_id = e.chunk_id
+JOIN   data_items d ON d.data_id = c.data_id
+WHERE  d.project_id = $2
+  AND  (d.access_level = 'org' OR d.owner_id = $3 OR …)
+  AND  e.model_id = $4
+ORDER  BY distance
+LIMIT  20;
+```
+
+The ACL predicate and the similarity search are **one query with one plan**. Filtering after
+retrieval would return the wrong twenty rows and then hide some of them, which is a different and
+worse thing than filtering before.
+
+The `e.model_id = $4` predicate is the fallback-chain protection made physical: a mixed index still
+returns comparable results, because the query only ever considers one vector space.
+
+The cost is stated where it belongs — every workspace shares one instance, and filtered ANN over
+tens of millions of rows is the named scaling risk.
+
+### Indexes that are not optional
+
+| Index | Why |
+|-------|-----|
+| `data_items (project_id, event_time DESC)` | Every scoped read and every timeline |
+| `data_items (project_id, external_id)` unique | Upsert on the caller's natural key |
+| `embeddings` HNSW on the vector, **partitioned or filtered by `model_id`** | Comparable vector spaces |
+| `artifact_sources (data_id)` | The erasure reverse lookup |
+| `memory_members (data_id)` | The reverse lookup that answers "why is this still here?" |
+| `entity_contributions (data_id)` | Remove the contribution, not the entity |
+| `normalized_records (data_id)` · `(target_type, project_id)` | The projection lookup, and facet queries by domain type |
+| `access_log (org_id, at)` | The audit query, on a partitioned table |
+
+Four of those seven exist for **deletion and diagnosis**, not for retrieval. That ratio is the
+schema telling you what the hard operations actually are.
+
+### Requirements
+
+- **FR-SCH-1** All metadata MUST live in the record store. The blob store MUST hold bytes only.
+- **FR-SCH-2** `is_downloaded` MUST be derived from the content columns, never stored.
+- **FR-SCH-3** `event_time` and `ingested_at` MUST be separate columns, both populated.
+- **FR-SCH-4** Every embedding row MUST carry `model_id`, and retrieval MUST filter on it.
+- **FR-SCH-5** Effective expiry MUST NOT be stored on `data_items` or `memory_members`.
+- **FR-SCH-6** Artifact provenance MUST be an indexed join table with span offsets, not an array.
+- **FR-SCH-7** `access_log` MUST be append-only, partitioned, and MUST survive deletion of the data
+  it describes.
+- **FR-SCH-8** ACL predicates MUST be evaluated inside the retrieval query, not applied to results.
+- **FR-SCH-12** Identifiers MUST be ULIDs, so creation time is recoverable from the id and ids sort
+  chronologically. `event_time` MUST remain a column and MUST NOT be encoded in an identifier.
+- **FR-SCH-9** `mime_type` MUST be server-detected and MUST outrank `source_type` for routing.
+  `source_type` MUST be treated as a hint.
+- **FR-SCH-10** The normalized projection MUST be stored separately from the original, tagged with
+  the schema version that produced it.
+- **FR-SCH-11** A normalization failure MUST store the record raw with a reason, and MUST remain
+  retryable. It MUST NOT reject the write.
+
+---
+
+## Blob Store Layout
+
+What actually sits in object storage, and under what key.
+
+This was previously unspecified — write-api.md shows
+`gs://.../upl_01JQRS/img-4410` with the bucket elided, which is fine as an illustration and
+insufficient as a contract. The key layout is not a naming preference: it decides whether tenant
+isolation, erasure and lifecycle rules are cheap or impossible.
+
+---
+
+### Only bytes live here
+
+The split is one line: **raw binary goes to the blob store, everything else goes to the record
+store.**
+
+| In object storage | In Postgres |
+|-------------------|-------------|
+| Original files as fetched or uploaded | Data items and all metadata |
+| Large extracted text, above a threshold | Chunks, embeddings, lexical index |
+| Derived media — thumbnails, page images, transcripts | Memories, cases, ACLs, versions, audit |
+
+If something can be queried, filtered or joined, it is not in the blob store. The blob store
+answers exactly one question: *give me the bytes for this reference.*
+
+### The key
+
+```
+{bucket}/{org_id}/{project_id}/{data_id}/{kind}/{sha256}.{ext}
+```
+
+```
+memdog-raw-prod/org_01J8.../prj_01J9.../data_01JQRS.../raw/9f2c8e….pdf
+                                                      /text/4a17bb….txt
+                                                      /derived/c81d02….webp
+```
+
+Each segment earns its place:
+
+| Segment | Why it is at that depth |
+|---------|------------------------|
+| `org_id` first | **Bucket-policy and IAM boundaries can only be expressed on a prefix.** Anything above the tenant id makes per-tenant access control impossible |
+| `project_id` second | Project purge becomes a **prefix delete** rather than an enumeration |
+| `data_id` third | All artifacts of one item are colocated, so a single-item delete is one prefix |
+| `kind` | `raw` / `text` / `derived` — lets lifecycle rules differ by kind |
+| `sha256` as the filename | Content-addressed **within the item**, so a re-fetch that yields identical bytes writes the same key instead of a duplicate |
+
+#### Content addressing stops at the tenant boundary, deliberately
+
+The tempting optimisation is a global content-addressed store — one copy of any given byte string,
+deduplicated across the whole platform. **Do not.**
+
+> Two tenants upload the same PDF. Global deduplication stores one object. Tenant A then exercises
+> an erasure right. Either you delete the object and destroy tenant B's data, or you keep it and
+> the erasure did not happen. **There is no third option**, and no amount of reference counting
+> makes "we deleted your data" true while the bytes are still being served to someone else.
+
+So deduplication is scoped: identical bytes within one item collapse to one key, and across
+tenants they do not. The storage saved by global dedupe is not worth an unsatisfiable erasure
+request.
+
+### No timestamp segment — the path already carries one
+
+There is deliberately no `{yyyy}/{mm}/` in the key, and the reason is not that time does not matter.
+
+**`data_id` is a ULID — its first 10 characters *are* a 48-bit millisecond timestamp**, so ids sort
+chronologically and creation time decodes straight out of the key. So the path is already time-ordered and a creation time is already recoverable from
+the key without a database lookup. A date segment would restate what is there.
+
+The operational arguments for date-partitioned keys mostly do not apply here:
+
+| Usual reason for a date prefix | Why it does not apply |
+|--------------------------------|----------------------|
+| Lifecycle rules — "move to cold after 90 days" | Object stores evaluate an **`age` condition** natively. No prefix needed |
+| Scoping a reconciliation scan by period | The ULID prefix already orders by time; a range scan works on `data_id` |
+| Avoiding sequential-prefix hot-spotting | The `org_id` prefix already distributes writes across tenants, which is the dimension that actually spreads |
+
+#### The version that would be a real mistake
+
+> **`event_time` must never appear in a path.**
+
+`event_time` is when the thing *happened*; `ingested_at` is when we learned about it. They differ —
+a 2019 X-ray ingested today is the canonical example — and `event_time` is **correctable**. A
+backfill, a better parse, or a normalization fix can change it after the fact.
+
+Objects are immutable. A path segment derived from a mutable field means that correcting the field
+forces a **copy-and-delete** of every affected object — the one operation this layout exists to
+avoid — and until that copy completes the record store and the blob store disagree about where the
+bytes are.
+
+If a date segment were ever added, it could only be `ingested_at`: known at write, never revised.
+Which is precisely what the ULID already encodes.
+
+#### Where time *is* a partition key
+
+In the record store, not in the path:
+
+| Table | Partitioned by | Why |
+|-------|---------------|-----|
+| `access_log` | month | Written on every read, queried by time range, retained on its own schedule |
+| `usage_records` | month | Same shape — high volume, time-range queries, periodic rollup |
+
+The difference is that a table partition can be reorganised. An object key cannot.
+
+### Objects are immutable
+
+Written once, never modified. A revision writes a **new** object under a new checksum; the record
+store's version row points at it. This matches the rule that
+mutation is a new version, never in place, and it makes the blob
+store safe to cache and cheap to replicate.
+
+Deletion is the only operation that removes an object.
+
+### Every object carries its owning ids as metadata
+
+```
+x-goog-meta-org-id      org_01J8...
+x-goog-meta-project-id  prj_01J9...
+x-goog-meta-data-id     data_01JQRS...
+x-goog-meta-checksum    sha256:9f2c8e...
+x-goog-meta-ingested-at 2026-08-27T09:20:00Z
+```
+
+This is redundant with the key path, and it is redundant on purpose.
+
+**The failure mode this exists for is orphaned blobs.** A delete that removes the database row but
+fails before removing the object leaves bytes with no owner — invisible to every query, and
+indistinguishable from a legitimate object during a reconciliation sweep unless the object itself
+says who it belonged to. Without the metadata, the only way to find orphans is to enumerate the
+entire bucket and check every key against the database, which stops being feasible long before it
+stops being necessary.
+
+With it, a periodic sweep can list a prefix, resolve `data_id`s in one query, and delete what has
+no row. **`storage.orphaned_objects` is the metric**, and like everything else in this system the
+failure it detects is silent — an orphan costs money and holds content that should be gone, and
+nothing surfaces it.
+
+### Two buckets, not one
+
+| Bucket | Holds | Why separate |
+|--------|-------|--------------|
+| `{env}-raw` | Tenant data | Tenant-scoped IAM, lifecycle rules, CMEK |
+| `{env}-secrets` | Encrypted provider credentials — `{user_id}/engines/{id}.json` | **Completely different access policy.** No tenant principal ever reads it, and it must not inherit a data-bucket lifecycle rule that expires objects |
+
+Putting encrypted credentials in the data bucket means one over-broad prefix grant exposes both,
+and one retention rule written for data can silently expire a key. They are different kinds of
+thing with different lifetimes and different readers.
+
+### What deletion can and cannot do with prefixes
+
+Worth stating plainly, because it is the difference between a fast operation and a slow one:
+
+| Deletion scope | Blob strategy |
+|----------------|---------------|
+| One item | Prefix delete on `…/{data_id}/` |
+| A project purge | Prefix delete on `…/{project_id}/` |
+| Org offboarding | Prefix delete on `{org_id}/` |
+| **A selector** | **Enumerate from the record store** — a selector is a query, not a prefix |
+| **An account's data** | **Enumerate from the record store** — an account's items live inside projects, so there is no prefix that means "this person" |
+
+The last two matter for Phase 1 scope. Selector and account deletion cannot be
+prefix operations, so they walk the record store and delete object by object — which is precisely
+why they are **resumable runs** rather than requests, and why the object metadata has to be right.
+
+### Encryption
+
+Customer-managed keys via KMS, not a key held in Secret Manager. Per-object encryption is the
+platform's default; the KEK belongs in a key management service where it can be rotated and its use
+audited. Secret Manager and KMS are not interchangeable.
+
+### Per-variant realisation
+
+Same layout, three fillings — the paths below the bucket root are byte-identical, so a corpus moves
+between variants without rewriting references:
+
+| Variant | Root |
+|---------|------|
+| Local | `./data/blobs/` on the filesystem |
+| GKE | GCS bucket |
+| Cloud | GCS bucket |
+
+The `STORAGE_BACKEND` abstraction is what makes this a configuration rather than a fork, and it is
+why the blob store is rated **low swap cost** in technology.md.
+
+### Requirements
+
+- **FR-BLOB-1** Object keys MUST begin with the tenant identifier, so access policy can be
+  expressed as a prefix.
+- **FR-BLOB-2** Deduplication MUST NOT cross a tenant boundary.
+- **FR-BLOB-3** Objects MUST be immutable. A revision MUST write a new object.
+- **FR-BLOB-4** Every object MUST carry its owning org, project, data id and checksum as object
+  metadata, so orphans are detectable without a full-bucket scan against the database.
+- **FR-BLOB-5** A reconciliation sweep MUST report orphaned objects as a metric.
+- **FR-BLOB-6** Encrypted credentials MUST NOT share a bucket with tenant data.
+- **FR-BLOB-7** Object encryption MUST use a KMS-managed key, not a secret-store value.
+- **FR-BLOB-8** Paths below the bucket root MUST be identical across deployment variants.
+- **FR-BLOB-9** Object keys MUST NOT contain a segment derived from a mutable field.
+  `event_time` in particular MUST NOT appear in a path.
+
+---
+
 ## Technology Choices
 
 Everything in the design docs is stated in **roles**. This is where roles meet products. Keeping
@@ -6918,6 +7507,7 @@ be attached.
 | `fetch.requests` | counter | by `provider`, `status` |
 | `fetch.duration` / `fetch.bytes` | histogram / counter | by provider |
 | **`fetch.rate_limited`** | counter | Per provider — drives bucket narrowing |
+| **`deletion.oldest_pending_purge`** | gauge | Seconds since the oldest un-purged tombstone — a record that looks deleted and is not |
 | **`fetch.needs_reauth`** | gauge | Per provider. Non-zero means data has silently stopped |
 | `fetch.fanout_ratio` | histogram | Children emitted per parent — catches truncation |
 | `fetch.depth_reached` | histogram | Against the recursion cap |
@@ -7155,15 +7745,12 @@ CPU and error rate would catch almost none of them.
 ### Cost telemetry becomes enforcement
 
 > Detailed usage-record design, the six ways token counts go wrong, and budget enforcement are in
-> [token-accounting.md](#token-accounting).
+> token-accounting.md.
 
 Token usage is already tracked per user, model and agent. Under multi-tenancy with user-supplied
 provider keys that measurement has to become a **control**: budget consumed against cap, spend
 projection for a queued backfill *before* it runs, and automatic tier-downgrade or refusal at the
 limit.
-
-
----
 
 ---
 
