@@ -666,6 +666,89 @@ evidence attached, rather than as a destructive edit. We haven't built it.
 
 ---
 
+---
+
+## Some things are subjects, not documents
+
+Everything above treats data as a pile you search. Then someone asks for a patient timeline, and
+you discover the pile model has been quietly load-bearing.
+
+A patient timeline. A legal matter. Every reading from one machine. These are the same shape: a
+long-lived subject that accumulates heterogeneous data from many sources over years, and has to be
+retrieved and reasoned about **as a unit**. Not "documents matching a query" — a thing, with a
+history.
+
+Nothing in the model expressed that, and each of the obvious places to put it was wrong.
+
+Projects are workspaces in an org hierarchy; a hospital is not a hundred thousand projects, and the
+capacity plan targets about a thousand. Memories are closer — they already contain data items — but
+memory types are lifecycle concepts, built around TTLs and expiry, with no stable external
+identifier and no typed attributes. Tags have no identity at all.
+
+And then there's the graph, which is the obvious answer and the genuinely dangerous one.
+
+The knowledge graph already extracts entities and links data to them. A patient is a `Person`.
+Perfect. Except entities are *extracted*, not declared — and entity resolution's entire job is to
+merge similar ones. That's what makes it useful: "John Smith", "J. Smith" and "John" collapsing
+into one node is the feature.
+
+**Two patients with the same name must never merge.** Not "should rarely". Never.
+
+Everything that makes entity resolution valuable for knowledge extraction makes it unsafe for
+identity. So a case is a separate primitive, and its defining property is that it is **declared,
+not inferred**. The host system knows who the patient is. Our job is to not lose that.
+
+### The field that breaks silently
+
+Two fields carry most of the design. The first is whether a membership was *asserted* or
+*inferred* — because in a clinical or legal context, "this document is in the case" and "this
+document appears related to the case" are categorically different claims, and a system that
+collapses them can be trusted for neither purpose.
+
+The second is event time, and it fails in the way we'd come to recognise.
+
+Backfill three years of patient history. Every record is ingested this morning. Order the timeline
+by creation date — the obvious thing, and what most systems do by default — and the 2019 chest
+X-ray appears *after* this week's lab result.
+
+The page renders. Every date on it is real. Nothing errors. And the timeline is clinically
+misleading.
+
+Our own crawler work made this acute rather than theoretical: historical import is now a
+first-class ingestion path, and historical import is precisely what scrambles ingestion-ordered
+timelines. So event time becomes a canonical normalized field, timelines order by it, and items
+where it genuinely cannot be extracted get *visibly marked* rather than quietly placed somewhere
+plausible.
+
+### Correlation is a join
+
+The satisfying part: once records normalize to canonical types carrying an identifiers array — MRN,
+docket number, serial, VIN — then attaching a lab result to a patient is a **join on an
+identifier**. Not an inference. Not a similarity score. A join.
+
+Deterministic before probabilistic, one more time, in the place where being wrong matters most.
+
+### And a conflict we decided not to resolve
+
+Cases carry retention policy, which is where two requirements we had both written down collide
+head-on.
+
+A case under legal hold must not be deleted. An erasure request must be honoured. Sooner or later
+someone submits the second against data covered by the first.
+
+Legal obligation generally prevails — but the interesting decision was what the *system* does,
+because both silent behaviours are indefensible. Silently deleting held data destroys evidence
+someone is legally obliged to preserve. Silently ignoring an erasure request is a compliance
+failure dressed as success.
+
+So it does neither. It returns a **partial completion**: here is what was erased, here is what was
+withheld, here is the hold that withheld it and who authorised it. Release the hold and the
+deferred erasure re-queues automatically.
+
+The general shape is one we kept arriving at: when two requirements genuinely conflict, the
+system's job is to **represent the conflict faithfully**, not to pick a winner quietly and let
+someone discover it later.
+
 ## Privacy is a shape, not a feature
 
 The hardest design problem in the system wasn't technical. It was that two of our own use cases
@@ -1012,6 +1095,23 @@ loop, that shape was the safe one. Agent-authored crawler configs and field mapp
 a human, executed by boring code. Agents choosing frontiers at runtime is a budget with a loop
 attached.
 
+**Declared beats inferred, for anything that is an identity.** Extraction and resolution are
+wonderful for knowledge and catastrophic for identity. If two of a thing must never be confused, a
+human or a host system declares it and the model never gets a vote.
+
+**Ordering by the wrong clock is worse than not ordering.** Ingestion time and event time diverge
+the moment you backfill, and a timeline built on the wrong one looks completely correct.
+
+**The expensive part of a write is what it triggers.** A batch endpoint is a capacity control, not
+an API convenience — admission control before efficiency, every time.
+
+**Enums that encode external constraints go stale silently.** Five model tiers were a snapshot of
+what hardware could do in a particular year. Nothing forces you to revisit them; the code keeps
+compiling while the world moves.
+
+**When two requirements genuinely conflict, represent the conflict.** Do not pick a winner quietly.
+Partial completion with an explanation beats a silent success or a silent refusal.
+
 **Look at your competitors properly before claiming a moat.** We spent a while believing
 self-hosting was a differentiator. It's an entry requirement, and a well-funded MIT-licensed
 competitor was already past it.
@@ -1029,7 +1129,9 @@ The version that's actually hard is plumbing.
 It's that Gmail sends you a `historyId` instead of a message. That Google Docs have no bytes to
 download and must be exported. That HEIC is the iPhone default and needs a library that isn't in
 your base image. That `mbox` exports are multi-gigabyte single files containing fifty thousand
-messages. That WhatsApp voice notes arrive as `amr`. That a nightly crawl re-embeds everything
+messages. That WhatsApp voice notes arrive as `amr`. That a patient timeline ordered by upload date is wrong in a way that renders
+perfectly. That ten thousand rows written in a second becomes ten thousand model calls over the
+next four hours. That a nightly crawl re-embeds everything
 unless you thought about etags. That a summary written last month still contains the paragraph
 someone asked you to delete.
 

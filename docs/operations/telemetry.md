@@ -74,6 +74,9 @@ of every tenant. Measure early; keep an escape hatch to ship traces externally.
 
 ## Cost telemetry becomes enforcement
 
+> Detailed usage-record design, the six ways token counts go wrong, and budget enforcement are in
+> [token-accounting.md](token-accounting.md).
+
 Token usage is already tracked per user, model and agent. Under multi-tenancy with user-supplied
 provider keys that measurement has to become a **control**: budget consumed against cap, spend
 projection for a queued backfill *before* it runs, and automatic tier-downgrade or refusal at the
