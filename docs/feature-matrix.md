@@ -125,6 +125,9 @@ Every feature in the platform, with the phase that ships it and whether it is in
 | `shared_with` principals | user / group / project / org / public | 1 | ◐ |
 | RBAC | Org roles, one enforcement path | 1 | ◐ |
 | Auth seam | `TokenVerifier` — Firebase hosted, local password air-gapped | 1 | ◐ API key |
+| **Invite-only registration** | Default mode; invites single-use, expiring, email-bound, audited on create and redeem | 1 | ● |
+| **Bootstrap-once admin** | Refuses to run when any user exists — otherwise it is an unauthenticated signup endpoint | 1 | ● |
+| **`seed --demo`** | Org, team, project, two users, ~50 items — **through the real API**, so a successful seed is the Phase 1 verification | 1 | ● |
 | **Capability-scoped keys** | A key can only do what was checked at creation | 1 | ● |
 | Ephemeral token exchange | Key → short-lived JWT → gateway validates against our JWKS | 3 | ○ |
 | Credential proxy | Workers receive references, never secrets | 2 | ◐ |

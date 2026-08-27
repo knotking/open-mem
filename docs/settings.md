@@ -103,6 +103,9 @@ describe a *corpus*, and a corpus belongs to a project.
 |---------|--------|---------|-------|
 | Key capability defaults | **O** 🔒 | **nothing checked** | See below |
 | Key max lifetime | **O** 🔒 | 90 days | |
+| **`registration_mode`** | **O** PL 🔒 | **`invite_only`** | `open` and `disabled` also available |
+| Invite expiry | **O** 🔒 | 7 days | Single-use, revocable, audited on create *and* redeem |
+| Invite email binding | **O** 🔒 | **on** | An unscoped link is transferable by design |
 | Auth providers | **PL** O | per variant | |
 | Budget | **U** **P** O | none | Both levels — one person's sandbox must not spend the team's month |
 | Rate limits | **O** PL | per provider | |
@@ -120,6 +123,7 @@ decision made on someone's behalf**, and the ones that matter are all defaults-o
 | Activity capture: **off** | A recall feature ships as surveillance |
 | Answer retention: **metadata** | A second corpus accumulates, more sensitive than the first |
 | Sharing externally: **disabled** | Public exposure is one click from a user who did not know what `public` meant |
+| Registration: **invite-only** | Anyone who signed up before you closed it is already inside |
 | Bulk `enrich`: **false** | A 50k import silently spends a month's budget |
 | `orphan_delete`, never unconditional | A container nobody thought owned anything deletes data |
 
