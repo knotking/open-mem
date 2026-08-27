@@ -78,7 +78,7 @@ because the credential does not carry the scope.
 | `CRUD /schemas`, `/mappings` | Normalization customization |
 | `PATCH /connections/{id}` | Set `personal` / `shared` scope — the ACL-inheritance root |
 | `POST /tokens/ephemeral` | Short-lived project-bound token for embeddable widgets |
-| `DELETE /data/{id}?cascade=true` | W9 — propagate through embeddings, entities, graph, summaries |
+| **`DELETE /data/{id}`** · **`POST /deletions`** with a selector · project and org purge | Cleanup and erasure. Beyond one item it is a job — see [deletion](operations/deletion.md) |
 
 ## Six personas, not four roles
 

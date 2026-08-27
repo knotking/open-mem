@@ -67,6 +67,7 @@ can be filled three different ways.
 | Document | Covers |
 |----------|--------|
 | [operations/bulk-operations.md](operations/bulk-operations.md) | Batch writes, imports, and the four other bulk jobs |
+| [operations/deletion.md](operations/deletion.md) | Cleanup vs erasure, the cascade, legal hold, verification |
 | [operations/token-accounting.md](operations/token-accounting.md) | Usage records, budget enforcement, estimate-vs-actual |
 | [operations/implementation.md](operations/implementation.md) | Stack choices, per-variant realisation, phased build |
 | [operations/model-catalog.md](operations/model-catalog.md) | Model cards, selection, and the tier redesign |

@@ -139,6 +139,9 @@ The same job machinery serves the others, which is the main argument for buildin
 
 ### Bulk delete deserves specific attention
 
+> Full treatment in [deletion.md](deletion.md).
+
+
 An erasure request touching 50,000 items is not a `DELETE`. It is a cascading job across data
 items, embeddings, entities, graph facts in two stores, object-store blobs, **and any compressed
 summary that absorbed the content**.
