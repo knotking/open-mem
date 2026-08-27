@@ -75,6 +75,7 @@ So each concern below appears twice: what must exist now, and what deliberately 
 | **Async boundary** | Queue abstraction with the **in-process** implementation |
 | **Index** | Chunk · embed · lexical index |
 | **Read** | `GET /data/{id}` · `POST /api/v1/retrieve` — vector, lexical, hybrid |
+| **Delete** | `DELETE /data/{id}` — single item, cascade over its own derived artifacts |
 | **Auth** | `TokenVerifier` seam, API-key verifier behind it |
 
 ### 1b · Write-time facts — column and enforcement only
@@ -167,6 +168,7 @@ Both are producer shapes the spine already anticipates.
 | MIME sniffing server-side | Declared type is a hint, never the router |
 | Bulk writes at scale | Same verb, more items; admission control on queue depth |
 | `enrich: false` default for bulk | Full enrichment must be asked for and budgeted |
+| **Selector-based deletion as a job** | Same run entity as bulk import — checkpointed, dry-run, per-item errors |
 
 **Exit:** drag a 500 MB file into the UI and it ingests; push ten thousand records and the platform
 stays responsive.
@@ -222,8 +224,8 @@ could *remove* work — the broker's own sync engine may replace part of Phase 5
 
 ## Phase 8 — scale and compliance
 
-Quotas before raising ceilings · SSO/SAML · SCIM · immutable audit log · **delete cascade** ·
-legal hold and its interaction with erasure · composable retrieval primitives · soak to target
+Quotas before raising ceilings · SSO/SAML · SCIM · immutable audit log · **erasure with
+verification** · legal hold and partial completion · composable retrieval primitives · soak to target
 workspace count.
 
 > **Design the delete-cascade hooks in Phase 2**, when derived artifacts first exist. Retrofitting
@@ -249,7 +251,7 @@ can never be ahead of the API**. That sequences it automatically.
 | **5 · Crawlers** | **Config editor with dry-run preview**, run history, per-item errors | **On the critical path** — see below |
 | **6 · Variants** | First-run setup, model picker with hardware feasibility | Local onboarding is the product's first impression |
 | **7 · Team & cases** | Sharing, members, groups, **case timeline** | A timeline is inherently visual; a JSON timeline is not a timeline |
-| **8 · Scale** | Admin console, audit search, public-share inventory | The inventory view is what catches a six-month-old mistake |
+| **8 · Scale** | Admin console, audit search, public-share inventory, **deletion preview and confirmation** | The inventory catches a six-month-old mistake; the deletion preview stops one being made |
 
 ### Two places the UI is genuinely blocking
 
@@ -290,7 +292,7 @@ discipline, because anything it can do only by reaching past the API is a bug in
 | **Model selection mechanism** | **1** | Engine registration and per-artifact provenance — not retrofittable |
 | **Model catalog UX** | 6 | Cards, hardware feasibility, staleness-impact preview. Needs staleness fields (2) |
 | **Trace context across the queue** | 1 | Span links, with the queue abstraction |
-| **Delete cascade** | hooks 2, build 8 | |
+| **Deletion** | 1 → 8 | Single item in 1 · selector jobs and dry-run in 4 with the job machinery · entity refcounting and summary rebuild in 5 with reprocess · erasure, legal hold and verification in 8 |
 
 ---
 
