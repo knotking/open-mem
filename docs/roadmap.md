@@ -253,6 +253,9 @@ workspace count.
 
 ---
 
+> **Every phase gate is a test, not a demo.** See [operations/testing.md](operations/testing.md)
+> for the per-phase gates and the invariant suite.
+
 ## Cross-cutting, placed by phase
 
 | Capability | Lands | Note |
