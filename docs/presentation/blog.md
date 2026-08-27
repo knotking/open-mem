@@ -263,6 +263,47 @@ blocklist — link traversal escapes any blocklist eventually, because that's wh
 **Bulk runs at lower priority than live ingestion.** A customer's three-year historical import
 must never starve the messages arriving right now.
 
+### Where customization stops
+
+A configurable crawler is only useful if it can reach the API nobody wrote an adapter for. So the
+config has to be expressive. The question is how expressive.
+
+We landed on a spectrum with a deliberate hole in the middle. Levels zero through two are
+declarative — pick a strategy, supply a request template with a declared pagination shape, write
+JMESPath expressions to extract and transform. All of that is *data*. JMESPath has no side effects,
+no I/O and no loops, so it cannot hang a worker or reach the network.
+
+Level three is: write your own crawler, in your own runtime, and call our API.
+
+**There is nothing in between, on purpose.** The obvious middle option is a plugin sandbox — let
+users supply a small transform function, run it in a restricted interpreter. Every time we sketched
+it we were sketching a function-as-a-service platform: resource limits, timeouts, egress control,
+dependency management, a whole new security surface inside the worker that already holds other
+tenants' data.
+
+The escape hatch is strictly better. Their runtime, their dependencies, their scaling, their blast
+radius. Every "but what if someone needs to..." has the same answer, and the answer is good.
+
+### Anything can be a crawler
+
+Which leads somewhere we didn't plan.
+
+Because our crawlers write through the *public* API rather than internal queues — that decision to
+make them discover-and-emit, nothing more — they hold no special privileges and take no shortcuts.
+They are, architecturally, just API clients.
+
+Which means **an external system doing the same thing is a first-class producer, not a workaround.**
+A customer's Python script. A scheduled GitHub Action. An n8n flow. An Airbyte destination. An
+internal ETL job that already has the data and just needs somewhere to put it.
+
+That reframes what the connector catalog is. It stops being a ceiling on what the platform can
+ingest and becomes a floor. We will never write an adapter for a customer's bespoke internal
+system, their mainframe export, or the API their vendor documented badly in 2011 — and we no longer
+have to.
+
+The catch is that this only works if the ingest API is genuinely good enough to build on. Which is
+where we found we'd left a hole.
+
 ### On agentic crawlers
 
 The obvious next thought is: what if the crawler were an agent? Let it figure out pagination on an
@@ -285,6 +326,52 @@ the same: **agents author configuration; humans approve it; deterministic machin
 We use exactly that for field mappings too.
 
 ---
+
+---
+
+## Ten thousand rows is not ten thousand rows
+
+The hole was a batch endpoint. External systems push in bulk — ten thousand records at a time — and
+a per-record POST turns that into ten thousand round trips, ten thousand auth checks, ten thousand
+transactions. Obvious gap, easy fix, add a batch endpoint.
+
+Then we thought about what a batch endpoint actually does.
+
+Ten thousand rows written is ten thousand enrichment jobs queued, which is ten thousand model
+calls, ten thousand embeddings, entity extraction, graph writes, index builds. **The write is the
+cheap part.** The insert is milliseconds; what it triggers is hours.
+
+An endpoint that accepts a batch instantly and returns `200` while quietly flooding the enrichment
+queue is worse than having no batch endpoint at all. The caller thinks it worked. The platform has
+a multi-hour backlog. Every other tenant's live ingestion queues behind a bulk import nobody
+authorised.
+
+So a batch endpoint is not an API convenience. It is a capacity control, and it needs four things
+before it needs efficiency:
+
+**Per-item results, not all-or-nothing.** One malformed row must not fail nine thousand nine
+hundred and ninety-nine good ones. Return `207 Multi-Status` — specifically `207`, because a client
+that treats any 2xx as total success will silently drop the failures otherwise, and now you have a
+data loss bug in someone else's code that you caused.
+
+**Idempotency at two levels.** A batch-level key handles the client that timed out and retried. An
+`external_id` upsert handles the ETL job whose sync windows overlap. Different duplicates, different
+mechanisms, both required — batch-level alone doesn't help overlapping windows, item-level alone
+means a network retry writes everything twice.
+
+**Bulk defaults to not enriching.** Store it, index it structurally, skip the model calls. If
+someone wants full enrichment across ten thousand items they should have to ask, see the estimate,
+and have it counted against a budget — not receive it by accident because the default was
+convenient.
+
+**Admission control before acceptance.** Item count, payload size, storage quota, *current
+enrichment queue depth*, token budget. Rejecting a batch is cheap. Accepting one you cannot process
+is not.
+
+And above a certain size the shape changes entirely. A five-hundred-thousand-row import is not a
+request. It is a job — and specifically, it is a crawl run whose discovery phase happens to be
+"read the payload you were given." Same run entity, same checkpointing, same progress reporting,
+same pause and resume. We nearly built that twice before noticing.
 
 ## The LLM's actual job is not summarising
 
@@ -463,6 +550,53 @@ similar meaning — interchangeable enough. Two embedding models produce coordin
 spaces — not interchangeable at all. The chain doesn't know the difference. You have to tell it.
 
 ---
+
+---
+
+## A tier design that outlived its constraint
+
+While writing down how model selection should work, we noticed the tier model had quietly expired.
+
+The pipeline routes work across five tiers: small, medium, large, multimodal, omni. That design
+encodes a real constraint — text models used to be text-only, so anything involving an image needed
+a different model, which meant it needed its own tier.
+
+That constraint has largely dissolved. Current open-weight families are natively multimodal at
+essentially every size. Vision, audio and tool use are capabilities of the four-billion-parameter
+model as much as the twenty-seven-billion one.
+
+Which means `multimodal` and `omni` are not siblings of `small` and `large` at all. They're a
+different axis:
+
+```
+            CAPACITY  ──────────────────▶
+            small      medium      large
+CAPABILITY
+  text        ●           ●          ●
+  vision      ●           ●          ●     ← used to be its own tier
+  audio       ●           ●          ●     ← used to be its own tier
+  tools       ●           ●          ●
+```
+
+Every cell is filled now. So routing should select on *capacity × required capabilities*, and the
+old tier names survive only as deprecated aliases.
+
+There's a broader lesson buried in that. A five-value enum looked like a modelling decision; it was
+actually a snapshot of what hardware could do in a particular year. Enums that encode external
+constraints go stale silently, because nothing forces you to revisit them — the code keeps
+compiling, the routing keeps routing, and the shape of the world underneath quietly changes.
+
+The same reasoning applies to why model selection needs a real catalog rather than a dropdown of
+identifiers. `qwen3.6:27b` and `gemma4:e4b` are both strings. One needs a 24GB card and one runs on
+a phone. Nobody can choose sensibly from strings, and routing cannot validate an assignment it
+knows nothing about.
+
+And one consequence that's easy to miss: **changing a model is a versioning event.** The model is
+part of the generator version of everything that tier produced. Switch it and every existing
+summary, extraction and classification from that tier is stale. Which means the selection UI owes
+the user a number before they click — *this marks 2.1 million artifacts stale, roughly four hours
+to rebuild* — rather than letting them discover it months later when half the corpus reflects one
+model and half another.
 
 ## Everything derived goes stale
 
