@@ -96,6 +96,8 @@ Every feature in the platform, with the phase that ships it and whether it is in
 | **Embeddings never fall through** | Two embedding models produce incomparable vector spaces | 1 | ● |
 | **Allow-list per project, fail closed** | The chain must not cross a legal or cost boundary | 2 | ◐ enforcement |
 | Typed enrichment agents | Output schema is the contract, not the prompt | 2 | ◐ one agent |
+| **Default extraction prompts** | Shipped per type — shared skeleton, nonce delimiter, null-over-guess | 2 | ◐ one agent |
+| **Base viewpoint schema** | summary · entities · claims · intents · questions · key_dates · sentiment, all with spans | 2 | ◐ |
 | Staleness impact preview | What changing this model or prompt invalidates | 6 | ○ |
 
 ## Security and privacy

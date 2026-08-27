@@ -225,6 +225,11 @@ to length and cost caps so a pathological prompt cannot quietly multiply the cor
 
 ### Defaults ship with the product — and that makes them versioned too
 
+> **The defaults themselves are written out in
+> [extraction-prompts.md](extraction-prompts.md)** — the shared skeleton, the per-type prompts,
+> the classifier, and the types that deliberately have no prompt at all.
+
+
 The system arrives with a working prompt for every data type. Nobody has to configure anything to
 get useful extraction; overriding is opting *out* of a default, not filling in a blank.
 
