@@ -9,6 +9,22 @@ can be filled three different ways.
 
 ---
 
+## How to read this
+
+Eight parts, in order. The published [blueprint artifact](https://claude.ai/code/artifact/c8a9e266-fef7-4b68-b521-dceef8d0574e)
+is the same material as one continuous page.
+
+| Part | Covers | Documents |
+|------|--------|-----------|
+| **I · Why this exists** | The problem, the bet, who owns what | [use-cases](use-cases.md) · [design-principles](design-principles.md) |
+| **II · What the things are** | The data model everything else operates on | [memories](memories.md) · [cases](cases.md) · [normalization](ingestion/normalization.md) |
+| **III · Getting data in** | One write path, and every producer that uses it | [write-api](ingestion/write-api.md) · [workers](ingestion/workers.md) · [sources](ingestion/sources.md) · [connectors](ingestion/connectors.md) · [formats](ingestion/formats.md) · [uploads](ingestion/uploads.md) · [crawlers](ingestion/crawlers.md) · [bulk](operations/bulk-operations.md) |
+| **IV · Making it useful** | Indexes, models, keeping derived data honest | [indexes](retrieval/indexes.md) · [model catalog](operations/model-catalog.md) · [model routing](operations/model-routing.md) · [versioning](retrieval/versioning.md) |
+| **V · Lifecycle** | Removing things, correctly | [deletion](operations/deletion.md) |
+| **VI · Access and privacy** | Who sees what, and what we can prove | [tenancy](security/tenancy.md) · [access model](security/access-model.md) · [auth](security/auth.md) · [privacy foundations](security/privacy-foundations.md) · [compliance](security/compliance.md) |
+| **VII · Interfaces and operations** | The contract, and running the thing | [api](api.md) · [telemetry](operations/telemetry.md) · [testing](operations/testing.md) · [technology](operations/technology.md) · [deployment variants](operations/deployment-variants.md) |
+| **VIII · The plan** | Sequence, decisions, the market | [roadmap](roadmap.md) · [implementation](operations/implementation.md) · [competition](competition/README.md) |
+
 ## Start here
 
 | Document | Read it for |

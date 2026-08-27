@@ -37,6 +37,82 @@ the embedding-model column from the first commit, so those defects have nowhere 
 > **Where to actually start** — the step-by-step build order to the first milestone is in
 > [operations/implementation.md](operations/implementation.md#build-order--where-to-actually-start).
 
+## The plan at a glance
+
+| Phase | Goal | Exits when |
+|-------|------|-----------|
+| **0 · Unblock** | Two independent urgencies | Secrets rotated, replicas above zero |
+| **1 · Spine** | Write → store → read | An item is written into a project with an ACL, found by scoped search, cited, and the read is audited |
+| **2 · Depth** | Make what is stored good | Items classify, summarise and entity-extract; changing a prompt can rebuild what the old one produced |
+| **3 · Connectors** | Data arrives on its own | Connect a mailbox; mail ingests, enriches and is findable without an API call |
+| **4 · Uploads &amp; bulk** | The other producer shapes | A 500 MB file ingests from a browser; ten thousand records land without stalling the platform |
+| **5 · Crawlers** | Pull from what will not push | A connector backfills three years and stays current on a schedule |
+| **6 · Variants** | Local and cloud harden | **Unplug the network and everything still works** |
+| **7 · Team &amp; cases** | Sharing and correlation | A patient timeline assembles across sources, ordered by event time |
+| **8 · Scale &amp; compliance** | Enterprise-addressable | Erasure completes and verifies; soak holds at target |
+
+**Every exit is a test, not a demo** — see [operations/testing.md](operations/testing.md).
+
+## Capabilities that span phases
+
+| Capability | Lands | Note |
+|-----------|-------|------|
+| **Write-path telemetry** | **1** | You cannot tell the spine works if you cannot see it work |
+| **Tenancy model** | **1** | Columns, not features. Retrofitting multi-tenancy is the expensive migration |
+| **Observability, broader** | 2 → 8 | Detectors ship with the thing they watch, never after |
+| **Domain event store** | 2 | The audit substrate must exist before events accumulate |
+| **Token accounting** | 2 → 5 | Usage records with depth; estimate-vs-actual with crawler dry-run |
+| **Model selection mechanism** | **1** | Engine registration and per-artifact provenance — not retrofittable |
+| **Model catalog UX** | 6 | Cards, hardware feasibility, staleness-impact preview. Needs staleness fields (2) |
+| **Trace context across the queue** | 1 | Span links, with the queue abstraction |
+| **Deletion** | 1 → 8 | Single item in 1 · selector jobs and dry-run in 4 with the job machinery · entity refcounting and summary rebuild in 5 with reprocess · erasure, legal hold and verification in 8 |
+
+---
+
+## UI, placed by phase
+
+Each slice ships the interface for what that slice made possible. There is no "UI phase", because
+the parity requirement — everything settable in the UI is settable through the API — means **the UI
+can never be ahead of the API**. That sequences it automatically.
+
+| Slice | What the UI gains | Why then |
+|-------|------------------|----------|
+| **1 · Spine** | A **thin console**: write something, search, inspect a result | You cannot judge retrieval quality from a JSON body. One page, not a product |
+| **2 · Depth** | Enrichment inspector — viewpoint, entities, classification layer reached; **prompt override editor with test-before-save and staleness preview** | You cannot tune a prompt without seeing what the last one produced, or what changing it invalidates |
+| **3 · Connectors** | **Connect flows**, connection health, reauthorise | **On the critical path** — see below |
+| **4 · Uploads** | Drag-and-drop, progress, per-item results | Uploads are inherently a browser feature |
+| **5 · Crawlers** | **Config editor with dry-run preview**, run history, per-item errors | **On the critical path** — see below |
+| **6 · Variants** | First-run setup, model picker with hardware feasibility | Local onboarding is the product's first impression |
+| **7 · Team & cases** | Sharing, members, groups, **case timeline** | A timeline is inherently visual; a JSON timeline is not a timeline |
+| **8 · Scale** | Admin console, audit search, public-share inventory, **deletion preview and confirmation** | The inventory catches a six-month-old mistake; the deletion preview stops one being made |
+
+### Two places the UI is genuinely blocking
+
+**OAuth connect flows need a browser.** There is no API-only path to connecting Gmail — the user
+must be redirected, consent, and return. Phase 3 does not ship without UI; it is *how you connect
+at all*.
+
+**Crawler dry-run is a safety mechanism whose value is visual.** A dry-run that returns JSON nobody
+reads does not prevent the mistake it exists to prevent. "This will create 47,213 items, take six
+hours and consume 84% of your monthly budget" only works if someone sees it. Shipping the crawler
+without the preview UI removes the guardrail while keeping the feature.
+
+Everywhere else the UI can lag by a slice without harm.
+
+### Relationship to the UI that exists
+
+The running deployment has a working UI — dashboard, AI Studio, playground, settings. Same
+strangler posture as the rest: it keeps serving the current system while the new console is built
+against the new API. Convergence or retirement is a decision for around slice 3, once the connector
+path has moved.
+
+### It is also a reference implementation
+
+Hosts embedding the platform build their own surfaces, and the
+[ephemeral-token pattern](api.md) exists so they can do so without holding durable credentials.
+Our UI is therefore the reference client as much as it is the product — which is a useful
+discipline, because anything it can do only by reaching past the API is a bug in the API.
+
 ## Phase 0 — unblock
 
 Independent of the spine. Neither blocks it; both are urgent on their own terms.
@@ -237,66 +313,6 @@ workspace count.
 
 > **Every phase gate is a test, not a demo.** See [operations/testing.md](operations/testing.md)
 > for the per-phase gates and the invariant suite.
-
-## UI is not a phase
-
-Each slice ships the interface for what that slice made possible. There is no "UI phase", because
-the parity requirement — everything settable in the UI is settable through the API — means **the UI
-can never be ahead of the API**. That sequences it automatically.
-
-| Slice | What the UI gains | Why then |
-|-------|------------------|----------|
-| **1 · Spine** | A **thin console**: write something, search, inspect a result | You cannot judge retrieval quality from a JSON body. One page, not a product |
-| **2 · Depth** | Enrichment inspector — viewpoint, entities, classification layer reached; **prompt override editor with test-before-save and staleness preview** | You cannot tune a prompt without seeing what the last one produced, or what changing it invalidates |
-| **3 · Connectors** | **Connect flows**, connection health, reauthorise | **On the critical path** — see below |
-| **4 · Uploads** | Drag-and-drop, progress, per-item results | Uploads are inherently a browser feature |
-| **5 · Crawlers** | **Config editor with dry-run preview**, run history, per-item errors | **On the critical path** — see below |
-| **6 · Variants** | First-run setup, model picker with hardware feasibility | Local onboarding is the product's first impression |
-| **7 · Team & cases** | Sharing, members, groups, **case timeline** | A timeline is inherently visual; a JSON timeline is not a timeline |
-| **8 · Scale** | Admin console, audit search, public-share inventory, **deletion preview and confirmation** | The inventory catches a six-month-old mistake; the deletion preview stops one being made |
-
-### Two places the UI is genuinely blocking
-
-**OAuth connect flows need a browser.** There is no API-only path to connecting Gmail — the user
-must be redirected, consent, and return. Phase 3 does not ship without UI; it is *how you connect
-at all*.
-
-**Crawler dry-run is a safety mechanism whose value is visual.** A dry-run that returns JSON nobody
-reads does not prevent the mistake it exists to prevent. "This will create 47,213 items, take six
-hours and consume 84% of your monthly budget" only works if someone sees it. Shipping the crawler
-without the preview UI removes the guardrail while keeping the feature.
-
-Everywhere else the UI can lag by a slice without harm.
-
-### Relationship to the UI that exists
-
-The running deployment has a working UI — dashboard, AI Studio, playground, settings. Same
-strangler posture as the rest: it keeps serving the current system while the new console is built
-against the new API. Convergence or retirement is a decision for around slice 3, once the connector
-path has moved.
-
-### It is also a reference implementation
-
-Hosts embedding the platform build their own surfaces, and the
-[ephemeral-token pattern](api.md) exists so they can do so without holding durable credentials.
-Our UI is therefore the reference client as much as it is the product — which is a useful
-discipline, because anything it can do only by reaching past the API is a bug in the API.
-
-## Cross-cutting, placed by phase
-
-| Capability | Lands | Note |
-|-----------|-------|------|
-| **Write-path telemetry** | **1** | You cannot tell the spine works if you cannot see it work |
-| **Tenancy model** | **1** | Columns, not features. Retrofitting multi-tenancy is the expensive migration |
-| **Observability, broader** | 2 → 8 | Detectors ship with the thing they watch, never after |
-| **Domain event store** | 2 | The audit substrate must exist before events accumulate |
-| **Token accounting** | 2 → 5 | Usage records with depth; estimate-vs-actual with crawler dry-run |
-| **Model selection mechanism** | **1** | Engine registration and per-artifact provenance — not retrofittable |
-| **Model catalog UX** | 6 | Cards, hardware feasibility, staleness-impact preview. Needs staleness fields (2) |
-| **Trace context across the queue** | 1 | Span links, with the queue abstraction |
-| **Deletion** | 1 → 8 | Single item in 1 · selector jobs and dry-run in 4 with the job machinery · entity refcounting and summary rebuild in 5 with reprocess · erasure, legal hold and verification in 8 |
-
----
 
 ## Two sequencing risks
 
