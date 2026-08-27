@@ -109,6 +109,138 @@ re-embed, and invalidate the facts derived from the superseded version.
 | No authenticated crawling of third-party sites | Crawl what the tenant owns or what is public |
 | Provenance tagging | Publicly-sourced content carries different licensing exposure and must be distinguishable at retrieval |
 
+## Customization
+
+Crawling has to reach APIs nobody wrote an adapter for, so the config has to be more expressive
+than "pick a strategy". The spectrum runs from declarative to fully external, and **we deliberately
+stop before executing user code.**
+
+| Level | What the user supplies | Runs where |
+|-------|----------------------|------------|
+| **0 · Preset** | A strategy plus scope | Our workers |
+| **1 · Templated HTTP** | Request template, pagination shape, extraction paths | Our workers |
+| **2 · Expressions** | JMESPath transforms, computed fields, filter predicates | Our workers |
+| **3 · External crawler** | Their own code, in their own runtime, writing through our API | **Their infrastructure** |
+| **4 · ETL platform** | An existing tool configured to target our ingest API | **Their infrastructure** |
+
+Levels 0–2 are declarative and safe. Levels 3–4 need nothing from us but a good API. **There is no
+level between them** — no plugin sandbox, no user-supplied Python in our workers. Running arbitrary
+tenant code inside a multi-tenant worker means building a function-as-a-service platform with the
+security surface that implies, and the escape hatch is strictly better: their runtime, their
+dependencies, their scaling, their blast radius.
+
+### The templated HTTP strategy
+
+One generic strategy covers most "we need to pull from X" cases without any adapter work:
+
+```yaml
+strategy: http
+source:  { connection_id: conn_01JQRS... }   # or public
+
+request:
+  method: GET
+  url: "https://api.example.com/v2/items"
+  query:
+    updated_since: "{{ watermark }}"
+    limit: 200
+  headers:
+    Accept: application/json
+
+pagination:
+  type: cursor            # cursor | offset | page | link_header
+  cursor_path: "meta.next_cursor"
+  cursor_param: "cursor"
+  stop_when: "length(data) == `0`"
+
+extract:
+  items_path:   "data[*]"
+  id_path:      "id"
+  version_path: "updated_at"
+  content_path: "body"
+  url_path:     "attachments[*].download_url"
+
+transform:
+  - target: amount
+    expr: "to_number(financials.total_cents) / `100`"
+  - target: is_priority
+    expr: "priority == 'high' || contains(tags, 'urgent')"
+
+filter:
+  include: "status != 'deleted'"
+```
+
+Everything above is data. Expressions are JMESPath — a specified query language with no side
+effects, no I/O and no loops, so it cannot hang a worker or reach the network. Templates
+(`{{ watermark }}`) resolve from a fixed, documented variable set.
+
+That combination — templated request, declared pagination, path extraction, expression transforms —
+covers a large majority of REST APIs. When it does not, the answer is level 3, not a bigger DSL.
+
+### Where the line sits
+
+| Allowed | Not allowed |
+|---------|------------|
+| JMESPath expressions | Arbitrary code |
+| Declared pagination shapes | Custom pagination callbacks |
+| Template variables from a fixed set | Template evaluation with side effects |
+| Static header and query values, plus connection credentials | Fetching secrets at runtime |
+| Regex extraction with a compile timeout | Unbounded backtracking |
+
+Every one of those "not allowed" items is a request someone will make. The answer each time is the
+same: run it in your own process and write through the API.
+
+---
+
+## Crawling is a way of adding data — and it does not have to be ours
+
+Crawling belongs alongside webhooks, uploads and the SDK as a **first-class way data enters the
+system**. It is not an internal implementation detail of connectors.
+
+Which leads to the more useful framing: **the ingest API is the universal crawler interface.** Our
+built-in crawlers are a convenience layer over it. They call the same endpoints an external system
+would, hold no special privileges, and take no shortcuts. That was a deliberate choice — see
+"the crawler does not fetch, and does not enrich" above — and this is where it pays.
+
+The consequence: **anything can be a crawler.** A customer's Python script. A scheduled GitHub
+Action. An n8n or Zapier flow. An Airbyte or Fivetran destination. An internal ETL job that already
+has the data and just needs somewhere to put it.
+
+### What an external crawler needs from us
+
+| Requirement | Status |
+|-------------|--------|
+| A **project-scoped service key** with `data:write` and nothing more | Designed — see [api.md](../api.md) |
+| **`external_id` upsert** so re-runs update rather than duplicate | Specified in the host contract |
+| **Idempotency key** on writes so retries are safe | Gap |
+| **Batch write endpoint** — `POST /api/v1/data/batch` | **Gap, and it matters** |
+| Documented **rate limits and quota headers** so a client can self-throttle | Partial |
+| Structured errors with a machine-readable `code` | Partial — two error formats today |
+| Client helpers in the SDKs | Partial |
+
+The batch endpoint is the real gap. External ETL pushes in bulk — ten thousand rows at a time —
+and a per-record POST turns that into ten thousand round trips, ten thousand auth checks and ten
+thousand transactions. Bulk producers need a bulk verb, with per-item results so a partial failure
+does not fail the batch.
+
+### Two other external paths that already work
+
+**Per-user webhooks.** An external system that already has push semantics can post to
+`whk_<ulid>` directly. Nothing new required.
+
+**The credential broker's own sync engine.** It ships scheduled incremental pulls with cursor state.
+If the deployed version supports it, a slice of what we would build as crawlers becomes
+configuration in a system we already run — worth confirming before writing the framework, since it
+could *remove* work rather than add it.
+
+### Why this matters strategically
+
+A managed crawler covers the common cases well. It will never cover a customer's bespoke internal
+system, their mainframe export, or the API their vendor documented badly in 2011.
+
+Treating the ingest API as the contract means those cases are **supported by default** rather than
+requiring us to build an adapter for each. The connector catalog stops being a ceiling on what the
+platform can ingest and becomes a floor.
+
 ## Agentic crawlers: propose, don't execute
 
 An agent that decides what to crawl next is a runaway loop with a budget attached. The safer

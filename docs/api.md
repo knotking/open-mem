@@ -67,6 +67,7 @@ because the credential does not carry the scope.
 |----------|-----|
 | `POST /uploads`, `POST /uploads/{id}/complete` | Presigned direct-to-storage flow |
 | `CRUD /crawlers`, `POST /crawlers/{id}/runs`, `POST /crawlers/{id}/dry-run`, `PATCH /runs/{id}` | Crawler configs and run control |
+| **`POST /data/batch`** | Bulk write with per-item results — external crawlers and ETL push thousands of rows; per-record POST is ten thousand round trips |
 | `POST /retrieve` | Composable retrieval; the five modes become presets over it |
 | `POST /reprocess` | W7 — rebuild derived artifacts by selector |
 | `GET /artifacts/stale` | What needs rebuilding, and why |
