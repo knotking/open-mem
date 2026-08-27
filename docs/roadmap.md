@@ -100,6 +100,24 @@ The distinction that matters: **the selection mechanism is Phase 1; the catalog 
 If models stay hardcoded until then, every artifact produced in phases 1–5 carries no provenance
 and the catalog's arrival becomes a corpus-wide staleness event.
 
+#### Privacy
+
+Privacy has the same property as tenancy, and one control is not merely expensive to retrofit but
+**impossible**: "who accessed this record in March?" has no answer if you were not recording in
+March. See [security/privacy-foundations.md](security/privacy-foundations.md).
+
+| Work | Why now |
+|------|---------|
+| **Access audit on every read** — append-only, separate store | Past access is unknowable. No migration recovers it |
+| **Provenance on every derived artifact** — source set as a *list* | A summary spanning forty items, written without its source list, is **unerasable** later |
+| **Encryption at rest, failing closed** | Retrofitting per-tenant keys onto a single-key corpus is a full re-encrypt |
+| **Classification flag at ingest** — regulated / personal | Gates the inference fallback; without the field, classification means re-scanning the corpus |
+| **Classification-gated inference** | Every call made before this exists is an untracked disclosure |
+| Log discipline — never content, never prompts | Zero cost, irreversible if wrong |
+
+*Not yet:* DSAR tooling, export UX, SSO, break-glass, ethical walls, legal hold, residency, the
+delete-cascade implementation — its hooks are the provenance row above.
+
 #### Write-path telemetry
 
 You cannot tell whether the spine works if you cannot see it work.

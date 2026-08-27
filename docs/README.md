@@ -58,6 +58,7 @@ can be filled three different ways.
 |----------|--------|
 | [security/tenancy.md](security/tenancy.md) | Org/project model, privacy holes, scale posture |
 | [security/auth.md](security/auth.md) | Identity abstraction, password auth, API keys, credential storage |
+| [security/privacy-foundations.md](security/privacy-foundations.md) | **What cannot be retrofitted** — audit, provenance, encryption, classification |
 | [security/compliance.md](security/compliance.md) | GDPR, HIPAA, and what the deployment variant decides |
 
 ## Operations
