@@ -35,8 +35,12 @@ The system ships a few sensible ones and organisations add their own:
 | `session` | 24 hours | `archive` |
 | `tracing` | 3 days | `orphan_delete` |
 
-Everything else — `factual`, `episodic`, `semantic`, `organizational`, `procedural`, whatever a
-particular deployment needs — is a type someone defines. Precedence for definitions is the usual
+Everything else is a type someone defines — commonly `factual`, `episodic`, `semantic`,
+`organizational`, and **`procedural`**.
+
+`procedural` is worth naming because the taxonomy borrows episodic and semantic from cognitive
+science and the third member is the one an agent system most needs: *how we do X here* — runbooks,
+workflows, learned procedures. It fits neither `semantic` (concepts) nor `factual` (assertions). Precedence for definitions is the usual
 project → org → shipped, with admin locks.
 
 **`default` exists so nothing is orphaned.** An item written with no memory and no matching routing

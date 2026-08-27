@@ -19,7 +19,7 @@ is the same material as one continuous page.
 | **I · Why this exists** | The problem, the bet, who owns what | [use-cases](use-cases.md) · [design-principles](design-principles.md) |
 | **II · What the things are** | The data model everything else operates on | [memories](memories.md) · [cases](cases.md) · [normalization](ingestion/normalization.md) |
 | **III · Getting data in** | One write path, and every producer that uses it | [write-api](ingestion/write-api.md) · [workers](ingestion/workers.md) · [sources](ingestion/sources.md) · [connectors](ingestion/connectors.md) · [formats](ingestion/formats.md) · [uploads](ingestion/uploads.md) · [crawlers](ingestion/crawlers.md) · [bulk](operations/bulk-operations.md) |
-| **IV · Making it useful** | Indexes, models, keeping derived data honest | [indexes](retrieval/indexes.md) · [model catalog](operations/model-catalog.md) · [model routing](operations/model-routing.md) · [versioning](retrieval/versioning.md) |
+| **IV · Making it useful** | Indexes, models, keeping derived data honest | [indexes](retrieval/indexes.md) · [quality](retrieval/quality.md) · [multilingual](multilingual.md) · [model catalog](operations/model-catalog.md) · [model routing](operations/model-routing.md) · [versioning](retrieval/versioning.md) |
 | **V · Lifecycle** | Removing things, correctly | [deletion](operations/deletion.md) |
 | **VI · Access and privacy** | Who sees what, and what we can prove | [tenancy](security/tenancy.md) · [access model](security/access-model.md) · [auth](security/auth.md) · [privacy foundations](security/privacy-foundations.md) · [compliance](security/compliance.md) |
 | **VII · Interfaces and operations** | The contract, and running the thing | [api](api.md) · [telemetry](operations/telemetry.md) · [testing](operations/testing.md) · [technology](operations/technology.md) · [deployment variants](operations/deployment-variants.md) |
@@ -33,6 +33,7 @@ is the same material as one continuous page.
 | [design-principles.md](design-principles.md) | The central bet, cross-cutting invariants, capability ownership |
 | [memories.md](memories.md) | Typed lifecycle containers — configurable types, TTL, expiry policy, data mapping |
 | [cases.md](cases.md) | Correlating information around a subject — patient timelines, legal matters, asset histories |
+| [multilingual.md](multilingual.md) | Language detection, lexical config, and the embedder choice that decides cross-lingual retrieval |
 | [roadmap.md](roadmap.md) | Phased plan across local, GKE and cloud — plus open decisions |
 
 ## Requirements & architecture

@@ -144,6 +144,37 @@ Two endpoints remain separate, for good reasons:
 | `POST /api/v1/uploads` | Issues a presigned URL. It grants capability rather than writing data; the *completion* is an ordinary write with `Stored` content |
 | `POST /webhooks/{whk_id}` | The public, provider-facing surface. It accepts whatever shape a provider sends, normalises it, and calls the write API. It is a **translator in front of** the write API, not a second one |
 
+## Two kinds of duplicate
+
+`external_id` dedupes **within** a source: re-crawling the same Salesforce record updates rather
+than duplicates. It does nothing across sources.
+
+The same PDF arrives from Drive and as an email attachment. Two producers, two `external_id`
+values, both legitimate — and one document, embedded twice, entity-extracted twice, occupying two
+places in every result set.
+
+### Dedupe the derived work, not the provenance
+
+The tempting fix is to reject the second write. That loses something real: **who sent it, when and
+in what context is itself information.** The email attachment tells you a person shared it with a
+colleague; the Drive copy tells you it lives in a folder. Collapsing them discards that.
+
+So keep both items and **share the expensive derived layer**:
+
+| Layer | Behaviour on a content-hash match |
+|-------|----------------------------------|
+| Data item | **Both kept** — provenance differs, and provenance is data |
+| Content hash | Recorded on both; the match is what links them |
+| Chunks, embeddings | **Computed once**, referenced by both |
+| Extraction, entities, claims | **Computed once**, attributed to both sources |
+| Retrieval | **Deduplicated at query time** — one result, both provenances shown |
+
+That last row is what the user actually experiences: searching does not return the same document
+twice, but opening it shows both places it came from.
+
+The cost saving is not incidental either — the derived layer is where nearly all the expense sits,
+so deduplicating it is most of the benefit of deduplicating at all.
+
 ## The write is synchronous; the enrichment is not
 
 A common misreading worth stating plainly: **`POST /write` commits.** The item is durable and has

@@ -119,6 +119,40 @@ Three economies share one code path, and conflating them produces bad decisions:
 | `org_key` | Org-provided credentials | Org policy applies; admin sets the ceiling |
 | `platform` | Ours, in a hosted deployment | Quota with margin; refuse at the limit |
 
+## Read-side cost is unmetered
+
+Write quotas are designed in detail. Retrieval has none — and retrieval is where a single request
+can be a thousand times more expensive than another.
+
+| Request | Relative cost |
+|---------|--------------|
+| Vector search, top-10 | 1× |
+| Hybrid with RRF | ~2× |
+| `full` mode — all signals, RRF merged | ~5× |
+| …plus a cross-encoder reranker | **~100×** — an inference call per candidate |
+| …plus RAG generation | **~1000×** — generation dominates everything above it |
+
+### Rate-limiting by request count is the wrong primitive
+
+A hundred vector searches and a hundred `full`+cross-encoder+chat requests are the same number to a
+counter and three orders of magnitude apart in cost. **Quota must be cost-weighted**, priced on the
+work a request actually authorises rather than on the fact that it arrived.
+
+Controls, in order of how much they matter:
+
+| Control | Effect |
+|---------|--------|
+| **Cost-weighted quota** | The only one that survives contact with `full` mode |
+| Budget check **before** the expensive stage | Rerank and generation are gated, not the retrieval that precedes them |
+| Reranker availability by tier | Cross-encoder is not a default anyone can loop |
+| Max candidates into rerank | Bounds the worst case rather than trusting the caller |
+| Per-key concurrency | One client cannot occupy the model tier |
+| Query timeout | A runaway hybrid query is cancelled, not waited on |
+
+This is both a **cost** vector and a **denial-of-service** vector, and the second is the one that
+arrives without malice — a client with a retry loop and an expensive default configuration will do
+it by accident.
+
 ## Volume
 
 One row per inference call at target ingest rates is millions of rows, so this cannot live in the
