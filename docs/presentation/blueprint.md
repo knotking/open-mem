@@ -102,6 +102,7 @@ ending in a test rather than a demo.
 
 - [Where Metadata Lives](#where-metadata-lives)
 - [Blob Store Layout](#blob-store-layout)
+- [Onboarding and Seeding](#onboarding-and-seeding)
 - [Technology Choices](#technology-choices)
 - [Deployment Variants](#deployment-variants)
 - [Telemetry](#telemetry)
@@ -930,6 +931,13 @@ Every feature in the platform, with the phase that ships it and whether it is in
 | `shared_with` principals | user / group / project / org / public | 1 | ◐ |
 | RBAC | Org roles, one enforcement path | 1 | ◐ |
 | Auth seam | `TokenVerifier` — Firebase hosted, local password air-gapped | 1 | ◐ API key |
+| **Invite-only registration** | Default mode; invites single-use, expiring, email-bound, audited on create and redeem | 1 | ● |
+| **Bootstrap-once admin** | Refuses to run when any user exists — otherwise it is an unauthenticated signup endpoint | 1 | ● |
+| **`seed --demo`** | One worked domain, ~40 items — **through the real API**, so a successful seed is the Phase 1 verification | 1 | ● |
+| **Test fixture with recorded responses** | Separate from the demo — no test may depend on live model output | 1 | ● |
+| Demo ships its **configuration** | Memory types, data-type profiles, model assignments, saved queries — half the value | 2 | ◐ |
+| Demo includes **deliberate imperfection** | A normalization failure, an item mid-enrichment, an item the member cannot see | 2 | ◐ |
+| `seed --demo --full` — six domains | Sales · clinical · legal · support · telemetry · personal | 6 | ○ |
 | **Capability-scoped keys** | A key can only do what was checked at creation | 1 | ● |
 | Ephemeral token exchange | Key → short-lived JWT → gateway validates against our JWKS | 3 | ○ |
 | Credential proxy | Workers receive references, never secrets | 2 | ◐ |
@@ -7050,6 +7058,9 @@ describe a *corpus*, and a corpus belongs to a project.
 |---------|--------|---------|-------|
 | Key capability defaults | **O** 🔒 | **nothing checked** | See below |
 | Key max lifetime | **O** 🔒 | 90 days | |
+| **`registration_mode`** | **O** PL 🔒 | **`invite_only`** | `open` and `disabled` also available |
+| Invite expiry | **O** 🔒 | 7 days | Single-use, revocable, audited on create *and* redeem |
+| Invite email binding | **O** 🔒 | **on** | An unscoped link is transferable by design |
 | Auth providers | **PL** O | per variant | |
 | Budget | **U** **P** O | none | Both levels — one person's sandbox must not spend the team's month |
 | Rate limits | **O** PL | per provider | |
@@ -7067,6 +7078,7 @@ decision made on someone's behalf**, and the ones that matter are all defaults-o
 | Activity capture: **off** | A recall feature ships as surveillance |
 | Answer retention: **metadata** | A second corpus accumulates, more sensitive than the first |
 | Sharing externally: **disabled** | Public exposure is one click from a user who did not know what `public` meant |
+| Registration: **invite-only** | Anyone who signed up before you closed it is already inside |
 | Bulk `enrich`: **false** | A 50k import silently spends a month's budget |
 | `orphan_delete`, never unconditional | A container nobody thought owned anything deletes data |
 
@@ -8116,6 +8128,291 @@ why the blob store is rated **low swap cost** in technology.md.
 - **FR-BLOB-8** Paths below the bucket root MUST be identical across deployment variants.
 - **FR-BLOB-9** Object keys MUST NOT contain a segment derived from a mutable field.
   `event_time` in particular MUST NOT appear in a path.
+
+---
+
+## Onboarding and Seeding
+
+Two things that arrive together at first run: **how the first tenant comes to exist**, and **who is
+allowed to become the second**.
+
+Decided: **a seeded demo org, team, project and user for testing, and invite-only registration for
+everyone else.**
+
+---
+
+### The seed is the Phase 1 exit criterion, made runnable
+
+Phase 1 exits when *an item is written into a project owned by an org with an
+access level, found by scoped search, cited, audited, and the row records which model embedded it.*
+
+**That is exactly what seeding a demo tenant does.** So the seed is not a convenience script beside
+the tests — run through the real path, a successful seed **is** an end-to-end verification, and a
+failing one localises the break before any human has logged in.
+
+Which gives the rule that shapes everything else here:
+
+> **Seeding uses the same API a real signup uses. There is no fixture path.**
+
+A seed that inserts rows directly tests the seed. Whatever it proves is not transferable, and it
+diverges the moment the real path changes — the same argument the sandbox makes
+for not being a special mode.
+
+Concretely: the seeder creates the org through the org endpoint, the project through the project
+endpoint, and writes its sample items through `POST /api/v1/write` with a registered producer,
+exactly as an external client would.
+
+### The demo ships working use cases, not a scaffold
+
+The demo is not fifty assorted rows. It is **six worked domains that answer real questions on first
+login** — and each one exists to demonstrate something the others cannot.
+
+| Domain | Chosen because it is the only one that shows… |
+|--------|-----------------------------------------------|
+| **Sales** — an Acme renewal | Multi-source correlation on a **deal id**, recording **fan-out** into four assets, and commitments as structured fields with actors and due dates |
+| **Clinical** — a patient timeline | **`event_time` ≠ `ingested_at`** — a backdated 2019 report ingested today · **`sensitivity: phi`** making cloud models non-candidates · identifier join on MRN |
+| **Legal** — a matter | **Asserted vs inferred** membership rendered differently · **legal hold beating erasure** with partial completion · deadlines as date facets |
+| **Support** — a ticket history | The **question index** — the ticket says *"it just spins forever"*, the engineer searches *"performance regression"* · sentiment as a bounded facet |
+| **Telemetry** — sensor readings | The **`enrich: false`** path · facet-only retrieval · volume that never reaches a model |
+| **Personal** — one user's own mail | **Connection scope** `personal` vs `shared` producing opposite ACLs in the same org · the per-user default memory |
+
+**Six, not twelve.** The selection principle is coverage of *mechanisms*, not breadth of industries.
+A seventh domain that demonstrates nothing the first six do not is corpus weight without
+information — it makes the demo slower to seed and no more convincing.
+
+#### Each domain ships its configuration, and that is half the value
+
+A demo that only contains data shows what the product stores. A demo that contains **the
+configuration that made the data useful** shows how to use it — and configuration is the part new
+users get wrong.
+
+So each domain arrives with:
+
+| Shipped | Example |
+|---------|---------|
+| **Memory types** with TTL and expiry policy | `matter` — no TTL, `keep_members` |
+| **A `data_type_profile`** | `medical_record` — `sensitivity: phi`, requires `domain:medical` |
+| **Model assignment** for its types | `enrich · medical_record → medgemma` |
+| The **shipped prompt**, unmodified | So the user can see what a default produces before overriding |
+| **Saved queries that work** | *"What did we promise Acme?"* · *"What is due in the next 30 days?"* |
+
+The saved queries matter more than they look: **a demo corpus with no questions attached is a
+corpus.** The questions are what make it a demonstration, and they double as the acceptance
+assertions — if *"what did we promise Acme?"* stops returning the commitment, something broke.
+
+### The tension this creates, and how it resolves
+
+Two rules already written point in opposite directions here:
+
+> *"Seeding uses the same API a real signup uses. There is no fixture path."*
+>
+> *"The demo must answer real questions on first login."*
+
+Honouring the first means **enriching six domains through real model calls at seed time** — on a
+laptop with local models, that is not minutes. Honouring the second by shipping pre-computed
+artifacts means the seed no longer exercises the pipeline, and proves nothing.
+
+#### The resolution: they are two different fixtures with opposite requirements
+
+| | **Test fixture** | **Demo tenant** |
+|---|---|---|
+| Goal | Determinism | Authenticity |
+| Model calls | **None** — recorded responses | **Real**, through the pipeline |
+| Enrichment | Pre-computed, checked in | Produced at seed time |
+| Used by | CI, every test run | A human, once per deployment |
+| If it drifts from reality | The test is wrong | The demo is wrong |
+
+**Tests must not depend on a model.** A test suite whose assertions move when a provider updates a
+model is a test suite people learn to ignore — so the test fixture carries recorded responses, and
+the pipeline is exercised against them.
+
+**The demo must not lie.** Its whole purpose is showing what this system does with data, so it runs
+the real path.
+
+#### And the demo's seeding time is a feature, not a cost
+
+Seeding enriches in the background with the **readiness staircase visible**:
+
+```
+uploaded    ████████████████████████  312
+stored      ████████████████████████  312
+searchable  ████████████████░░░░░░░░  198
+enriched    ███████░░░░░░░░░░░░░░░░░   94   ~6 min remaining
+```
+
+This is the most honest possible first impression, and it teaches the mental model the product
+actually needs the user to hold: **content arrives immediately, becomes searchable shortly after,
+and becomes *understood* later.** A demo that hid that would set an expectation the user's own data
+will not meet.
+
+Two tiers keep it practical:
+
+| Command | Contents | Time |
+|---------|----------|------|
+| `seed --demo` | **One domain** (sales), ~40 items, enriched synchronously | Under a minute |
+| `seed --demo --full` | All six domains, ~300 items, enriched in the background | Minutes, watchable |
+
+### Synthetic data has to be obviously synthetic
+
+This matters far more in clinical and legal than anywhere else, and it is easy to get wrong by
+trying to make a demo look impressive.
+
+| Rule | Why |
+|------|-----|
+| **Reserved names only** — Acme, Contoso, Northwind | A demo company that is a real company is a problem someone else did not agree to |
+| **Documented fake identifier ranges** — `MRN-DEMO-*`, `MATTER-DEMO-*` | A realistic-format MRN could collide with a real one, and a demo record that looks real may be treated as real |
+| **A visible marker** on demo records | Someone eventually screenshots a demo patient timeline into a deck |
+| **Generated, never anonymised** | Anonymised real data is real data that has been processed. Generated data was never anyone's |
+
+> **The goal is a demo nobody can mistake for production data**, including at a glance, in a
+> screenshot, six months later, by someone who was not there when it was seeded.
+
+### A demo that only shows success teaches a false expectation
+
+The instinct is to curate: every record enriched cleanly, every timeline complete, every query
+answered. **That demo is a bad demo**, because the user's own corpus will not look like it, and the
+gap will read as the product failing rather than as normal.
+
+So the fixture deliberately includes:
+
+- **One item that failed normalization** — stored raw with `normalization_status: failed` and a
+  reason, showing that a mapping bug loses nothing
+- **One item still enriching** when the others are done, so the staircase is visible in a steady
+  state, not only during seeding
+- **One item the demo member cannot see** — the admin's `personal` connection data, in the same
+  project, so ACL behaviour is demonstrable rather than asserted
+- **One case with an inferred member** alongside asserted ones, rendered subordinate and excluded
+  from the count
+
+Each of these is a mechanism from these documents that is otherwise invisible until it matters. The
+demo is where they can be *shown* rather than described.
+
+### Reset is the ordinary cascade
+
+`seed --demo --reset` purges the demo org and re-seeds — through
+`DELETE /organizations/{id}?purge=true`, the same path as any offboarding.
+
+**A demo people can break needs a reset, and the reset needs to be the real one.** If resetting the
+demo requires bespoke cleanup, the purge cascade is incomplete — and the demo has found the bug
+before a customer did.
+
+### Demo credentials are the classic backdoor
+
+A known demo user with a known password, present in every deployment, is a shipped default
+credential — the failure mode that shows up in breach write-ups more reliably than any other.
+
+So:
+
+- **Credentials are generated per deployment**, never fixed in the seeder
+- The generated password is **printed once, at seed time**, and not stored in recoverable form
+- The demo user is an **ordinary user** with ordinary rights, not an escalated one
+- `seed --demo` is **explicit**. Production installs are not seeded by accident
+
+### The demo tenant is ordinary data, and reporting knows the difference
+
+The tempting shortcut is an `is_demo` flag consulted throughout. Resist it: a flag checked in the
+data path becomes a branch in retrieval, in deletion, in the ACL predicate — a special case in
+exactly the places that must not have one.
+
+**The data path never knows.** The demo org has a known id; *reporting* excludes it from tenant
+counts, usage aggregates and billing. One filter, in the layer that summarises, not in the layer
+that serves.
+
+And it is **deleted by the ordinary path** — `DELETE /organizations/{id}?purge=true`, the same
+cascade as any other offboarding. If removing the demo needs bespoke cleanup, the cascade is
+incomplete and the demo has just found the bug.
+
+---
+
+### Registration is invite-only
+
+```
+registration_mode:  invite_only  (default)  |  open  |  disabled
+```
+
+**Invite-only is the default and the intended posture for now.** `open` exists for deployments that
+want self-service; `disabled` for a closed appliance where accounts are provisioned out of band.
+
+#### An invite is a credential, and gets credential treatment
+
+An invite grants org membership at a stated role. That makes it a bearer token, not a hint, so it
+carries what any credential carries:
+
+| Property | Rule |
+|----------|------|
+| **Single-use** | Redeemed once, then dead |
+| **Expiry** | Bounded — 7 days by default |
+| **Scoped** | To one org, one role, and optionally one email address |
+| **Revocable** | Before redemption, by any org admin |
+| **Audited** | On creation *and* on redemption — see audit |
+
+Auditing redemption matters as much as creation: *"who invited them"* and *"who actually walked
+through the door"* are different questions, and an invite forwarded to someone else answers only the
+second.
+
+#### Two failure modes worth designing against
+
+**An invalid token must not reveal whether an org exists.** *"That invite is invalid"* and
+*"that invite expired"* are acceptable; anything that distinguishes *"no such org"* from *"wrong
+token for this org"* turns the invite endpoint into an org-enumeration oracle.
+
+**Email-scoped invites are the stronger form and should be the default.** An unscoped invite link is
+transferable — forwarded, pasted into a channel, screenshotted — and whoever redeems it becomes a
+member. Binding the invite to an address means a forwarded link fails, which is the behaviour
+someone sending it actually intended.
+
+#### The bootstrap is the one exception, and must stay one
+
+Invite-only has a chicken-and-egg problem: **someone must exist before anyone can be invited.**
+
+The seed creates that first admin. That is the only account in the system created without an invite,
+and it must be a **one-time operation** rather than a standing capability — a seeder that can run
+twice is an unauthenticated account-creation endpoint wearing an operations script's clothes.
+
+So bootstrap **refuses to run if any user already exists**, and says so rather than silently doing
+nothing.
+
+---
+
+### Where this lands
+
+| Phase | Work |
+|-------|------|
+| **1** | `seed --demo` through the real API · bootstrap-once admin · `registration_mode` defaulting to `invite_only` · invite create and redeem, audited |
+| **2** | Demo data extended as agents arrive, so the sandbox has enriched content on first login |
+| **7** | Invite **UI**, role management, resend and revoke — the surface, after the mechanism |
+
+The mechanism is Phase 1 because **the alternative to invites is open registration**, and shipping
+with open registration then closing it later means anyone who signed up in between is already inside.
+
+### Requirements
+
+- **FR-ONB-1** Seeding MUST use the same API path as real signup and ingestion. There MUST NOT be a
+  fixture-only write path.
+- **FR-ONB-2** The demo tenant MUST be ordinary data. No flag consulted in the data path; exclusion
+  from reporting only.
+- **FR-ONB-3** The demo tenant MUST be removable by the ordinary purge cascade.
+- **FR-ONB-4** Demo credentials MUST be generated per deployment, shown once, and never fixed in the
+  seeder.
+- **FR-ONB-5** Seeding MUST be explicit and MUST NOT run by default.
+- **FR-ONB-6** Sample data MUST be generated, never derived from or anonymised from real content.
+- **FR-ONB-12** The demo MUST ship worked domains that answer real questions on first login,
+  selected for mechanism coverage rather than industry breadth.
+- **FR-ONB-13** Each demo domain MUST ship its configuration — memory types, data-type profile,
+  model assignment — and saved queries that double as acceptance assertions.
+- **FR-ONB-14** The test fixture and the demo tenant MUST be separate. Tests MUST NOT depend on live
+  model output; the demo MUST run the real pipeline.
+- **FR-ONB-15** Demo entities MUST use reserved names and documented fake identifier ranges, and
+  demo records MUST carry a visible marker.
+- **FR-ONB-16** The demo fixture MUST include a normalization failure, an item mid-enrichment, an
+  item the demo member cannot see, and an inferred case member.
+- **FR-ONB-17** Demo reset MUST use the ordinary purge cascade.
+- **FR-ONB-7** `registration_mode` MUST default to `invite_only`.
+- **FR-ONB-8** Invites MUST be single-use, expiring, org- and role-scoped, revocable, and audited on
+  both creation and redemption.
+- **FR-ONB-9** Invites SHOULD be bound to an email address by default.
+- **FR-ONB-10** Invite validation MUST NOT disclose whether an organisation exists.
+- **FR-ONB-11** Bootstrap MUST refuse to run when any user exists.
 
 ---
 
@@ -9652,6 +9949,9 @@ deliberately does not.
 | **Bulk** | **The run entity** — checkpointed, resumable, dry-run, per-item results · bulk write at scale with admission control on queue depth · `enrich: false` default for bulk · **selector-based delete as a job** |
 | **Account deletion** | `DELETE /users/{id}/data` — **revoke first**, then cascade as a run · `personal` connections deleted, `shared` retained with attribution removed · the deletion's own audit record survives it |
 | **Auth** | `TokenVerifier` seam, API-key verifier behind it |
+| **Onboarding** | **Bootstrap-once admin** · `registration_mode` defaulting to **`invite_only`** · invite create and redeem, audited on both |
+| **Test fixture** | Separate from the demo — **recorded model responses**, so no test depends on live model output |
+| **Seed** | `seed --demo` — **one worked domain** (sales), ~40 items, enriched synchronously, **through the real API** · reset via the ordinary purge cascade |
 
 #### Why bulk and account deletion are here rather than Phase 4
 
@@ -9673,6 +9973,21 @@ that regenerates, where a revoked one is inert.
 **Cost:** roughly a week to ten days Phase 1 did not have, against erasure working from the first
 release and four later phases inheriting the machinery. Full treatment in
 bulk-operations.md and deletion.md.
+
+#### The seed is the exit criterion, made runnable
+
+Phase 1 exits when an item is written into a project owned by an org with an access level, found by
+scoped search, cited, audited, and recording which model embedded it. **Seeding a demo tenant does
+exactly that** — so run through the real API, a successful seed *is* the end-to-end verification,
+and a failing one localises the break before anyone logs in.
+
+Which is why there is no fixture path: a seed that inserts rows directly tests the seed. Full
+treatment in onboarding.md, including why demo credentials are
+generated per deployment and why bootstrap must refuse to run twice.
+
+**Invite-only is Phase 1 rather than Phase 7** because the alternative is open registration —
+and shipping open, then closing it later, means everyone who signed up in between is already inside.
+The invite *UI* can wait; the mechanism cannot.
 
 #### 1b · Write-time facts — column and enforcement only
 
@@ -9740,6 +10055,7 @@ has been contaminated.
 | **Assignment per `(purpose, data_type)`** | MedGemma for clinical, a 270M classifier for layer 7 · **embeddings accept `*` only** |
 | **Sensitivity-driven candidacy** | A cloud engine is never a *candidate* for a `phi` type |
 | **W7 reprocess** | You will want to tune prompts on day two. Without this, tuning is write-only |
+| **Demo grows to support + personal** | Question index and connection-scope ACLs become demonstrable once agents exist |
 | Telemetry | `enrich.classification_layer` — measures the ~80% claim rather than asserting it |
 
 **Exit:** written items are classified, summarised and entity-extracted; changing a prompt can
@@ -9812,7 +10128,7 @@ The seams from Phase 1 are what make this cheap rather than a fork.
 
 | Variant | Work | Exit |
 |---------|------|------|
-| **Local** | Lean compose · local password auth behind the existing `TokenVerifier` seam · **model catalog UX** — cards, hardware feasibility, **derived assignment proposals with exclusions shown**, `declared_by` provenance, staleness preview | **Unplug the network and everything still works** — including the models |
+| **Local** | `seed --demo --full` — all six domains · lean compose · local password auth behind the existing `TokenVerifier` seam · **model catalog UX** — cards, hardware feasibility, **derived assignment proposals with exclusions shown**, `declared_by` provenance, staleness preview | **Unplug the network and everything still works** — including the models |
 | **Cloud** | Managed queue behind the existing abstraction · hosted auth as another verifier · pooling audit · Secret Manager · crawl runs as jobs | Single-tenant prod, SaaS-ready |
 
 **Gate:** run the credential-broker request-scoped-lifecycle spike before committing to the cloud
@@ -9826,6 +10142,7 @@ could *remove* work — the broker's own sync engine may replace part of Phase 5
 | Work | Depends on |
 |------|-----------|
 | Sharing surface, invite flows, role management UI | Tenancy model (1) · connection ACL (3) |
+| **Demo gains clinical and legal** | Cases, asserted-vs-inferred membership and legal hold have nothing to demonstrate before (7) |
 | **Permission sync from source systems** | The gap competitors already ship |
 | Normalization: `identifiers[]`, `event_time` | Depth (2) |
 | Case primitive, membership, correlation | Normalization + staleness |
