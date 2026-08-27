@@ -166,6 +166,16 @@ That is the argument for building the intersection rather than six vertical prod
 also why the correlation, provenance and privacy work is not optional infrastructure. Take any of
 it out and the scenarios stop working in ways nobody notices until someone acts on a wrong answer.
 
+## The full published catalog
+
+The six scenarios above are worked in depth. The **twelve use cases published on the site** are
+enumerated with their implementation paths — and their honest status — in
+[use-cases-catalog.md](use-cases-catalog.md).
+
+Writing all twelve out surfaced two gaps the five families did not: retrieval is **pull-only**
+while four use cases need push, and derived artifacts are **hardcoded to summarisation** when
+several use cases need other output schemas over the same member set.
+
 ## The five families
 
 | Family | Covers | Needs |

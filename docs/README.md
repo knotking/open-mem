@@ -16,7 +16,7 @@ is the same material as one continuous page.
 
 | Part | Covers | Documents |
 |------|--------|-----------|
-| **I · Why this exists** | The problem, the bet, who owns what | [use-cases](use-cases.md) · [design-principles](design-principles.md) |
+| **I · Why this exists** | The problem, the bet, who owns what | [use-cases](use-cases.md) · [use-case catalog](use-cases-catalog.md) · [design-principles](design-principles.md) |
 | **II · What the things are** | The data model everything else operates on | [memories](memories.md) · [cases](cases.md) · [normalization](ingestion/normalization.md) |
 | **III · Getting data in** | One write path, and every producer that uses it | [write-api](ingestion/write-api.md) · [workers](ingestion/workers.md) · [sources](ingestion/sources.md) · [connectors](ingestion/connectors.md) · [formats](ingestion/formats.md) · [uploads](ingestion/uploads.md) · [crawlers](ingestion/crawlers.md) · [bulk](operations/bulk-operations.md) |
 | **IV · Making it useful** | Indexes, models, keeping derived data honest | [indexes](retrieval/indexes.md) · [quality](retrieval/quality.md) · [multilingual](multilingual.md) · [model catalog](operations/model-catalog.md) · [model routing](operations/model-routing.md) · [versioning](retrieval/versioning.md) |
@@ -30,6 +30,7 @@ is the same material as one continuous page.
 | Document | Read it for |
 |----------|-------------|
 | [use-cases.md](use-cases.md) | The five families in scope, how their conflicts resolve, and build order |
+| [use-cases-catalog.md](use-cases-catalog.md) | All twelve published use cases with their implementation paths and honest status |
 | [design-principles.md](design-principles.md) | The central bet, cross-cutting invariants, capability ownership |
 | [memories.md](memories.md) | Typed lifecycle containers — configurable types, TTL, expiry policy, data mapping |
 | [cases.md](cases.md) | Correlating information around a subject — patient timelines, legal matters, asset histories |
