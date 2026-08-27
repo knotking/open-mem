@@ -230,6 +230,15 @@ Evaluated before anything is written:
 
 Rejecting a write is cheap. Accepting one you cannot process is not.
 
+## The phases are customizable — in a fixed order
+
+Four of the nine write phases are customizable: validation, transform/redact, normalization, and
+memory routing. The other five are sealed, and **ACL assignment is sealed deliberately before any
+of them runs** — a hook that can edit metadata is a hook that can edit visibility.
+
+See [write-customization.md](write-customization.md) for the phase order, the five customization
+surfaces, and the shared precedence rule.
+
 ## Requirements
 
 `FR-ING-8`, `FR-EXT-1..7` and the `FR-CRAWL` series all resolve against this single path. See

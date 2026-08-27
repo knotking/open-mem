@@ -18,7 +18,7 @@ is the same material as one continuous page.
 |------|--------|-----------|
 | **I · Why this exists** | The problem, the bet, who owns what | [use-cases](use-cases.md) · [use-case catalog](use-cases-catalog.md) · [design-principles](design-principles.md) |
 | **II · What the things are** | The data model everything else operates on | [memories](memories.md) · [cases](cases.md) · [normalization](ingestion/normalization.md) |
-| **III · Getting data in** | One write path, and every producer that uses it | [write-api](ingestion/write-api.md) · [workers](ingestion/workers.md) · [sources](ingestion/sources.md) · [connectors](ingestion/connectors.md) · [formats](ingestion/formats.md) · [uploads](ingestion/uploads.md) · [crawlers](ingestion/crawlers.md) · [bulk](operations/bulk-operations.md) |
+| **III · Getting data in** | One write path, and every producer that uses it | [write-api](ingestion/write-api.md) · [customization](ingestion/write-customization.md) · [workers](ingestion/workers.md) · [sources](ingestion/sources.md) · [connectors](ingestion/connectors.md) · [formats](ingestion/formats.md) · [uploads](ingestion/uploads.md) · [crawlers](ingestion/crawlers.md) · [bulk](operations/bulk-operations.md) |
 | **IV · Making it useful** | Indexes, models, keeping derived data honest | [indexes](retrieval/indexes.md) · [quality](retrieval/quality.md) · [multilingual](multilingual.md) · [model catalog](operations/model-catalog.md) · [model routing](operations/model-routing.md) · [versioning](retrieval/versioning.md) |
 | **V · Lifecycle** | Removing things, correctly | [deletion](operations/deletion.md) |
 | **VI · Access and privacy** | Who sees what, and what we can prove | [tenancy](security/tenancy.md) · [access model](security/access-model.md) · [auth](security/auth.md) · [privacy foundations](security/privacy-foundations.md) · [compliance](security/compliance.md) |
@@ -50,6 +50,7 @@ is the same material as one continuous page.
 |----------|--------|
 | [ingestion/](ingestion/README.md) | Entry points and the push/pull split |
 | [ingestion/write-api.md](ingestion/write-api.md) | **The single write path** — one endpoint, registered producers |
+| [ingestion/write-customization.md](ingestion/write-customization.md) | The nine write phases, which four are customizable, and why ACL is sealed before them |
 | [ingestion/workers.md](ingestion/workers.md) | Eight worker classes, the content contract, failure policy |
 | [ingestion/crawlers.md](ingestion/crawlers.md) | The pull half — scheduled, configurable discovery |
 | [ingestion/uploads.md](ingestion/uploads.md) | Presigned direct-to-storage uploads |

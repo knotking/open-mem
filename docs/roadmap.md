@@ -351,6 +351,8 @@ the audit record, costs a question that can never be answered.
 | Decision | Note |
 |----------|------|
 
+| **Add write phase 5 — transform / redact?** | The one customization request the design cannot serve at all. Not-storing beats storing-then-erasing on every axis. Recommend yes; cost is a declarative rule type and the discipline that it never calls a model inline |
+| **Allow `reject` as a validation policy?** | Recommend yes, but **blocked for webhook producers** — enabling it there converts a compliance preference into silent data loss |
 | **Scope W10 standing queries?** | Four published use cases need push; media monitoring is *only* a push product, so shipping it without delivery ships nothing. Recommend scoping W10 with media monitoring and stating the deferral for the rest |
 | **`compress` → `derive`?** | Study guides, flashcards, obligation extracts and customer briefings are one operation with different output schemas. Recommend yes — reuses the existing generator registry, and the endpoint has no clients yet |
 | **Materialisation policy** | Always store (recommended) / threshold / derived-only |
