@@ -24,7 +24,8 @@ Every feature in the platform, with the phase that ships it and whether it is in
 | W6 stream worker | Persistent socket sources | 5 | ○ |
 | W7 reprocess worker | Config or schema change re-runs derived work | 2 | ◐ |
 | W8 mutate worker | Upstream revision → new version, never in place | 2 | ○ |
-| W9 retract worker | Delete and erasure cascade | 1 | ● |
+| W9 retract worker | Delete and erasure cascade — **fully async**, tombstone is the only sync part | 1 | ● |
+| **`deleted_at` / `purged_at`** | Two timestamps; the erasure certificate is issued against the second | 1 | ● |
 | **Selector-based delete** | Deletion by query, as a resumable job, **with a mandatory preview** | 1 | ● |
 | **Account data deletion** | **Revoke first**, then cascade · `personal` deleted, `shared` retained with attribution removed | 1 | ● |
 | **W10 standing query** | Match new writes against saved selectors, deliver to a target | — | △ |

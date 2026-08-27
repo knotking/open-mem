@@ -133,6 +133,98 @@ POST /api/v1/deletions   { "selector": {...}, "dry_run": true }
 A destructive operation whose blast radius is only visible afterwards is not a safe operation. For
 project- and org-scoped purges, dry-run plus explicit confirmation is **required**, not advisory.
 
+## Deletion is asynchronous — but its *effect* is not
+
+Every deletion, including a single item, runs as an async pipeline. The synchronous part is
+deliberately tiny.
+
+```
+SYNCHRONOUS  ── one transaction, returns immediately
+  1. tombstone      deleted_at = now() on the root row
+  2. audit          who, what, scope, why — written in the same transaction
+  3. enqueue        a deletion run
+
+ASYNCHRONOUS ── W9, resumable, idempotent
+  4. chunks · embeddings · lexical rows
+  5. artifact_sources · entity_contributions   ← contributions, not the entities
+  6. normalized_records · versions
+  7. blobs                                     ← the network call that can fail
+  8. graph facts, where a graph exists
+  9. purged_at = now(), and ONLY NOW remove the root row
+```
+
+### Why the effect must still be immediate
+
+An erasure request cannot wait in a queue to take effect. But a cascade across Postgres, pgvector,
+an object store and possibly a graph store **cannot** complete inside a request — it is several
+network calls to systems with independent failure modes, and a synchronous version either times out
+under load or swallows failures to avoid doing so.
+
+The tombstone resolves it: **visibility is transactional, reclamation is eventual.**
+
+| | When | Guaranteed by |
+|---|------|--------------|
+| **Invisible to every read** | Immediately, at commit | The `deleted_at` predicate, applied in the query alongside the ACL predicate |
+| **Physically reclaimed** | Eventually, minutes | The W9 run, resumable and monitored |
+
+Because the filter lives *inside* the retrieval query — [the same place the ACL predicate lives](../operations/schema.md) — there is no window where a deleted item is returnable. It stops
+being visible at the same instant the caller gets their response.
+
+### A tombstone is not an erasure, and the difference must be recorded
+
+This is the failure the design exists to prevent: a record that **looks** deleted, is invisible to
+every query, and whose bytes are still in the object store because the cascade failed at step 7 and
+nobody looked.
+
+So **"deleted" has two timestamps, and both are stored:**
+
+```
+deleted_at    the tombstone — when it became invisible
+purged_at     when the last derived artifact and blob were actually gone
+```
+
+> **An erasure certificate is issued at `purged_at`, never at `deleted_at`.** Reporting the first as
+> though it were the second is how an organisation certifies an erasure that did not happen — in
+> good faith, from a screen that said "deleted".
+
+`deletion.oldest_pending_purge` is the metric, and it is the usual shape: nothing errors, the UI is
+correct, and the only signal that anything is wrong is a number nobody is watching.
+
+### The root row is deleted last, because it is the map
+
+Step 9 is not stylistic ordering. **`data_items` is what tells the cascade which chunks, which
+blobs, which contributions belong to this item.** Remove it first and a cascade that fails halfway
+has lost the ability to find what it did not finish — the remaining artifacts become orphans with
+no path back to a request that would clean them up.
+
+Delete the dependents, then the map. The same logic applies at every level of the cascade.
+
+### Cleanup and erasure are the same pipeline with a different delay
+
+The [two operations wearing one word](#two-different-operations-wearing-one-word) need no separate
+machinery:
+
+| | Tombstone | Cascade enqueued | Cancellable |
+|---|---|---|---|
+| **Cleanup** | Immediately | **After the grace window** | Yes, until the cascade starts |
+| **Erasure** | Immediately | Immediately | **No** |
+
+A grace period is a delay before enqueueing, not a different code path — which is what keeps
+"restore from the bin" and "irrevocably gone" from drifting apart in behaviour.
+
+### What the async pipeline inherits for free
+
+It runs on the [run entity](bulk-operations.md), so it already has what it needs:
+
+- **Resumable** — a cascade interrupted at step 7 restarts at step 7, not step 1
+- **Idempotent** — every step is `DELETE … WHERE data_id = $1`, safe to re-run
+- **Per-item errors** — a single-item delete is a run of one, so the reporting is uniform
+- **Backpressure** — a 50,000-item erasure does not starve ingestion; it is a queue with a priority
+
+And the [orphan sweep](blob-layout.md) is the backstop beneath all of it: if a blob delete fails
+permanently and the run gives up, the object still carries its `data_id` in metadata, and the sweep
+finds it with no row behind it.
+
 ## What the cascade actually touches
 
 | Artifact | Behaviour |
@@ -224,6 +316,16 @@ what is held, progress while it runs, and the result with what was withheld and 
   (immediate, verified).
 - **FR-DEL-2** Deletion beyond a single item MUST be a checkpointed, resumable job.
 - **FR-DEL-3** A selector `time_range` MUST name which clock it applies to.
+- **FR-DEL-14** All deletion MUST be asynchronous. The synchronous portion MUST be limited to the
+  tombstone, the audit record and enqueueing the run, in one transaction.
+- **FR-DEL-15** A tombstoned item MUST be invisible to every read immediately, enforced by a
+  predicate inside the retrieval query.
+- **FR-DEL-16** `deleted_at` and `purged_at` MUST both be recorded, and an erasure certificate MUST
+  be issued against `purged_at`.
+- **FR-DEL-17** The root row MUST be deleted last, after every dependent artifact.
+- **FR-DEL-18** Cleanup and erasure MUST use the same pipeline, differing only in the delay before
+  the cascade is enqueued.
+- **FR-DEL-19** Un-purged tombstones MUST be reported as a metric.
 - **FR-DEL-10** Account data deletion MUST revoke keys, sessions, connections and producers
   **before** the cascade begins, and MUST verify the account is no longer producing.
 - **FR-DEL-11** Account data deletion MUST delete data from `personal`-scoped connections and

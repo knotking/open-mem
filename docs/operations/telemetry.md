@@ -124,6 +124,7 @@ be attached.
 | `fetch.requests` | counter | by `provider`, `status` |
 | `fetch.duration` / `fetch.bytes` | histogram / counter | by provider |
 | **`fetch.rate_limited`** | counter | Per provider — drives bucket narrowing |
+| **`deletion.oldest_pending_purge`** | gauge | Seconds since the oldest un-purged tombstone — a record that looks deleted and is not |
 | **`fetch.needs_reauth`** | gauge | Per provider. Non-zero means data has silently stopped |
 | `fetch.fanout_ratio` | histogram | Children emitted per parent — catches truncation |
 | `fetch.depth_reached` | histogram | Against the recursion cap |

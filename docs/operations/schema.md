@@ -56,7 +56,9 @@ data_items
   identifiers        text[] — MRN, docket, serial, VIN
   normalization_status · schema_version
 
-  created_at · updated_at · deleted_at
+  created_at · updated_at
+  deleted_at         tombstone — invisible from this instant
+  purged_at          cascade complete — the erasure certificate is issued against THIS
 ```
 
 ### The identifier already carries a timestamp
