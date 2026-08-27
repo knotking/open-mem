@@ -1,0 +1,188 @@
+# Where Metadata Lives
+
+**All of it is in Postgres.** The [blob store](blob-layout.md) holds bytes and nothing else.
+
+This assembles the schema that the rest of the documentation has been specifying piecemeal —
+`memory_members` in [memories.md](../memories.md), `access_log` in
+[privacy-foundations.md](../security/privacy-foundations.md), `redaction_events` in
+[write-customization.md](../ingestion/write-customization.md), and so on. Phase 1 *is* this
+migration, so it is worth having in one place.
+
+---
+
+## The tables
+
+### Tenancy and identity
+
+| Table | Holds |
+|-------|-------|
+| `organizations` | The billing and policy boundary |
+| `projects` | The isolation boundary every query is scoped to |
+| `users` · `identities` | A person, and the several ways they authenticate |
+| `memberships` | user × org, with role |
+| `groups` · `group_members` | Principals for sharing |
+| `api_keys` | **Capability-scoped**, with expiry and last-used |
+| `producers` | `whk_` / `crw_` / `key_` / `upl_` — nothing writes anonymously |
+| `connections` | An authorised link to a source, carrying **`scope: personal \| shared`** |
+
+`connections.scope` is small and load-bearing: it decides the ACL at write time, and it decides
+what an [account deletion](deletion.md) takes.
+
+### Data
+
+`data_items` is the core row, and most of its columns exist because they cannot be backfilled.
+
+```
+data_items
+  data_id            ULID, primary key
+  org_id             ─┐ cannot be backfilled — no way to reconstruct
+  project_id         ─┤ which org owned a row after the fact
+  producer_id        ─┘
+  connection_id      nullable — null for uploads and direct writes
+  external_id        caller's natural key; unique per (project, producer)
+
+  access_level       private | org | shared | public
+  shared_with        principals — jsonb
+
+  content_text       ─┐  the three ContentRef cases,
+  storage_ref        ─┤  exactly one non-null
+  pending_ref        ─┘  jsonb: provider, resource_id, hints
+  mime_type · size_bytes · checksum
+
+  event_time         when the thing happened
+  ingested_at        when we learned about it
+  state              stored | searchable | enriched
+
+  identifiers        text[] — MRN, docket, serial, VIN
+  normalization_status · schema_version
+
+  created_at · updated_at · deleted_at
+```
+
+Two schema-level rules that are easy to lose:
+
+- **`is_downloaded` is not a column.** It is derived — `content_text IS NOT NULL OR storage_ref IS
+  NOT NULL`. A field kept in sync by hand is a field that drifts, and drifting was the original
+  defect.
+- **`event_time` and `ingested_at` are both required.** One column cannot carry both, and a
+  timeline built on the wrong one renders perfectly while being wrong.
+
+| Table | Holds |
+|-------|-------|
+| `data_versions` | Every revision, with a diff. Nothing is mutated in place |
+| `chunks` | Text spans, with offsets back into the source |
+| `embeddings` | `chunk_id`, the vector, **`model_id`**, `generator_version` |
+| — | The lexical index is a `tsvector` **column on `chunks`**, not a table |
+
+**`embeddings.model_id` is the single most important column in this schema.** Without it, a mixed
+index cannot be identified, let alone repaired — you know ranking is wrong and cannot tell which
+rows caused it.
+
+### Memories and cases
+
+| Table | Holds |
+|-------|-------|
+| `memory_types` | name, `ttl`, `on_expiry`, scope, lock state |
+| `memories` | `mem_<ulid>`, mutable `type`, optional `memory_key` unique per (project, type) |
+| `memory_members` | memory × data, `added_at`, **`added_by`** — explicit / routed / agent |
+| `memory_links` | `part_of` / `derived_from` / `about` / `continues` / `supersedes` |
+| `cases` · `case_members` | Declared subjects; membership records **asserted vs inferred** |
+
+> **`memory_members` has no `expires_at`, and `data_items` has no `expires_at`.** Effective expiry
+> is the *maximum* TTL across an item's memberships, and membership is mutable — so any stored
+> answer is wrong the moment someone adds or removes a member. The sweeper computes it. This is a
+> schema-level enforcement of a design rule, and adding the column back would silently break
+> `orphan_delete`.
+
+### Derived artifacts, and the provenance join
+
+| Table | Holds |
+|-------|-------|
+| `artifacts` | Viewpoints, summaries, extractions — with `model_id`, `generator_version`, `served_by_model` |
+| **`artifact_sources`** | `artifact_id`, `data_id`, `span_start`, `span_end` |
+| `entities` · `entity_contributions` | An entity, and each item that contributed to it |
+| `generators` | Immutable registry — prompt, model, schema, parser, chunker, handler digest |
+
+**`artifact_sources` is a join table rather than an array column, and that is deliberate.** The
+requirement is that erasure can ask *"which summaries absorbed this item?"* — an indexed reverse
+lookup on `data_id`. An array column makes that a scan, and a scan is what gets skipped under time
+pressure, which is how content survives inside a summary after the source is deleted.
+
+The `span_start` / `span_end` columns are what let a citation open at the sentence, and what keeps
+citations working after compression archives the originals.
+
+`entity_contributions` exists for the same reason in a different shape: deleting an item removes
+its **contribution** to an entity, not the entity.
+
+### Governance and operations
+
+| Table | Holds |
+|-------|-------|
+| `access_log` | **Append-only.** Who read what, when, under which principal and key |
+| `runs` · `run_items` | The shared run entity — bulk write, selector delete, account delete, reprocess |
+| `redaction_events` | rule id and version, action, **match count** — never the content |
+| `engines` | Registered models with **encrypted** credentials, failing closed |
+| `model_assignments` | Which model per purpose |
+| `usage_records` | Tokens per user, model and agent — estimate against actual |
+| `budgets` | Enforced at **user and project** scope |
+
+`access_log` is separate from everything else because its volume, retention and access pattern all
+differ: it is written on every read, never updated, queried rarely and by time range, and it must
+**survive the deletion of what it describes** — you cannot evidence "we deleted it" if the evidence
+was inside the deletion. Partition it by month.
+
+---
+
+## Why the indexes live in the record store too
+
+`pgvector` and `tsvector` are Postgres, not separate systems. That is
+[the central bet](technology.md), and its payoff is visible in the schema:
+
+```sql
+SELECT c.data_id, c.text, e.embedding <=> $1 AS distance
+FROM   embeddings e
+JOIN   chunks c   ON c.chunk_id = e.chunk_id
+JOIN   data_items d ON d.data_id = c.data_id
+WHERE  d.project_id = $2
+  AND  (d.access_level = 'org' OR d.owner_id = $3 OR …)
+  AND  e.model_id = $4
+ORDER  BY distance
+LIMIT  20;
+```
+
+The ACL predicate and the similarity search are **one query with one plan**. Filtering after
+retrieval would return the wrong twenty rows and then hide some of them, which is a different and
+worse thing than filtering before.
+
+The `e.model_id = $4` predicate is the fallback-chain protection made physical: a mixed index still
+returns comparable results, because the query only ever considers one vector space.
+
+The cost is stated where it belongs — every workspace shares one instance, and filtered ANN over
+tens of millions of rows is the named scaling risk.
+
+## Indexes that are not optional
+
+| Index | Why |
+|-------|-----|
+| `data_items (project_id, event_time DESC)` | Every scoped read and every timeline |
+| `data_items (project_id, external_id)` unique | Upsert on the caller's natural key |
+| `embeddings` HNSW on the vector, **partitioned or filtered by `model_id`** | Comparable vector spaces |
+| `artifact_sources (data_id)` | The erasure reverse lookup |
+| `memory_members (data_id)` | The reverse lookup that answers "why is this still here?" |
+| `entity_contributions (data_id)` | Remove the contribution, not the entity |
+| `access_log (org_id, at)` | The audit query, on a partitioned table |
+
+Four of those seven exist for **deletion and diagnosis**, not for retrieval. That ratio is the
+schema telling you what the hard operations actually are.
+
+## Requirements
+
+- **FR-SCH-1** All metadata MUST live in the record store. The blob store MUST hold bytes only.
+- **FR-SCH-2** `is_downloaded` MUST be derived from the content columns, never stored.
+- **FR-SCH-3** `event_time` and `ingested_at` MUST be separate columns, both populated.
+- **FR-SCH-4** Every embedding row MUST carry `model_id`, and retrieval MUST filter on it.
+- **FR-SCH-5** Effective expiry MUST NOT be stored on `data_items` or `memory_members`.
+- **FR-SCH-6** Artifact provenance MUST be an indexed join table with span offsets, not an array.
+- **FR-SCH-7** `access_log` MUST be append-only, partitioned, and MUST survive deletion of the data
+  it describes.
+- **FR-SCH-8** ACL predicates MUST be evaluated inside the retrieval query, not applied to results.
