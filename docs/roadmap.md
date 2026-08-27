@@ -322,13 +322,15 @@ the audit record, costs a question that can never be answered.
 | Fixed search modes or composable? | **Composable** |
 | Can the delete cascade wait? | **Build late, design early** |
 | Keep the global `API_KEY`? | **No** |
+| Auth provider? | **Firebase for login; user-created API keys validated at the gateway; both resolved to one identity.** Air-gap is served by a local password verifier behind the same seam — so **air-gapped operation is a self-hosted capability, not a property of the hosted product** |
+| Inbound authentication? | **The same user-created keys** where the provider can present one; signature or URL secret otherwise, declared per producer |
 | Separate batch endpoint? | **No** — one write verb, `items[]` |
 
 ### Still open
 
 | Decision | Note |
 |----------|------|
-| **Own auth entirely, or keep a hosted IdP?** | The `TokenVerifier` seam defers this to Phase 6 — but owning it means building MFA, reset and abuse handling, and it is the only version satisfying the air-gapped pillar without a second code path |
+
 | **Materialisation policy** | Always store (recommended) / threshold / derived-only |
 | **Default ACL for a team upload** | Private-by-default is consistent; users dragging into a *team* space often expect team visibility |
 | **Is media in scope for v1?** | Transcription infrastructure, and the largest cost exposure of any format group |

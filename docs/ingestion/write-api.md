@@ -35,7 +35,16 @@ Producer
   defaults        project, memory_type, tags
   policy          enrich · priority · rate_limit · quota · budget
   status          draft | enabled | disabled
+
+  inbound_auth    api_key | signature | url_secret | none
+  api_key_id      ← when inbound_auth = api_key
+  signing_secret  ← when inbound_auth = signature
 ```
+
+**A user-created API key can be configured onto an inbound producer**, so one credential mechanism
+serves both directions. Not every provider can present one, so the producer declares its method —
+prefer `api_key` where supported, since it is revocable, attributable and capability-scoped, where
+a URL secret is none of those. See [auth](../security/auth.md).
 
 | Producer type | Preconfigured by | Identified as |
 |---------------|-----------------|---------------|
