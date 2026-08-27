@@ -52,6 +52,13 @@ predicate over new writes — nothing arrives on that day. Those are a **W4** sc
 date facets. Two mechanisms, deliberately: folding them together produces a standing-query engine
 that quietly re-scans on a timer, which is the failure the first rule exists to prevent.
 
+### Handlers may be custom on a dedicated cluster
+
+Worker handlers may be **customer-supplied code on a custom cluster** — most valuably a custom
+**W2 fetch adapter** for an internal system no connector reaches. Not in MVP, and never in the
+shared multi-tenant deployment or the synchronous write path. See
+[custom-workers.md](custom-workers.md).
+
 ### Why fetch and enrich must be separate pools
 
 ```

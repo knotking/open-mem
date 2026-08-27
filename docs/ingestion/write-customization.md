@@ -1,6 +1,25 @@
 # Customizing the Write Path
 
-Yes — the write path is customizable, at five points. This document collects them, because they
+> ## MVP position: none of this ships
+>
+> **MVP has no customization.** One normalization schema, the shipped agent prompts, the shipped
+> memory types, no redaction rules, no custom code. Everything below is post-MVP, and this document
+> exists to make sure the *shape* is decided before the surface is built — not to add scope to v1.
+>
+> Three things must land in MVP anyway, and they are the usual kind:
+>
+> | Must ship in MVP | Why it cannot wait |
+> |------------------|--------------------|
+> | **The phase order, with ACL assigned before any hook point** | An enforcement point, and the [escalation boundary](#the-finding--ordering-is-a-privilege-escalation-boundary). Free now; it means reordering the write path once projects depend on it later |
+> | **Security fields read-only in the item envelope** | Same enforcement point, and it costs nothing when nothing is yet plugged in |
+> | **`handler_digest` present in the `generator_version` input set** | A **column**. Add a field to the hash later and every existing fingerprint changes, so the whole corpus reads as stale at once. Ship it constant for built-ins |
+>
+> This is [Phase 1's rule](../roadmap.md#phase-1--the-spine) applied to customization: *ship the
+> column and the enforcement point; the surface follows.*
+
+---
+
+The write path is customizable at five points — **post-MVP**. This document collects them, because they
 are currently specified in five different places and **a single write touches four of them at
 once**. Nobody had written down the order they apply in, or what happens when two disagree.
 
