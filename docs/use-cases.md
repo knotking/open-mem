@@ -153,6 +153,9 @@ parsing, since a discovery export is one multi-gigabyte file containing fifty th
 
 ---
 
+> **Worked versions with real records and sequence diagrams** are in
+> [examples/](examples/README.md).
+
 ### The pattern across all six
 
 Every scenario is the same shape: **heterogeneous sources, one subject, a question that spans

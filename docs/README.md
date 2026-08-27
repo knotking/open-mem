@@ -100,6 +100,7 @@ is the same material as one continuous page.
 | Document | Covers |
 |----------|--------|
 | [presentation/blog.md](presentation/blog.md) | Long-form article — the whole story, from the bug that started it to what we'd tell someone starting over |
+| [examples/](examples/README.md) | **Worked examples** — canonical flows with sequence diagrams, and medical, legal and telemetry walkthroughs with real records |
 | [presentation/blueprint.md](presentation/blueprint.md) | **The whole documentation set as one file** — same eight parts, ~50k words, for sharing or offline reading |
 
 ## Market

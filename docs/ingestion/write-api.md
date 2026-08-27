@@ -87,6 +87,7 @@ Idempotency-Key: 9f2c...
       "content": { "kind": "inline", "text": "..." },
       "metadata": { "tags": ["source:salesforce"] },
       "event_time": "2019-03-14T09:20:00Z",
+      "memory": { "key": "thread-8841", "type": "conversation" },
       "case": { "external_id": "MRN-A12345", "case_type": "patient" }
     },
     {
@@ -114,12 +115,28 @@ Idempotency-Key: 9f2c...
 {
   "accepted": 3, "failed": 0,
   "results": [
-    { "index": 0, "status": "created", "data_id": "data_01J...", "state": "queued" },
-    { "index": 1, "status": "created", "data_id": "data_01J...", "state": "fetch_pending" },
-    { "index": 2, "status": "updated", "data_id": "data_01J...", "state": "queued" }
+    { "index": 0, "status": "created", "data_id": "data_01J...", "state": "queued",
+      "memories": ["mem_01JQRS…"], "case_id": "cas_01JQRS…" },
+    { "index": 1, "status": "created", "data_id": "data_01J...", "state": "fetch_pending",
+      "memories": ["mem_01JQRS…"] },
+    { "index": 2, "status": "updated", "data_id": "data_01J...", "state": "queued",
+      "memories": ["mem_01JQRS…", "mem_01JQXY…"] }
   ]
 }
 ```
+
+### Memory and case association happen at write time
+
+`memory` upserts by `(project, type, key)` — so a producer writing many messages from one thread
+collects them into one memory without tracking session state or pre-creating anything. Omit it and
+the producer's default type plus any routing rule applies; if neither matches, the item lands in
+the project's `default` memory so nothing is orphaned.
+
+`case` behaves the same way, upserting by `(project, case_type, external_id)`.
+
+**The response reports what the item was actually mapped into** — including memberships the caller
+did not ask for, because a routing rule or the default may have added them. Otherwise the caller
+has to query to discover where its own write went.
 
 `items` is always an array — one item is an array of one. Always `207`. The SDK facade hides that
 for the single-item case, but the *protocol* has one shape, one set of semantics and one admission
