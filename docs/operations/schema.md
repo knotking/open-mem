@@ -282,6 +282,7 @@ part (clinical, legal) has `none` for exactly that reason.
 | Table | Holds |
 |-------|-------|
 | `access_log` | **Append-only.** Who read what, when, under which principal and key |
+| `audit_events` | **Everything that is not a read** — writes, ACL changes, shares, config, keys, break-glass. Low volume, never purged. See [audit.md](../security/audit.md) |
 | `queries` · `query_sources` | What was asked, what was retrieved and why it was excluded, what it cost |
 | `runs` · `run_items` | The shared run entity — bulk write, selector delete, account delete, reprocess |
 | `redaction_events` | rule id and version, action, **match count** — never the content |

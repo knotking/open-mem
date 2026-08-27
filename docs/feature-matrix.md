@@ -119,6 +119,9 @@ Every feature in the platform, with the phase that ships it and whether it is in
 | Credential proxy | Workers receive references, never secrets | 2 | ◐ |
 | Encryption failing closed | Never store a provider key in plaintext with a warning | 1 | ● |
 | **Audit on every read** | Impossible to retrofit — March cannot be reconstructed | 1 | ● |
+| **Audit on access *changes*** | Who made this public, and when — a share is a state, and a state forgets when it changed | 1 | ● |
+| Config-change audit | Before and after, so "extraction got worse last Tuesday" is answerable | 2 | ◐ |
+| Hash-chained audit log | What "immutable" must mean concretely; until then the claim is *append-only* | 8 | ○ |
 | Deletion cascade | Chunks, embeddings, blobs, entity contributions, summaries — **grows as the artifacts do** | 1 | ● |
 | Provenance as a source **list** | What makes erasure through compression possible | 1 | ● |
 | Legal hold | Suppresses expiry; refuses erasure **with a reason** | 7 | ○ |
