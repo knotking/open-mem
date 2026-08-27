@@ -90,6 +90,9 @@ naturally alongside Phase 3, since the local variant is where model choice matte
 staleness-impact preview depends on Phase 1's staleness fields. See
 [operations/model-catalog.md](operations/model-catalog.md).
 
+> Stack choices and the per-variant realisation of each phase are in
+> [operations/implementation.md](operations/implementation.md).
+
 ## Deliberately deferred
 
 | Not yet | Instead |
