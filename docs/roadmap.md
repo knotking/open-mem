@@ -63,15 +63,32 @@ forking. Build Cloud first with hosted auth hardcoded and Local never happens.
 
 | Phase | Scope | Exit |
 |-------|-------|------|
-| **2 · Demo (GKE)** | Verify four live connectors end-to-end; conversational agent on one channel; RAG chat with citations | A repeatable five-minute demo |
+| **2 · Demo (GKE)** | Verify four live connectors end-to-end; conversational agent on one channel; RAG chat with citations; **backfill-on-connect** | A repeatable five-minute demo |
 | **3 · Local MVP** | One-command compose, local password auth, local models, filesystem blobs, no external accounts | **Unplug the network and everything still works** |
 | **4 · Cloud MVP (GCP)** | Serverless topology, managed data tier, hosted auth, cloud inference | Single-tenant prod, SaaS-ready |
-| **4b · Crawlers** | Config store, run lifecycle, scheduler behind one interface, dry-run, `enumerate` + `query` strategies | The ~8% pull-only catalog with zero bespoke code |
+| **4b · Crawlers** | Full config store, run lifecycle, scheduler behind one interface, `query` + remaining strategies | The ~8% pull-only catalog with zero bespoke code |
 | **5 · Team** | Sharing surface, RBAC enforcement, **permission sync from source systems**, tier-1 connector depth | Family B addressable |
 | **6 · Scale & compliance** | Quotas before ceilings, SSO/SAML, SCIM, immutable audit log, delete cascade, soak to target | Enterprise-addressable |
 
 **Gate on Phase 4:** run the credential-broker request-scoped-lifecycle spike first. The
 no-cluster design assumes it holds no background workers.
+
+### Correction: backfill is MVP, not Phase 4b
+
+An earlier version of this plan placed all crawler work at Phase 4b. That is wrong for **backfill
+specifically**. Without it a user connects a source and sees *nothing* until new data arrives —
+the system is empty on day one, the demo has nothing to show, and "ask about something from last
+week" does not function.
+
+The `enumerate` strategy with a bounded window (30 days) is MVP-critical and belongs in Phase 2.
+The full crawler framework — remaining strategies, scheduling, web traversal — stays at 4b.
+
+### Model catalog
+
+Model cards, capability-validated assignment and the capacity × capability routing change fit
+naturally alongside Phase 3, since the local variant is where model choice matters most. The
+staleness-impact preview depends on Phase 1's staleness fields. See
+[operations/model-catalog.md](operations/model-catalog.md).
 
 ## Deliberately deferred
 

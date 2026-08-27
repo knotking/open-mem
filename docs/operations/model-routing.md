@@ -11,9 +11,14 @@ violates one of those assumptions.
 | Small | JSON, CSV, YAML, XML, IoT, classification |
 | Medium | Code, email, chat, financial, summarisation |
 | Large | PDFs, Office documents, web pages, reasoning |
-| Multimodal | Images, visual PDFs, OCR |
-| Omni | Audio, video, multi-format |
+| ~~Multimodal~~ | Images, visual PDFs, OCR — **deprecated as a tier** |
+| ~~Omni~~ | Audio, video — **deprecated as a tier** |
 | Embedding | Vector generation — **see the warning below** |
+
+> **The multimodal and omni tiers are obsolete.** They existed because text models were text-only.
+> Current model families are natively multimodal at every size, so modality is a *capability* to
+> validate, not a tier to route to. Routing should select on **capacity × required capabilities**.
+> See [model-catalog.md](model-catalog.md).
 
 ## Fallback chains
 

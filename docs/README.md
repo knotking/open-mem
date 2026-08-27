@@ -62,6 +62,7 @@ can be filled three different ways.
 
 | Document | Covers |
 |----------|--------|
+| [operations/model-catalog.md](operations/model-catalog.md) | Model cards, selection, and the tier redesign |
 | [operations/model-routing.md](operations/model-routing.md) | Tiers, fallback chains, what breaks at bulk |
 | [operations/telemetry.md](operations/telemetry.md) | Detecting absence, not errors |
 | [operations/technology.md](operations/technology.md) | Role → product, with swap cost |
