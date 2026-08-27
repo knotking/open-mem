@@ -203,11 +203,86 @@ citations working after compression archives the originals.
 `entity_contributions` exists for the same reason in a different shape: deleting an item removes
 its **contribution** to an entity, not the entity.
 
+### Where LLM output goes
+
+Five distinct things come back from a model, and they land in four different places.
+
+| Output | Lands in | Notes |
+|--------|----------|-------|
+| **Extraction** — the standard envelope | `artifacts` | Core envelope as columns, standard and extension fields as `jsonb` |
+| **Embeddings** | `embeddings` | With `model_id`, which is what keeps the vector space comparable |
+| **Classification** (layer 7 only) | `data_items.data_type` + `classified_by_layer` | Just a value. Recording *which layer resolved it* is what measures the "80% never reach a model" claim rather than asserting it |
+| **Memory-level artifacts** — summaries, study guides, obligation extracts | `artifacts`, keyed on `memory_id` instead of `data_id` | The [`derive` generalisation](../use-cases-catalog.md) needs no new table |
+| **Query answers** | `queries` · `query_sources` | **See below — this had nowhere to live** |
+
+**The raw model response is not stored on success.** With schema-constrained output the parsed
+artifact *is* the response, and `generator_version` plus `served_by_model` record what produced it.
+On failure it is kept — the DLQ entry carries the raw output attached, which is the only case where
+having it matters.
+
+### Query answers, and why storing one is not obviously safe
+
+```
+queries
+  query_id · user_id · project_id
+  question           the text asked
+  answer             nullable — see the policy below
+  model_id · generator_version · served_by_model
+  token_cost · latency_ms
+  asked_at
+
+query_sources
+  query_id, data_id
+  rank · score
+  used               bool — retrieved and passed to the model, or retrieved and excluded
+  excluded_reason    acl | threshold | not_yet_enriched
+```
+
+The console's *"what I asked, what was retrieved, and what it cost"* panel needs exactly this, and
+`query_sources` is also what makes the [retrieval trace](../ui-sandbox.md) reconstructable after
+the fact rather than only visible in the moment.
+
+#### An answer is a derived artifact, and inherits the strictest source
+
+This is the part that is easy to miss and expensive to retrofit.
+
+> **An answer synthesised from three private documents contains their content.** It is not a new,
+> unencumbered object because a model wrote it.
+
+Two consequences, both of which the platform already has mechanisms for:
+
+- **ACL** — a stored answer inherits the **strictest** ACL among its sources, exactly as every
+  other derived artifact does. Otherwise a user's saved answer becomes a way to read, later and
+  through a different surface, content whose permissions have since narrowed.
+- **Erasure** — `query_sources` is the same shape as `artifact_sources` for the same reason.
+  Delete a source document and every stored answer that quoted it must be invalidated, or this is
+  [compression defeats erasure](../security/privacy-foundations.md) reappearing in a place nobody
+  thought to look. **The answer is a summary; it just does not call itself one.**
+
+#### Whether to store the answer text is a privacy decision, not a technical one
+
+Storing every answer creates a **second corpus that is frequently more sensitive than the first** —
+an answer distils precisely the parts of the corpus someone cared enough to ask about, stripped of
+the surrounding context that made them innocuous.
+
+So `answer` is nullable and governed by policy, defaulting to metadata-only:
+
+| Setting | Stores | Suits |
+|---------|--------|-------|
+| `metadata` **(default)** | Question, sources, cost, timing — **not the answer text** | Everyone. The console panel works entirely from this |
+| `full` | Answer text as well | Audit obligations, quality review, regulated review workflows |
+| `none` | Nothing beyond the audit-log read record | Deployments where a question is itself sensitive |
+
+The question text is stored even at `metadata`, because a query log without questions cannot answer
+*"what was this key being used for?"* — but a deployment where the **question** is the sensitive
+part (clinical, legal) has `none` for exactly that reason.
+
 ### Governance and operations
 
 | Table | Holds |
 |-------|-------|
 | `access_log` | **Append-only.** Who read what, when, under which principal and key |
+| `queries` · `query_sources` | What was asked, what was retrieved and why it was excluded, what it cost |
 | `runs` · `run_items` | The shared run entity — bulk write, selector delete, account delete, reprocess |
 | `redaction_events` | rule id and version, action, **match count** — never the content |
 | `engines` | Registered models with **encrypted** credentials, failing closed |
@@ -260,6 +335,7 @@ tens of millions of rows is the named scaling risk.
 | `memory_members (data_id)` | The reverse lookup that answers "why is this still here?" |
 | `entity_contributions (data_id)` | Remove the contribution, not the entity |
 | `normalized_records (data_id)` · `(target_type, project_id)` | The projection lookup, and facet queries by domain type |
+| `query_sources (data_id)` | Which stored answers must be invalidated when a source is deleted |
 | `access_log (org_id, at)` | The audit query, on a partitioned table |
 
 Four of those seven exist for **deletion and diagnosis**, not for retrieval. That ratio is the
@@ -276,6 +352,11 @@ schema telling you what the hard operations actually are.
 - **FR-SCH-7** `access_log` MUST be append-only, partitioned, and MUST survive deletion of the data
   it describes.
 - **FR-SCH-8** ACL predicates MUST be evaluated inside the retrieval query, not applied to results.
+- **FR-SCH-13** A stored answer MUST record its retrieved sources, including those excluded and the
+  reason for exclusion.
+- **FR-SCH-14** A stored answer MUST inherit the strictest ACL among its sources.
+- **FR-SCH-15** Deleting a source MUST invalidate every stored answer derived from it.
+- **FR-SCH-16** Storing answer text MUST be a per-project policy, defaulting to metadata-only.
 - **FR-SCH-12** Identifiers MUST be ULIDs, so creation time is recoverable from the id and ids sort
   chronologically. `event_time` MUST remain a column and MUST NOT be encoded in an identifier.
 - **FR-SCH-9** `mime_type` MUST be server-detected and MUST outrank `source_type` for routing.

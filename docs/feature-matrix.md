@@ -68,6 +68,8 @@ Every feature in the platform, with the phase that ships it and whether it is in
 | Hybrid retrieval | Combined, with reranking | 1 | ● |
 | **ACL filtering inside the query** | Not post-filtering — the reason indexes live in the record store | 1 | ● |
 | **Retrieval trace** | Ranked chunks with scores, and exclusions **with the reason** | 1 | ● |
+| **Query log** | `queries` · `query_sources` — what was asked, retrieved, excluded and why, and what it cost | 1 | ● |
+| Answer-text retention policy | Per project — metadata-only by default; a stored answer is a derived artifact | 1 | ● |
 | Composable primitives | Not five fixed modes — Family C requires composition | 2 | ○ |
 | Facet search | Typed fields — amounts, dates, sentiment, device, units | 2 | ○ |
 | Temporal graph | `valid_at` / `invalid_at`, what was true when | 7 | ○ |
