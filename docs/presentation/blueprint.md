@@ -52,15 +52,22 @@ ending in a test rather than a demo.
 **Part II · What the things are**
 
 - [Memories](#memories)
-- [Cases — Correlating Information Around a Subject](#cases-correlating-information-around-a-subject)
+- [Cases — Correlating Information Around a Subject](#cases--correlating-information-around-a-subject)
 - [Normalization](#normalization)
 
-**Part III · Getting data in**
+**Part III · Write, read, delete**
 
 - [The Write API](#the-write-api)
-- [Customizing the Write Path](#customizing-the-write-path)
+- [Index Construction](#index-construction)
+- [Retrieval Quality — Feedback and Conflict](#retrieval-quality--feedback-and-conflict)
+- [Versioning & Staleness](#versioning--staleness)
+- [Deletion](#deletion)
+
+**Part IV · Ingestion at scale**
+
 - [Ingestion Workers](#ingestion-workers)
 - [Custom Worker Code](#custom-worker-code)
+- [Customizing the Write Path](#customizing-the-write-path)
 - [Source Coverage](#source-coverage)
 - [Connector Catalog](#connector-catalog)
 - [Formats](#formats)
@@ -68,54 +75,45 @@ ending in a test rather than a demo.
 - [Crawlers](#crawlers)
 - [Bulk Operations](#bulk-operations)
 
-**Part IV · Making it useful**
+**Part V · Models and the sandbox**
 
-- [UI Design](#ui-design)
-- [The Sandbox](#the-sandbox)
-- [Index Construction](#index-construction)
 - [Model Catalog](#model-catalog)
 - [Model Routing at Bulk](#model-routing-at-bulk)
-- [Versioning & Staleness](#versioning-staleness)
-- [Retrieval Quality — Feedback and Conflict](#retrieval-quality-feedback-and-conflict)
+- [The Sandbox](#the-sandbox)
 - [Multi-Language](#multi-language)
-
-**Part V · Lifecycle**
-
-- [Deletion](#deletion)
 
 **Part VI · Access and privacy**
 
-- [Tenancy & Privacy](#tenancy-privacy)
-- [Access Model — Principals, Sharing and Settings](#access-model-principals-sharing-and-settings)
-- [Auth & Credentials](#auth-credentials)
+- [Tenancy & Privacy](#tenancy--privacy)
+- [Access Model — Principals, Sharing and Settings](#access-model--principals-sharing-and-settings)
+- [Auth & Credentials](#auth--credentials)
 - [Privacy Foundations](#privacy-foundations)
-- [Privacy & Compliance](#privacy-compliance)
+- [Privacy & Compliance](#privacy--compliance)
 
-**Part VII · Interfaces and operations**
+**Part VII · How we define the API**
 
-- [API Contract & Surfaces](#api-contract-surfaces)
+- [API Contract & Surfaces](#api-contract--surfaces)
+- [UI Design](#ui-design)
+
+**Part VIII · How we implement it**
+
+- [Technology Choices](#technology-choices)
+- [Deployment Variants](#deployment-variants)
 - [Telemetry](#telemetry)
 - [Token Accounting](#token-accounting)
 - [Testing](#testing)
-- [Technology Choices](#technology-choices)
-- [Deployment Variants](#deployment-variants)
+- [Implementation Plan & Stack](#implementation-plan--stack)
 
-**Part VIII · The plan**
+**Part IX · The plan**
 
 - [Roadmap](#roadmap)
-- [Implementation Plan & Stack](#implementation-plan-stack)
 - [Competitive Landscape](#competitive-landscape)
 - [mem-dog vs Onyx: Detailed Comparison](#mem-dog-vs-onyx-detailed-comparison)
 - [mem-dog vs Glean](#mem-dog-vs-glean)
 
----
-
-
-
 # Part I · Why this exists
 
 *The problem, the bet, and who owns what*
-
 
 ---
 
@@ -353,6 +351,8 @@ summaries in production.
 
 See competition/ for the full analysis.
 
+
+---
 
 ---
 
@@ -796,6 +796,8 @@ already specified; the sixth is a new worker class in an established taxonomy.
 
 ---
 
+---
+
 ## Feature Matrix
 
 Every feature in the platform, with the phase that ships it and whether it is in MVP.
@@ -990,6 +992,8 @@ roadmap.md.
 
 ---
 
+---
+
 ## Design Principles
 
 ### The central bet
@@ -1079,10 +1083,16 @@ everything else.
 
 
 
-# Part II · What the things are
+
 
 *The data model everything else operates on*
 
+
+---
+
+# Part II · What the things are
+
+*The data model everything else operates on*
 
 ---
 
@@ -1497,6 +1507,8 @@ policy, a memory browser showing members and time remaining, and the reverse loo
 
 ---
 
+---
+
 ## Cases — Correlating Information Around a Subject
 
 A patient timeline. All telemetry from one machine. A legal matter. Each is the same shape: **a
@@ -1727,6 +1739,8 @@ composition, not the primitive.
 
 ---
 
+---
+
 ## Normalization
 
 ### Three layers, currently conflated
@@ -1835,10 +1849,16 @@ nondeterministic and expensive, and identical inputs would normalize differently
 
 
 
-# Part III · Getting data in
+
 
 *One write path, and every producer that uses it*
 
+
+---
+
+# Part III · Write, read, delete
+
+*One record, its whole life — in one place*
 
 ---
 
@@ -2065,299 +2085,591 @@ functional-requirements.md.
 
 ---
 
-## Customizing the Write Path
+---
 
-> ## MVP position: none of this ships
->
-> **MVP has no customization.** One normalization schema, the shipped agent prompts, the shipped
-> memory types, no redaction rules, no custom code. Everything below is post-MVP, and this document
-> exists to make sure the *shape* is decided before the surface is built — not to add scope to v1.
->
-> Three things must land in MVP anyway, and they are the usual kind:
->
-> | Must ship in MVP | Why it cannot wait |
-> |------------------|--------------------|
-> | **The phase order, with ACL assigned before any hook point** | An enforcement point, and the escalation boundary. Free now; it means reordering the write path once projects depend on it later |
-> | **Security fields read-only in the item envelope** | Same enforcement point, and it costs nothing when nothing is yet plugged in |
-> | **`handler_digest` present in the `generator_version` input set** | A **column**. Add a field to the hash later and every existing fingerprint changes, so the whole corpus reads as stale at once. Ship it constant for built-ins |
->
-> This is Phase 1's rule applied to customization: *ship the
-> column and the enforcement point; the surface follows.*
+## Index Construction
+
+The pipeline's purpose is not summarization — it is **building retrieval structures**. Classic
+inverted indexes map terms that *appear* to documents. An LLM lets you index over vocabulary the
+document never contains:
+
+> A ticket saying *"it just spins forever after they hit save"* should be findable by
+> *performance regression*, *data loss risk* and *escalation candidate* — none of which are in
+> the text.
+
+### The index set
+
+| Index | Built by | Query shape unlocked | Status |
+|-------|----------|---------------------|--------|
+| Chunk vectors | embedder | "things like this" | built |
+| Lexical / BM25 | keyword index | exact terms, names, IDs | built |
+| Entity + relationship graph | extractor | who connects to what | built |
+| **Structural** | parser | precise citations — page, section path | **near-free** |
+| **Normalized facets** | normalizer | `amount > 10000`, `status = open` | **deterministic** |
+| **Question index** | LLM | match question-to-question, not question-to-prose | **highest leverage** |
+| Claim / fact index | LLM | fact-level citation, contradiction detection | gap |
+| Concept index | LLM | inverted index over inferred concepts | gap |
+| Summary hierarchy | LLM | both "what is this about" and "what's the number" | gap |
+| Intent index | LLM | decisions, action items, commitments | extracted, not indexed |
+| Document relations | LLM | supersedes / replies-to / cites | gap |
+
+Two are nearly free and under-exploited — **structural** (the parser already knows it) and
+**normalized facets** (no LLM at all). Build those before any expensive one.
+
+Of the LLM-derived indexes the **question index** is highest leverage: most RAG failure is a
+mismatch between how people ask and how documents state, and one extra call per chunk closes it.
+
+### Not every item deserves every index
+
+Six index types per item means up to 6× the LLM calls. A log line does not need a question index;
+a contract does.
+
+The control surface already exists — see [extraction prompts](#ingestion-workers) — the per-agent processing flags (`extract_entities`,
+`extract_actions`, `extract_topics`, `embed`) **are** index-selection flags.
+
+### Build cheap eagerly, expensive lazily
+
+| Tier | What | When |
+|------|------|------|
+| **eager** | chunks, vectors, FTS, structure, facets | always, on ingest |
+| **deferred** | questions, claims, concepts, summaries | on demand |
+| **adaptive** | expensive indexes for items that actually get retrieved | after N retrievals |
+
+Most corpora have a long cold tail nobody ever queries. The adaptive tier concentrates spend on
+content that demonstrably matters, at the cost of a slower first query on cold content.
+
+### Every index is a privacy leak surface
+
+Each derived artifact must inherit the ACL of its **most restrictive source**:
+
+- A **claim** extracted from a private doc is private — but claims are the most tempting thing to
+  merge across a corpus
+- A **concept index** entry pointing at a restricted item leaks its existence
+- The **entity graph** already merges across sources; a fact derived from a private doc surfaced
+  to a teammate is a leak with no audit trail
+- A **summary hierarchy** spanning mixed-ACL items must take the *intersection*
+
+**The rule:** derived artifacts carry the ACL of their most restrictive source, and retrieval
+filters **at query time, never post-rank**. Post-filtering also breaks top-K — ask for 10, filter
+to 3.
+
+### Composable retrieval
+
+Five modes and four rerankers are a *preset table*, not an interface. An application wanting
+facets plus graph walks plus a time bound has no way to ask. Four axes:
+
+| Axis | Options |
+|------|---------|
+| `select` | chunks · facts · entities · facets · summaries |
+| `match` | vector · lexical · graph walk · question index · concept |
+| `filter` | project · memory type · tags · time range · facets · **ACL (always)** |
+| `rank` | rrf · mmr · cross-encoder · none |
+
+The existing five modes survive as **named compositions** — `hybrid` becomes *match: vector +
+lexical, rank: rrf*. Presets stay for the simple case; the axes exist for the ones that need them.
+
 
 ---
 
-The write path is customizable at five points — **post-MVP**. This document collects them, because they
-are currently specified in five different places and **a single write touches four of them at
-once**. Nobody had written down the order they apply in, or what happens when two disagree.
+---
 
-Writing that order down turned out to matter more than adding features to it.
+## Retrieval Quality — Feedback and Conflict
+
+Two things the design detects but never acts on: whether an answer was any good, and what to do
+when sources disagree.
+
+### Feedback
+
+Nothing currently captures whether a result was useful. That is the signal that would evaluate a
+[prompt override](#ingestion-workers), justify a reranker, or tell you an index type is not
+earning its cost — and it is cheap to collect at retrieval time if designed in early, and
+impossible to collect retroactively.
+
+| Signal | Kind | Cost to collect |
+|--------|------|-----------------|
+| Explicit rating on an answer | strong, sparse | a thumb |
+| Citation opened | implicit, dense | one event |
+| Result opened, then a refined query | implicit — a **negative** signal | free |
+| Answer copied or acted on | strong, rare | one event |
+| Query abandoned with no interaction | weak negative | free |
+
+**The refinement signal is the most useful and the most overlooked.** A user who searches, opens
+nothing, rephrases and searches again has told you the first result set was wrong — with no rating
+and no complaint.
+
+#### Feedback cannot be pooled across tenants
+
+The obvious use is to learn a better ranking. The obvious implementation is to learn it from
+everyone's feedback at once.
+
+**That leaks.** A model tuned on one tenant's click behaviour encodes what their corpus contains and
+what they look for. Ranking learned across tenants is a side channel, and a subtle one — nobody
+sees another tenant's document, but the ranking function carries information about it.
+
+So: feedback is **tenant-scoped by default**. Cross-tenant learning is opt-in, aggregated, and
+should probably not exist in v1 at all.
+
+#### What it is safe to use immediately
+
+- **Evaluation, not training.** Feedback against a golden set tells you whether a prompt or
+  reranker change helped — without any model consuming it
+- **Per-tenant reranking signals** — a document repeatedly chosen for similar queries in *this*
+  workspace
+- **Index-value measurement** — if the question index never contributes to a chosen citation, it is
+  not paying for itself
+
+### Conflict
+
+The [claim index](#index-construction) detects contradictions. Nothing says what to do with one.
+
+Two sources say the approval threshold is $5,000 and $10,000. Someone asks. What comes back?
+
+#### Resolve what is resolvable; surface the rest
+
+| Conflict | Resolution |
+|----------|-----------|
+| **Temporal** — the same fact changed over time | Already solved: `valid_at` / `invalid_at`. Not a conflict, a history |
+| **Supersession** — a document revised | The [mutation path](#ingestion-workers) invalidates facts from the superseded version |
+| **Source authority** — a system of record disagrees with a chat message | Rank by **declared source authority**, per producer or connection |
+| **Genuine disagreement** — two authoritative sources differ | **Surface both.** Do not pick |
+
+#### Source authority is declared, not inferred
+
+A producer carries an authority level. The HR system is authoritative for employment facts; a Slack
+message mentioning someone's title is not. That is a configuration a human makes, not something to
+infer from confidence scores.
+
+Without it, "most recent wins" becomes the default — which means a passing remark in chat overrides
+the system of record because it arrived later.
+
+#### Never silently pick one
+
+When authority does not separate them, the answer says so:
+
+> The approval threshold is **$10,000** according to the Finance Policy (updated March),
+> though the Procurement Handbook [2] states $5,000.
+
+**A confident wrong answer is worse than an uncertain right one.** The system knows there is a
+conflict — the claim index found it — and hiding that to produce a cleaner sentence is the failure
+mode this whole design has been avoiding everywhere else.
+
+### Requirements
+
+- **FR-QUAL-1** Retrieval MUST capture explicit and implicit feedback, including query refinement
+  as a negative signal.
+- **FR-QUAL-2** Feedback MUST be tenant-scoped. Cross-tenant learning MUST be opt-in and MUST NOT
+  be enabled by default.
+- **FR-QUAL-3** Feedback MUST be usable for evaluation without being consumed by a model.
+- **FR-QUAL-4** Producers MUST carry a declared source-authority level.
+- **FR-QUAL-5** Detected conflicts MUST be resolved by authority where it separates them, and
+  **surfaced with both positions** where it does not.
+- **FR-QUAL-6** An answer MUST NOT silently present one side of a detected conflict.
+
 
 ---
 
-### What is already customizable
+---
 
-| Surface | Scope | Owning doc |
-|---------|-------|-----------|
-| **Normalization schema** — canonical types and their shape | project → org → global | normalization.md |
-| **Field mapping** — `source_path → target_field`, transforms, `on_missing` | per (provider, target_type) | normalization.md |
-| **Extraction prompts and output schemas** — what the agents produce | project → org → shipped, with admin locks | workers.md |
-| **Memory types and routing** — name, TTL, expiry policy, which memory an item lands in | per deployment | ../memories.md |
-| **Producer defaults** — ACL scope, `embed`/`enrich` policy, target memory type | per producer | write-api.md |
-| **Per-request options** — `enrich`, `priority` | per call | write-api.md |
+## Versioning & Staleness
 
-Every one of these follows the same precedence rule — **most specific wins, project → org →
-shipped** — which is the tenancy model applied consistently. That much was already right.
+Versioning exists in exactly two places today: data items get a new version per mutation with
+diff tracking, and the temporal graph stamps facts with `valid_at` / `invalid_at`. Everything
+*between* — every chunk, embedding, entity, claim, summary and facet — is produced once and never
+reconsidered.
+
+### The rule
+
+A derived artifact is a function of **two** inputs:
+
+```
+artifact = f(source_version, generator_version)
+```
+
+Change either and the artifact is stale. Without recording both, "is this embedding still valid?"
+is unanswerable — which is why config changes today silently apply only to future data.
+
+**Generator version is compound**, and every component independently invalidates output: agent
+prompt · model identity *and weights* · output schema · embedding model · normalization schema ·
+chunking strategy · **parser** (different parsers extract different text from the same PDF).
+
+### Four version surfaces
+
+| Surface | Changes when | Status |
+|---------|--------------|--------|
+| **Source content** | upstream doc revised, message edited, ticket updated | partial — data items version; connector revisions don't upsert |
+| **Generators** | prompt, model, schema, parser or chunker changes | **untracked** |
+| **Schemas** | normalization target evolves | designed — versioned, never mutated in place |
+| **Facts** | world changes, or we learn we were wrong | partial — valid-time only |
+
+### Embeddings: the one that is actually broken
+
+Embeddings are not merely stale-able — they are **incomparable across models**. A vector from one
+embedding model and one from another live in different spaces with different dimensionality.
+Cosine similarity between them is a number, and that number is meaningless.
+
+**The documented fallback chain switches between a local embedder and a cloud one.** For
+generation that is graceful degradation; for embeddings it silently corrupts ranking, with no
+error raised and no way to identify affected rows after the fact.
+
+```
+embed request ──┬── normal ──▶ local embedder   (space A, dim 768)
+                └── outage ──▶ cloud embedder   (space B, dim 3072)
+                                     ↓
+                            ONE vector index — mixed spaces
+                                     ↓
+                            similarity search returns nonsense
+```
+
+Three consequences:
+
+1. Every embedding row must carry `model_id` and `dim`, and search must filter to a single space.
+   Without the column, affected rows cannot even be identified retroactively.
+2. **Embeddings must not silently fall back.** If the primary embedder is unavailable, defer with
+   `embed_status = pending` — never substitute a different space.
+3. Changing embedding model is a **corpus-wide migration**: build the new index alongside, then
+   swap. Never mix.
+
+### Knowledge graph: valid time exists, transaction time does not
+
+| Question | Needs |
+|----------|-------|
+| "Who was CEO in 2024?" | valid time — **have it** |
+| "What did we believe on March 1?" | transaction time — partial |
+| "When did we learn we were wrong?" | both — **gap** |
+
+**Nothing invalidates facts when a source is revised.** If a document is superseded, facts
+extracted from the old version keep `invalid_at = null` — they remain true forever. Temporal
+queries then return confidently wrong answers, which is worse than returning nothing. Source
+revision (W8) must set `invalid_at` on facts derived from the superseded version.
+
+A harder case sits behind it: **entity resolution decisions are themselves versioned claims.** If
+the graph merges two people and later learns they are distinct, an un-merge is required — and
+merges are lossy. Recording the merge as a retractable, evidence-bearing decision rather than a
+destructive edit is the only way this stays recoverable.
+
+### The staleness model
+
+The concrete deliverable — what makes W7 targetable rather than a full-corpus rebuild:
+
+| Field | Purpose |
+|-------|---------|
+| `source_id`, `source_version` | which content produced it — a **list** where several sources contributed |
+| `generator_version` | what was **intended** — FK to the immutable generator registry |
+| `served_by_model`, `fallback_depth` | what **actually ran**, because the chain may have substituted |
+| `produced_at` | transaction time |
+| `status` | `current` · `superseded` · `stale` · `failed` |
+
+An artifact is stale when either version moves. A sweep marks affected rows; W7 rebuilds by
+priority. Without this, "we changed the summarization prompt" means either re-running the entire
+corpus or living with permanent inconsistency — and at 50M rows the first option is not available.
+
+### The fingerprint is a change detector, not a record
+
+`generator_version = sha256(canonical_json({prompt, model_id, schema, parser_version, ...}))` tells
+you *that* two artifacts were produced differently. It cannot tell you *how*.
+
+Knowing an artifact came from `a3f2…` and another from `b7c1…` does not let you debug a bad
+summary, reproduce a result, roll back a regression, or answer "what instructions produced this
+clinical summary?" — which is a real question in a regulated context.
+
+#### A generator registry
+
+Immutable and append-only, keyed by the fingerprint:
+
+```
+generator_versions
+  generator_version      PK — the fingerprint
+  agent_id
+  prompt_text            the actual prompt, not a reference to a mutable one
+  model_id, provider     the CONFIGURED model
+  output_schema
+  parser_version, chunker_version, embedder_id
+  processing_flags
+  created_at, created_by
+```
+
+Every derived artifact holds a foreign key into it. The full configuration that produced any
+artifact in the corpus is always reconstructible, and a prompt change is a new row rather than an
+edit — a mutable prompt breaks the guarantee the fingerprint exists to provide.
 
 ---
 
-### The write pipeline has a fixed order, and that is the point
+### The bug: the fingerprint records intent, not what happened
 
-A write is nine phases. **Four are customizable. Five are sealed.** Which is which is not a
-convenience decision — it is the security boundary.
+This one matters more than it looks.
+
+The fingerprint is computed from the **configured** model. But the fallback chain may have served a
+**different** one — a busy local GPU falls through to a cloud provider, and the artifact is written
+as though nothing happened.
 
 ```
-  ┌─────────────────────────────────────────────────────────────┐
-  │  1  Authenticate · resolve producer            SEALED       │
-  │  2  Admission control                          limits only  │
-  │  3  ACL assignment — from connection scope     SEALED  ★    │
-  ├─────────────────────────────────────────────────────────────┤
-  │  4  Validation                                 CUSTOM       │
-  │  5  Transform · redact                         CUSTOM  (new)│
-  │  6  Normalization — schema + field mapping     CUSTOM       │
-  ├─────────────────────────────────────────────────────────────┤
-  │  7  Persist raw + projection                   SEALED       │
-  │  8  Memory · case routing                      CUSTOM       │
-  │  9  Enqueue enrichment                         SEALED       │
-  └─────────────────────────────────────────────────────────────┘
-                                    ★ everything below 3 runs
-                                      inside an ACL already fixed
+generator_version = a3f2…    ← says "gemma, medium tier"
+actually served   = a cloud model, two hops down the chain
+recorded          = nothing
 ```
 
-#### The finding — ordering is a privilege escalation boundary
+So two artifacts with **identical fingerprints** can have been produced by different models. That
+breaks the core assumption of the staleness model: that equal fingerprints imply equivalent
+provenance.
 
-An item's ACL derives from the **connection scope** and, in places, from its metadata. A
-customization hook that can edit metadata is therefore a hook that can edit visibility — unless
-the ACL is already sealed by the time it runs.
+The usage record already captures `serving_model` — but on the *inference event*, not on the
+*artifact*. The artifact is what survives, and it is what a rebuild decision reads.
 
-Put phase 3 after phase 5 and a project-authored transform rule can move a `private` item into
-`org` visibility by rewriting a tag. Nothing errors. Nothing looks wrong in the audit log, because
-the item was *written* with the visibility it ended up with.
+#### Fix
 
-So the rule is absolute:
+Record both on the artifact:
 
-> **ACL is assigned before any customizable phase runs, and no customizable phase may write to an
-> ACL-determining field.** Hooks receive content and metadata inside an envelope whose security
-> fields are read-only.
+| Field | Meaning |
+|-------|---------|
+| `generator_version` | What was **intended** — the fingerprint, FK to the registry |
+| `served_by_model` | What **actually ran** |
+| `fallback_depth` | `0` means the primary served it |
+| `under_fallback` | Derived — `served_by_model ≠ configured` |
 
-This costs nothing to honour now and is close to unfixable later, because by then projects will
-have written rules that depend on running earlier.
-
-#### Why customization is declarative, not customer code
-
-Every hook here is a **declarative rule the platform evaluates**. None of them is customer code
-executed in the write path.
-
-That is a tenancy decision, not a taste one. The write path is shared: one project's arbitrary
-code in it becomes every project's latency, every project's crash, and — given the phase-3 rule
-above — every project's security boundary. There is no version of in-process customer code that is
-safe here.
-
-**Customers who genuinely need arbitrary logic already have the answer:** run it before the write
-and post the result through a `key_` producer. That is exactly what the external-ETL producer class
-is for, and it puts the code in their process where it belongs.
+This makes "artifacts produced under fallback" a **selector for reprocess**, which is a genuinely
+useful cleanup: after an outage, rebuild exactly the artifacts that degraded, and nothing else.
 
 ---
 
-### Gap 1 — redaction has nowhere to run
+### Derived artifacts need history, not just current state
 
-The strongest customization request the design cannot serve today is *"never store this."*
+Reprocess overwrites. That is the obvious implementation and it loses three things:
 
-A project handling clinical or financial data wants an SSN, a card number or a patient name
-stripped **before** anything is persisted. Today the only tools are downstream: classify it after
-storage, then run an erasure cascade. That works, and it is strictly worse — the data existed, it
-was backed up, and the cascade has to reach every derived artifact.
+- **Rollback.** A prompt change that made output worse cannot be undone
+- **Comparison.** Evaluating whether a change helped requires old and new side by side
+- **The regulated question.** "What did the system say in March?" has no answer
 
-**Not storing is categorically better than storing and deleting.** Phase 5 is where that runs.
+Keep the **previous** version of each derived artifact by default, with retention configurable per
+artifact type. Reprocess writes a new version and demotes the old rather than replacing it.
 
-```
-RedactionRule           scope: project | org
-  match                 declarative pattern — regex, named detector, field path
-  action                drop_item | redact_span | hash | tokenize
-  applies_to            content | metadata | both
-  record                always — see below
-```
+Storage is the objection, and it is real at fifty million rows — so make it a policy: summaries and
+claims keep history, chunk embeddings do not. The expensive ones to regenerate are the cheap ones
+to keep.
 
-#### Redaction collides with an existing invariant, and the collision resolves cleanly
+### Two more leaks
 
-normalization.md states: **raw is truth; never discard the
-original.** Redaction discards the original on purpose. These look contradictory.
+- **Compressed summaries.** A summary derived from N items goes stale when any one is revised or
+  deleted — and deleting the original does not remove its content from the prose. Summaries must
+  record their `(source_id, version)` list.
+- **Query provenance.** A cited RAG answer cannot be reproduced or audited unless the index
+  versions, model versions and retrieval parameters used are recorded with it.
 
-They are not, once you notice the two are lossy for different reasons:
+### Deletion vs history
 
-| | Normalization | Redaction |
-|---|---|---|
-| Lossy | **by accident** — mappings have bugs, schemas evolve | **by intent** — the original must not exist |
-| So keep raw? | **Yes** — it is the recovery path | **No** — keeping it defeats the entire purpose |
-
-The invariant is therefore sharpened rather than broken: **raw is truth as admitted.** Redaction
-happens at the boundary, before anything becomes truth. What is never admitted was never raw.
-
-#### But a redaction must still be auditable
-
-The content is gone; the *fact* must not be. Otherwise "why does this record have a hole in it?"
-and "is our redaction rule even firing?" are both unanswerable — and a rule that silently stopped
-matching looks exactly like a corpus that stopped containing SSNs.
-
-```
-redaction_events
-  data_id, rule_id, rule_version
-  action, span_count
-  at
-```
-
-This is the characteristic failure mode again: the system fails by
-**silence**. A redaction rule that matches nothing produces the same output as a rule that is
-working perfectly, so the count is the only signal, and it has to be recorded.
-
-#### Redaction must not call a model on the hot path
-
-Same argument normalization.md makes about mapping:
-runtime LLM inference on the write path is nondeterministic, expensive, and latency the write
-budget does not have. Identical inputs would redact differently across runs, which for a privacy
-control is disqualifying.
-
-Rules are declarative patterns. Build the **suggester** offline — point it at sample payloads, get
-proposed rules, review and store them declaratively. Detection quality improves by improving the
-rule set, not by asking a model twice.
-
----
-
-### Gap 2 — the rejection policy is fixed, and one class of customer needs the opposite
-
-Today, a record that fails normalization lands raw with `normalization_status = failed` and stays
-retryable. **This is the right default** — losing data because a mapping had a bug is the worse
-failure, and it is the failure that is unrecoverable.
-
-But a regulated project may need the opposite: *reject non-conforming data at the door rather than
-store it*. Storing it, flagged, still means storing it — and for some corpora that is the
-compliance breach, not a step towards fixing one.
-
-```
-validation_policy       scope: project
-  on_validation_failure     accept_raw (default) | reject
-  required_fields           beyond identifiers[] and event_time
-```
-
-#### The tension worth stating rather than hiding
-
-`reject` pushes the failure onto the producer — and **most producers cannot handle it.** A webhook
-gets a `4xx` and, depending on the provider, either retries forever or drops the event silently.
-The data is then gone, which is the failure mode `accept_raw` exists to prevent.
-
-So `reject` is only honest when the producer can act on rejection:
-
-| Producer | `reject` viable? |
-|----------|:----------------:|
-| `key_` client / ETL — synchronous, sees the `207` | **Yes** |
-| `upl_` upload — a person is watching | **Yes** |
-| `whk_` webhook — provider-controlled retry | **No** — it will be lost |
-| `crw_` crawler — ours, can re-queue | Yes, with a DLQ |
-
-**Recommendation:** allow `reject` per project, but **refuse to enable it for webhook producers**,
-and say why at configuration time rather than discovering it as data loss.
-
----
-
-### Gap 3 — changing a customization is a versioning event
-
-workers.md already establishes this for prompt
-overrides, and normalization.md tags projections with the schema
-version that produced them. The rule needs to hold for **every** write-path customization, because
-they share one property that surprises people:
-
-> **A customization change looks retroactive and is not.** Edit a field mapping and the corpus
-> does not re-map. Yesterday's records keep yesterday's shape, and a query spanning the change
-> returns two shapes with no marker between them.
-
-Exactly the generator-version problem in another form. Same resolution:
-
-- Every write-path config is **versioned, never mutated in place**
-- Every stored artifact records **which version produced it**
-- Changing one **enqueues W7 reprocess** for affected data, or the corpus is knowingly mixed —
-  and "knowingly" means it is stated, not discovered
-
-Redaction is the exception that proves it: **W7 cannot un-redact.** Reprocessing under a *narrower*
-rule cannot recover what a broader rule removed, because the source is gone. Widening a redaction
-rule is safe and reprocessable; narrowing one is not, and the UI must say so before it applies —
-the same preview-before-destructive-change treatment re-typing a memory gets.
-
----
-
-### Precedence, in one place
-
-All five surfaces resolve identically. Stating it once beats stating it five times and hoping they
-stay consistent:
-
-```
-per-request option  →  producer default  →  project  →  org  →  shipped default
-```
-
-Two qualifications:
-
-- **Admin locks beat specificity.** An org that locks a normalization schema or a redaction rule
-  makes it non-overridable at project scope. Without locks, org-level policy is advisory, and a
-  compliance control that a project can switch off is not a control.
-- **A per-request option can never widen access or skip a phase.** `options` tunes cost and
-  latency — `enrich`, `priority`. It does not select ACLs, skip validation, or bypass redaction.
-  If a caller could set `redact: false`, the redaction rule would be decoration.
-
----
-
-### API
-
-```
-CRUD  /api/v1/normalization-schemas          scoped, versioned
-CRUD  /api/v1/field-mappings                 per (provider, target_type)
-CRUD  /api/v1/redaction-rules                scoped, versioned, lockable
-CRUD  /api/v1/validation-policies            per project
-CRUD  /api/v1/agent-configs                  prompts and output schemas
-POST  /api/v1/write-config:test              dry-run a payload through phases 4–6
-```
-
-The last one carries more weight than its size suggests. A customization you cannot test against a
-real payload before enabling gets tested in production against live data, which for a redaction
-rule means the test failure is a disclosure. workers.md already
-requires this for prompts; it applies to the whole customizable set.
+Hard deletion breaks version history; soft deletion fails erasure requests. The workable split is
+to **hard-delete content and retain a metadata-only tombstone** — id, versions, timestamps,
+reason — so lineage stays intact and no user content survives.
 
 ---
 
 ### Requirements
 
-- **FR-WC-1** The write pipeline MUST have a fixed, documented phase order, and the order MUST NOT
-  vary by producer, project or configuration.
-- **FR-WC-2** ACL assignment MUST complete before any customizable phase executes.
-- **FR-WC-3** No customizable phase may write to an ACL-determining field. Security fields MUST be
-  read-only to hooks.
-- **FR-WC-4** Write-path customization MUST be declarative and evaluated by the platform.
-  Customer-supplied code MUST NOT execute in the shared write path.
-- **FR-WC-5** Redaction MUST be applied before persistence, never as a post-storage correction.
-- **FR-WC-6** A redaction MUST record rule id, rule version, action and match count, even though
-  the content is not retained.
-- **FR-WC-7** Redaction MUST NOT invoke a model on the write path. Rules MUST be declarative;
-  model assistance MUST be confined to offline rule suggestion.
-- **FR-WC-8** Validation failure policy MUST be configurable per project, defaulting to
-  `accept_raw`. `reject` MUST NOT be enablable for producers that cannot act on rejection.
-- **FR-WC-9** Every write-path customization MUST be versioned and never mutated in place, and
-  every artifact MUST record the version that produced it.
-- **FR-WC-10** Changing a write-path customization MUST enqueue W7 reprocess for affected data, or
-  MUST record that the corpus is knowingly mixed.
-- **FR-WC-11** Narrowing a redaction rule MUST warn that prior removals are unrecoverable before
-  the change is applied.
-- **FR-WC-12** Admin locks MUST override specificity, so org-level policy cannot be disabled at
-  project scope.
-- **FR-WC-13** Per-request options MUST NOT widen access, skip a phase, or bypass redaction.
-- **FR-WC-14** Every customization surface MUST be testable against a sample payload before it is
-  enabled.
+- **FR-VER-1** Every derived artifact MUST record the complete configuration fingerprint that
+  produced it, as a reference to an **immutable** generator registry.
+- **FR-VER-2** The generator registry MUST store the full configuration — prompt text, model,
+  schema, parser and chunker versions — so any artifact's provenance is reconstructible. Registry
+  entries MUST NOT be edited; a change is a new entry.
+- **FR-VER-3** Every derived artifact MUST record the model that **actually served** it, not only
+  the one configured, together with the fallback depth reached.
+- **FR-VER-4** Artifacts produced under fallback MUST be identifiable as a selector for reprocess.
+- **FR-VER-5** Derived artifacts MUST retain at least the previous version, with retention
+  configurable per artifact type.
+- **FR-VER-6** Reprocess MUST write a new version and supersede the old, not overwrite it.
+
+
+---
+
+---
+
+## Deletion
+
+The most destructive operation in the system, and the one where "it seemed to work" is least
+trustworthy — because what remains after a bad delete is invisible.
+
+### Two different operations wearing one word
+
+| | **Cleanup** | **Erasure** |
+|---|---|---|
+| Intent | "I don't want this any more" | "This person has a legal right to have it gone" |
+| Initiated by | user or admin | subject request, or a compliance process |
+| Grace period | **yes** — recoverable window | **no** — immediate |
+| Legal hold | respected, deletion deferred | respected, returns **partial completion** |
+| Audit weight | normal | **the record is the deliverable** |
+| Verification | optional | **required** |
+
+Conflating them produces one of two failures: a GDPR erasure that sits in a grace bin for thirty
+days is not an erasure, and a user who fat-fingers "delete project" and cannot undo it has been
+badly served. Different intents, different behaviour, one API with a `mode`.
+
+### Scope
+
+| Scope | Endpoint |
+|-------|----------|
+| One item | `DELETE /api/v1/data/{id}` |
+| A selection | `POST /api/v1/deletions` with a selector |
+| Everything in a project | `DELETE /api/v1/projects/{id}?purge=true` |
+| Everything for a subject | `POST /api/v1/deletions` with `subject` |
+| Org offboarding | `DELETE /api/v1/organizations/{id}?purge=true` |
+
+Beyond a single item, **deletion is a job, not a request** — cascading across embeddings, chunks,
+entities, graph facts, summaries and blobs takes time and must survive a worker restart. It reuses
+the run entity from [bulk operations](#bulk-operations): checkpointed, resumable, pausable, with
+per-item errors.
+
+#### The selector
+
+```
+selector:
+  data_ids     [...]
+  producer_id  crw_… | whk_… | key_…      everything a source ever wrote
+  project_id
+  case_id
+  tags
+  source
+  access_level
+  time_range   { field: event_time | ingested_at, from, to }
+```
+
+**`time_range` must name its clock.** "Delete everything from 2019" means something entirely
+different by ingestion time than by event time once a backfill has happened — the same request
+either deletes three years of history or deletes nothing. Requiring the field makes the ambiguity
+impossible rather than merely documented.
+
+`producer_id` is the one people reach for after a mistake: a crawler misconfigured and ingested the
+wrong site, and the fix is "remove everything that producer wrote."
+
+### Dry-run is mandatory for scoped deletes
+
+Same pattern as [crawler configs](#crawlers), for the same reason:
+
+```json
+POST /api/v1/deletions   { "selector": {...}, "dry_run": true }
+
+{ "would_delete": { "items": 12403, "embeddings": 91220,
+                    "summaries_affected": 340, "blobs_bytes": "8.2 GB" },
+  "withheld": { "legal_hold": 22, "reason": "matter M-2291" },
+  "shared_entities_retained": 1841,
+  "sample": [ … ] }
+```
+
+A destructive operation whose blast radius is only visible afterwards is not a safe operation. For
+project- and org-scoped purges, dry-run plus explicit confirmation is **required**, not advisory.
+
+### What the cascade actually touches
+
+| Artifact | Behaviour |
+|----------|-----------|
+| Data item | Hard-deleted; a **metadata-only tombstone** remains — id, versions, timestamps, reason |
+| Chunks, embeddings | Deleted |
+| Blobs | Deleted from the object store |
+| **Entities** | **Reference-counted.** An entity mentioned by fifty documents is not deleted because one is — only its contribution is removed |
+| **Memory membership** | Removed. An item held by another memory survives — see [memories](#memories) |
+| **Graph facts** | Facts sourced solely from the item are deleted; facts with other sources have that source removed |
+| **Summaries** | **Marked stale and rebuilt**, not deleted — see below |
+| Derived indexes | Deleted with their source |
+| **Audit records** | **Survive.** They record that the deletion happened; deleting them defeats the purpose |
+
+#### Entities and summaries are where naive deletes go wrong
+
+**Deleting an entity because one of its sources went away destroys knowledge that fifty other
+documents still support.** Reference counting is the difference between removing a contribution and
+removing a fact.
+
+**Summaries are the harder case.** A summary spanning forty items, one of which is erased, still
+contains the erased content in prose. Deleting the summary loses value; leaving it is a compliance
+failure. The right answer reuses machinery that already exists: **mark it stale and let reprocess
+rebuild it from the surviving members.** That is exactly why derived artifacts must record their
+source set as a *list* from the first row — see
+[privacy foundations](#privacy-foundations).
+
+Without that list, a summary is unerasable, because nothing records that the paragraph someone
+wants removed came from the document they are asking about.
+
+### Legal hold returns partial completion
+
+An erasure touching a case under hold does **neither** silent thing:
+
+```json
+{ "status": "partial",
+  "deleted": 11890,
+  "withheld": [ { "case_id": "cas_…", "items": 513,
+                  "hold": "hold_…", "authority": "Matter M-2291" } ],
+  "requeued_on_release": true }
+```
+
+Silently deleting held data destroys evidence someone is legally obliged to preserve. Silently
+ignoring the request is a compliance failure dressed as success. The only defensible behaviour is
+to do what is possible and say precisely what was not — and to re-queue automatically when the hold
+lifts.
+
+### Verification
+
+After an erasure the job runs a verification pass: no derived artifact references the deleted
+source, no blob remains, no embedding row survives, no graph fact retains it as its only source.
+
+"We deleted it" is a claim someone may have to stand behind. Verification turns it into a checkable
+one, and the result belongs in the audit record.
+
+### Permissions
+
+| Scope | Required |
+|-------|----------|
+| Own item | owner |
+| Selection within a project | `member` for own data, `admin` for others' |
+| Project purge | `admin` |
+| Org purge | `owner`, plus typed confirmation |
+| Subject erasure | `admin`, or an authenticated compliance process |
+
+Every deletion is audited with actor, scope, mode, counts and withholdings — and audit is the one
+thing a delete never touches.
+
+### API
+
+```
+DELETE /api/v1/data/{id}                     single; idempotent, returns already_gone
+POST   /api/v1/deletions                     job — selector, mode, dry_run
+GET    /api/v1/deletions/{job_id}            progress, counts, withheld, errors
+POST   /api/v1/deletions/{job_id}/confirm    required for project and org scope
+POST   /api/v1/deletions/{job_id}/cancel     cleanup mode only, within the grace window
+DELETE /api/v1/projects/{id}?purge=true      convenience over the job API
+DELETE /api/v1/organizations/{id}?purge=true offboarding
+```
+
+The UI is a client of exactly these — dry-run preview, a confirmation step naming what will go and
+what is held, progress while it runs, and the result with what was withheld and why.
+
+### Requirements
+
+- **FR-DEL-1** Deletion MUST distinguish **cleanup** (grace period, cancellable) from **erasure**
+  (immediate, verified).
+- **FR-DEL-2** Deletion beyond a single item MUST be a checkpointed, resumable job.
+- **FR-DEL-3** A selector `time_range` MUST name which clock it applies to.
+- **FR-DEL-4** Scoped deletion MUST support dry-run, and project- and org-scoped purges MUST
+  require it plus explicit confirmation.
+- **FR-DEL-5** The cascade MUST reach chunks, embeddings, blobs, derived indexes, entity
+  contributions and graph facts.
+- **FR-DEL-6** Entities MUST be reference-counted; an entity supported by other sources MUST NOT be
+  removed.
+- **FR-DEL-7** Summaries containing deleted content MUST be marked stale and rebuilt, not left
+  intact and not silently discarded.
+- **FR-DEL-8** Deletion MUST leave a metadata-only tombstone and MUST NOT delete audit records.
+- **FR-DEL-9** Erasure touching held data MUST return partial completion naming what was withheld,
+  and MUST re-queue on release.
+- **FR-DEL-10** Erasure MUST run a verification pass, and the result MUST be recorded in the audit
+  trail.
+
+
+
+
+
+*Who can see what, and what we can prove*
+
+
+---
+
+# Part IV · Ingestion at scale
+
+*Every producer that uses the write path, and how far it bends*
 
 ---
 
@@ -2698,6 +3010,8 @@ redelivery is a cache hit rather than a second download and a second data item.
 
 ---
 
+---
+
 ## Custom Worker Code
 
 **Data workers may run customer-supplied code on a custom cluster.**
@@ -2919,6 +3233,306 @@ better than letting them discover it after adopting the hosted version.
 
 ---
 
+---
+
+## Customizing the Write Path
+
+> ## MVP position: none of this ships
+>
+> **MVP has no customization.** One normalization schema, the shipped agent prompts, the shipped
+> memory types, no redaction rules, no custom code. Everything below is post-MVP, and this document
+> exists to make sure the *shape* is decided before the surface is built — not to add scope to v1.
+>
+> Three things must land in MVP anyway, and they are the usual kind:
+>
+> | Must ship in MVP | Why it cannot wait |
+> |------------------|--------------------|
+> | **The phase order, with ACL assigned before any hook point** | An enforcement point, and the escalation boundary. Free now; it means reordering the write path once projects depend on it later |
+> | **Security fields read-only in the item envelope** | Same enforcement point, and it costs nothing when nothing is yet plugged in |
+> | **`handler_digest` present in the `generator_version` input set** | A **column**. Add a field to the hash later and every existing fingerprint changes, so the whole corpus reads as stale at once. Ship it constant for built-ins |
+>
+> This is Phase 1's rule applied to customization: *ship the
+> column and the enforcement point; the surface follows.*
+
+---
+
+The write path is customizable at five points — **post-MVP**. This document collects them, because they
+are currently specified in five different places and **a single write touches four of them at
+once**. Nobody had written down the order they apply in, or what happens when two disagree.
+
+Writing that order down turned out to matter more than adding features to it.
+
+---
+
+### What is already customizable
+
+| Surface | Scope | Owning doc |
+|---------|-------|-----------|
+| **Normalization schema** — canonical types and their shape | project → org → global | normalization.md |
+| **Field mapping** — `source_path → target_field`, transforms, `on_missing` | per (provider, target_type) | normalization.md |
+| **Extraction prompts and output schemas** — what the agents produce | project → org → shipped, with admin locks | workers.md |
+| **Memory types and routing** — name, TTL, expiry policy, which memory an item lands in | per deployment | ../memories.md |
+| **Producer defaults** — ACL scope, `embed`/`enrich` policy, target memory type | per producer | write-api.md |
+| **Per-request options** — `enrich`, `priority` | per call | write-api.md |
+
+Every one of these follows the same precedence rule — **most specific wins, project → org →
+shipped** — which is the tenancy model applied consistently. That much was already right.
+
+---
+
+### The write pipeline has a fixed order, and that is the point
+
+A write is nine phases. **Four are customizable. Five are sealed.** Which is which is not a
+convenience decision — it is the security boundary.
+
+```
+  ┌─────────────────────────────────────────────────────────────┐
+  │  1  Authenticate · resolve producer            SEALED       │
+  │  2  Admission control                          limits only  │
+  │  3  ACL assignment — from connection scope     SEALED  ★    │
+  ├─────────────────────────────────────────────────────────────┤
+  │  4  Validation                                 CUSTOM       │
+  │  5  Transform · redact                         CUSTOM  (new)│
+  │  6  Normalization — schema + field mapping     CUSTOM       │
+  ├─────────────────────────────────────────────────────────────┤
+  │  7  Persist raw + projection                   SEALED       │
+  │  8  Memory · case routing                      CUSTOM       │
+  │  9  Enqueue enrichment                         SEALED       │
+  └─────────────────────────────────────────────────────────────┘
+                                    ★ everything below 3 runs
+                                      inside an ACL already fixed
+```
+
+#### The finding — ordering is a privilege escalation boundary
+
+An item's ACL derives from the **connection scope** and, in places, from its metadata. A
+customization hook that can edit metadata is therefore a hook that can edit visibility — unless
+the ACL is already sealed by the time it runs.
+
+Put phase 3 after phase 5 and a project-authored transform rule can move a `private` item into
+`org` visibility by rewriting a tag. Nothing errors. Nothing looks wrong in the audit log, because
+the item was *written* with the visibility it ended up with.
+
+So the rule is absolute:
+
+> **ACL is assigned before any customizable phase runs, and no customizable phase may write to an
+> ACL-determining field.** Hooks receive content and metadata inside an envelope whose security
+> fields are read-only.
+
+This costs nothing to honour now and is close to unfixable later, because by then projects will
+have written rules that depend on running earlier.
+
+#### Why customization is declarative, not customer code
+
+Every hook here is a **declarative rule the platform evaluates**. None of them is customer code
+executed in the write path.
+
+That is a tenancy decision, not a taste one. The write path is shared: one project's arbitrary
+code in it becomes every project's latency, every project's crash, and — given the phase-3 rule
+above — every project's security boundary. There is no version of in-process customer code that is
+safe here.
+
+**Customers who genuinely need arbitrary logic already have the answer:** run it before the write
+and post the result through a `key_` producer. That is exactly what the external-ETL producer class
+is for, and it puts the code in their process where it belongs.
+
+---
+
+### Gap 1 — redaction has nowhere to run
+
+The strongest customization request the design cannot serve today is *"never store this."*
+
+A project handling clinical or financial data wants an SSN, a card number or a patient name
+stripped **before** anything is persisted. Today the only tools are downstream: classify it after
+storage, then run an erasure cascade. That works, and it is strictly worse — the data existed, it
+was backed up, and the cascade has to reach every derived artifact.
+
+**Not storing is categorically better than storing and deleting.** Phase 5 is where that runs.
+
+```
+RedactionRule           scope: project | org
+  match                 declarative pattern — regex, named detector, field path
+  action                drop_item | redact_span | hash | tokenize
+  applies_to            content | metadata | both
+  record                always — see below
+```
+
+#### Redaction collides with an existing invariant, and the collision resolves cleanly
+
+normalization.md states: **raw is truth; never discard the
+original.** Redaction discards the original on purpose. These look contradictory.
+
+They are not, once you notice the two are lossy for different reasons:
+
+| | Normalization | Redaction |
+|---|---|---|
+| Lossy | **by accident** — mappings have bugs, schemas evolve | **by intent** — the original must not exist |
+| So keep raw? | **Yes** — it is the recovery path | **No** — keeping it defeats the entire purpose |
+
+The invariant is therefore sharpened rather than broken: **raw is truth as admitted.** Redaction
+happens at the boundary, before anything becomes truth. What is never admitted was never raw.
+
+#### But a redaction must still be auditable
+
+The content is gone; the *fact* must not be. Otherwise "why does this record have a hole in it?"
+and "is our redaction rule even firing?" are both unanswerable — and a rule that silently stopped
+matching looks exactly like a corpus that stopped containing SSNs.
+
+```
+redaction_events
+  data_id, rule_id, rule_version
+  action, span_count
+  at
+```
+
+This is the characteristic failure mode again: the system fails by
+**silence**. A redaction rule that matches nothing produces the same output as a rule that is
+working perfectly, so the count is the only signal, and it has to be recorded.
+
+#### Redaction must not call a model on the hot path
+
+Same argument normalization.md makes about mapping:
+runtime LLM inference on the write path is nondeterministic, expensive, and latency the write
+budget does not have. Identical inputs would redact differently across runs, which for a privacy
+control is disqualifying.
+
+Rules are declarative patterns. Build the **suggester** offline — point it at sample payloads, get
+proposed rules, review and store them declaratively. Detection quality improves by improving the
+rule set, not by asking a model twice.
+
+---
+
+### Gap 2 — the rejection policy is fixed, and one class of customer needs the opposite
+
+Today, a record that fails normalization lands raw with `normalization_status = failed` and stays
+retryable. **This is the right default** — losing data because a mapping had a bug is the worse
+failure, and it is the failure that is unrecoverable.
+
+But a regulated project may need the opposite: *reject non-conforming data at the door rather than
+store it*. Storing it, flagged, still means storing it — and for some corpora that is the
+compliance breach, not a step towards fixing one.
+
+```
+validation_policy       scope: project
+  on_validation_failure     accept_raw (default) | reject
+  required_fields           beyond identifiers[] and event_time
+```
+
+#### The tension worth stating rather than hiding
+
+`reject` pushes the failure onto the producer — and **most producers cannot handle it.** A webhook
+gets a `4xx` and, depending on the provider, either retries forever or drops the event silently.
+The data is then gone, which is the failure mode `accept_raw` exists to prevent.
+
+So `reject` is only honest when the producer can act on rejection:
+
+| Producer | `reject` viable? |
+|----------|:----------------:|
+| `key_` client / ETL — synchronous, sees the `207` | **Yes** |
+| `upl_` upload — a person is watching | **Yes** |
+| `whk_` webhook — provider-controlled retry | **No** — it will be lost |
+| `crw_` crawler — ours, can re-queue | Yes, with a DLQ |
+
+**Recommendation:** allow `reject` per project, but **refuse to enable it for webhook producers**,
+and say why at configuration time rather than discovering it as data loss.
+
+---
+
+### Gap 3 — changing a customization is a versioning event
+
+workers.md already establishes this for prompt
+overrides, and normalization.md tags projections with the schema
+version that produced them. The rule needs to hold for **every** write-path customization, because
+they share one property that surprises people:
+
+> **A customization change looks retroactive and is not.** Edit a field mapping and the corpus
+> does not re-map. Yesterday's records keep yesterday's shape, and a query spanning the change
+> returns two shapes with no marker between them.
+
+Exactly the generator-version problem in another form. Same resolution:
+
+- Every write-path config is **versioned, never mutated in place**
+- Every stored artifact records **which version produced it**
+- Changing one **enqueues W7 reprocess** for affected data, or the corpus is knowingly mixed —
+  and "knowingly" means it is stated, not discovered
+
+Redaction is the exception that proves it: **W7 cannot un-redact.** Reprocessing under a *narrower*
+rule cannot recover what a broader rule removed, because the source is gone. Widening a redaction
+rule is safe and reprocessable; narrowing one is not, and the UI must say so before it applies —
+the same preview-before-destructive-change treatment re-typing a memory gets.
+
+---
+
+### Precedence, in one place
+
+All five surfaces resolve identically. Stating it once beats stating it five times and hoping they
+stay consistent:
+
+```
+per-request option  →  producer default  →  project  →  org  →  shipped default
+```
+
+Two qualifications:
+
+- **Admin locks beat specificity.** An org that locks a normalization schema or a redaction rule
+  makes it non-overridable at project scope. Without locks, org-level policy is advisory, and a
+  compliance control that a project can switch off is not a control.
+- **A per-request option can never widen access or skip a phase.** `options` tunes cost and
+  latency — `enrich`, `priority`. It does not select ACLs, skip validation, or bypass redaction.
+  If a caller could set `redact: false`, the redaction rule would be decoration.
+
+---
+
+### API
+
+```
+CRUD  /api/v1/normalization-schemas          scoped, versioned
+CRUD  /api/v1/field-mappings                 per (provider, target_type)
+CRUD  /api/v1/redaction-rules                scoped, versioned, lockable
+CRUD  /api/v1/validation-policies            per project
+CRUD  /api/v1/agent-configs                  prompts and output schemas
+POST  /api/v1/write-config:test              dry-run a payload through phases 4–6
+```
+
+The last one carries more weight than its size suggests. A customization you cannot test against a
+real payload before enabling gets tested in production against live data, which for a redaction
+rule means the test failure is a disclosure. workers.md already
+requires this for prompts; it applies to the whole customizable set.
+
+---
+
+### Requirements
+
+- **FR-WC-1** The write pipeline MUST have a fixed, documented phase order, and the order MUST NOT
+  vary by producer, project or configuration.
+- **FR-WC-2** ACL assignment MUST complete before any customizable phase executes.
+- **FR-WC-3** No customizable phase may write to an ACL-determining field. Security fields MUST be
+  read-only to hooks.
+- **FR-WC-4** Write-path customization MUST be declarative and evaluated by the platform.
+  Customer-supplied code MUST NOT execute in the shared write path.
+- **FR-WC-5** Redaction MUST be applied before persistence, never as a post-storage correction.
+- **FR-WC-6** A redaction MUST record rule id, rule version, action and match count, even though
+  the content is not retained.
+- **FR-WC-7** Redaction MUST NOT invoke a model on the write path. Rules MUST be declarative;
+  model assistance MUST be confined to offline rule suggestion.
+- **FR-WC-8** Validation failure policy MUST be configurable per project, defaulting to
+  `accept_raw`. `reject` MUST NOT be enablable for producers that cannot act on rejection.
+- **FR-WC-9** Every write-path customization MUST be versioned and never mutated in place, and
+  every artifact MUST record the version that produced it.
+- **FR-WC-10** Changing a write-path customization MUST enqueue W7 reprocess for affected data, or
+  MUST record that the corpus is knowingly mixed.
+- **FR-WC-11** Narrowing a redaction rule MUST warn that prior removals are unrecoverable before
+  the change is applied.
+- **FR-WC-12** Admin locks MUST override specificity, so org-level policy cannot be disabled at
+  project scope.
+- **FR-WC-13** Per-request options MUST NOT widen access, skip a phase, or bypass redaction.
+- **FR-WC-14** Every customization surface MUST be testable against a sample payload before it is
+  enabled.
+
+---
+
+---
+
 ## Source Coverage
 
 Bespoke adapters do not scale to a 900-provider catalog. But sorting providers by *retrieval
@@ -2985,6 +3599,8 @@ and change webhooks. That overlaps substantially with the [crawler](#crawlers). 
 deployed version supports *before* writing a crawler framework; it may collapse into writing a
 consumer.
 
+
+---
 
 ---
 
@@ -3101,6 +3717,8 @@ enabled.
 
 ---
 
+---
+
 ## Formats
 
 Tiers of support, not a count. "60+ MIME types" does not mean 60 types are equally well handled.
@@ -3156,6 +3774,8 @@ transcription behind explicit per-org opt-in with a visible cost estimate.
 
 ---
 
+---
+
 ## Direct Uploads
 
 ### Where the current path breaks
@@ -3207,6 +3827,8 @@ ingestion for free.
 everything else, but users dragging a file into a *team* space often expect team visibility. Very
 hard to change once habits form.
 
+
+---
 
 ---
 
@@ -3659,6 +4281,8 @@ connection and the single most valuable alert.
 
 ---
 
+---
+
 ## Bulk Operations
 
 A batch endpoint sounds like an API convenience. It is actually a capacity control, because
@@ -3824,10 +4448,1563 @@ checkpoint preserved) and `FR-CRAWL-20` (heartbeat and reclaim) apply unchanged.
 
 
 
-# Part IV · Making it useful
+
 
 *Indexes, models, and keeping derived data honest*
 
+
+---
+
+# Part V · Models and the sandbox
+
+*Choosing what runs, and proving it works on your data*
+
+---
+
+## Model Catalog
+
+*Landscape surveyed August 2026. Model families move fast; the catalog is designed to be updated,
+and the point of this document is the shape, not the specific version numbers.*
+
+### What this adds to Model Garden
+
+Model Garden today manages **providers**: add an API key, test connectivity, discover what models
+that provider exposes. Discovery returns a flat list of model IDs — strings with no properties.
+
+That is not enough to choose with. `qwen3.6:27b` and `gemma4:e4b` are both strings; one needs a
+24GB card and one runs on a phone; one does vision and one does not. Users cannot make an informed
+choice from a dropdown of identifiers, and smart routing cannot validate an assignment it knows
+nothing about.
+
+The addition is a **curated catalog of model cards** — models with declared properties — that
+users browse, select, and assign. Once assigned, smart routing uses them.
+
+### The finding that changes the tier design
+
+The current five-tier model — small, medium, large, **multimodal**, **omni** — was designed
+around a real constraint: text models were text-only, so vision and audio needed separate models
+in separate tiers.
+
+**That constraint has largely dissolved.** Gemma 4 is natively multimodal at every size (vision,
+audio, tools, thinking). Qwen 3.5 spans roughly 0.8B to 122B with every size natively multimodal.
+Modality is now a **capability most models have**, not a tier you route to.
+
+Keeping `multimodal` and `omni` as sibling tiers to `small`/`medium`/`large` conflates two
+independent axes:
+
+```
+            CAPACITY  ────────────────────────▶
+            small        medium        large
+CAPABILITY
+  text        ●            ●             ●
+  vision      ●            ●             ●      ← used to be one column
+  audio       ●            ●             ●      ← used to be one column
+  tools       ●            ●             ●
+```
+
+Routing should select on **capacity tier × required capabilities**, and the catalog must declare
+capabilities so that selection can be validated. A vision task routed to a text-only model should
+be a startup error, not a runtime surprise.
+
+Migration is straightforward: keep `multimodal` and `omni` as deprecated aliases that resolve to
+*(capacity tier, capability set)* pairs, so existing configs keep working.
+
+### The model card
+
+Each catalog entry declares:
+
+| Field | Purpose |
+|-------|---------|
+| `id` | Canonical identifier, e.g. `qwen3.6:27b` |
+| `family` / `version` / `variant` | Grouping and upgrade paths |
+| `architecture` | `dense` or `moe` — with total and active parameters for MoE |
+| **`license`** | Apache-2.0 · Gemma terms · community licenses with use restrictions. **Must be surfaced** — some restrict commercial use |
+| `context_window` | 32K … 1M — governs chunking and long-document routing |
+| **`capabilities`** | `text` · `vision` · `audio` · `tools` · `thinking` · `structured_output` · `embedding` |
+| `hardware.min_vram_gb` | Per quantization: q4 / q8 / fp16 |
+| `hardware.quantizations` | What's actually available to pull |
+| `serving.providers` | Which configured engines can serve it — local, cloud, gateway |
+| `serving.pricing` | Per-token cost, or free for local |
+| `quality_signals` | Benchmark references, **with the date and caveat attached** |
+| `recommended_for` | Suggested capacity tier and agent types |
+| `status` | `recommended` · `available` · `deprecated` · `superseded_by: <id>` |
+| `card_url` | Link to the upstream model card |
+
+`status` matters more than it looks. mem-dog's defaults currently reference a model generation
+that has been superseded — without a `superseded_by` field there is no mechanism to tell users
+that, and defaults silently rot.
+
+### Where the catalog comes from
+
+Three sources, intersected:
+
+```
+  curated registry          what we ship and maintain
+        ∩
+  provider discovery        what your configured engines actually serve
+        ∩
+  hardware feasibility      what your machine can actually run
+        ─────────────────────────────────────────────
+        = models offered to this user
+```
+
+The curated registry follows the pattern already established by `nango_provider_meta.py`: a static
+local mapping supplying metadata the upstream API does not provide. Providers tell you a model
+exists; they do not tell you its VRAM requirements, its license restrictions, or whether it has
+been superseded.
+
+Models discovered from a provider but absent from the registry still appear — as
+`status: available`, unvalidated, with a note that capabilities are undeclared. **Never hide a
+model the user has access to**; just be honest about what is unknown.
+
+### Indicative catalog (August 2026)
+
+Illustrative of the shape and of what "current" means. Expect this to be stale within months.
+
+| Model | Capacity | Capabilities | Context | Notes |
+|-------|----------|--------------|---------|-------|
+| `gemma4:e2b` / `e4b` | small | text, vision, audio, tools | — | Nano variants — edge and low-RAM |
+| `gemma4:12b` | medium | text, vision, audio, tools, thinking | — | Practical laptop model |
+| `gemma4:26b` / `31b` | large | text, vision, audio, tools, thinking | — | Strong vision/multimodal |
+| `qwen3.5:4b` | small | natively multimodal, tools, thinking | — | Multimodal at 4B |
+| `qwen3.6:27b` | large | text, tools, thinking | — | Fits 24GB at Q4; strong agentic/coding |
+| `qwen3.6:35b-a3b` | large | MoE, 3B active | — | Best all-round at 32GB |
+| `qwen3-coder:30b` | large | code | 256K | Long-context coding |
+| `llama4-scout` / `maverick` | large | text | up to 1M | Long-context retrieval leader |
+| `deepseek-v4` | large | text, reasoning | — | High-end reasoning, serious hardware |
+| `glm-5.2` | large | text | — | Strong all-round open-weight |
+| `mistral-medium-3.5` | large | text | 256K | 128B dense |
+| `phi-4-mini` | small | text | — | Very small footprint |
+
+Embedding models are catalogued separately — see below, because they are not interchangeable in
+the way these are.
+
+### Selection → routing
+
+Once a user assigns models, routing **validates** rather than trusting:
+
+| Check | Failure mode prevented |
+|-------|----------------------|
+| **Capability match** | A vision agent assigned a text-only model — fails at ingest, not at config time |
+| **Hardware feasibility** | A 70B model selected on a 16GB machine — pulls, then OOMs under load |
+| **Context window** | Long documents silently truncated because the assigned model has a 32K window |
+| **License** | A use-restricted model assigned in a commercial deployment |
+| **Provider reachability** | A model assigned but not served by any configured engine |
+
+Validation runs at **assignment time** with clear errors, and again at startup. The current failure
+mode — discovering the mismatch when a document fails to process at 3am — is what this removes.
+
+### Changing a model is a versioning event
+
+This is the part most likely to be under-designed.
+
+A model assignment is part of the **generator version** of every artifact that tier produces.
+Switching the medium tier from one model to another does not just affect future work — it makes
+every existing summary, entity extraction and classification from that tier **stale**.
+
+So the selection UI has an obligation:
+
+> Changing this model marks **2.1M artifacts** stale.
+> Estimated rebuild: **~4.5 hours**, **~$0** (local) / **~$180** (cloud).
+> [ Rebuild now ] [ Rebuild in background ] [ Leave stale ]
+
+Without that, "improve the model" is a change users make casually and whose consequences they
+discover months later when half the corpus reflects one model and half another. See
+[retrieval/versioning.md](#versioning-staleness).
+
+### Embedding models are a different UI
+
+**Embedding model selection must not be a dropdown.**
+
+Vectors from different embedding models occupy incomparable spaces. Changing the embedding model
+is a corpus-wide migration, not a configuration change — build a parallel index, backfill it,
+verify, then swap.
+
+The catalog carries embedding models with their own fields — `dimensions`, `max_input_tokens`,
+`normalization` — and the UI must present the change as a **guided migration with a cost estimate
+and a rollback path**, never as a setting.
+
+Related and non-negotiable: **embedding calls must never use the fallback chain.** If the assigned
+embedder is unavailable, defer with `embed_status = pending`. Substituting a different model
+silently corrupts the index.
+
+### Telemetry
+
+Per-inference, record the **model id and version that actually served the request** — not the one
+that was configured. Without it you cannot tell whether output came from the primary or the third
+fallback, cannot attribute quality regressions, and cannot identify affected rows after a bad
+assignment.
+
+Also worth tracking: per-model latency and cost, fallback depth reached, capability-mismatch
+rejections, and pull/warm status for local models.
+
+### Surfaces
+
+| Surface | Capability |
+|---------|------------|
+| **API** | `GET /ai/catalog` (with filters), `GET /ai/catalog/{id}`, assignment endpoints, `POST /ai/assignments/preview` returning the staleness estimate |
+| **UI** | Browsable catalog with capability and hardware filters, model card detail, "runs on your hardware" indicator, assignment with impact preview |
+| **SDK** | Catalog listing and assignment in the full client; policy locks in the admin client |
+| **Admin** | Org-level allowlist — pin approved models, block others. Ties to the config precedence model |
+
+### Open questions
+
+- **Catalog freshness.** Ship it static and update with releases, or fetch a signed catalog
+  periodically? Static is air-gap-friendly; fetched stays current. Probably static with an
+  optional refresh.
+- **Benchmark claims.** Publishing quality signals invites disagreement and dates badly. Cite with
+  dates and link out, or omit and let users judge?
+- **Auto-upgrade.** When a model is superseded, offer a one-click migration path with the
+  staleness estimate attached — or stay silent and let users choose?
+
+### Sources
+
+- [Hugging Face — Best Open Source and Open-Weight LLMs to Run Locally (2026)](https://huggingface.co/blog/daya-shankar/open-source-llm-models-to-run-locally)
+- [Codersera — Open-Source LLM Landscape 2026](https://codersera.com/blog/open-source-llms-landscape-2026/)
+- [PromptQuorum — Ollama 2026: best models by use case](https://www.promptquorum.com/local-llms/top-open-source-models-ollama)
+- [ComputingForGeeks — Ollama Models Cheat Sheet 2026](https://computingforgeeks.com/ollama-models-cheat-sheet/)
+- [Till Freitag — Open-Source LLMs Compared 2026](https://till-freitag.com/en/blog/open-source-llm-comparison)
+
+
+---
+
+---
+
+## Model Routing at Bulk
+
+Model Garden and Smart Routing already ship. The gap is not building them — it is that they were
+designed for **event-driven, single-item, interactive** enrichment, and every new worker class
+violates one of those assumptions.
+
+### Tiers
+
+| Tier | Used for |
+|------|----------|
+| Small | JSON, CSV, YAML, XML, IoT, classification |
+| Medium | Code, email, chat, financial, summarisation |
+| Large | PDFs, Office documents, web pages, reasoning |
+| ~~Multimodal~~ | Images, visual PDFs, OCR — **deprecated as a tier** |
+| ~~Omni~~ | Audio, video — **deprecated as a tier** |
+| Embedding | Vector generation — **see the warning below** |
+
+> **The multimodal and omni tiers are obsolete.** They existed because text models were text-only.
+> Current model families are natively multimodal at every size, so modality is a *capability* to
+> validate, not a tier to route to. Routing should select on **capacity × required capabilities**.
+> See [model-catalog.md](#model-catalog).
+
+### Fallback chains
+
+Each path has an ordered chain evaluated left to right; the first available model serves. A
+provider outage degrades quality or cost, not availability.
+
+**Two exceptions where fallback is unsafe:**
+
+1. **Embeddings must never fall back.** Different models produce incomparable vector spaces. Defer
+   with `embed_status = pending` instead. See [versioning](#versioning-staleness).
+2. **Regulated content must never fall back.** Falling through to a third-party provider is an
+   undisclosed transfer. See [compliance](#privacy-compliance).
+
+### Two credential classes
+
+| Class | Enrich worker | Held where |
+|-------|:-------------:|------------|
+| **Integration credentials** (OAuth) | must **not** have | gateway / fetch worker, via proxy |
+| **AI provider credentials** | **must** have today | resolved per-item, cached |
+
+The invariant is "zero *integration* credentials". The proposed fix is an **LLM proxy** mirroring
+the integration proxy, after which no worker holds a secret of either class.
+
+### Collisions with the worker design
+
+| Intersection | Problem |
+|--------------|---------|
+| Per-item routing in a shared pool | Every message resolves user → agent → tier → engine → credentials. Workers cannot be pinned to a model |
+| **Head-of-line blocking** | One tenant's rate-limited provider stalls shared workers and starves everyone else. Needs per-(user, engine) concurrency caps |
+| Credential cache × scaling | The per-worker cache means going from 2 to 40 workers multiplies credential fetches 20× |
+| **Bulk operations spend user money** | A 50k-item backfill through a large tier on a user's own key is a large unbudgeted bill. Needs estimation up front, budget caps, forced tier-downgrade for bulk paths |
+| Retry × fallback | Chain exhaustion triggers retry; the retry may land on a different model. Same input, different output — corrosive for reprocess |
+| Worker vs model capacity | Scaling enrich workers past pod capacity relocates the queue from the broker to the model tier, where it is less observable |
+
+
+---
+
+---
+
+## The Sandbox
+
+Upload a dataset, watch it get enriched, chat against it, and see exactly what the chat retrieved.
+
+The sandbox is where someone decides whether mem-dog works for *their* data. Nothing else in the
+product answers that question — a connector list does not, and a benchmark on someone else's corpus
+certainly does not.
+
+---
+
+### It is a real project with a TTL, not a mode
+
+The single most important decision, and it is a negative one:
+
+> **There is no sandbox code path.** A sandbox is a project with `sandbox: true` and a TTL. It runs
+> the identical write path, the identical workers, the identical retrieval.
+
+A special "demo mode" with its own shortcuts tests the demo mode. Whatever the user concludes from
+it is not transferable, and worse, it is *convincingly* not transferable — it looks like evidence.
+The sandbox is only worth building if what you see in it is what production does.
+
+The cleanup machinery already exists and needs nothing new:
+
+| Need | Mechanism that already covers it |
+|------|----------------------------------|
+| Expires automatically | A memory type with a TTL and `orphan_delete` |
+| Removes derived artifacts | The deletion cascade |
+| Scoped away from real data | Project isolation — every query is already scoped |
+| Bounded cost | Admission control and token budget, per project |
+
+A sandbox is therefore a *configuration* of things that exist. If building one requires new
+deletion, new scoping or new limits, that is a signal those mechanisms were not general enough.
+
+---
+
+### "Sandbox" is a word that makes people paste production data
+
+This needs saying before the feature is designed, because the naming does real damage.
+
+People treat a sandbox as consequence-free. They will upload real customer exports, real clinical
+notes, real contracts — precisely because it is "just a test". The data is real; the TTL does not
+change that; a 7-day retention of PHI is still PHI.
+
+**So the sandbox is not a lower-security zone, and must not behave like one:**
+
+- It inherits the project's ACL defaults, privacy policy and model-routing allow-list. A project
+  whose chain is BAA-restricted stays restricted in its sandbox.
+- Its contents are auditable and erasable like anything else.
+- **The upload surface says what it is** — that this is real ingestion into real storage under real
+  retention, expiring on a date it names.
+
+The failure to avoid is a sandbox that quietly routes to a cheaper, unrestricted model because "it
+is only a test". That converts a convenience into a disclosure, and it is the
+same fallback-chain boundary in a friendlier costume.
+
+---
+
+### The upload step
+
+Reuses bulk operations — same run entity, same dry-run, same
+per-item results. Nothing bespoke.
+
+| Input | Path |
+|-------|------|
+| CSV / JSONL | Bulk write, one item per row |
+| A folder of documents | Batch upload → `Stored` refs |
+| A live connector | Normal connector sync, scoped to the sandbox project |
+| Paste | A single inline item, for a quick look |
+
+#### Sample first, by default
+
+Enriching 100k uploaded rows before the user has looked at one is the expensive mistake this
+feature invites. The default is to **enrich a sample, show it, then ask**.
+
+```
+1. Ingest everything          cheap — stored and searchable
+2. Enrich a sample (~50)      the user looks at real output on their own data
+3. Enrich the rest            only on an explicit, costed decision
+```
+
+Step 2 is where the actual product judgement happens, and it costs almost nothing. Step 3 is where
+the money is, and it should never be implicit. The cost estimate shown at step 3 comes from the
+token accounting already built for budgets.
+
+---
+
+### The readiness staircase is the whole UI problem
+
+The write API defines
+three states — `stored`, `searchable`, `enriched`. In the sandbox they stop being an API detail and
+become the interface.
+
+Someone uploads 500 records and immediately asks a question. Enrichment has not finished. The
+answer is thin. **They conclude the product does not work** — and they are wrong for a reason the
+UI could have shown them.
+
+```
+  uploaded  ████████████████████████  500
+  stored    ████████████████████████  500
+  searchable████████████████░░░░░░░░  341
+  enriched  ██████░░░░░░░░░░░░░░░░░░  126   ~4 min remaining
+```
+
+Two consequences for the chat surface:
+
+- **It says what it is answering over.** *"Answering over 126 enriched of 500 records"* — one line,
+  and the early answer becomes informative rather than damning.
+- **It offers to wait.** Not a spinner blocking the UI; an explicit "ask again when enrichment
+  finishes" that re-runs the same question and shows the difference.
+
+That second one is quietly the best demo in the product: the same question, answered before and
+after enrichment, side by side. It demonstrates what enrichment *is* better than any description.
+
+---
+
+### The output is the retrieval trace, not the answer
+
+**This is the finding that decides whether the sandbox is a toy or a tool.**
+
+A chat sandbox that shows only the answer is a demo. The answer is a *lagging indicator* of
+ingestion quality, filtered through a model that is good at sounding right regardless. If the
+answer is bad, it tells you nothing about why: bad chunking, wrong embedding model, the record
+never got enriched, retrieval found the wrong thing, or the model fumbled a correct context.
+
+So the sandbox shows the trace, and the answer is secondary:
+
+| Panel | What it answers |
+|-------|-----------------|
+| **Retrieved chunks, ranked, with scores** | Did retrieval find the right records? |
+| **Source record per chunk**, openable | Is the chunk boundary sane, or did it split a claim from its subject? |
+| **What was actually sent to the model** | Is the failure retrieval or generation? |
+| **`model_id` and `generator_version`** | Which configuration produced this, so it is reproducible |
+| **Records considered but filtered** | Was it excluded by ACL, by score, or by not being enriched yet? |
+
+The last row matters more than it looks. *"The answer is missing something I know is in the data"*
+is the most common sandbox complaint, and it has four completely different causes with four
+different fixes. Showing which one applies turns an unfalsifiable impression into a diagnosis.
+
+> Everything here is data the retrieval path already has. The sandbox does not compute it — it
+> declines to throw it away.
+
+---
+
+### Comparing datasets — and comparing configurations
+
+"Upload different datasets" has two readings, and the second is the more valuable one.
+
+**Different datasets, same configuration** — does this work for my CRM export as well as my
+tickets? Two sandbox projects, results side by side. Straightforward.
+
+**Same dataset, different configurations** — this is where the sandbox earns its cost. Run one
+corpus under two chunkers, two embedding models, or two extraction prompts, and diff the retrieval
+traces for the same question.
+
+```
+                    config A              config B
+  chunker           semantic-1024         semantic-512
+  embedding         local-mini            cloud-large
+  ─────────────────────────────────────────────────────
+  top-1 correct     6 / 10                8 / 10
+  cost / 1k         $0.00                 $0.42
+```
+
+This is the staleness-impact preview machinery pointed at a
+question people actually ask: *is the expensive model worth it on my data?* The honest answer
+varies by corpus, and this is the only way to find it.
+
+It also produces the evidence for a decision the system otherwise forces blind: which model to
+assign per purpose. **A model choice made without measuring it on the target corpus is a guess with
+a monthly invoice attached.**
+
+#### The comparison has a hard prerequisite
+
+A/B comparison is only meaningful if the two runs are genuinely comparable, which requires
+`generator_version` and `model_id` recorded per artifact — already required,
+and the reason it is required. Comparing two runs whose configuration you cannot pin is comparing
+noise.
+
+---
+
+### Where this sits in the plan
+
+The sandbox is not a late polish item. **It is Phase 1's acceptance test with a face on it.**
+
+Phase 1's goal is *"write an item, find it by search, get it back."* The sandbox is that loop, made
+visible, on the user's own data — which means building it exercises the spine end to end and
+produces the first genuinely demonstrable thing.
+
+| Slice | Sandbox capability |
+|-------|--------------------|
+| **Phase 1** | Upload, staircase, retrieval with the trace. **No chat yet — retrieval results are the output** |
+| **Phase 2** | Chat over the retrieved context; before/after-enrichment comparison |
+| **Phase 4** | Bulk dataset upload, sample-first enrichment, cost estimate |
+| **Phase 6** | Configuration A/B — models, chunkers, prompts |
+
+**Phase 1 deliberately ships retrieval-without-chat.** The trace is the useful part and it is what
+proves the spine; adding a conversational layer over a retrieval path nobody has inspected just
+hides the thing worth looking at. It also keeps the honest ordering: if retrieval is wrong, chat
+cannot be right, and a chat UI would let you ship without noticing.
+
+---
+
+### Requirements
+
+- **FR-SBX-1** A sandbox MUST be an ordinary project with a TTL, running the identical write,
+  enrichment and retrieval paths. There MUST NOT be a sandbox-specific code path.
+- **FR-SBX-2** A sandbox MUST inherit the project's ACL defaults, privacy policy and model-routing
+  allow-list. It MUST NOT relax any of them.
+- **FR-SBX-3** The upload surface MUST state that ingestion is real, under real retention, and MUST
+  name the expiry date.
+- **FR-SBX-4** Sandbox expiry MUST run the standard deletion cascade.
+- **FR-SBX-5** Bulk enrichment MUST default to a sample, and full enrichment MUST require an
+  explicit decision with a cost estimate.
+- **FR-SBX-6** The readiness staircase MUST be visible per dataset, with counts per state.
+- **FR-SBX-7** A chat or retrieval response MUST state how many records were enriched of the total
+  it searched.
+- **FR-SBX-8** Retrieval results MUST show ranked chunks with scores, their source records, and the
+  exact context passed to the model.
+- **FR-SBX-9** Excluded records MUST be distinguishable by reason — ACL, score threshold, or not
+  yet enriched.
+- **FR-SBX-10** Every result MUST record `model_id` and `generator_version`, so a run is
+  reproducible and two runs are comparable.
+- **FR-SBX-11** The sandbox MUST support running one dataset under two configurations and
+  comparing the retrieval traces.
+
+---
+
+---
+
+## Multi-Language
+
+Absent from the design until now, and **Phase 1 relevant** — because two of the decisions it forces
+are made when the first row is written, and both are corpus migrations afterwards.
+
+A system ingesting mailboxes and chat across an international organisation gets multilingual on day
+one, whether or not it was designed for.
+
+### The two Phase-1 decisions
+
+#### 1. The lexical index needs a language per row
+
+Postgres full-text search takes a **language configuration** — it determines stemming and stop
+words. Index German text as `english` and stemming is wrong, stop words are wrong, and BM25 quietly
+underperforms in a way no error reveals.
+
+So `language` is a **column, set at ingest**, before the lexical index is built. Detected
+per item, overridable, and defaulting to a configured project language rather than to `english`.
+
+Retrofitting means re-indexing the corpus.
+
+#### 2. Embedding model choice determines cross-lingual retrieval
+
+A monolingual embedder places "invoice" and "Rechnung" in unrelated regions. A multilingual one
+places them near each other, so a query in one language retrieves documents in another.
+
+That is a product decision disguised as a model choice — and per
+[versioning](#versioning-staleness), **changing the embedding model is a corpus-wide migration**,
+not a setting. It is made in Phase 1 whether deliberately or by default.
+
+| Approach | Cross-lingual retrieval | Cost |
+|----------|------------------------|------|
+| **Multilingual embedder** | Works | Usually slightly weaker monolingual quality |
+| Per-language embedders | **Fails across languages** — separate vector spaces | Better per-language quality |
+| Translate then embed | Works | Extra inference per item, translation loss, and the original is what you must cite |
+
+**Recommend a multilingual embedder** unless a deployment is genuinely single-language. The
+per-language option is the [vector-space trap](#versioning-staleness) in a new costume: separate
+spaces that cannot be compared, arrived at deliberately this time.
+
+### What else changes
+
+| Area | Consideration |
+|------|--------------|
+| **Chunking** | CJK has no word spaces; sentence boundaries differ. A splitter tuned for English produces bad chunks elsewhere |
+| **Extraction prompts** | Does the agent answer in the source language or a canonical one? **Canonical for structured fields, source language for quoted content** — otherwise facets are unfilterable |
+| **Normalization** | Dates (`03/04` is ambiguous), numbers (decimal comma), name order, addresses |
+| **Entity resolution** | The same organisation across scripts. Transliteration is a real matching problem |
+| **Retrieval** | Query language may differ from corpus language — the reason the embedder choice matters |
+| **Citations** | Cite the original, never a translation. The user must be able to check it |
+
+### Detection
+
+Deterministic first, as everywhere else: source metadata (an email declares a charset and often a
+language), then a fast statistical detector, then the model only for genuinely ambiguous short
+text. Store confidence alongside, and mark `unknown` rather than guessing `english` — a wrong
+language label is worse than an absent one, because it silently mis-stems.
+
+### Requirements
+
+- **FR-LANG-1** Every item MUST carry a detected language with confidence, set at ingest, before
+  lexical indexing.
+- **FR-LANG-2** Language MUST default to a configured project language, never to a hardcoded one.
+- **FR-LANG-3** The lexical index MUST use the item's language configuration.
+- **FR-LANG-4** Undetectable language MUST be recorded as `unknown`, not guessed.
+- **FR-LANG-5** Structured extraction output MUST use canonical values; quoted content MUST retain
+  its source language.
+- **FR-LANG-6** Citations MUST reference the original text, never a translation.
+
+
+
+
+
+*Removing things, correctly*
+
+
+---
+
+# Part VI · Access and privacy
+
+*Who can see what, and what we can prove*
+
+---
+
+## Tenancy & Privacy
+
+### Two tenancy models are in play
+
+The host-SaaS contract states that end-user RBAC is *enforced by the host*. That is coherent when
+mem-dog is a backend behind someone else's product. It is **not** what a team model needs.
+
+| | Host-SaaS model | Team model |
+|---|---|---|
+| Who enforces RBAC | the host application | **mem-dog** |
+| Keys held by | host backend | per user |
+| `project` means | host workspace | team space |
+| Privacy unit | project boundary | **per item, per member** |
+
+**Resolution: one enforcement path.** mem-dog always enforces; the host model becomes the case
+where a service identity is a single broad principal. Two implementations kept in sync is the
+failure mode to avoid.
+
+### Hierarchy
+
+```
+Organization (org_<ulid>)          — team or company
+  ├── Members (user_id + role)     — owner / admin / member / viewer
+  └── Project (proj_<ulid>)        — team space or host workspace
+        ├── Memory                 — scoped to project
+        ├── Data                   — associated with memory
+        └── Embedding              — scoped to project
+```
+
+Scoping is applied by passing `project_id` on create and `?project_id=` on list endpoints.
+Omitting it returns everything the user owns, keeping single-tenant deployments unchanged.
+
+### Privacy holes that only appear once orgs are teams
+
+**Connection ownership.** The proxy takes `?user_id=` and fetches that user's credentials. If
+authorization is "authenticated to the org" rather than "owns this connection", an admin can read
+a member's mail through the proxy. Connections need `personal` vs `shared` scope enforced **at the
+proxy**, not hidden in the UI.
+
+**Derived-fact leakage.** A fact extracted from a private document, surfaced to a teammate through
+the graph, is a leak with no audit trail.
+
+**Compression leakage.** A summary spanning mixed-ACL items must take the *intersection*, or it
+leaks by construction — and deleting the original does not remove it from the prose.
+
+**Cross-tenant entity merging.** A single-database graph means isolation is property-filtering
+only. Two orgs both holding "Acme Corp" must not merge — and LLM entity resolution is actively
+trying to merge them.
+
+**Retrieval filtering.** ACLs must be applied *in* the query. Post-filtering after ranking
+silently breaks top-K and leaks existence.
+
+### The unifying rule
+
+**ACL inheritance follows the connection, not the container.** A connection carries a scope
+(`personal` or `shared`) set at connect time. Personal mail connected inside a team org produces
+private items regardless of project defaults.
+
+This is what reconciles personal and team memory, and it closes the proxy hole in the same move.
+
+### Access levels
+
+| Level | Visibility |
+|-------|-----------|
+| `private` | Only the owner (default) |
+| `shared` | Owner + users in `shared_with` |
+| `public` | Any authenticated user **in the organization** — internal, not public |
+| `restricted` | Only users in `shared_with` |
+
+**The `public` level is renamed `org`**, and `public` becomes genuine external sharing — see
+[access-model.md](#access-model-principals-sharing-and-settings), which also covers principals, groups, share links and the
+admin dual-role.
+
+### Scale posture
+
+Build on the existing capacity plan rather than replacing it — quotas before replicas,
+`project_id` always in the vector filter path, temporal graph default-off for host workspaces, a
+connection pooler, per-org metrics, and a soak harness from 100 to 1,000 projects.
+
+| Dimension | Target |
+|-----------|--------|
+| Active workspaces | ~1,000 with traffic in the last 30 days |
+| Ingest | 50–100 docs/min sustained; bursts to 300/min for ≤5 min |
+| Corpus | Median workspace ≤50k embedding rows; p95 ≤500k; cluster ≤50M |
+| Search | p95 semantic/hybrid **< 800 ms** excluding generation |
+| Availability | API 99.5% monthly; memory soft-fail preferred over cascade |
+
+**"The record store is the shared fate."** Colocating vector and lexical indexes with records is
+what makes the low infrastructure floor possible — and it is why every workspace competes for the
+same instance. Filtered ANN search over tens of millions of rows is the load-bearing risk.
+
+
+---
+
+---
+
+## Access Model — Principals, Sharing and Settings
+
+### The rename that has to happen first
+
+Today `public` means *"any authenticated user in the organization."* That is **internal**, not
+public. Once genuine external sharing exists, the same word means two things and someone will make
+a document world-readable believing they made it team-readable.
+
+| Old | New | Means |
+|-----|-----|-------|
+| `private` | `private` | Owner only — default |
+| `shared` | `shared` | Explicit principal list |
+| **`public`** | **`org`** | Everyone in the organization |
+| — | **`public`** | **Genuinely external, via a share link** |
+| `restricted` | `restricted` | Principal list, owner excluded |
+
+Rename before the second meaning exists. Afterwards it is a migration against a field people have
+already reasoned about incorrectly.
+
+### Principals, not user IDs
+
+`shared_with` currently holds user identifiers. That does not survive contact with teams: every
+membership change requires rewriting every shared item, and it silently fails to revoke when
+someone leaves.
+
+Share with a **principal**:
+
+```
+principal = user:<id> | group:<id> | project:<id> | org:<id> | public
+```
+
+Resolution happens at query time, so a group membership change takes effect immediately and
+everywhere — including revocation, which is the direction that matters.
+
+#### Groups
+
+A named set of members within an organization. Sharing with *engineering* rather than enumerating
+eleven people is the difference between an access model people use correctly and one they route
+around.
+
+```
+Group
+  group_id     grp_<ulid>
+  org_id
+  name
+  members      user_id[]          — direct
+  managed_by   manual | scim | idp_claim
+```
+
+`managed_by` matters later: enterprise expects groups to arrive from the identity provider rather
+than being maintained twice.
+
+### Public sharing
+
+Genuinely external sharing is the feature most likely to cause an accidental disclosure, so it
+carries controls the others do not.
+
+```
+ShareLink
+  share_id     shr_<ulid>
+  data_id | case_id
+  created_by, created_at
+  expires_at            default: required, not optional
+  password              optional
+  revoked_at
+  access_count, last_accessed_at
+```
+
+| Control | Behaviour |
+|---------|-----------|
+| **Org policy gate** | Public sharing is **disabled by default at org level**. An admin enables it; some orgs never will |
+| **Expiry required** | A link with no expiry is a permanent disclosure nobody revisits |
+| **Explicit confirmation** | The UI states plainly that the item becomes readable by anyone with the link |
+| **Revocable** | Immediately, and revocation is audited |
+| **Inventory** | Owner and admin can both list *everything currently shared publicly* — the view that catches the mistake made six months ago |
+| **Audited** | Creation, each access, and revocation |
+
+#### Derived artifacts do not follow automatically
+
+Sharing a document publicly must **not** publish its summary, its extracted claims, its entities or
+its graph facts.
+
+This is the derived-artifact ACL rule ([indexes](#index-construction)) meeting sharing: a
+derived artifact carries the ACL of its **most restrictive source**, and a share widens the source
+only. A summary spanning a public document and two private ones stays private — otherwise sharing
+one item leaks two.
+
+The practical consequence: a public share exposes the item and, optionally and explicitly, a
+purpose-built public rendering. Never the internal derived layer.
+
+### The admin who is also a user
+
+One human, two modes — and conflating them is how admin tooling becomes a privacy hole.
+
+```
+identity        a normal user, in an org, with normal data
+    +
+platform grant  platform:read | platform:admin
+```
+
+#### System view shows metadata, not content
+
+| Admin can see | Admin cannot see |
+|---------------|------------------|
+| System health, queue depth, error rates | Item content |
+| Org and project inventory, counts, storage | Search results across tenants |
+| Usage, quota and budget consumption | Summaries, entities, extracted claims |
+| Producer health, connection status | Case contents |
+| Audit records | — |
+| Feature flags, global limits | — |
+
+**A platform admin does not get tenant data by default.** Support tooling that shows customer
+content by default is a privacy violation that arrives disguised as a feature request.
+
+Where content access is genuinely required — an escalated support case, a clinical emergency — it
+goes through **break-glass**: explicit justification, scoped to a subject, time-boxed,
+notified to the data owner, and written to the audit store as its own event type.
+
+#### Mode is explicit and separately audited
+
+The same human acting as a tenant user and acting as a platform admin produces **different audit
+records**. The session carries the active mode; switching is an auditable event. "Was this
+read done as the user or as the operator?" must have an answer.
+
+#### Platform grants are not an org role
+
+`owner`, `admin`, `member`, `viewer` are org-scoped. `platform:*` is orthogonal — a platform admin
+holds no elevated rights inside any org they are not a member of.
+
+This is also what finally retires the global unscoped `API_KEY`: system operations get a real
+identity with real scopes, and every action is attributable.
+
+### Settings taxonomy
+
+Four levels, with the precedence and locking model already used for normalization and model
+configuration.
+
+| Level | Owns | Set by |
+|-------|------|--------|
+| **Platform** | Storage backend, encryption keys, global limits, feature flags | operator |
+| **Org** | Members, groups, roles, quotas, allowed providers, **sharing policy**, retention, connection defaults | owner/admin |
+| **Project** | Defaults, normalization schemas, crawlers, producers | admin/member |
+| **User** | Profile, password, MFA, API keys, own engines, own agent configs, default project, notifications | the user |
+
+**Precedence:** user → project → org → platform, most specific wins, **except where an admin has
+locked a setting.** A locked org setting cannot be overridden below it — that is how "only our
+approved model providers" and "public sharing disabled" are enforced rather than suggested.
+
+#### Account settings, concretely
+
+| Group | Contains |
+|-------|----------|
+| **Identity** | Email, display name, password change, MFA enrolment, linked identities |
+| **Credentials** | API keys — create, list with prefix and `last_used_at`, rotate, revoke. Never re-displayed |
+| **Workspace** | Default org and project, project switcher |
+| **AI** | Engines, model assignments, agent configs — within org policy |
+| **Connections** | Connected sources, **personal vs shared scope**, reauthorise, disconnect |
+| **Sharing** | What I have shared, with whom, and **what is public** |
+| **Privacy** | Export my data, delete my data, view my access history |
+| **Notifications** | Connection failures, quota warnings, share access |
+
+That last privacy group is worth building early even in thin form: a user who can see their own
+access history is a user who can catch a problem you cannot.
+
+### API and UI parity
+
+**Everything settable in the UI is settable through the API**, at the same granularity and with the
+same validation. The UI is a client of the API, never a privileged path.
+
+Two consequences: an embedding host can build its own settings surface, and the settings surface is
+testable without a browser.
+
+Control-plane endpoints:
+
+```
+/organizations  /organizations/{id}/members  /groups  /projects
+/users/me  /users/me/api-keys  /users/me/identities  /users/me/connections
+/shares                    ← inventory, revoke
+/settings/{scope}          ← get/set with lock state
+/platform/health  /platform/orgs  /platform/usage  /platform/audit
+/platform/breakglass       ← justification required
+```
+
+### Requirements
+
+- **FR-ACC-1** The access level currently named `public` MUST be renamed `org`, and `public` MUST
+  mean externally shared.
+- **FR-ACC-2** `shared_with` MUST hold principals — user, group, project, org or public — resolved
+  at query time.
+- **FR-ACC-3** Groups MUST be a first-class primitive within an organization, and MUST support
+  external management for later identity-provider integration.
+- **FR-ACC-4** Public sharing MUST be disabled by default at org level and enabled explicitly.
+- **FR-ACC-5** Share links MUST require an expiry, be revocable, and record creation, each access
+  and revocation.
+- **FR-ACC-6** Owners and admins MUST be able to list everything currently shared publicly.
+- **FR-ACC-7** Sharing an item MUST NOT change the access level of artifacts derived from it.
+- **FR-ACC-8** Platform grants MUST be orthogonal to org roles and MUST NOT confer rights within an
+  organization the holder is not a member of.
+- **FR-ACC-9** A platform admin MUST NOT have access to tenant content by default; content access
+  MUST require break-glass with justification, scope, time limit and audit.
+- **FR-ACC-10** Acting as a platform admin MUST be an explicit, separately audited mode.
+- **FR-ACC-11** Settings MUST resolve user → project → org → platform, and an administrator MUST be
+  able to **lock** a setting against override.
+- **FR-ACC-12** Every setting available in the UI MUST be available through the API at equal
+  granularity.
+- **FR-ACC-13** Users MUST be able to view their own access history.
+
+
+---
+
+---
+
+## Auth & Credentials
+
+### The requirement
+
+Login/password **and** API keys, on a pluggable identity layer.
+
+### Decided: Firebase for login, keys at the gateway, married on identity
+
+| Path | Mechanism |
+|------|-----------|
+| **Login / password** | **Firebase Auth** |
+| **API keys** | Validated at the **API gateway**, created by users themselves |
+| **Inbound (webhooks)** | The **same user-created keys**, configured onto a producer |
+
+The three converge on one canonical identity — that is the marriage, and it happens in the
+`identities` table below rather than at the edge.
+
+#### Consequence 1: Firebase and air-gap are incompatible
+
+Firebase is a hosted service. An air-gapped deployment cannot reach its JWKS endpoint, so token
+verification fails and nobody can log in.
+
+This does **not** invalidate the air-gap claim — it means the claim belongs to the **local variant
+only**, served by a different verifier behind the same seam:
+
+| Variant | Login verifier |
+|---------|----------------|
+| Cloud, GKE | Firebase (RS256, Google JWKS) |
+| **Local / air-gapped** | **Local password** (Argon2id, our own signing key) |
+
+The `TokenVerifier` seam is what makes this two implementations rather than two products. It is
+also why the seam is Phase 1 work even though Firebase does not arrive until later: build it now
+and local costs an implementation; skip it and local costs a fork.
+
+**What must be stated publicly:** air-gapped operation is a self-hosted capability, not a property
+of the hosted product.
+
+#### Consequence 2: gateway API keys are not per-end-user keys
+
+A managed API gateway validates **platform-level** API keys — created in the cloud project, bounded
+in number, and not something an end user mints for themselves. They are the wrong primitive for
+"every user creates their own key", and they do not scale to one per tenant.
+
+Two ways to reconcile that with wanting validation at the edge:
+
+| Option | How | Trade |
+|--------|-----|-------|
+| **A · Key exchange** *(recommended)* | User key → short-lived JWT from a token endpoint → gateway validates it against **our** JWKS, same as it validates Firebase | One verification mechanism at the edge, two ways to obtain a token. Costs one round trip, cacheable for the token's lifetime |
+| **B · Pass-through** | Gateway handles routing, TLS and coarse rate limiting; the application validates `md_*` keys | Simpler, no exchange — but the gateway is no longer doing authentication, only transport |
+
+**Option A is the one that actually marries them.** Both Firebase login and a user API key end up
+as a JWT the gateway verifies against a JWKS, so the backend has exactly one code path for "who is
+this" and the gateway has exactly one for "is this valid".
+
+Under A the gateway still enforces its own platform key for coarse abuse control at the edge. That
+is a different tier from user identity and should not be confused with it.
+
+### Identity is where they marry
+
+Whatever validated the credential, everything resolves to one canonical internal user:
+
+```
+users                          ← canonical, internal, never changes
+  user_id                        (existing UUIDs preserved)
+
+identities                     ← many-to-one
+  (provider, external_id) → user_id
+  provider: firebase | local | apikey | saml
+  UNIQUE(provider, external_id)
+
+credentials                    ← local password auth only
+  user_id, password_hash (Argon2id)
+
+api_keys                       ← user-created
+  key_id, user_id, org_id, project_id
+  key_hash                       SHA-256; high-entropy token, no slow KDF needed
+  prefix                         for display; the key itself is never re-shown
+  capabilities                   data:read · data:write · config:write · admin:*
+  expires_at, last_used_at, revoked_at
+```
+
+A Firebase login and an API key belonging to the same person land on the same `user_id`, with the
+same ACLs and the same tenancy scope. The difference is only what the credential is *permitted* to
+do — which is the capability scope, not the identity.
+
+**Firebase UIDs are 28-character strings and existing IDs are UUIDs.** Making `identities` the
+permanent design rather than migration scaffolding is what turns that from a rewrite into inserting
+rows.
+
+### Inbound uses the same keys — with a caveat
+
+A user-created key can be configured onto an inbound producer, so one credential mechanism serves
+both directions.
+
+The caveat is that **not every provider can present one.** Webhook senders differ:
+
+| Provider capability | Producer auth method | Examples |
+|--------------------|---------------------|----------|
+| Sends custom headers | **`api_key`** — the user's own key | Generic webhooks, most internal systems, ETL |
+| Signs the payload | `signature` — shared secret, HMAC verified | Slack, Stripe, GitHub |
+| Neither — just POSTs | `url_secret` — the `whk_<ulid>` path is the credential | Simple integrations, legacy systems |
+
+So the producer record declares it:
+
+```
+Producer
+  ...
+  inbound_auth   api_key | signature | url_secret | none
+  api_key_id     ← when inbound_auth = api_key
+  signing_secret ← when inbound_auth = signature
+```
+
+**Prefer `api_key` wherever the provider supports it** — it is revocable per key, attributable to a
+user, capability-scoped, and shows up in `last_used_at`. A URL secret is none of those: revoking it
+means re-registering the endpoint with the provider, and it leaks through logs and referrers.
+
+Where signature verification is available it should be used **in addition**, not instead — it
+authenticates the *payload*, which a bearer credential does not.
+
+### Password auth requirements
+
+| Concern | Requirement |
+|---------|-------------|
+| Hashing | **Argon2id** (or bcrypt cost ≥12). Never SHA-family |
+| Brute force | Per-account **and** per-IP rate limiting, exponential lockout |
+| Reset flow | Single-use, short-TTL, side-effect-free tokens |
+| Verification | Email confirmation before first ingest |
+| Enumeration | Identical response for unknown vs wrong password |
+| Sessions | Short access token + revocable refresh token; **revocation list** — pure stateless JWT cannot log anyone out |
+| MFA | TOTP — an expectation at team scale |
+| Policy | Length-first, breach-list check where available |
+
+Most of this comes free with hosted auth and must be **built** for local. That asymmetry is the
+real cost of the air-gapped path.
+
+### API keys under multi-tenancy
+
+Today `md_*` binds to one user. A team system needs scope:
+
+| Key type | Acts as | Use |
+|----------|---------|-----|
+| **User key** | that user, their ACLs | personal scripts, MCP, SDK |
+| **Project key** | project service identity | CI, connectors, host-SaaS |
+| **Org key** | org service identity | admin automation |
+
+Required properties, several of which are gaps:
+
+- **Hashed at rest.** Store a hash, indexed; keep a display prefix separately. "O(1) lookup" reads
+  like a lookup on key value — if plaintext, one read exposes every tenant.
+- **Membership-coupled.** Leaving the org must immediately revoke org access, or offboarding leaks.
+- **Bounded.** Expiry, rotation with overlap, revocation, `last_used_at`.
+- **Never in a browser.** Enforced, not documented.
+- **Capability-scoped** — see [api.md](#api-contract-surfaces).
+
+### Retire the global API key
+
+`API_KEY` grants unscoped access with no `user_id` and bypasses all access control. Tolerable
+single-tenant; in a team system with per-item privacy it is a master key that voids every ACL.
+Anything that logs "who did this" as *nobody* is incompatible with the privacy model.
+
+### Where credentials live — and five problems
+
+| Class | Encryption | Stored in |
+|-------|-----------|-----------|
+| OAuth / integration | AES-256-GCM | credential broker's own database |
+| AI provider keys | symmetric | `{user_id}/engines/{id}.json` — **the blob store** |
+| `md_*` API keys | unspecified | record store, "O(1) lookup" |
+| Global `API_KEY` | none | environment variable |
+| Webhook signing secrets | unspecified | `webhooks` table |
+| Infra credentials | none | orchestrator secrets |
+
+1. **Encryption fails open.** Documented behaviour: if encryption is unavailable, keys are stored
+   as plain text with a warning. At 1,000 orgs that is a breach with a log line. **Must fail
+   closed.**
+2. **One master key for all tenants.** Compromise is total. Needs envelope encryption — KEK in a
+   KMS, per-tenant DEKs.
+3. **"Set once, never rotate"** is documented for the broker encryption key. An operational dead
+   end that fails rotation requirements.
+4. **Secrets share a blast radius with user data** — encrypted provider keys sit in the same blob
+   store as ingested content.
+5. **`md_*` storage is unspecified.** If plaintext, one read yields every tenant's credentials.
+
+> Where each of these physically lives per deployment variant — and why Secret Manager and KMS are
+> not interchangeable — is in
+> [operations/deployment-variants.md](#deployment-variants).
+
+### The fix is symmetry
+
+Integration credentials already have the right pattern — a proxy injects them so the caller never
+holds them. AI provider credentials do the opposite: workers fetch decrypted keys over the network
+and cache them for minutes.
+
+```
+integration creds  →  /proxy/{provider}    →  worker never holds  ✓ exists
+AI provider creds  →  /llm-proxy/{engine}  →  worker never holds  ✗ proposed
+```
+
+Mirror the pattern and no worker holds a secret of either class.
+
+### Sequence
+
+1. Identity abstraction + `identities` table — no behaviour change, unblocks everything
+2. Asymmetric signing — removes the forge-anywhere weakness
+3. Local password auth — Argon2id, lockout, reset, verification
+4. API key hardening — hashing, scoping, membership coupling
+5. Hosted provider — now just another implementation
+6. Retire the global key → scoped platform credentials
+7. MFA, then SAML/OIDC when enterprise demands it
+
+
+---
+
+---
+
+## Privacy Foundations
+
+Most of [compliance.md](#privacy-compliance) describes capabilities that can be added to a running
+system: DSAR tooling, export, SSO, certification. This document is about the subset that **cannot**,
+and therefore belongs in the first slice.
+
+### The retrofit cost is not uniform
+
+| Control | If deferred | Recoverable? |
+|---------|------------|--------------|
+| **Access audit** | Past access is unknowable — no record exists | **No. Ever.** |
+| **Derived-artifact provenance** | You cannot determine what a summary was built from once the sources have changed | **Effectively no** |
+| **Encryption at rest** | Full re-encrypt migration; key management designed under pressure | Expensive |
+| **Per-item ACL** | No defensible default for existing rows — every choice is a guess | Guesswork |
+| **Content classification** | Re-scan the entire corpus | Expensive |
+| **Query-time ACL filtering** | Every retrieval path rewritten | Mechanical but wide |
+| DSAR tooling, export, SSO, certification | Built later against existing data | Yes — defer these |
+
+The first row is the argument. **"Who accessed this patient record in March?" has no answer if you
+were not recording in March.** No migration recovers it, no amount of later engineering helps, and
+it is exactly the question that gets asked after an incident.
+
+### What belongs in the first slice
+
+#### 1. Access audit, from the moment access control exists
+
+The instant there is an ACL, there is a question about who got past it. Audit starts with the first
+read, not with the compliance push.
+
+- Every read of an access-controlled item produces an audit record: who, what, when, which
+  credential, which producer or surface
+- **Append-only**, with retention measured in years rather than the three days that tracing
+  memories keep
+- **Separate store** from logs and traces — different retention, different mutability guarantee,
+  different threat model
+- Written on the read path, so it cannot be skipped by a code path that forgot
+
+This is the `domain_events` store from [telemetry](#telemetry). It exists in
+Phase 1 for this reason, not because events are useful for debugging.
+
+#### 2. Provenance on every derived artifact
+
+The [delete cascade](#privacy-compliance) is a Phase 8 capability, but it is only *possible* if every
+derived artifact has recorded what it came from — from the first one.
+
+| Artifact | Must record |
+|----------|-------------|
+| Embedding | `source_id`, `source_version` |
+| Summary | The full `(source_id, version)` **list** — summaries span items |
+| Extracted claim | Source and location |
+| Entity / graph fact | Contributing sources |
+| Case-level artifact | Member set at generation time |
+
+A summary written in month one that spans forty items, without its source list, is unerasable in
+month twelve. Not difficult — **unerasable**, because nothing records that the paragraph someone
+wants deleted came from the document they are asking about.
+
+The staleness fields already carry `source_id` and `source_version`. Making the multi-source case a
+*list* rather than a single reference is the whole change, and it costs nothing now.
+
+#### 3. Encryption at rest, failing closed
+
+Currently unspecified for user content — credentials are encrypted, content is not documented as
+being so.
+
+- Content and derived artifacts encrypted at rest
+- **Fail closed.** The documented behaviour for provider keys — plaintext with a warning if
+  encryption is unavailable — must not be repeated for content. A misconfiguration must refuse the
+  write
+- Envelope encryption from the start: a key-encryption key held externally, per-tenant data keys.
+  Retrofitting per-tenant keys onto a single-key corpus is a full re-encrypt
+- Key rotation possible by design. "Set once, never rotate" is an operational dead end
+
+#### 4. Per-item ACL and query-time filtering
+
+Already in Phase 1 for tenancy reasons. Restating why it is also a privacy foundation: an item
+written without an access level has no defensible default later, and post-rank filtering both
+degrades results and leaks existence.
+
+#### 5. Content classification
+
+A flag, set at ingest, marking content as regulated or containing personal data.
+
+It gates three things already designed:
+
+- **Classification-gated inference** — regulated content pins to local models and fails closed
+  rather than falling through to a third party
+- **Erasure scope** — knowing which items are in scope for a subject request
+- **Export and residency** — what may leave which boundary
+
+Start deterministic: source-based (an HR connector is PII by construction), pattern-based for
+obvious identifiers, and caller-declared. Model-based detection can come later; **the field must
+exist from the first write** or classification means re-scanning the corpus.
+
+#### 6. Log discipline
+
+Zero cost, and irreversible if got wrong — a secret or a document body written to a log is in a
+system with different retention and different access control, and it stays there.
+
+**Never logged:** item content or excerpts · prompt and completion bodies · credentials, including
+in URLs and error payloads · personal identifiers in free text.
+
+Prompts *contain user content*. "Log the prompt for debugging" is a data-exfiltration path that
+looks like observability. Where genuinely needed, it goes behind a time-boxed, audited, per-tenant
+flag — not a log level.
+
+---
+
+### What can safely wait
+
+Deferring these is a scheduling decision, not a design failure:
+
+DSAR tooling and subject-indexed inventory · export and portability UX · SSO, SAML, SCIM ·
+break-glass and ethical walls · legal hold · per-org retention policy · data residency ·
+certification · the delete cascade *implementation* — its **hooks** are above.
+
+---
+
+### The two hazards, restated as build order
+
+Both are documented in [compliance.md](#privacy-compliance). Their placement matters here:
+
+| Hazard | When it must be closed |
+|--------|----------------------|
+| **Fallback chain transmits regulated content to a third party** | **Phase 1**, with the first inference call. It is a policy check before the chain, and it is cheap — but every call made before it exists is an untracked disclosure |
+| **Compression defeats erasure** | Hooks in Phase 1–2 (provenance above); the cascade itself later. The hazard is created the moment the first summary is written without its source list |
+
+---
+
+### Requirements
+
+- **FR-PRIV-1** Every read of an access-controlled item MUST produce an append-only audit record
+  identifying accessor, item, time, credential and surface.
+- **FR-PRIV-2** Audit records MUST be stored separately from logs and traces, with independent
+  retention, and MUST NOT be mutable by the application.
+- **FR-PRIV-3** Every derived artifact MUST record its complete source set, as a list where more
+  than one source contributed.
+- **FR-PRIV-4** User content and derived artifacts MUST be encrypted at rest, and encryption MUST
+  fail closed.
+- **FR-PRIV-5** Encryption MUST use envelope encryption with per-tenant data keys, and key rotation
+  MUST be possible without re-authenticating tenants.
+- **FR-PRIV-6** Every item MUST carry a classification flag indicating regulated or personal
+  content, set at ingest.
+- **FR-PRIV-7** Classification MUST gate the inference fallback chain: regulated content pins to
+  local inference and fails closed.
+- **FR-PRIV-8** Item content, prompt bodies, completion bodies and credentials MUST NOT be written
+  to logs.
+- **FR-PRIV-9** Access control MUST be applied within the retrieval query, never as a post-ranking
+  filter.
+- **FR-PRIV-10** An item MUST NOT be written without an access level.
+
+
+---
+
+---
+
+## Privacy & Compliance
+
+Engineering analysis, not legal advice — but the architectural consequences are concrete and
+several are load-bearing.
+
+### The deployment variant decides the regulatory posture
+
+**Self-hosting is not merely a privacy feature — it changes who the regulated party is.**
+
+| | Local / self-hosted | Cloud (hosted by us) |
+|---|---|---|
+| Our role under GDPR | **Neither controller nor processor** — we never touch the data | **Processor** — DPA required |
+| HIPAA | Customer is the covered entity; **no BAA needed from us** | We are a Business Associate — **BAA required** |
+| Sub-processors | None, if inference is local | Cloud provider, inference, auth, credential broker |
+| Cross-border transfer | None | Requires a transfer mechanism for EU data |
+| Breach notification | Customer's obligation | Ours, on a clock |
+| Certification burden | Effectively none | SOC 2, and audit evidence |
+
+This is the strongest commercial argument for the local variant — and the opposite of how it
+currently reads in the roadmap, where self-hosting is treated as the hobbyist tier while being the
+only configuration that sidesteps the entire compliance apparatus.
+
+### Two hazards in the current design
+
+#### Hazard 1 — the fallback chain crosses a legal boundary invisibly
+
+The documented chain is *local model → cloud model → third-party API*. When the local model is
+unavailable, regulated content is **automatically transmitted to a third party**, with no error,
+no prompt and no record distinguishing which items took which path.
+
+Under HIPAA that is a disclosure of PHI to a party that may have no BAA. Under GDPR it is an
+undisclosed transfer. Architecturally it is the same defect as the embedding-fallback bug — an
+automatic substitution that is safe for availability and unsafe for correctness — except the
+consequence is legal.
+
+**Fix:** data classification gates the chain. Items marked regulated pin to local inference and
+**fail closed** rather than falling back. Every inference call records which provider served it.
+
+#### Hazard 2 — compression defeats erasure
+
+Memory compression summarises N items into prose. On an erasure request the source item is
+deleted — but its content **survives inside the summary**, and inside any claim, concept key or
+graph fact extracted from it.
+
+A "right to be forgotten" implementation that deletes the row and leaves the substance in derived
+text has not erased anything. This is why the delete cascade cannot be deferred: it becomes
+exponentially more expensive once a production corpus has compressed mixed-subject content.
+
+### GDPR obligations against current state
+
+| Obligation | State | Gap |
+|------------|-------|-----|
+| **Erasure** (Art 17) | missing | W9 cascade — must reach embeddings, entities, graph facts, summaries, blobs |
+| **Access / DSAR** (Art 15) | missing | Subject-indexed inventory across all stores |
+| **Portability** (Art 20) | partial | Workspace export exists as a manifest; needs machine-readable completeness |
+| **Storage limitation** (Art 5) | **strong** | Typed memories with per-type TTL map onto this unusually well |
+| **Data minimisation** (Art 5) | tension | A product that ingests everything from 900 sources is in structural tension with minimisation — needs explicit per-connection scoping |
+| **Records of processing** (Art 30) | partial | Entity-to-source mapping gives provenance; needs a processing register |
+| **Privacy by design** (Art 25) | **strong** | Private-by-default ACLs, connection-scoped inheritance, local inference |
+| **Breach notification** | missing | Needs a real audit trail to even determine scope |
+
+**Embeddings, extracted entities and graph facts are derived from personal data and should be
+treated as personal data.** An erasure that removes the source row but leaves its vector and
+entity node has not completed.
+
+### HIPAA — and the agent nobody costed
+
+**The pipeline ships a Medical / DICOM agent.** That is an explicit design decision to ingest and
+analyse protected health information. It places HIPAA squarely in scope, and nothing in the
+current design addresses it: no BAA path, no audit controls, no minimum-necessary enforcement, no
+documented encryption of PHI at rest, and an inference fallback chain that can transmit PHI to a
+third party.
+
+In the hosted variant, HIPAA requires a BAA with *every* sub-processor touching PHI, including
+inference providers. **The current cloud inference stack is unlikely to be BAA-able.** Either
+healthcare is a self-hosted-only story, or the cloud inference choice has to change.
+
+| Safeguard | State |
+|-----------|-------|
+| Access control — unique user ID, minimum necessary | partial — per-item ACLs exist; the global unscoped key defeats them |
+| **Audit controls** | **missing** |
+| Integrity — detect improper alteration | good — versioning with diffs |
+| Transmission security | partial — TLS at edges; the fallback chain is the hole |
+| Encryption at rest | **unspecified** — credentials are encrypted; user content is not documented as encrypted |
+
+### Tracing memories are not an audit log
+
+Observability is persisted as `tracing` memories with a **3-day TTL**, and it is sampled. An audit
+trail must be durable, complete and tamper-evident, and must record *who accessed which record
+when* — a different dataset with different retention and a different threat model. Three-day
+sampled traces cannot answer a breach-scope question about last quarter.
+
+### "Public" needs defining
+
+The `public` access level currently means "any authenticated user in the organization" — which is
+*internal*, not public. Three distinct things share the word:
+
+- **Org-visible** — the current meaning; harmless
+- **Externally shared** — a link outside the tenant. Not supported, and the feature most likely to
+  cause accidental disclosure once added
+- **Publicly-sourced** — [crawled](#crawlers) web content, which carries different
+  licensing and copyright exposure and must be tagged at ingest so retrieval can distinguish it
+
+### What to build, in order
+
+1. **Classification-gated inference** — mark regulated content, pin to local models, fail closed,
+   record the serving provider *(hazard 1)*
+2. **Delete cascade with derived-artifact reach** — designed now even if built later *(hazard 2)*
+3. **Immutable access audit log**, separate from tracing, with real retention
+4. **Encryption at rest for user content**, failing closed
+5. **Retire the global unscoped key** — it defeats minimum-necessary by construction
+6. **Subject-indexed inventory** for DSAR
+7. SOC 2, SSO/SAML, SCIM — the entry ticket for team and enterprise
+
+Items 1 and 2 get materially harder with time. Everything else can be added to a running system;
+those two get baked into data.
+
+
+
+
+
+*The contract, and running the thing*
+
+
+---
+
+# Part VII · How we define the API
+
+*The rules the surface obeys, before any endpoint exists*
+
+---
+
+## API Contract & Surfaces
+
+Everything reaches the platform through `/api/v1/` — UI, SDKs, MCP server, gateway,
+conversational agent and host applications alike. That uniformity is a strength; the problem is
+that **privilege is not expressed in the surface**.
+
+### The finding
+
+`md_*` keys bind to a **user** and inherit *all* that user's rights. If you are an org owner, the
+key you paste into an MCP client can delete your organization — and the MCP tool list includes a
+delete tool.
+
+Keys must be **capability-scoped**, not only identity-scoped:
+
+```
+identity   →  who am I acting as       (exists today)
+capability →  what may this key do     (missing)
+```
+
+### Two planes
+
+| | Control plane | Data plane |
+|---|---|---|
+| Volume | low | high |
+| Privilege | high | per-item ACL |
+| Audit | mandatory | sampled |
+| Latency | irrelevant | sub-second for agents |
+| Surfaces | UI, CLI, REST | UI, SDK, MCP, chat agent, REST |
+
+### Endpoint groups by plane
+
+| Group | Prefix | Plane | Capability scope |
+|-------|--------|-------|------------------|
+| **Write** | `/write` | data | `data:write` — **the single write path, every producer** |
+| Data items | `/data` | data | `data:read` — reads and mutations of existing items |
+| Producers | `/producers` | control | `config:write` — register webhooks, crawlers, keys |
+| Retrieval | `/search` · `/ai/query` | data | `data:read` |
+| Memories | `/memories` | data | `data:read` · `data:write` |
+| Graph | `/graph` | data | `data:read` · `data:write` |
+| Uploads | `/uploads` | data | `data:write` |
+| **Crawlers** | `/crawlers` | control | `config:write` |
+| Webhooks | `/webhooks` | control | `config:write` |
+| Integrations | `/integrations` | control | `config:write` |
+| AI config | `/ai/users/{uid}/…` | control | `config:write` |
+| Organizations | `/organizations` | control | `admin:*` |
+| API keys | `/api-keys` | control | `admin:*` |
+| Infrastructure | `/pods` | control | `admin:*` |
+| MCP | `/mcp/sse` | **data only** | `data:read` · `data:write` |
+
+Capability scope becomes a property of the **key**, checked at the router. An MCP key is
+*structurally incapable* of reaching `/organizations` — not because the caller lacks a role, but
+because the credential does not carry the scope.
+
+### Conventions
+
+| Concern | Today | Needs to be |
+|---------|-------|-------------|
+| Identifiers | ULID with type prefix — `data_`, `mem_`, `whk_`, `org_`, `proj_` | keep — time-sortable and self-describing |
+| Pagination | `?limit=&offset=` | **cursor-based** — deep offsets scan; at 50M rows this is the wrong primitive |
+| Errors | **two formats** — `{detail, status_code}` and `{error:{code,message,details,request_id}}` | **converge** on the structured envelope; keep `detail` as a deprecated mirror with a stated removal version |
+| Correlation | `X-Request-Id` echoed | **extend** — propagate into the pipeline, not just the API |
+| Idempotency | none on writes | **idempotency key** — providers redeliver; so do retrying clients |
+| Quota responses | `429` + `Retry-After` + structured code | keep |
+| Spec | OpenAPI + Swagger/ReDoc | keep — drives SDK codegen |
+
+### Endpoints the design adds
+
+| Endpoint | Why |
+|----------|-----|
+| `POST /uploads`, `POST /uploads/{id}/complete` | Presigned direct-to-storage flow |
+| `CRUD /crawlers`, `POST /crawlers/{id}/runs`, `POST /crawlers/{id}/dry-run`, `PATCH /runs/{id}` | Crawler configs and run control |
+| **`POST /write`** | The one write endpoint. `items[]` always, `207` always — batch is not a separate verb, just the same verb with more items |
+| **`/agents/{id}/config`** — get effective + provenance, set, revert, **test**, **impact**, lock | Extraction prompts, schemas, tiers and flags per data type — defaults shipped, overridable per org and project |
+| **`PUT /cases`** · `/cases/{id}/members` · `/timeline` · `/retrieve` · `/similar` | Subject correlation — patient timelines, legal matters, asset histories |
+| `POST /retrieve` | Composable retrieval; the five modes become presets over it |
+| `POST /reprocess` | W7 — rebuild derived artifacts by selector |
+| `GET /artifacts/stale` | What needs rebuilding, and why |
+| `CRUD /schemas`, `/mappings` | Normalization customization |
+| `PATCH /connections/{id}` | Set `personal` / `shared` scope — the ACL-inheritance root |
+| `POST /tokens/ephemeral` | Short-lived project-bound token for embeddable widgets |
+| **`DELETE /data/{id}`** · **`POST /deletions`** with a selector · project and org purge | Cleanup and erasure. Beyond one item it is a job — see [deletion](#deletion) |
+
+### Six personas, not four roles
+
+| Persona | Scope | Gap today |
+|---------|-------|-----------|
+| **Platform operator** | deployment, infra, secrets | **missing** — the unscoped global key does this job, unattributably |
+| **Org owner** | billing, delete org, all members | — |
+| **Org admin** | members, projects, quotas, policy | — |
+| **Member** | own data, connections, AI config | the "simple user" |
+| **Viewer** | read-only | — |
+| **Service identity** | host app, CI, agent | **missing** — every key is a person today |
+
+#### Surface × persona
+
+| Surface | Operator | Owner / Admin | Member | Service |
+|---------|----------|---------------|--------|---------|
+| **Web UI** | infra only | full control plane | own settings only | — |
+| **CLI** | primary | scripting | rare | CI |
+| **SDK** | — | some config | data plane | primary |
+| **MCP** | — | **no admin tools** | data plane | agent |
+| **Chat agent** | — | — | data plane | — |
+| **REST** | platform creds | scoped by role | scoped by role | scoped key |
+
+### Config precedence, with locking
+
+| Level | Owns | Persona |
+|-------|------|---------|
+| **Platform** | storage backend, encryption keys, deployment | operator |
+| **Org** | quotas, allowed providers, sharing policy | admin |
+| **User** | own engines, agent configs, connections | member |
+
+Model Garden is per-user today. An org admin will need to mandate "only our approved provider", so
+precedence needs a **lock** flag: org sets policy, user customizes within it, admin can pin.
+
+### SDK layering
+
+Three layers, not one flat client, so the capability boundary is visible at the call site:
+
+| Layer | Contents |
+|-------|----------|
+| **Simple facade** | `add()` / `search()` / `chat()` — the 90% case |
+| **Full client** | Typed CRUD, scoping, pagination, crawler config builders |
+| **Admin client** | Org, members, quotas, keys, run control — **separate import, separate key** |
+
+### Embeddable UI
+
+The host contract forbids end-user browsers holding durable secrets. That rules out shipping a
+widget with an embedded key — but not embeddable UI:
+
+```
+host backend ──mints──▶ short-lived scoped token ──▶ browser widget
+                        (project-bound, read-only, minutes not days)
+```
+
+Without it, every host rebuilds retrieval UI from scratch.
+
+### Stability policy
+
+Hosts pin against this surface. Write down what may change inside `/api/v1` — additive fields, new
+optional parameters, new endpoints — versus what forces `/api/v2`: removed fields, changed types,
+altered defaults, narrowed enums.
+
+### Handle with care
+
+**Conversational admin is appealing and dangerous.** "Delete the marketing project", sent over a
+messaging app, executed by an LLM that resolved identity from a phone number, is a bad failure
+mode. Keep the chat agent strictly data-plane; gate destructive actions behind confirmation in an
+authenticated surface.
+
+
+---
 
 ---
 
@@ -4231,2096 +6408,329 @@ layer over an uninspected retrieval path would let you ship without noticing.
 
 ---
 
-## The Sandbox
+# Part VIII · How we implement it
 
-Upload a dataset, watch it get enriched, chat against it, and see exactly what the chat retrieved.
-
-The sandbox is where someone decides whether mem-dog works for *their* data. Nothing else in the
-product answers that question — a connector list does not, and a benchmark on someone else's corpus
-certainly does not.
+*Stack, variants, observability, and the tests that close each slice*
 
 ---
 
-### It is a real project with a TTL, not a mode
+## Technology Choices
 
-The single most important decision, and it is a negative one:
+Everything in the design docs is stated in **roles**. This is where roles meet products. Keeping
+the two separate is not pedantry: the same design runs on three very different stacks, and a role
+that names a product cannot be re-filled.
 
-> **There is no sandbox code path.** A sandbox is a project with `sandbox: true` and a TTL. It runs
-> the identical write path, the identical workers, the identical retrieval.
+### Role → implementation
 
-A special "demo mode" with its own shortcuts tests the demo mode. Whatever the user concludes from
-it is not transferable, and worse, it is *convincingly* not transferable — it looks like evidence.
-The sandbox is only worth building if what you see in it is what production does.
+| Role | Chosen | Viable alternatives | Swap cost |
+|------|--------|--------------------|-----------|
+| `record store` | Postgres 16 | any mature RDBMS | **high** — system of record |
+| `vector index` | pgvector, inside the record store | Qdrant, Weaviate, Pinecone | medium |
+| `lexical index` | Postgres `tsvector` | OpenSearch, Elasticsearch | medium |
+| `data access` | Kong + PostgREST via `supabase-py` | raw psycopg | **high** — `storage.py` is ~6,400 lines |
+| `blob store` | GCS | S3, Azure Blob, filesystem | **low** — abstracted by `STORAGE_BACKEND` |
+| `durable queue` | NATS JetStream / **Pub/Sub in cloud** | Kafka, SQS, Redis Streams | medium — **already swapped per variant** |
+| `temporal graph store` | Neo4j + Graphiti | FalkorDB, Memgraph, none | **low** — gated by `is_graphiti_enabled()` |
+| `credential broker` | Nango, self-hosted | Paragon, Merge, custom | medium |
+| `inference layer` | **MVP: Gemini Flash + Gemini embeddings, plus Ollama Cloud (token-authenticated).** Later: local Ollama | any OpenAI-compatible endpoint | **low** — the catalog abstracts it |
+| `identity provider` | GoTrue → Firebase / local | any OIDC provider | **high today** (hardcoded at two sites); **low after abstraction** |
+| `orchestrator` | Kubernetes + KEDA / Cloud Run | ECS, Nomad | medium |
 
-The cleanup machinery already exists and needs nothing new:
+### The bet has a cost
 
-| Need | Mechanism that already covers it |
-|------|----------------------------------|
-| Expires automatically | A memory type with a TTL and `orphan_delete` |
-| Removes derived artifacts | The deletion cascade |
-| Scoped away from real data | Project isolation — every query is already scoped |
-| Bounded cost | Admission control and token budget, per project |
+Colocating the **vector index and lexical index inside the record store** is what makes "only two
+required roles" possible — no extra infrastructure, no sync problem, joins and ACL filters in one
+query. It is also why the capacity plan says *"Postgres is the shared fate"*: every workspace
+competes for the same instance, and filtered ANN search over tens of millions of rows is the
+load-bearing risk.
 
-A sandbox is therefore a *configuration* of things that exist. If building one requires new
-deletion, new scoping or new limits, that is a signal those mechanisms were not general enough.
+**The floor is low because the ceiling is shared.**
 
----
+### MVP inference: Gemini for RAG, Ollama Cloud alongside it
 
-### "Sandbox" is a word that makes people paste production data
+MVP registers **two engines**:
 
-This needs saying before the feature is designed, because the naming does real damage.
+| Engine | Auth | Used for |
+|--------|------|----------|
+| **Gemini** — latest Flash, plus Gemini embeddings | API key | **Generation and all embeddings** |
+| **Ollama Cloud** — open-weight models | Account token | Generation, alternative and comparison |
 
-People treat a sandbox as consequence-free. They will upload real customer exports, real clinical
-notes, real contracts — precisely because it is "just a test". The data is real; the TTL does not
-change that; a 7-day retention of PHI is still PHI.
+No local engine yet, and no tiered routing policy — but two engines rather than one, which is a
+better MVP than it looks.
 
-**So the sandbox is not a lower-security zone, and must not behave like one:**
+#### Two engines exercises the seam that one engine does not
 
-- It inherits the project's ACL defaults, privacy policy and model-routing allow-list. A project
-  whose chain is BAA-restricted stays restricted in its sandbox.
-- Its contents are auditable and erasable like anything else.
-- **The upload surface says what it is** — that this is real ingestion into real storage under real
-  retention, expiring on a date it names.
+A catalog abstraction filled with exactly one entry is untested. Every assumption baked into it —
+that `model_id` is recorded, that `served_by_model` is populated, that the per-project allow-list
+is consulted, that credentials are held per engine and encrypted — is unfalsifiable while there is
+only one thing to select between.
 
-The failure to avoid is a sandbox that quietly routes to a cheaper, unrestricted model because "it
-is only a test". That converts a convenience into a disclosure, and it is the
-same fallback-chain boundary in a friendlier costume.
+**Registering a second engine at MVP proves the seam works before anything depends on it.**
 
----
+And the second engine is well chosen for a reason beyond capability: **Ollama Cloud speaks the same
+protocol as local Ollama.** The air-gapped variant — the one that restores the $0 and
+no-data-leaves-the-machine claims — becomes largely a *base URL and credential change* against an
+adapter already in production, rather than a new integration attempted late under pressure.
 
-### The upload step
+The riskiest deferred capability in the plan gets de-risked by a choice made for other reasons.
+Worth naming so it is not lost.
 
-Reuses bulk operations — same run entity, same dry-run, same
-per-item results. Nothing bespoke.
+Three consequences still need a decision now.
 
-| Input | Path |
-|-------|------|
-| CSV / JSONL | Bulk write, one item per row |
-| A folder of documents | Batch upload → `Stored` refs |
-| A live connector | Normal connector sync, scoped to the sandbox project |
-| Paste | A single inline item, for a quick look |
+#### Embeddings stay on one engine, and that is not negotiable
 
-#### Sample first, by default
+Generation may be served by either engine. **Embeddings may not.**
 
-Enriching 100k uploaded rows before the user has looked at one is the expensive mistake this
-feature invites. The default is to **enrich a sample, show it, then ask**.
+Two embedding models produce **incomparable vector spaces**. Mixed vectors in one index do not
+error — they silently corrupt ranking, and without a `model_id` column the affected rows cannot
+even be identified afterwards. A second engine that *can* embed is precisely the condition under
+which this happens by accident.
 
-```
-1. Ingest everything          cheap — stored and searchable
-2. Enrich a sample (~50)      the user looks at real output on their own data
-3. Enrich the rest            only on an explicit, costed decision
-```
+So: Gemini embeddings for RAG, exclusively, and `embed.distinct_models_per_index` is the metric
+that catches a violation. Ollama Cloud is a generation engine in this design regardless of what
+else it can do.
 
-Step 2 is where the actual product judgement happens, and it costs almost nothing. Step 3 is where
-the money is, and it should never be implicit. The cost estimate shown at step 3 comes from the
-token accounting already built for budgets.
+#### Credentials: two providers, one path
 
----
+The Ollama Cloud token is a provider credential and takes the existing path — held in the model
+catalog, **encrypted, failing closed**, never in an environment variable on a worker, never
+reaching enrichment code. Same as the Gemini key. Two providers is the point at which "we have a
+credential path" stops being a claim.
 
-### The readiness staircase is the whole UI problem
+The per-project allow-list also stops being theoretical. With two engines, *"this project may not
+use provider X"* is an enforceable statement rather than a placeholder — which matters for the
+regulated case, where the answer is that the chain **fails closed** rather than falling through to
+an unapproved provider.
 
-The write API defines
-three states — `stored`, `searchable`, `enriched`. In the sandbox they stop being an API detail and
-become the interface.
+#### Pin the version. Never point at a floating alias
 
-Someone uploads 500 records and immediately asks a question. Enrichment has not finished. The
-answer is thin. **They conclude the product does not work** — and they are wrong for a reason the
-UI could have shown them.
+`generator_version` is a hash over prompt, **model id**, schema, parser and chunker. Point the
+config at a rolling alias like `-latest` and the provider can change the model underneath it
+without the id changing.
 
-```
-  uploaded  ████████████████████████  500
-  stored    ████████████████████████  500
-  searchable████████████████░░░░░░░░  341
-  enriched  ██████░░░░░░░░░░░░░░░░░░  126   ~4 min remaining
-```
+> **The fingerprint would then be a lie**, and every guarantee resting on it — reproducibility,
+> staleness detection, reprocess targeting, trend pinning — silently stops holding while
+> continuing to look correct.
 
-Two consequences for the chat surface:
+So the configured value is an explicit pinned version, and moving to a new one is a deliberate
+change that enqueues W7 reprocess. "Latest Flash" is a **procurement decision reviewed
+periodically**, not a runtime behaviour.
 
-- **It says what it is answering over.** *"Answering over 126 enriched of 500 records"* — one line,
-  and the early answer becomes informative rather than damning.
-- **It offers to wait.** Not a spinner blocking the UI; an explicit "ask again when enrichment
-  finishes" that re-runs the same question and shows the difference.
+This applies with more force to the embedding model. A silently-swapped embedding model produces
+**incomparable vectors in the same index** — the corruption `embed.distinct_models_per_index`
+exists to catch, arriving through the one door nobody is watching.
 
-That second one is quietly the best demo in the product: the same question, answered before and
-after enrichment, side by side. It demonstrates what enrichment *is* better than any description.
+#### Expanding the Ollama Cloud model set is a later-stage catalog operation
 
----
+Once the adapter is in production, adding models from Ollama Cloud is **registering catalog
+entries**, not integration work — which is the payoff for building the seam properly at MVP. Later
+stages widen the set: larger open-weight models for harder extraction, smaller ones for cheap
+high-volume classification, and per-purpose assignment across them.
 
-### The output is the retrieval trace, not the answer
+Three gates apply, and they are the ones already established rather than new ones:
 
-**This is the finding that decides whether the sandbox is a toy or a tool.**
+| Gate | Why |
+|------|-----|
+| **Each model is a distinct `model_id`** | It enters `generator_version`, so output is attributable and reproducible |
+| **Reassigning a purpose enqueues W7 reprocess** | Or the corpus is knowingly mixed — the same rule as any config change |
+| **Embeddings remain on a single engine** | Regardless of how many generation models are registered |
 
-A chat sandbox that shows only the answer is a demo. The answer is a *lagging indicator* of
-ingestion quality, filtered through a model that is good at sounding right regardless. If the
-answer is bad, it tells you nothing about why: bad chunking, wrong embedding model, the record
-never got enriched, retrieval found the wrong thing, or the model fumbled a correct context.
-
-So the sandbox shows the trace, and the answer is secondary:
-
-| Panel | What it answers |
-|-------|-----------------|
-| **Retrieved chunks, ranked, with scores** | Did retrieval find the right records? |
-| **Source record per chunk**, openable | Is the chunk boundary sane, or did it split a claim from its subject? |
-| **What was actually sent to the model** | Is the failure retrieval or generation? |
-| **`model_id` and `generator_version`** | Which configuration produced this, so it is reproducible |
-| **Records considered but filtered** | Was it excluded by ACL, by score, or by not being enriched yet? |
+The sandbox A/B comparison is what makes the widened set useful rather than
+merely available: *is the larger model worth it on my corpus?* is a question with a
+corpus-specific answer, and registering ten models without a way to compare them is ten guesses.
 
-The last row matters more than it looks. *"The answer is missing something I know is in the data"*
-is the most common sandbox complaint, and it has four completely different causes with four
-different fixes. Showing which one applies turns an unfalsifiable impression into a diagnosis.
+#### Choose the embedding dimension deliberately — it is not changeable later
 
-> Everything here is data the retrieval path already has. The sandbox does not compute it — it
-> declines to throw it away.
+Gemini embeddings support several output dimensions. The choice sets the pgvector column width,
+and **changing it is a full re-embed of the corpus**, not a migration.
 
----
-
-### Comparing datasets — and comparing configurations
-
-"Upload different datasets" has two readings, and the second is the more valuable one.
-
-**Different datasets, same configuration** — does this work for my CRM export as well as my
-tickets? Two sandbox projects, results side by side. Straightforward.
-
-**Same dataset, different configurations** — this is where the sandbox earns its cost. Run one
-corpus under two chunkers, two embedding models, or two extraction prompts, and diff the retrieval
-traces for the same question.
-
-```
-                    config A              config B
-  chunker           semantic-1024         semantic-512
-  embedding         local-mini            cloud-large
-  ─────────────────────────────────────────────────────
-  top-1 correct     6 / 10                8 / 10
-  cost / 1k         $0.00                 $0.42
-```
-
-This is the staleness-impact preview machinery pointed at a
-question people actually ask: *is the expensive model worth it on my data?* The honest answer
-varies by corpus, and this is the only way to find it.
-
-It also produces the evidence for a decision the system otherwise forces blind: which model to
-assign per purpose. **A model choice made without measuring it on the target corpus is a guess with
-a monthly invoice attached.**
-
-#### The comparison has a hard prerequisite
-
-A/B comparison is only meaningful if the two runs are genuinely comparable, which requires
-`generator_version` and `model_id` recorded per artifact — already required,
-and the reason it is required. Comparing two runs whose configuration you cannot pin is comparing
-noise.
-
----
-
-### Where this sits in the plan
-
-The sandbox is not a late polish item. **It is Phase 1's acceptance test with a face on it.**
-
-Phase 1's goal is *"write an item, find it by search, get it back."* The sandbox is that loop, made
-visible, on the user's own data — which means building it exercises the spine end to end and
-produces the first genuinely demonstrable thing.
-
-| Slice | Sandbox capability |
-|-------|--------------------|
-| **Phase 1** | Upload, staircase, retrieval with the trace. **No chat yet — retrieval results are the output** |
-| **Phase 2** | Chat over the retrieved context; before/after-enrichment comparison |
-| **Phase 4** | Bulk dataset upload, sample-first enrichment, cost estimate |
-| **Phase 6** | Configuration A/B — models, chunkers, prompts |
-
-**Phase 1 deliberately ships retrieval-without-chat.** The trace is the useful part and it is what
-proves the spine; adding a conversational layer over a retrieval path nobody has inspected just
-hides the thing worth looking at. It also keeps the honest ordering: if retrieval is wrong, chat
-cannot be right, and a chat UI would let you ship without noticing.
-
----
-
-### Requirements
-
-- **FR-SBX-1** A sandbox MUST be an ordinary project with a TTL, running the identical write,
-  enrichment and retrieval paths. There MUST NOT be a sandbox-specific code path.
-- **FR-SBX-2** A sandbox MUST inherit the project's ACL defaults, privacy policy and model-routing
-  allow-list. It MUST NOT relax any of them.
-- **FR-SBX-3** The upload surface MUST state that ingestion is real, under real retention, and MUST
-  name the expiry date.
-- **FR-SBX-4** Sandbox expiry MUST run the standard deletion cascade.
-- **FR-SBX-5** Bulk enrichment MUST default to a sample, and full enrichment MUST require an
-  explicit decision with a cost estimate.
-- **FR-SBX-6** The readiness staircase MUST be visible per dataset, with counts per state.
-- **FR-SBX-7** A chat or retrieval response MUST state how many records were enriched of the total
-  it searched.
-- **FR-SBX-8** Retrieval results MUST show ranked chunks with scores, their source records, and the
-  exact context passed to the model.
-- **FR-SBX-9** Excluded records MUST be distinguishable by reason — ACL, score threshold, or not
-  yet enriched.
-- **FR-SBX-10** Every result MUST record `model_id` and `generator_version`, so a run is
-  reproducible and two runs are comparable.
-- **FR-SBX-11** The sandbox MUST support running one dataset under two configurations and
-  comparing the retrieval traces.
-
----
-
-## Index Construction
-
-The pipeline's purpose is not summarization — it is **building retrieval structures**. Classic
-inverted indexes map terms that *appear* to documents. An LLM lets you index over vocabulary the
-document never contains:
-
-> A ticket saying *"it just spins forever after they hit save"* should be findable by
-> *performance regression*, *data loss risk* and *escalation candidate* — none of which are in
-> the text.
-
-### The index set
-
-| Index | Built by | Query shape unlocked | Status |
-|-------|----------|---------------------|--------|
-| Chunk vectors | embedder | "things like this" | built |
-| Lexical / BM25 | keyword index | exact terms, names, IDs | built |
-| Entity + relationship graph | extractor | who connects to what | built |
-| **Structural** | parser | precise citations — page, section path | **near-free** |
-| **Normalized facets** | normalizer | `amount > 10000`, `status = open` | **deterministic** |
-| **Question index** | LLM | match question-to-question, not question-to-prose | **highest leverage** |
-| Claim / fact index | LLM | fact-level citation, contradiction detection | gap |
-| Concept index | LLM | inverted index over inferred concepts | gap |
-| Summary hierarchy | LLM | both "what is this about" and "what's the number" | gap |
-| Intent index | LLM | decisions, action items, commitments | extracted, not indexed |
-| Document relations | LLM | supersedes / replies-to / cites | gap |
-
-Two are nearly free and under-exploited — **structural** (the parser already knows it) and
-**normalized facets** (no LLM at all). Build those before any expensive one.
-
-Of the LLM-derived indexes the **question index** is highest leverage: most RAG failure is a
-mismatch between how people ask and how documents state, and one extra call per chunk closes it.
-
-### Not every item deserves every index
-
-Six index types per item means up to 6× the LLM calls. A log line does not need a question index;
-a contract does.
-
-The control surface already exists — see [extraction prompts](#ingestion-workers) — the per-agent processing flags (`extract_entities`,
-`extract_actions`, `extract_topics`, `embed`) **are** index-selection flags.
-
-### Build cheap eagerly, expensive lazily
-
-| Tier | What | When |
-|------|------|------|
-| **eager** | chunks, vectors, FTS, structure, facets | always, on ingest |
-| **deferred** | questions, claims, concepts, summaries | on demand |
-| **adaptive** | expensive indexes for items that actually get retrieved | after N retrievals |
-
-Most corpora have a long cold tail nobody ever queries. The adaptive tier concentrates spend on
-content that demonstrably matters, at the cost of a slower first query on cold content.
-
-### Every index is a privacy leak surface
-
-Each derived artifact must inherit the ACL of its **most restrictive source**:
-
-- A **claim** extracted from a private doc is private — but claims are the most tempting thing to
-  merge across a corpus
-- A **concept index** entry pointing at a restricted item leaks its existence
-- The **entity graph** already merges across sources; a fact derived from a private doc surfaced
-  to a teammate is a leak with no audit trail
-- A **summary hierarchy** spanning mixed-ACL items must take the *intersection*
-
-**The rule:** derived artifacts carry the ACL of their most restrictive source, and retrieval
-filters **at query time, never post-rank**. Post-filtering also breaks top-K — ask for 10, filter
-to 3.
-
-### Composable retrieval
-
-Five modes and four rerankers are a *preset table*, not an interface. An application wanting
-facets plus graph walks plus a time bound has no way to ask. Four axes:
-
-| Axis | Options |
-|------|---------|
-| `select` | chunks · facts · entities · facets · summaries |
-| `match` | vector · lexical · graph walk · question index · concept |
-| `filter` | project · memory type · tags · time range · facets · **ACL (always)** |
-| `rank` | rrf · mmr · cross-encoder · none |
-
-The existing five modes survive as **named compositions** — `hybrid` becomes *match: vector +
-lexical, rank: rrf*. Presets stay for the simple case; the axes exist for the ones that need them.
-
-
----
-
-## Model Catalog
-
-*Landscape surveyed August 2026. Model families move fast; the catalog is designed to be updated,
-and the point of this document is the shape, not the specific version numbers.*
-
-### What this adds to Model Garden
-
-Model Garden today manages **providers**: add an API key, test connectivity, discover what models
-that provider exposes. Discovery returns a flat list of model IDs — strings with no properties.
-
-That is not enough to choose with. `qwen3.6:27b` and `gemma4:e4b` are both strings; one needs a
-24GB card and one runs on a phone; one does vision and one does not. Users cannot make an informed
-choice from a dropdown of identifiers, and smart routing cannot validate an assignment it knows
-nothing about.
-
-The addition is a **curated catalog of model cards** — models with declared properties — that
-users browse, select, and assign. Once assigned, smart routing uses them.
-
-### The finding that changes the tier design
-
-The current five-tier model — small, medium, large, **multimodal**, **omni** — was designed
-around a real constraint: text models were text-only, so vision and audio needed separate models
-in separate tiers.
-
-**That constraint has largely dissolved.** Gemma 4 is natively multimodal at every size (vision,
-audio, tools, thinking). Qwen 3.5 spans roughly 0.8B to 122B with every size natively multimodal.
-Modality is now a **capability most models have**, not a tier you route to.
-
-Keeping `multimodal` and `omni` as sibling tiers to `small`/`medium`/`large` conflates two
-independent axes:
-
-```
-            CAPACITY  ────────────────────────▶
-            small        medium        large
-CAPABILITY
-  text        ●            ●             ●
-  vision      ●            ●             ●      ← used to be one column
-  audio       ●            ●             ●      ← used to be one column
-  tools       ●            ●             ●
-```
-
-Routing should select on **capacity tier × required capabilities**, and the catalog must declare
-capabilities so that selection can be validated. A vision task routed to a text-only model should
-be a startup error, not a runtime surprise.
-
-Migration is straightforward: keep `multimodal` and `omni` as deprecated aliases that resolve to
-*(capacity tier, capability set)* pairs, so existing configs keep working.
-
-### The model card
-
-Each catalog entry declares:
-
-| Field | Purpose |
-|-------|---------|
-| `id` | Canonical identifier, e.g. `qwen3.6:27b` |
-| `family` / `version` / `variant` | Grouping and upgrade paths |
-| `architecture` | `dense` or `moe` — with total and active parameters for MoE |
-| **`license`** | Apache-2.0 · Gemma terms · community licenses with use restrictions. **Must be surfaced** — some restrict commercial use |
-| `context_window` | 32K … 1M — governs chunking and long-document routing |
-| **`capabilities`** | `text` · `vision` · `audio` · `tools` · `thinking` · `structured_output` · `embedding` |
-| `hardware.min_vram_gb` | Per quantization: q4 / q8 / fp16 |
-| `hardware.quantizations` | What's actually available to pull |
-| `serving.providers` | Which configured engines can serve it — local, cloud, gateway |
-| `serving.pricing` | Per-token cost, or free for local |
-| `quality_signals` | Benchmark references, **with the date and caveat attached** |
-| `recommended_for` | Suggested capacity tier and agent types |
-| `status` | `recommended` · `available` · `deprecated` · `superseded_by: <id>` |
-| `card_url` | Link to the upstream model card |
-
-`status` matters more than it looks. mem-dog's defaults currently reference a model generation
-that has been superseded — without a `superseded_by` field there is no mechanism to tell users
-that, and defaults silently rot.
-
-### Where the catalog comes from
-
-Three sources, intersected:
-
-```
-  curated registry          what we ship and maintain
-        ∩
-  provider discovery        what your configured engines actually serve
-        ∩
-  hardware feasibility      what your machine can actually run
-        ─────────────────────────────────────────────
-        = models offered to this user
-```
-
-The curated registry follows the pattern already established by `nango_provider_meta.py`: a static
-local mapping supplying metadata the upstream API does not provide. Providers tell you a model
-exists; they do not tell you its VRAM requirements, its license restrictions, or whether it has
-been superseded.
-
-Models discovered from a provider but absent from the registry still appear — as
-`status: available`, unvalidated, with a note that capabilities are undeclared. **Never hide a
-model the user has access to**; just be honest about what is unknown.
-
-### Indicative catalog (August 2026)
-
-Illustrative of the shape and of what "current" means. Expect this to be stale within months.
-
-| Model | Capacity | Capabilities | Context | Notes |
-|-------|----------|--------------|---------|-------|
-| `gemma4:e2b` / `e4b` | small | text, vision, audio, tools | — | Nano variants — edge and low-RAM |
-| `gemma4:12b` | medium | text, vision, audio, tools, thinking | — | Practical laptop model |
-| `gemma4:26b` / `31b` | large | text, vision, audio, tools, thinking | — | Strong vision/multimodal |
-| `qwen3.5:4b` | small | natively multimodal, tools, thinking | — | Multimodal at 4B |
-| `qwen3.6:27b` | large | text, tools, thinking | — | Fits 24GB at Q4; strong agentic/coding |
-| `qwen3.6:35b-a3b` | large | MoE, 3B active | — | Best all-round at 32GB |
-| `qwen3-coder:30b` | large | code | 256K | Long-context coding |
-| `llama4-scout` / `maverick` | large | text | up to 1M | Long-context retrieval leader |
-| `deepseek-v4` | large | text, reasoning | — | High-end reasoning, serious hardware |
-| `glm-5.2` | large | text | — | Strong all-round open-weight |
-| `mistral-medium-3.5` | large | text | 256K | 128B dense |
-| `phi-4-mini` | small | text | — | Very small footprint |
-
-Embedding models are catalogued separately — see below, because they are not interchangeable in
-the way these are.
-
-### Selection → routing
-
-Once a user assigns models, routing **validates** rather than trusting:
-
-| Check | Failure mode prevented |
-|-------|----------------------|
-| **Capability match** | A vision agent assigned a text-only model — fails at ingest, not at config time |
-| **Hardware feasibility** | A 70B model selected on a 16GB machine — pulls, then OOMs under load |
-| **Context window** | Long documents silently truncated because the assigned model has a 32K window |
-| **License** | A use-restricted model assigned in a commercial deployment |
-| **Provider reachability** | A model assigned but not served by any configured engine |
-
-Validation runs at **assignment time** with clear errors, and again at startup. The current failure
-mode — discovering the mismatch when a document fails to process at 3am — is what this removes.
-
-### Changing a model is a versioning event
-
-This is the part most likely to be under-designed.
-
-A model assignment is part of the **generator version** of every artifact that tier produces.
-Switching the medium tier from one model to another does not just affect future work — it makes
-every existing summary, entity extraction and classification from that tier **stale**.
-
-So the selection UI has an obligation:
-
-> Changing this model marks **2.1M artifacts** stale.
-> Estimated rebuild: **~4.5 hours**, **~$0** (local) / **~$180** (cloud).
-> [ Rebuild now ] [ Rebuild in background ] [ Leave stale ]
-
-Without that, "improve the model" is a change users make casually and whose consequences they
-discover months later when half the corpus reflects one model and half another. See
-[retrieval/versioning.md](#versioning-staleness).
-
-### Embedding models are a different UI
-
-**Embedding model selection must not be a dropdown.**
-
-Vectors from different embedding models occupy incomparable spaces. Changing the embedding model
-is a corpus-wide migration, not a configuration change — build a parallel index, backfill it,
-verify, then swap.
-
-The catalog carries embedding models with their own fields — `dimensions`, `max_input_tokens`,
-`normalization` — and the UI must present the change as a **guided migration with a cost estimate
-and a rollback path**, never as a setting.
-
-Related and non-negotiable: **embedding calls must never use the fallback chain.** If the assigned
-embedder is unavailable, defer with `embed_status = pending`. Substituting a different model
-silently corrupts the index.
-
-### Telemetry
-
-Per-inference, record the **model id and version that actually served the request** — not the one
-that was configured. Without it you cannot tell whether output came from the primary or the third
-fallback, cannot attribute quality regressions, and cannot identify affected rows after a bad
-assignment.
-
-Also worth tracking: per-model latency and cost, fallback depth reached, capability-mismatch
-rejections, and pull/warm status for local models.
-
-### Surfaces
-
-| Surface | Capability |
-|---------|------------|
-| **API** | `GET /ai/catalog` (with filters), `GET /ai/catalog/{id}`, assignment endpoints, `POST /ai/assignments/preview` returning the staleness estimate |
-| **UI** | Browsable catalog with capability and hardware filters, model card detail, "runs on your hardware" indicator, assignment with impact preview |
-| **SDK** | Catalog listing and assignment in the full client; policy locks in the admin client |
-| **Admin** | Org-level allowlist — pin approved models, block others. Ties to the config precedence model |
-
-### Open questions
-
-- **Catalog freshness.** Ship it static and update with releases, or fetch a signed catalog
-  periodically? Static is air-gap-friendly; fetched stays current. Probably static with an
-  optional refresh.
-- **Benchmark claims.** Publishing quality signals invites disagreement and dates badly. Cite with
-  dates and link out, or omit and let users judge?
-- **Auto-upgrade.** When a model is superseded, offer a one-click migration path with the
-  staleness estimate attached — or stay silent and let users choose?
-
-### Sources
-
-- [Hugging Face — Best Open Source and Open-Weight LLMs to Run Locally (2026)](https://huggingface.co/blog/daya-shankar/open-source-llm-models-to-run-locally)
-- [Codersera — Open-Source LLM Landscape 2026](https://codersera.com/blog/open-source-llms-landscape-2026/)
-- [PromptQuorum — Ollama 2026: best models by use case](https://www.promptquorum.com/local-llms/top-open-source-models-ollama)
-- [ComputingForGeeks — Ollama Models Cheat Sheet 2026](https://computingforgeeks.com/ollama-models-cheat-sheet/)
-- [Till Freitag — Open-Source LLMs Compared 2026](https://till-freitag.com/en/blog/open-source-llm-comparison)
-
-
----
-
-## Model Routing at Bulk
-
-Model Garden and Smart Routing already ship. The gap is not building them — it is that they were
-designed for **event-driven, single-item, interactive** enrichment, and every new worker class
-violates one of those assumptions.
-
-### Tiers
-
-| Tier | Used for |
-|------|----------|
-| Small | JSON, CSV, YAML, XML, IoT, classification |
-| Medium | Code, email, chat, financial, summarisation |
-| Large | PDFs, Office documents, web pages, reasoning |
-| ~~Multimodal~~ | Images, visual PDFs, OCR — **deprecated as a tier** |
-| ~~Omni~~ | Audio, video — **deprecated as a tier** |
-| Embedding | Vector generation — **see the warning below** |
-
-> **The multimodal and omni tiers are obsolete.** They existed because text models were text-only.
-> Current model families are natively multimodal at every size, so modality is a *capability* to
-> validate, not a tier to route to. Routing should select on **capacity × required capabilities**.
-> See [model-catalog.md](#model-catalog).
-
-### Fallback chains
-
-Each path has an ordered chain evaluated left to right; the first available model serves. A
-provider outage degrades quality or cost, not availability.
-
-**Two exceptions where fallback is unsafe:**
-
-1. **Embeddings must never fall back.** Different models produce incomparable vector spaces. Defer
-   with `embed_status = pending` instead. See [versioning](#versioning-staleness).
-2. **Regulated content must never fall back.** Falling through to a third-party provider is an
-   undisclosed transfer. See [compliance](#privacy-compliance).
-
-### Two credential classes
-
-| Class | Enrich worker | Held where |
-|-------|:-------------:|------------|
-| **Integration credentials** (OAuth) | must **not** have | gateway / fetch worker, via proxy |
-| **AI provider credentials** | **must** have today | resolved per-item, cached |
-
-The invariant is "zero *integration* credentials". The proposed fix is an **LLM proxy** mirroring
-the integration proxy, after which no worker holds a secret of either class.
-
-### Collisions with the worker design
-
-| Intersection | Problem |
-|--------------|---------|
-| Per-item routing in a shared pool | Every message resolves user → agent → tier → engine → credentials. Workers cannot be pinned to a model |
-| **Head-of-line blocking** | One tenant's rate-limited provider stalls shared workers and starves everyone else. Needs per-(user, engine) concurrency caps |
-| Credential cache × scaling | The per-worker cache means going from 2 to 40 workers multiplies credential fetches 20× |
-| **Bulk operations spend user money** | A 50k-item backfill through a large tier on a user's own key is a large unbudgeted bill. Needs estimation up front, budget caps, forced tier-downgrade for bulk paths |
-| Retry × fallback | Chain exhaustion triggers retry; the retry may land on a different model. Same input, different output — corrosive for reprocess |
-| Worker vs model capacity | Scaling enrich workers past pod capacity relocates the queue from the broker to the model tier, where it is less observable |
-
-
----
-
-## Versioning & Staleness
-
-Versioning exists in exactly two places today: data items get a new version per mutation with
-diff tracking, and the temporal graph stamps facts with `valid_at` / `invalid_at`. Everything
-*between* — every chunk, embedding, entity, claim, summary and facet — is produced once and never
-reconsidered.
-
-### The rule
-
-A derived artifact is a function of **two** inputs:
-
-```
-artifact = f(source_version, generator_version)
-```
-
-Change either and the artifact is stale. Without recording both, "is this embedding still valid?"
-is unanswerable — which is why config changes today silently apply only to future data.
-
-**Generator version is compound**, and every component independently invalidates output: agent
-prompt · model identity *and weights* · output schema · embedding model · normalization schema ·
-chunking strategy · **parser** (different parsers extract different text from the same PDF).
-
-### Four version surfaces
-
-| Surface | Changes when | Status |
-|---------|--------------|--------|
-| **Source content** | upstream doc revised, message edited, ticket updated | partial — data items version; connector revisions don't upsert |
-| **Generators** | prompt, model, schema, parser or chunker changes | **untracked** |
-| **Schemas** | normalization target evolves | designed — versioned, never mutated in place |
-| **Facts** | world changes, or we learn we were wrong | partial — valid-time only |
-
-### Embeddings: the one that is actually broken
-
-Embeddings are not merely stale-able — they are **incomparable across models**. A vector from one
-embedding model and one from another live in different spaces with different dimensionality.
-Cosine similarity between them is a number, and that number is meaningless.
-
-**The documented fallback chain switches between a local embedder and a cloud one.** For
-generation that is graceful degradation; for embeddings it silently corrupts ranking, with no
-error raised and no way to identify affected rows after the fact.
-
-```
-embed request ──┬── normal ──▶ local embedder   (space A, dim 768)
-                └── outage ──▶ cloud embedder   (space B, dim 3072)
-                                     ↓
-                            ONE vector index — mixed spaces
-                                     ↓
-                            similarity search returns nonsense
-```
-
-Three consequences:
-
-1. Every embedding row must carry `model_id` and `dim`, and search must filter to a single space.
-   Without the column, affected rows cannot even be identified retroactively.
-2. **Embeddings must not silently fall back.** If the primary embedder is unavailable, defer with
-   `embed_status = pending` — never substitute a different space.
-3. Changing embedding model is a **corpus-wide migration**: build the new index alongside, then
-   swap. Never mix.
-
-### Knowledge graph: valid time exists, transaction time does not
-
-| Question | Needs |
-|----------|-------|
-| "Who was CEO in 2024?" | valid time — **have it** |
-| "What did we believe on March 1?" | transaction time — partial |
-| "When did we learn we were wrong?" | both — **gap** |
-
-**Nothing invalidates facts when a source is revised.** If a document is superseded, facts
-extracted from the old version keep `invalid_at = null` — they remain true forever. Temporal
-queries then return confidently wrong answers, which is worse than returning nothing. Source
-revision (W8) must set `invalid_at` on facts derived from the superseded version.
-
-A harder case sits behind it: **entity resolution decisions are themselves versioned claims.** If
-the graph merges two people and later learns they are distinct, an un-merge is required — and
-merges are lossy. Recording the merge as a retractable, evidence-bearing decision rather than a
-destructive edit is the only way this stays recoverable.
-
-### The staleness model
-
-The concrete deliverable — what makes W7 targetable rather than a full-corpus rebuild:
-
-| Field | Purpose |
-|-------|---------|
-| `source_id`, `source_version` | which content produced it — a **list** where several sources contributed |
-| `generator_version` | what was **intended** — FK to the immutable generator registry |
-| `served_by_model`, `fallback_depth` | what **actually ran**, because the chain may have substituted |
-| `produced_at` | transaction time |
-| `status` | `current` · `superseded` · `stale` · `failed` |
-
-An artifact is stale when either version moves. A sweep marks affected rows; W7 rebuilds by
-priority. Without this, "we changed the summarization prompt" means either re-running the entire
-corpus or living with permanent inconsistency — and at 50M rows the first option is not available.
-
-### The fingerprint is a change detector, not a record
-
-`generator_version = sha256(canonical_json({prompt, model_id, schema, parser_version, ...}))` tells
-you *that* two artifacts were produced differently. It cannot tell you *how*.
-
-Knowing an artifact came from `a3f2…` and another from `b7c1…` does not let you debug a bad
-summary, reproduce a result, roll back a regression, or answer "what instructions produced this
-clinical summary?" — which is a real question in a regulated context.
-
-#### A generator registry
-
-Immutable and append-only, keyed by the fingerprint:
-
-```
-generator_versions
-  generator_version      PK — the fingerprint
-  agent_id
-  prompt_text            the actual prompt, not a reference to a mutable one
-  model_id, provider     the CONFIGURED model
-  output_schema
-  parser_version, chunker_version, embedder_id
-  processing_flags
-  created_at, created_by
-```
-
-Every derived artifact holds a foreign key into it. The full configuration that produced any
-artifact in the corpus is always reconstructible, and a prompt change is a new row rather than an
-edit — a mutable prompt breaks the guarantee the fingerprint exists to provide.
-
----
-
-### The bug: the fingerprint records intent, not what happened
-
-This one matters more than it looks.
-
-The fingerprint is computed from the **configured** model. But the fallback chain may have served a
-**different** one — a busy local GPU falls through to a cloud provider, and the artifact is written
-as though nothing happened.
-
-```
-generator_version = a3f2…    ← says "gemma, medium tier"
-actually served   = a cloud model, two hops down the chain
-recorded          = nothing
-```
-
-So two artifacts with **identical fingerprints** can have been produced by different models. That
-breaks the core assumption of the staleness model: that equal fingerprints imply equivalent
-provenance.
-
-The usage record already captures `serving_model` — but on the *inference event*, not on the
-*artifact*. The artifact is what survives, and it is what a rebuild decision reads.
-
-#### Fix
-
-Record both on the artifact:
-
-| Field | Meaning |
-|-------|---------|
-| `generator_version` | What was **intended** — the fingerprint, FK to the registry |
-| `served_by_model` | What **actually ran** |
-| `fallback_depth` | `0` means the primary served it |
-| `under_fallback` | Derived — `served_by_model ≠ configured` |
-
-This makes "artifacts produced under fallback" a **selector for reprocess**, which is a genuinely
-useful cleanup: after an outage, rebuild exactly the artifacts that degraded, and nothing else.
-
----
-
-### Derived artifacts need history, not just current state
-
-Reprocess overwrites. That is the obvious implementation and it loses three things:
-
-- **Rollback.** A prompt change that made output worse cannot be undone
-- **Comparison.** Evaluating whether a change helped requires old and new side by side
-- **The regulated question.** "What did the system say in March?" has no answer
-
-Keep the **previous** version of each derived artifact by default, with retention configurable per
-artifact type. Reprocess writes a new version and demotes the old rather than replacing it.
-
-Storage is the objection, and it is real at fifty million rows — so make it a policy: summaries and
-claims keep history, chunk embeddings do not. The expensive ones to regenerate are the cheap ones
-to keep.
-
-### Two more leaks
-
-- **Compressed summaries.** A summary derived from N items goes stale when any one is revised or
-  deleted — and deleting the original does not remove its content from the prose. Summaries must
-  record their `(source_id, version)` list.
-- **Query provenance.** A cited RAG answer cannot be reproduced or audited unless the index
-  versions, model versions and retrieval parameters used are recorded with it.
-
-### Deletion vs history
-
-Hard deletion breaks version history; soft deletion fails erasure requests. The workable split is
-to **hard-delete content and retain a metadata-only tombstone** — id, versions, timestamps,
-reason — so lineage stays intact and no user content survives.
-
----
-
-### Requirements
-
-- **FR-VER-1** Every derived artifact MUST record the complete configuration fingerprint that
-  produced it, as a reference to an **immutable** generator registry.
-- **FR-VER-2** The generator registry MUST store the full configuration — prompt text, model,
-  schema, parser and chunker versions — so any artifact's provenance is reconstructible. Registry
-  entries MUST NOT be edited; a change is a new entry.
-- **FR-VER-3** Every derived artifact MUST record the model that **actually served** it, not only
-  the one configured, together with the fallback depth reached.
-- **FR-VER-4** Artifacts produced under fallback MUST be identifiable as a selector for reprocess.
-- **FR-VER-5** Derived artifacts MUST retain at least the previous version, with retention
-  configurable per artifact type.
-- **FR-VER-6** Reprocess MUST write a new version and supersede the old, not overwrite it.
-
-
----
-
-## Retrieval Quality — Feedback and Conflict
-
-Two things the design detects but never acts on: whether an answer was any good, and what to do
-when sources disagree.
-
-### Feedback
-
-Nothing currently captures whether a result was useful. That is the signal that would evaluate a
-[prompt override](#ingestion-workers), justify a reranker, or tell you an index type is not
-earning its cost — and it is cheap to collect at retrieval time if designed in early, and
-impossible to collect retroactively.
-
-| Signal | Kind | Cost to collect |
-|--------|------|-----------------|
-| Explicit rating on an answer | strong, sparse | a thumb |
-| Citation opened | implicit, dense | one event |
-| Result opened, then a refined query | implicit — a **negative** signal | free |
-| Answer copied or acted on | strong, rare | one event |
-| Query abandoned with no interaction | weak negative | free |
-
-**The refinement signal is the most useful and the most overlooked.** A user who searches, opens
-nothing, rephrases and searches again has told you the first result set was wrong — with no rating
-and no complaint.
-
-#### Feedback cannot be pooled across tenants
-
-The obvious use is to learn a better ranking. The obvious implementation is to learn it from
-everyone's feedback at once.
-
-**That leaks.** A model tuned on one tenant's click behaviour encodes what their corpus contains and
-what they look for. Ranking learned across tenants is a side channel, and a subtle one — nobody
-sees another tenant's document, but the ranking function carries information about it.
-
-So: feedback is **tenant-scoped by default**. Cross-tenant learning is opt-in, aggregated, and
-should probably not exist in v1 at all.
-
-#### What it is safe to use immediately
-
-- **Evaluation, not training.** Feedback against a golden set tells you whether a prompt or
-  reranker change helped — without any model consuming it
-- **Per-tenant reranking signals** — a document repeatedly chosen for similar queries in *this*
-  workspace
-- **Index-value measurement** — if the question index never contributes to a chosen citation, it is
-  not paying for itself
-
-### Conflict
-
-The [claim index](#index-construction) detects contradictions. Nothing says what to do with one.
-
-Two sources say the approval threshold is $5,000 and $10,000. Someone asks. What comes back?
-
-#### Resolve what is resolvable; surface the rest
-
-| Conflict | Resolution |
-|----------|-----------|
-| **Temporal** — the same fact changed over time | Already solved: `valid_at` / `invalid_at`. Not a conflict, a history |
-| **Supersession** — a document revised | The [mutation path](#ingestion-workers) invalidates facts from the superseded version |
-| **Source authority** — a system of record disagrees with a chat message | Rank by **declared source authority**, per producer or connection |
-| **Genuine disagreement** — two authoritative sources differ | **Surface both.** Do not pick |
-
-#### Source authority is declared, not inferred
-
-A producer carries an authority level. The HR system is authoritative for employment facts; a Slack
-message mentioning someone's title is not. That is a configuration a human makes, not something to
-infer from confidence scores.
-
-Without it, "most recent wins" becomes the default — which means a passing remark in chat overrides
-the system of record because it arrived later.
-
-#### Never silently pick one
-
-When authority does not separate them, the answer says so:
-
-> The approval threshold is **$10,000** according to the Finance Policy (updated March),
-> though the Procurement Handbook [2] states $5,000.
-
-**A confident wrong answer is worse than an uncertain right one.** The system knows there is a
-conflict — the claim index found it — and hiding that to produce a cleaner sentence is the failure
-mode this whole design has been avoiding everywhere else.
-
-### Requirements
-
-- **FR-QUAL-1** Retrieval MUST capture explicit and implicit feedback, including query refinement
-  as a negative signal.
-- **FR-QUAL-2** Feedback MUST be tenant-scoped. Cross-tenant learning MUST be opt-in and MUST NOT
-  be enabled by default.
-- **FR-QUAL-3** Feedback MUST be usable for evaluation without being consumed by a model.
-- **FR-QUAL-4** Producers MUST carry a declared source-authority level.
-- **FR-QUAL-5** Detected conflicts MUST be resolved by authority where it separates them, and
-  **surfaced with both positions** where it does not.
-- **FR-QUAL-6** An answer MUST NOT silently present one side of a detected conflict.
-
-
----
-
-## Multi-Language
-
-Absent from the design until now, and **Phase 1 relevant** — because two of the decisions it forces
-are made when the first row is written, and both are corpus migrations afterwards.
-
-A system ingesting mailboxes and chat across an international organisation gets multilingual on day
-one, whether or not it was designed for.
-
-### The two Phase-1 decisions
-
-#### 1. The lexical index needs a language per row
-
-Postgres full-text search takes a **language configuration** — it determines stemming and stop
-words. Index German text as `english` and stemming is wrong, stop words are wrong, and BM25 quietly
-underperforms in a way no error reveals.
-
-So `language` is a **column, set at ingest**, before the lexical index is built. Detected
-per item, overridable, and defaulting to a configured project language rather than to `english`.
-
-Retrofitting means re-indexing the corpus.
-
-#### 2. Embedding model choice determines cross-lingual retrieval
-
-A monolingual embedder places "invoice" and "Rechnung" in unrelated regions. A multilingual one
-places them near each other, so a query in one language retrieves documents in another.
-
-That is a product decision disguised as a model choice — and per
-[versioning](#versioning-staleness), **changing the embedding model is a corpus-wide migration**,
-not a setting. It is made in Phase 1 whether deliberately or by default.
-
-| Approach | Cross-lingual retrieval | Cost |
-|----------|------------------------|------|
-| **Multilingual embedder** | Works | Usually slightly weaker monolingual quality |
-| Per-language embedders | **Fails across languages** — separate vector spaces | Better per-language quality |
-| Translate then embed | Works | Extra inference per item, translation loss, and the original is what you must cite |
-
-**Recommend a multilingual embedder** unless a deployment is genuinely single-language. The
-per-language option is the [vector-space trap](#versioning-staleness) in a new costume: separate
-spaces that cannot be compared, arrived at deliberately this time.
-
-### What else changes
-
-| Area | Consideration |
-|------|--------------|
-| **Chunking** | CJK has no word spaces; sentence boundaries differ. A splitter tuned for English produces bad chunks elsewhere |
-| **Extraction prompts** | Does the agent answer in the source language or a canonical one? **Canonical for structured fields, source language for quoted content** — otherwise facets are unfilterable |
-| **Normalization** | Dates (`03/04` is ambiguous), numbers (decimal comma), name order, addresses |
-| **Entity resolution** | The same organisation across scripts. Transliteration is a real matching problem |
-| **Retrieval** | Query language may differ from corpus language — the reason the embedder choice matters |
-| **Citations** | Cite the original, never a translation. The user must be able to check it |
-
-### Detection
-
-Deterministic first, as everywhere else: source metadata (an email declares a charset and often a
-language), then a fast statistical detector, then the model only for genuinely ambiguous short
-text. Store confidence alongside, and mark `unknown` rather than guessing `english` — a wrong
-language label is worse than an absent one, because it silently mis-stems.
-
-### Requirements
-
-- **FR-LANG-1** Every item MUST carry a detected language with confidence, set at ingest, before
-  lexical indexing.
-- **FR-LANG-2** Language MUST default to a configured project language, never to a hardcoded one.
-- **FR-LANG-3** The lexical index MUST use the item's language configuration.
-- **FR-LANG-4** Undetectable language MUST be recorded as `unknown`, not guessed.
-- **FR-LANG-5** Structured extraction output MUST use canonical values; quoted content MUST retain
-  its source language.
-- **FR-LANG-6** Citations MUST reference the original text, never a translation.
-
-
-
-# Part V · Lifecycle
-
-*Removing things, correctly*
-
-
----
-
-## Deletion
-
-The most destructive operation in the system, and the one where "it seemed to work" is least
-trustworthy — because what remains after a bad delete is invisible.
-
-### Two different operations wearing one word
-
-| | **Cleanup** | **Erasure** |
+| | Smaller (e.g. 768) | Larger (e.g. 3072) |
 |---|---|---|
-| Intent | "I don't want this any more" | "This person has a legal right to have it gone" |
-| Initiated by | user or admin | subject request, or a compliance process |
-| Grace period | **yes** — recoverable window | **no** — immediate |
-| Legal hold | respected, deletion deferred | respected, returns **partial completion** |
-| Audit weight | normal | **the record is the deliverable** |
-| Verification | optional | **required** |
+| Index size and memory | Lower | ~4× |
+| Filtered ANN latency at scale | Better | Worse — and this is the named load-bearing risk |
+| Recall ceiling | Slightly lower | Higher |
 
-Conflating them produces one of two failures: a GDPR erasure that sits in a grace bin for thirty
-days is not an erasure, and a user who fat-fingers "delete project" and cannot undo it has been
-badly served. Different intents, different behaviour, one API with a `mode`.
+Given that *"Postgres is the shared fate"* and filtered ANN over tens of millions of rows is the
+scaling risk already on record, **the smaller dimension is the better default** — with the caveat
+that it should be measured on a real corpus in the sandbox, which is exactly
+the A/B comparison that surface exists for.
 
-### Scope
+#### What a cloud-only MVP costs, stated rather than discovered
 
-| Scope | Endpoint |
-|-------|----------|
-| One item | `DELETE /api/v1/data/{id}` |
-| A selection | `POST /api/v1/deletions` with a selector |
-| Everything in a project | `DELETE /api/v1/projects/{id}?purge=true` |
-| Everything for a subject | `POST /api/v1/deletions` with `subject` |
-| Org offboarding | `DELETE /api/v1/organizations/{id}?purge=true` |
+| Claim in the positioning | Status under a Gemini-only MVP |
+|--------------------------|-------------------------------|
+| Self-hosted | Still true — the platform runs locally |
+| **Air-gapped** | **Not true in MVP.** Every enrichment call leaves the machine |
+| **$0 local inference** | **Not true in MVP.** Flash is cheap, not free |
+| Regulated / BAA workloads | **Requires a provider agreement** — with no local engine there is nothing to fail closed *to*, so the allow-list refuses rather than degrades |
 
-Beyond a single item, **deletion is a job, not a request** — cascading across embeddings, chunks,
-entities, graph facts, summaries and blobs takes time and must survive a worker restart. It reuses
-the run entity from [bulk operations](#bulk-operations): checkpointed, resumable, pausable, with
-per-item errors.
+This is a reasonable MVP trade: one provider is dramatically simpler, and Flash plus its embeddings
+are cheap enough that cost is not the constraint at MVP volume. **But air-gap and $0 are load-bearing
+in the competitive positioning**, and they return only when the local engine does.
 
-#### The selector
+The mitigation is already designed and now partly proven: the catalog seam, `model_id` on every
+artifact, and the per-project allow-list stay in place — and **the Ollama adapter is in production
+from MVP**, pointed at Ollama Cloud. Restoring air-gap later means pointing that same adapter at a
+local endpoint and registering it, not building an integration. The allow-list then prevents a
+regulated project from reaching any cloud provider at all.
 
-```
-selector:
-  data_ids     [...]
-  producer_id  crw_… | whk_… | key_…      everything a source ever wrote
-  project_id
-  case_id
-  tags
-  source
-  access_level
-  time_range   { field: event_time | ingested_at, from, to }
-```
+### Abstract the queue before you need to
 
-**`time_range` must name its clock.** "Delete everything from 2019" means something entirely
-different by ingestion time than by event time once a backfill has happened — the same request
-either deletes three years of history or deletes nothing. Requiring the field makes the ambiguity
-impossible rather than merely documented.
-
-`producer_id` is the one people reach for after a mistake: a crawler misconfigured and ingested the
-wrong site, and the fix is "remove everything that producer wrote."
-
-### Dry-run is mandatory for scoped deletes
-
-Same pattern as [crawler configs](#crawlers), for the same reason:
-
-```json
-POST /api/v1/deletions   { "selector": {...}, "dry_run": true }
-
-{ "would_delete": { "items": 12403, "embeddings": 91220,
-                    "summaries_affected": 340, "blobs_bytes": "8.2 GB" },
-  "withheld": { "legal_hold": 22, "reason": "matter M-2291" },
-  "shared_entities_retained": 1841,
-  "sample": [ … ] }
-```
-
-A destructive operation whose blast radius is only visible afterwards is not a safe operation. For
-project- and org-scoped purges, dry-run plus explicit confirmation is **required**, not advisory.
-
-### What the cascade actually touches
-
-| Artifact | Behaviour |
-|----------|-----------|
-| Data item | Hard-deleted; a **metadata-only tombstone** remains — id, versions, timestamps, reason |
-| Chunks, embeddings | Deleted |
-| Blobs | Deleted from the object store |
-| **Entities** | **Reference-counted.** An entity mentioned by fifty documents is not deleted because one is — only its contribution is removed |
-| **Memory membership** | Removed. An item held by another memory survives — see [memories](#memories) |
-| **Graph facts** | Facts sourced solely from the item are deleted; facts with other sources have that source removed |
-| **Summaries** | **Marked stale and rebuilt**, not deleted — see below |
-| Derived indexes | Deleted with their source |
-| **Audit records** | **Survive.** They record that the deletion happened; deleting them defeats the purpose |
-
-#### Entities and summaries are where naive deletes go wrong
-
-**Deleting an entity because one of its sources went away destroys knowledge that fifty other
-documents still support.** Reference counting is the difference between removing a contribution and
-removing a fact.
-
-**Summaries are the harder case.** A summary spanning forty items, one of which is erased, still
-contains the erased content in prose. Deleting the summary loses value; leaving it is a compliance
-failure. The right answer reuses machinery that already exists: **mark it stale and let reprocess
-rebuild it from the surviving members.** That is exactly why derived artifacts must record their
-source set as a *list* from the first row — see
-[privacy foundations](#privacy-foundations).
-
-Without that list, a summary is unerasable, because nothing records that the paragraph someone
-wants removed came from the document they are asking about.
-
-### Legal hold returns partial completion
-
-An erasure touching a case under hold does **neither** silent thing:
-
-```json
-{ "status": "partial",
-  "deleted": 11890,
-  "withheld": [ { "case_id": "cas_…", "items": 513,
-                  "hold": "hold_…", "authority": "Matter M-2291" } ],
-  "requeued_on_release": true }
-```
-
-Silently deleting held data destroys evidence someone is legally obliged to preserve. Silently
-ignoring the request is a compliance failure dressed as success. The only defensible behaviour is
-to do what is possible and say precisely what was not — and to re-queue automatically when the hold
-lifts.
-
-### Verification
-
-After an erasure the job runs a verification pass: no derived artifact references the deleted
-source, no blob remains, no embedding row survives, no graph fact retains it as its only source.
-
-"We deleted it" is a claim someone may have to stand behind. Verification turns it into a checkable
-one, and the result belongs in the audit record.
-
-### Permissions
-
-| Scope | Required |
-|-------|----------|
-| Own item | owner |
-| Selection within a project | `member` for own data, `admin` for others' |
-| Project purge | `admin` |
-| Org purge | `owner`, plus typed confirmation |
-| Subject erasure | `admin`, or an authenticated compliance process |
-
-Every deletion is audited with actor, scope, mode, counts and withholdings — and audit is the one
-thing a delete never touches.
-
-### API
-
-```
-DELETE /api/v1/data/{id}                     single; idempotent, returns already_gone
-POST   /api/v1/deletions                     job — selector, mode, dry_run
-GET    /api/v1/deletions/{job_id}            progress, counts, withheld, errors
-POST   /api/v1/deletions/{job_id}/confirm    required for project and org scope
-POST   /api/v1/deletions/{job_id}/cancel     cleanup mode only, within the grace window
-DELETE /api/v1/projects/{id}?purge=true      convenience over the job API
-DELETE /api/v1/organizations/{id}?purge=true offboarding
-```
-
-The UI is a client of exactly these — dry-run preview, a confirmation step naming what will go and
-what is held, progress while it runs, and the result with what was withheld and why.
-
-### Requirements
-
-- **FR-DEL-1** Deletion MUST distinguish **cleanup** (grace period, cancellable) from **erasure**
-  (immediate, verified).
-- **FR-DEL-2** Deletion beyond a single item MUST be a checkpointed, resumable job.
-- **FR-DEL-3** A selector `time_range` MUST name which clock it applies to.
-- **FR-DEL-4** Scoped deletion MUST support dry-run, and project- and org-scoped purges MUST
-  require it plus explicit confirmation.
-- **FR-DEL-5** The cascade MUST reach chunks, embeddings, blobs, derived indexes, entity
-  contributions and graph facts.
-- **FR-DEL-6** Entities MUST be reference-counted; an entity supported by other sources MUST NOT be
-  removed.
-- **FR-DEL-7** Summaries containing deleted content MUST be marked stale and rebuilt, not left
-  intact and not silently discarded.
-- **FR-DEL-8** Deletion MUST leave a metadata-only tombstone and MUST NOT delete audit records.
-- **FR-DEL-9** Erasure touching held data MUST return partial completion naming what was withheld,
-  and MUST re-queue on release.
-- **FR-DEL-10** Erasure MUST run a verification pass, and the result MUST be recorded in the audit
-  trail.
-
-
-
-# Part VI · Access and privacy
-
-*Who can see what, and what we can prove*
-
+NATS JetStream and Pub/Sub differ in ack deadlines, ordering guarantees and redelivery semantics.
+The cloud variant already replaces one with the other, so the queue must sit behind an interface —
+otherwise there are two ingestion paths to keep correct and the worker retry policy has to be
+written twice.
 
 ---
 
-## Tenancy & Privacy
+---
 
-### Two tenancy models are in play
+## Deployment Variants
 
-The host-SaaS contract states that end-user RBAC is *enforced by the host*. That is coherent when
-mem-dog is a backend behind someone else's product. It is **not** what a team model needs.
+The variants are not scaled versions of each other — they make different technology choices and
+therefore support different subsets of the use-case families.
 
-| | Host-SaaS model | Team model |
-|---|---|---|
-| Who enforces RBAC | the host application | **mem-dog** |
-| Keys held by | host backend | per user |
-| `project` means | host workspace | team space |
-| Privacy unit | project boundary | **per item, per member** |
+### Role fulfilment by variant
 
-**Resolution: one enforcement path.** mem-dog always enforces; the host model becomes the case
-where a service identity is a single broad principal. Two implementations kept in sync is the
-failure mode to avoid.
+| Role | Local | GKE (dev today) | Cloud (prod v1) |
+|------|-------|-----------------|-----------------|
+| `record store` | Postgres in compose | Supabase in-cluster | Cloud SQL PG16 + pgvector |
+| `data access` | Kong + PostgREST | Kong + PostgREST | Kong + PostgREST on Cloud Run |
+| `blob store` | filesystem | GCS | GCS |
+| `durable queue` | **in-process** — one instance, nothing to distribute | NATS in-cluster | **Pub/Sub** |
+| `inference` | **Ollama local** — free | Ollama pods, tiered | **Ollama Cloud + Gemini**, no GPU pool |
+| `temporal graph` | off | Neo4j optional | **deferred** |
+| `credential broker` | Nango in compose | Nango in-cluster | Nango on Cloud Run |
+| `identity` | **local password** | GoTrue | **Firebase Auth** |
+| `conversational agent` | optional | DigiMe in cluster | **cut** |
+| `crawl scheduling` | in-process ticker | cluster CronJob + advisory lock | managed scheduler → HTTP |
+| `crawl execution` | background task | Deployment | **Cloud Run Jobs** — a 3h backfill is not a request |
+| `rate-limit store` | in-process | Redis pod | Memorystore |
+| `secrets` | `.env` | k8s Secrets | Secret Manager |
+| `scaling` | n/a | KEDA | Cloud Run, `min-instances ≥ 1` |
 
-### Hierarchy
+### The three
 
-```
-Organization (org_<ulid>)          — team or company
-  ├── Members (user_id + role)     — owner / admin / member / viewer
-  └── Project (proj_<ulid>)        — team space or host workspace
-        ├── Memory                 — scoped to project
-        ├── Data                   — associated with memory
-        └── Embedding              — scoped to project
-```
+**Local** — laptop or Mac Mini. Single user or household. Docker Compose, local models, filesystem
+blobs. **$0 recurring and genuinely air-gap capable** — the only variant that satisfies the privacy
+pillar in full, and the only one that sidesteps the compliance apparatus entirely.
 
-Scoping is applied by passing `project_id` on create and `?project_id=` on list endpoints.
-Omitting it returns everything the user owns, keeping single-tenant deployments unchanged.
+**GKE** — dev today. Self-hosted cluster across six namespaces, tiered inference pods, KEDA
+autoscaling. Richest capability set — the only variant running every component at once.
 
-### Privacy holes that only appear once orgs are teams
+**Cloud** — prod v1. Serverless: Cloud Run plus managed services, no cluster at all. Reverses the
+dev topology. Two components were forcing a cluster; one was cut and the other verified
+request-scoped.
 
-**Connection ownership.** The proxy takes `?user_id=` and fetches that user's credentials. If
-authorization is "authenticated to the org" rather than "owns this connection", an admin can read
-a member's mail through the proxy. Connections need `personal` vs `shared` scope enforced **at the
-proxy**, not hidden in the UI.
+### Which variant serves which use case
 
-**Derived-fact leakage.** A fact extracted from a private document, surfaced to a teammate through
-the graph, is a leak with no audit trail.
+| Family | Local | GKE | Cloud | Note |
+|--------|:-----:|:---:|:-----:|------|
+| A · Personal memory | ● | ● | ○ | Cloud loses conversational access with the agent cut |
+| B · Team memory | — | ● | ○ | Cloud defers the temporal graph, weakening institutional recall |
+| C · Agent infrastructure | ● | ● | ● | MCP works everywhere |
+| D · Embedded backend | — | ○ | ● | Cloud is the intended host-SaaS target |
+| E · Governance | ○ | ○ | ● | Managed tier makes audit and residency tractable |
 
-**Compression leakage.** A summary spanning mixed-ACL items must take the *intersection*, or it
-leaks by construction — and deleting the original does not remove it from the prose.
+### Where security artifacts live
 
-**Cross-tenant entity merging.** A single-database graph means isolation is property-filtering
-only. Two orgs both holding "Acme Corp" must not merge — and LLM entity resolution is actively
-trying to merge them.
+"Secrets go in Secret Manager" is too coarse. Five distinct classes with different requirements,
+and conflating them is how a KEK ends up retrievable as a string.
 
-**Retrieval filtering.** ACLs must be applied *in* the query. Post-filtering after ranking
-silently breaks top-K and leaks existence.
+| Artifact | Local | GKE | **Cloud (GCP)** |
+|----------|-------|-----|-----------------|
+| **Key-encryption key (KEK)** | file, dev-only | k8s Secret | **Cloud KMS** — never leaves |
+| **Per-tenant data keys (DEK)** | wrapped, in the record store | same | same — wrapped by KMS, ciphertext in Cloud SQL |
+| **Per-tenant secrets** — AI provider keys, webhook signing | envelope-encrypted in the record store | same | same — **not** Secret Manager |
+| **OAuth tokens** | credential broker's own store | same | broker's Cloud SQL, AES-256-GCM |
+| **Platform secrets** — broker encryption key, third-party platform keys | `.env` | k8s Secret | **Secret Manager** |
+| **JWT signing key** | file | k8s Secret | **Cloud KMS asymmetric signing** |
+| **`md_*` API keys** | hashed in the record store | same | same — hashed, never encrypted |
+| **Policy and settings** | record store | same | Cloud SQL — not secrets |
 
-### The unifying rule
+#### Secret Manager and KMS are not interchangeable
 
-**ACL inheritance follows the connection, not the container.** A connection carries a scope
-(`personal` or `shared`) set at connect time. Personal mail connected inside a team org produces
-private items regardless of project defaults.
+**Secret Manager stores and returns a value.** Correct for something the application must hold —
+the credential broker's encryption key, a platform-level third-party key.
 
-This is what reconciles personal and team memory, and it closes the proxy hole in the same move.
+**KMS performs cryptographic operations without releasing the key.** Correct for the KEK, because
+the whole point of envelope encryption is that the key-encryption key never enters application
+memory. Putting a KEK in Secret Manager gives you one string away from total compromise, which is
+the situation envelope encryption exists to avoid.
 
-### Access levels
+Same reasoning for JWT signing: **KMS asymmetric signing** means the private key never exists in a
+process, so a memory disclosure cannot forge tokens.
 
-| Level | Visibility |
-|-------|-----------|
-| `private` | Only the owner (default) |
-| `shared` | Owner + users in `shared_with` |
-| `public` | Any authenticated user **in the organization** — internal, not public |
-| `restricted` | Only users in `shared_with` |
+#### Per-tenant secrets do not belong in Secret Manager
 
-**The `public` level is renamed `org`**, and `public` becomes genuine external sharing — see
-[access-model.md](#access-model-principals-sharing-and-settings), which also covers principals, groups, share links and the
-admin dual-role.
+Secret Manager is built for a bounded set of platform secrets, not one entry per tenant per
+provider. Wrong quota model, wrong access model, and no way to scope reads per tenant.
 
-### Scale posture
+Per-tenant secrets are **envelope-encrypted in the record store**: plaintext → tenant DEK → wrapped
+by the KMS KEK → ciphertext in Cloud SQL. Rotation is a KMS key version bump plus a DEK re-wrap,
+not a re-encrypt of the corpus.
 
-Build on the existing capacity plan rather than replacing it — quotas before replicas,
-`project_id` always in the vector filter path, temporal graph default-off for host workspaces, a
-connection pooler, per-org metrics, and a soak harness from 100 to 1,000 projects.
+#### Two credentials that should not exist at all
 
-| Dimension | Target |
-|-----------|--------|
-| Active workspaces | ~1,000 with traffic in the last 30 days |
-| Ingest | 50–100 docs/min sustained; bursts to 300/min for ≤5 min |
-| Corpus | Median workspace ≤50k embedding rows; p95 ≤500k; cluster ≤50M |
-| Search | p95 semantic/hybrid **< 800 ms** excluding generation |
-| Availability | API 99.5% monthly; memory soft-fail preferred over cascade |
+| Removed by | What it removes |
+|-----------|-----------------|
+| **Workload Identity** | Service account **key files**. Cloud Run services assume an identity; there is no key to leak, rotate or commit |
+| **Cloud SQL IAM database authentication** | The database **password**. The service account authenticates directly |
 
-**"The record store is the shared fate."** Colocating vector and lexical indexes with records is
-what makes the low infrastructure floor possible — and it is why every workspace competes for the
-same instance. Filtered ANN search over tens of millions of rows is the load-bearing risk.
+Both matter given the launch blocker already on record — secrets committed to git history. The best
+defence is a credential that does not exist.
+
+Signed URLs still require the service account to hold `roles/iam.serviceAccountTokenCreator` **on
+itself**, which is easy to miss and fails only at runtime.
+
+#### Where the audit log physically lives
+
+[Privacy foundations](#privacy-foundations) requires an append-only audit record on
+every read, with retention in years. That is not Cloud Logging — wrong retention model, awkward for
+"who accessed this record in March", and it is operational logging rather than a compliance
+artifact.
+
+**Write to Cloud SQL, export to BigQuery.**
+
+- The write is **transactional with the read it records**, so no code path can skip it
+- Immutability is enforced by the database: the application role holds `INSERT` and `SELECT` on the
+  audit table and **no `UPDATE` or `DELETE` grant**. Immutable by permission, not by discipline
+- Cloud SQL keeps a hot window; BigQuery holds the long tail cheaply and answers the year-scale
+  question
+- Separate from `tracing` memories entirely — those are sampled, three-day, and observability
+
+### Two capability gaps worth naming
+
+**Cloud cuts the conversational agent**, so "reach your memory from any messaging app" — a
+headline capability and the only genuinely unique one — exists only on self-hosted variants.
+
+**Cloud defers the temporal graph**, one of the two differentiated capabilities.
+
+Prod v1 therefore ships without the two features that most distinguish the product. That may be
+correct for a first release, but it should be a stated trade rather than an emergent one.
+
+### Launch blockers on record
+
+- **Committed secrets** in `k8s/nango/nango-secrets.yaml` and `k8s/lean/*` — present in git
+  history, so **rotation** is required, not deletion
+- **`minReplicaCount: 0`** across the autoscaling manifests, which fights any availability target
+- **Gmail watch state persisted only to `/data`**, which does not survive beyond one volume — the
+  dead `_WATCH_BLOB_KEY` constant shows blob storage was the original intent
+
+### Verify before provisioning
+
+Deploy the credential broker image to Cloud Run **in dev first**, to confirm the self-hosted build
+tolerates a request-scoped lifecycle. It is the one component whose internals are outside our
+control, and the cloud topology assumes it holds no background workers.
+
+
+
+
+
+*Sequence, decisions, and the market*
 
 
 ---
-
-## Access Model — Principals, Sharing and Settings
-
-### The rename that has to happen first
-
-Today `public` means *"any authenticated user in the organization."* That is **internal**, not
-public. Once genuine external sharing exists, the same word means two things and someone will make
-a document world-readable believing they made it team-readable.
-
-| Old | New | Means |
-|-----|-----|-------|
-| `private` | `private` | Owner only — default |
-| `shared` | `shared` | Explicit principal list |
-| **`public`** | **`org`** | Everyone in the organization |
-| — | **`public`** | **Genuinely external, via a share link** |
-| `restricted` | `restricted` | Principal list, owner excluded |
-
-Rename before the second meaning exists. Afterwards it is a migration against a field people have
-already reasoned about incorrectly.
-
-### Principals, not user IDs
-
-`shared_with` currently holds user identifiers. That does not survive contact with teams: every
-membership change requires rewriting every shared item, and it silently fails to revoke when
-someone leaves.
-
-Share with a **principal**:
-
-```
-principal = user:<id> | group:<id> | project:<id> | org:<id> | public
-```
-
-Resolution happens at query time, so a group membership change takes effect immediately and
-everywhere — including revocation, which is the direction that matters.
-
-#### Groups
-
-A named set of members within an organization. Sharing with *engineering* rather than enumerating
-eleven people is the difference between an access model people use correctly and one they route
-around.
-
-```
-Group
-  group_id     grp_<ulid>
-  org_id
-  name
-  members      user_id[]          — direct
-  managed_by   manual | scim | idp_claim
-```
-
-`managed_by` matters later: enterprise expects groups to arrive from the identity provider rather
-than being maintained twice.
-
-### Public sharing
-
-Genuinely external sharing is the feature most likely to cause an accidental disclosure, so it
-carries controls the others do not.
-
-```
-ShareLink
-  share_id     shr_<ulid>
-  data_id | case_id
-  created_by, created_at
-  expires_at            default: required, not optional
-  password              optional
-  revoked_at
-  access_count, last_accessed_at
-```
-
-| Control | Behaviour |
-|---------|-----------|
-| **Org policy gate** | Public sharing is **disabled by default at org level**. An admin enables it; some orgs never will |
-| **Expiry required** | A link with no expiry is a permanent disclosure nobody revisits |
-| **Explicit confirmation** | The UI states plainly that the item becomes readable by anyone with the link |
-| **Revocable** | Immediately, and revocation is audited |
-| **Inventory** | Owner and admin can both list *everything currently shared publicly* — the view that catches the mistake made six months ago |
-| **Audited** | Creation, each access, and revocation |
-
-#### Derived artifacts do not follow automatically
-
-Sharing a document publicly must **not** publish its summary, its extracted claims, its entities or
-its graph facts.
-
-This is the derived-artifact ACL rule ([indexes](#index-construction)) meeting sharing: a
-derived artifact carries the ACL of its **most restrictive source**, and a share widens the source
-only. A summary spanning a public document and two private ones stays private — otherwise sharing
-one item leaks two.
-
-The practical consequence: a public share exposes the item and, optionally and explicitly, a
-purpose-built public rendering. Never the internal derived layer.
-
-### The admin who is also a user
-
-One human, two modes — and conflating them is how admin tooling becomes a privacy hole.
-
-```
-identity        a normal user, in an org, with normal data
-    +
-platform grant  platform:read | platform:admin
-```
-
-#### System view shows metadata, not content
-
-| Admin can see | Admin cannot see |
-|---------------|------------------|
-| System health, queue depth, error rates | Item content |
-| Org and project inventory, counts, storage | Search results across tenants |
-| Usage, quota and budget consumption | Summaries, entities, extracted claims |
-| Producer health, connection status | Case contents |
-| Audit records | — |
-| Feature flags, global limits | — |
-
-**A platform admin does not get tenant data by default.** Support tooling that shows customer
-content by default is a privacy violation that arrives disguised as a feature request.
-
-Where content access is genuinely required — an escalated support case, a clinical emergency — it
-goes through **break-glass**: explicit justification, scoped to a subject, time-boxed,
-notified to the data owner, and written to the audit store as its own event type.
-
-#### Mode is explicit and separately audited
-
-The same human acting as a tenant user and acting as a platform admin produces **different audit
-records**. The session carries the active mode; switching is an auditable event. "Was this
-read done as the user or as the operator?" must have an answer.
-
-#### Platform grants are not an org role
-
-`owner`, `admin`, `member`, `viewer` are org-scoped. `platform:*` is orthogonal — a platform admin
-holds no elevated rights inside any org they are not a member of.
-
-This is also what finally retires the global unscoped `API_KEY`: system operations get a real
-identity with real scopes, and every action is attributable.
-
-### Settings taxonomy
-
-Four levels, with the precedence and locking model already used for normalization and model
-configuration.
-
-| Level | Owns | Set by |
-|-------|------|--------|
-| **Platform** | Storage backend, encryption keys, global limits, feature flags | operator |
-| **Org** | Members, groups, roles, quotas, allowed providers, **sharing policy**, retention, connection defaults | owner/admin |
-| **Project** | Defaults, normalization schemas, crawlers, producers | admin/member |
-| **User** | Profile, password, MFA, API keys, own engines, own agent configs, default project, notifications | the user |
-
-**Precedence:** user → project → org → platform, most specific wins, **except where an admin has
-locked a setting.** A locked org setting cannot be overridden below it — that is how "only our
-approved model providers" and "public sharing disabled" are enforced rather than suggested.
-
-#### Account settings, concretely
-
-| Group | Contains |
-|-------|----------|
-| **Identity** | Email, display name, password change, MFA enrolment, linked identities |
-| **Credentials** | API keys — create, list with prefix and `last_used_at`, rotate, revoke. Never re-displayed |
-| **Workspace** | Default org and project, project switcher |
-| **AI** | Engines, model assignments, agent configs — within org policy |
-| **Connections** | Connected sources, **personal vs shared scope**, reauthorise, disconnect |
-| **Sharing** | What I have shared, with whom, and **what is public** |
-| **Privacy** | Export my data, delete my data, view my access history |
-| **Notifications** | Connection failures, quota warnings, share access |
-
-That last privacy group is worth building early even in thin form: a user who can see their own
-access history is a user who can catch a problem you cannot.
-
-### API and UI parity
-
-**Everything settable in the UI is settable through the API**, at the same granularity and with the
-same validation. The UI is a client of the API, never a privileged path.
-
-Two consequences: an embedding host can build its own settings surface, and the settings surface is
-testable without a browser.
-
-Control-plane endpoints:
-
-```
-/organizations  /organizations/{id}/members  /groups  /projects
-/users/me  /users/me/api-keys  /users/me/identities  /users/me/connections
-/shares                    ← inventory, revoke
-/settings/{scope}          ← get/set with lock state
-/platform/health  /platform/orgs  /platform/usage  /platform/audit
-/platform/breakglass       ← justification required
-```
-
-### Requirements
-
-- **FR-ACC-1** The access level currently named `public` MUST be renamed `org`, and `public` MUST
-  mean externally shared.
-- **FR-ACC-2** `shared_with` MUST hold principals — user, group, project, org or public — resolved
-  at query time.
-- **FR-ACC-3** Groups MUST be a first-class primitive within an organization, and MUST support
-  external management for later identity-provider integration.
-- **FR-ACC-4** Public sharing MUST be disabled by default at org level and enabled explicitly.
-- **FR-ACC-5** Share links MUST require an expiry, be revocable, and record creation, each access
-  and revocation.
-- **FR-ACC-6** Owners and admins MUST be able to list everything currently shared publicly.
-- **FR-ACC-7** Sharing an item MUST NOT change the access level of artifacts derived from it.
-- **FR-ACC-8** Platform grants MUST be orthogonal to org roles and MUST NOT confer rights within an
-  organization the holder is not a member of.
-- **FR-ACC-9** A platform admin MUST NOT have access to tenant content by default; content access
-  MUST require break-glass with justification, scope, time limit and audit.
-- **FR-ACC-10** Acting as a platform admin MUST be an explicit, separately audited mode.
-- **FR-ACC-11** Settings MUST resolve user → project → org → platform, and an administrator MUST be
-  able to **lock** a setting against override.
-- **FR-ACC-12** Every setting available in the UI MUST be available through the API at equal
-  granularity.
-- **FR-ACC-13** Users MUST be able to view their own access history.
-
-
----
-
-## Auth & Credentials
-
-### The requirement
-
-Login/password **and** API keys, on a pluggable identity layer.
-
-### Decided: Firebase for login, keys at the gateway, married on identity
-
-| Path | Mechanism |
-|------|-----------|
-| **Login / password** | **Firebase Auth** |
-| **API keys** | Validated at the **API gateway**, created by users themselves |
-| **Inbound (webhooks)** | The **same user-created keys**, configured onto a producer |
-
-The three converge on one canonical identity — that is the marriage, and it happens in the
-`identities` table below rather than at the edge.
-
-#### Consequence 1: Firebase and air-gap are incompatible
-
-Firebase is a hosted service. An air-gapped deployment cannot reach its JWKS endpoint, so token
-verification fails and nobody can log in.
-
-This does **not** invalidate the air-gap claim — it means the claim belongs to the **local variant
-only**, served by a different verifier behind the same seam:
-
-| Variant | Login verifier |
-|---------|----------------|
-| Cloud, GKE | Firebase (RS256, Google JWKS) |
-| **Local / air-gapped** | **Local password** (Argon2id, our own signing key) |
-
-The `TokenVerifier` seam is what makes this two implementations rather than two products. It is
-also why the seam is Phase 1 work even though Firebase does not arrive until later: build it now
-and local costs an implementation; skip it and local costs a fork.
-
-**What must be stated publicly:** air-gapped operation is a self-hosted capability, not a property
-of the hosted product.
-
-#### Consequence 2: gateway API keys are not per-end-user keys
-
-A managed API gateway validates **platform-level** API keys — created in the cloud project, bounded
-in number, and not something an end user mints for themselves. They are the wrong primitive for
-"every user creates their own key", and they do not scale to one per tenant.
-
-Two ways to reconcile that with wanting validation at the edge:
-
-| Option | How | Trade |
-|--------|-----|-------|
-| **A · Key exchange** *(recommended)* | User key → short-lived JWT from a token endpoint → gateway validates it against **our** JWKS, same as it validates Firebase | One verification mechanism at the edge, two ways to obtain a token. Costs one round trip, cacheable for the token's lifetime |
-| **B · Pass-through** | Gateway handles routing, TLS and coarse rate limiting; the application validates `md_*` keys | Simpler, no exchange — but the gateway is no longer doing authentication, only transport |
-
-**Option A is the one that actually marries them.** Both Firebase login and a user API key end up
-as a JWT the gateway verifies against a JWKS, so the backend has exactly one code path for "who is
-this" and the gateway has exactly one for "is this valid".
-
-Under A the gateway still enforces its own platform key for coarse abuse control at the edge. That
-is a different tier from user identity and should not be confused with it.
-
-### Identity is where they marry
-
-Whatever validated the credential, everything resolves to one canonical internal user:
-
-```
-users                          ← canonical, internal, never changes
-  user_id                        (existing UUIDs preserved)
-
-identities                     ← many-to-one
-  (provider, external_id) → user_id
-  provider: firebase | local | apikey | saml
-  UNIQUE(provider, external_id)
-
-credentials                    ← local password auth only
-  user_id, password_hash (Argon2id)
-
-api_keys                       ← user-created
-  key_id, user_id, org_id, project_id
-  key_hash                       SHA-256; high-entropy token, no slow KDF needed
-  prefix                         for display; the key itself is never re-shown
-  capabilities                   data:read · data:write · config:write · admin:*
-  expires_at, last_used_at, revoked_at
-```
-
-A Firebase login and an API key belonging to the same person land on the same `user_id`, with the
-same ACLs and the same tenancy scope. The difference is only what the credential is *permitted* to
-do — which is the capability scope, not the identity.
-
-**Firebase UIDs are 28-character strings and existing IDs are UUIDs.** Making `identities` the
-permanent design rather than migration scaffolding is what turns that from a rewrite into inserting
-rows.
-
-### Inbound uses the same keys — with a caveat
-
-A user-created key can be configured onto an inbound producer, so one credential mechanism serves
-both directions.
-
-The caveat is that **not every provider can present one.** Webhook senders differ:
-
-| Provider capability | Producer auth method | Examples |
-|--------------------|---------------------|----------|
-| Sends custom headers | **`api_key`** — the user's own key | Generic webhooks, most internal systems, ETL |
-| Signs the payload | `signature` — shared secret, HMAC verified | Slack, Stripe, GitHub |
-| Neither — just POSTs | `url_secret` — the `whk_<ulid>` path is the credential | Simple integrations, legacy systems |
-
-So the producer record declares it:
-
-```
-Producer
-  ...
-  inbound_auth   api_key | signature | url_secret | none
-  api_key_id     ← when inbound_auth = api_key
-  signing_secret ← when inbound_auth = signature
-```
-
-**Prefer `api_key` wherever the provider supports it** — it is revocable per key, attributable to a
-user, capability-scoped, and shows up in `last_used_at`. A URL secret is none of those: revoking it
-means re-registering the endpoint with the provider, and it leaks through logs and referrers.
-
-Where signature verification is available it should be used **in addition**, not instead — it
-authenticates the *payload*, which a bearer credential does not.
-
-### Password auth requirements
-
-| Concern | Requirement |
-|---------|-------------|
-| Hashing | **Argon2id** (or bcrypt cost ≥12). Never SHA-family |
-| Brute force | Per-account **and** per-IP rate limiting, exponential lockout |
-| Reset flow | Single-use, short-TTL, side-effect-free tokens |
-| Verification | Email confirmation before first ingest |
-| Enumeration | Identical response for unknown vs wrong password |
-| Sessions | Short access token + revocable refresh token; **revocation list** — pure stateless JWT cannot log anyone out |
-| MFA | TOTP — an expectation at team scale |
-| Policy | Length-first, breach-list check where available |
-
-Most of this comes free with hosted auth and must be **built** for local. That asymmetry is the
-real cost of the air-gapped path.
-
-### API keys under multi-tenancy
-
-Today `md_*` binds to one user. A team system needs scope:
-
-| Key type | Acts as | Use |
-|----------|---------|-----|
-| **User key** | that user, their ACLs | personal scripts, MCP, SDK |
-| **Project key** | project service identity | CI, connectors, host-SaaS |
-| **Org key** | org service identity | admin automation |
-
-Required properties, several of which are gaps:
-
-- **Hashed at rest.** Store a hash, indexed; keep a display prefix separately. "O(1) lookup" reads
-  like a lookup on key value — if plaintext, one read exposes every tenant.
-- **Membership-coupled.** Leaving the org must immediately revoke org access, or offboarding leaks.
-- **Bounded.** Expiry, rotation with overlap, revocation, `last_used_at`.
-- **Never in a browser.** Enforced, not documented.
-- **Capability-scoped** — see [api.md](#api-contract-surfaces).
-
-### Retire the global API key
-
-`API_KEY` grants unscoped access with no `user_id` and bypasses all access control. Tolerable
-single-tenant; in a team system with per-item privacy it is a master key that voids every ACL.
-Anything that logs "who did this" as *nobody* is incompatible with the privacy model.
-
-### Where credentials live — and five problems
-
-| Class | Encryption | Stored in |
-|-------|-----------|-----------|
-| OAuth / integration | AES-256-GCM | credential broker's own database |
-| AI provider keys | symmetric | `{user_id}/engines/{id}.json` — **the blob store** |
-| `md_*` API keys | unspecified | record store, "O(1) lookup" |
-| Global `API_KEY` | none | environment variable |
-| Webhook signing secrets | unspecified | `webhooks` table |
-| Infra credentials | none | orchestrator secrets |
-
-1. **Encryption fails open.** Documented behaviour: if encryption is unavailable, keys are stored
-   as plain text with a warning. At 1,000 orgs that is a breach with a log line. **Must fail
-   closed.**
-2. **One master key for all tenants.** Compromise is total. Needs envelope encryption — KEK in a
-   KMS, per-tenant DEKs.
-3. **"Set once, never rotate"** is documented for the broker encryption key. An operational dead
-   end that fails rotation requirements.
-4. **Secrets share a blast radius with user data** — encrypted provider keys sit in the same blob
-   store as ingested content.
-5. **`md_*` storage is unspecified.** If plaintext, one read yields every tenant's credentials.
-
-> Where each of these physically lives per deployment variant — and why Secret Manager and KMS are
-> not interchangeable — is in
-> [operations/deployment-variants.md](#deployment-variants).
-
-### The fix is symmetry
-
-Integration credentials already have the right pattern — a proxy injects them so the caller never
-holds them. AI provider credentials do the opposite: workers fetch decrypted keys over the network
-and cache them for minutes.
-
-```
-integration creds  →  /proxy/{provider}    →  worker never holds  ✓ exists
-AI provider creds  →  /llm-proxy/{engine}  →  worker never holds  ✗ proposed
-```
-
-Mirror the pattern and no worker holds a secret of either class.
-
-### Sequence
-
-1. Identity abstraction + `identities` table — no behaviour change, unblocks everything
-2. Asymmetric signing — removes the forge-anywhere weakness
-3. Local password auth — Argon2id, lockout, reset, verification
-4. API key hardening — hashing, scoping, membership coupling
-5. Hosted provider — now just another implementation
-6. Retire the global key → scoped platform credentials
-7. MFA, then SAML/OIDC when enterprise demands it
-
-
----
-
-## Privacy Foundations
-
-Most of [compliance.md](#privacy-compliance) describes capabilities that can be added to a running
-system: DSAR tooling, export, SSO, certification. This document is about the subset that **cannot**,
-and therefore belongs in the first slice.
-
-### The retrofit cost is not uniform
-
-| Control | If deferred | Recoverable? |
-|---------|------------|--------------|
-| **Access audit** | Past access is unknowable — no record exists | **No. Ever.** |
-| **Derived-artifact provenance** | You cannot determine what a summary was built from once the sources have changed | **Effectively no** |
-| **Encryption at rest** | Full re-encrypt migration; key management designed under pressure | Expensive |
-| **Per-item ACL** | No defensible default for existing rows — every choice is a guess | Guesswork |
-| **Content classification** | Re-scan the entire corpus | Expensive |
-| **Query-time ACL filtering** | Every retrieval path rewritten | Mechanical but wide |
-| DSAR tooling, export, SSO, certification | Built later against existing data | Yes — defer these |
-
-The first row is the argument. **"Who accessed this patient record in March?" has no answer if you
-were not recording in March.** No migration recovers it, no amount of later engineering helps, and
-it is exactly the question that gets asked after an incident.
-
-### What belongs in the first slice
-
-#### 1. Access audit, from the moment access control exists
-
-The instant there is an ACL, there is a question about who got past it. Audit starts with the first
-read, not with the compliance push.
-
-- Every read of an access-controlled item produces an audit record: who, what, when, which
-  credential, which producer or surface
-- **Append-only**, with retention measured in years rather than the three days that tracing
-  memories keep
-- **Separate store** from logs and traces — different retention, different mutability guarantee,
-  different threat model
-- Written on the read path, so it cannot be skipped by a code path that forgot
-
-This is the `domain_events` store from [telemetry](#telemetry). It exists in
-Phase 1 for this reason, not because events are useful for debugging.
-
-#### 2. Provenance on every derived artifact
-
-The [delete cascade](#privacy-compliance) is a Phase 8 capability, but it is only *possible* if every
-derived artifact has recorded what it came from — from the first one.
-
-| Artifact | Must record |
-|----------|-------------|
-| Embedding | `source_id`, `source_version` |
-| Summary | The full `(source_id, version)` **list** — summaries span items |
-| Extracted claim | Source and location |
-| Entity / graph fact | Contributing sources |
-| Case-level artifact | Member set at generation time |
-
-A summary written in month one that spans forty items, without its source list, is unerasable in
-month twelve. Not difficult — **unerasable**, because nothing records that the paragraph someone
-wants deleted came from the document they are asking about.
-
-The staleness fields already carry `source_id` and `source_version`. Making the multi-source case a
-*list* rather than a single reference is the whole change, and it costs nothing now.
-
-#### 3. Encryption at rest, failing closed
-
-Currently unspecified for user content — credentials are encrypted, content is not documented as
-being so.
-
-- Content and derived artifacts encrypted at rest
-- **Fail closed.** The documented behaviour for provider keys — plaintext with a warning if
-  encryption is unavailable — must not be repeated for content. A misconfiguration must refuse the
-  write
-- Envelope encryption from the start: a key-encryption key held externally, per-tenant data keys.
-  Retrofitting per-tenant keys onto a single-key corpus is a full re-encrypt
-- Key rotation possible by design. "Set once, never rotate" is an operational dead end
-
-#### 4. Per-item ACL and query-time filtering
-
-Already in Phase 1 for tenancy reasons. Restating why it is also a privacy foundation: an item
-written without an access level has no defensible default later, and post-rank filtering both
-degrades results and leaks existence.
-
-#### 5. Content classification
-
-A flag, set at ingest, marking content as regulated or containing personal data.
-
-It gates three things already designed:
-
-- **Classification-gated inference** — regulated content pins to local models and fails closed
-  rather than falling through to a third party
-- **Erasure scope** — knowing which items are in scope for a subject request
-- **Export and residency** — what may leave which boundary
-
-Start deterministic: source-based (an HR connector is PII by construction), pattern-based for
-obvious identifiers, and caller-declared. Model-based detection can come later; **the field must
-exist from the first write** or classification means re-scanning the corpus.
-
-#### 6. Log discipline
-
-Zero cost, and irreversible if got wrong — a secret or a document body written to a log is in a
-system with different retention and different access control, and it stays there.
-
-**Never logged:** item content or excerpts · prompt and completion bodies · credentials, including
-in URLs and error payloads · personal identifiers in free text.
-
-Prompts *contain user content*. "Log the prompt for debugging" is a data-exfiltration path that
-looks like observability. Where genuinely needed, it goes behind a time-boxed, audited, per-tenant
-flag — not a log level.
-
----
-
-### What can safely wait
-
-Deferring these is a scheduling decision, not a design failure:
-
-DSAR tooling and subject-indexed inventory · export and portability UX · SSO, SAML, SCIM ·
-break-glass and ethical walls · legal hold · per-org retention policy · data residency ·
-certification · the delete cascade *implementation* — its **hooks** are above.
-
----
-
-### The two hazards, restated as build order
-
-Both are documented in [compliance.md](#privacy-compliance). Their placement matters here:
-
-| Hazard | When it must be closed |
-|--------|----------------------|
-| **Fallback chain transmits regulated content to a third party** | **Phase 1**, with the first inference call. It is a policy check before the chain, and it is cheap — but every call made before it exists is an untracked disclosure |
-| **Compression defeats erasure** | Hooks in Phase 1–2 (provenance above); the cascade itself later. The hazard is created the moment the first summary is written without its source list |
-
----
-
-### Requirements
-
-- **FR-PRIV-1** Every read of an access-controlled item MUST produce an append-only audit record
-  identifying accessor, item, time, credential and surface.
-- **FR-PRIV-2** Audit records MUST be stored separately from logs and traces, with independent
-  retention, and MUST NOT be mutable by the application.
-- **FR-PRIV-3** Every derived artifact MUST record its complete source set, as a list where more
-  than one source contributed.
-- **FR-PRIV-4** User content and derived artifacts MUST be encrypted at rest, and encryption MUST
-  fail closed.
-- **FR-PRIV-5** Encryption MUST use envelope encryption with per-tenant data keys, and key rotation
-  MUST be possible without re-authenticating tenants.
-- **FR-PRIV-6** Every item MUST carry a classification flag indicating regulated or personal
-  content, set at ingest.
-- **FR-PRIV-7** Classification MUST gate the inference fallback chain: regulated content pins to
-  local inference and fails closed.
-- **FR-PRIV-8** Item content, prompt bodies, completion bodies and credentials MUST NOT be written
-  to logs.
-- **FR-PRIV-9** Access control MUST be applied within the retrieval query, never as a post-ranking
-  filter.
-- **FR-PRIV-10** An item MUST NOT be written without an access level.
-
-
----
-
-## Privacy & Compliance
-
-Engineering analysis, not legal advice — but the architectural consequences are concrete and
-several are load-bearing.
-
-### The deployment variant decides the regulatory posture
-
-**Self-hosting is not merely a privacy feature — it changes who the regulated party is.**
-
-| | Local / self-hosted | Cloud (hosted by us) |
-|---|---|---|
-| Our role under GDPR | **Neither controller nor processor** — we never touch the data | **Processor** — DPA required |
-| HIPAA | Customer is the covered entity; **no BAA needed from us** | We are a Business Associate — **BAA required** |
-| Sub-processors | None, if inference is local | Cloud provider, inference, auth, credential broker |
-| Cross-border transfer | None | Requires a transfer mechanism for EU data |
-| Breach notification | Customer's obligation | Ours, on a clock |
-| Certification burden | Effectively none | SOC 2, and audit evidence |
-
-This is the strongest commercial argument for the local variant — and the opposite of how it
-currently reads in the roadmap, where self-hosting is treated as the hobbyist tier while being the
-only configuration that sidesteps the entire compliance apparatus.
-
-### Two hazards in the current design
-
-#### Hazard 1 — the fallback chain crosses a legal boundary invisibly
-
-The documented chain is *local model → cloud model → third-party API*. When the local model is
-unavailable, regulated content is **automatically transmitted to a third party**, with no error,
-no prompt and no record distinguishing which items took which path.
-
-Under HIPAA that is a disclosure of PHI to a party that may have no BAA. Under GDPR it is an
-undisclosed transfer. Architecturally it is the same defect as the embedding-fallback bug — an
-automatic substitution that is safe for availability and unsafe for correctness — except the
-consequence is legal.
-
-**Fix:** data classification gates the chain. Items marked regulated pin to local inference and
-**fail closed** rather than falling back. Every inference call records which provider served it.
-
-#### Hazard 2 — compression defeats erasure
-
-Memory compression summarises N items into prose. On an erasure request the source item is
-deleted — but its content **survives inside the summary**, and inside any claim, concept key or
-graph fact extracted from it.
-
-A "right to be forgotten" implementation that deletes the row and leaves the substance in derived
-text has not erased anything. This is why the delete cascade cannot be deferred: it becomes
-exponentially more expensive once a production corpus has compressed mixed-subject content.
-
-### GDPR obligations against current state
-
-| Obligation | State | Gap |
-|------------|-------|-----|
-| **Erasure** (Art 17) | missing | W9 cascade — must reach embeddings, entities, graph facts, summaries, blobs |
-| **Access / DSAR** (Art 15) | missing | Subject-indexed inventory across all stores |
-| **Portability** (Art 20) | partial | Workspace export exists as a manifest; needs machine-readable completeness |
-| **Storage limitation** (Art 5) | **strong** | Typed memories with per-type TTL map onto this unusually well |
-| **Data minimisation** (Art 5) | tension | A product that ingests everything from 900 sources is in structural tension with minimisation — needs explicit per-connection scoping |
-| **Records of processing** (Art 30) | partial | Entity-to-source mapping gives provenance; needs a processing register |
-| **Privacy by design** (Art 25) | **strong** | Private-by-default ACLs, connection-scoped inheritance, local inference |
-| **Breach notification** | missing | Needs a real audit trail to even determine scope |
-
-**Embeddings, extracted entities and graph facts are derived from personal data and should be
-treated as personal data.** An erasure that removes the source row but leaves its vector and
-entity node has not completed.
-
-### HIPAA — and the agent nobody costed
-
-**The pipeline ships a Medical / DICOM agent.** That is an explicit design decision to ingest and
-analyse protected health information. It places HIPAA squarely in scope, and nothing in the
-current design addresses it: no BAA path, no audit controls, no minimum-necessary enforcement, no
-documented encryption of PHI at rest, and an inference fallback chain that can transmit PHI to a
-third party.
-
-In the hosted variant, HIPAA requires a BAA with *every* sub-processor touching PHI, including
-inference providers. **The current cloud inference stack is unlikely to be BAA-able.** Either
-healthcare is a self-hosted-only story, or the cloud inference choice has to change.
-
-| Safeguard | State |
-|-----------|-------|
-| Access control — unique user ID, minimum necessary | partial — per-item ACLs exist; the global unscoped key defeats them |
-| **Audit controls** | **missing** |
-| Integrity — detect improper alteration | good — versioning with diffs |
-| Transmission security | partial — TLS at edges; the fallback chain is the hole |
-| Encryption at rest | **unspecified** — credentials are encrypted; user content is not documented as encrypted |
-
-### Tracing memories are not an audit log
-
-Observability is persisted as `tracing` memories with a **3-day TTL**, and it is sampled. An audit
-trail must be durable, complete and tamper-evident, and must record *who accessed which record
-when* — a different dataset with different retention and a different threat model. Three-day
-sampled traces cannot answer a breach-scope question about last quarter.
-
-### "Public" needs defining
-
-The `public` access level currently means "any authenticated user in the organization" — which is
-*internal*, not public. Three distinct things share the word:
-
-- **Org-visible** — the current meaning; harmless
-- **Externally shared** — a link outside the tenant. Not supported, and the feature most likely to
-  cause accidental disclosure once added
-- **Publicly-sourced** — [crawled](#crawlers) web content, which carries different
-  licensing and copyright exposure and must be tagged at ingest so retrieval can distinguish it
-
-### What to build, in order
-
-1. **Classification-gated inference** — mark regulated content, pin to local models, fail closed,
-   record the serving provider *(hazard 1)*
-2. **Delete cascade with derived-artifact reach** — designed now even if built later *(hazard 2)*
-3. **Immutable access audit log**, separate from tracing, with real retention
-4. **Encryption at rest for user content**, failing closed
-5. **Retire the global unscoped key** — it defeats minimum-necessary by construction
-6. **Subject-indexed inventory** for DSAR
-7. SOC 2, SSO/SAML, SCIM — the entry ticket for team and enterprise
-
-Items 1 and 2 get materially harder with time. Everything else can be added to a running system;
-those two get baked into data.
-
-
-
-# Part VII · Interfaces and operations
-
-*The contract, and running the thing*
-
-
----
-
-## API Contract & Surfaces
-
-Everything reaches the platform through `/api/v1/` — UI, SDKs, MCP server, gateway,
-conversational agent and host applications alike. That uniformity is a strength; the problem is
-that **privilege is not expressed in the surface**.
-
-### The finding
-
-`md_*` keys bind to a **user** and inherit *all* that user's rights. If you are an org owner, the
-key you paste into an MCP client can delete your organization — and the MCP tool list includes a
-delete tool.
-
-Keys must be **capability-scoped**, not only identity-scoped:
-
-```
-identity   →  who am I acting as       (exists today)
-capability →  what may this key do     (missing)
-```
-
-### Two planes
-
-| | Control plane | Data plane |
-|---|---|---|
-| Volume | low | high |
-| Privilege | high | per-item ACL |
-| Audit | mandatory | sampled |
-| Latency | irrelevant | sub-second for agents |
-| Surfaces | UI, CLI, REST | UI, SDK, MCP, chat agent, REST |
-
-### Endpoint groups by plane
-
-| Group | Prefix | Plane | Capability scope |
-|-------|--------|-------|------------------|
-| **Write** | `/write` | data | `data:write` — **the single write path, every producer** |
-| Data items | `/data` | data | `data:read` — reads and mutations of existing items |
-| Producers | `/producers` | control | `config:write` — register webhooks, crawlers, keys |
-| Retrieval | `/search` · `/ai/query` | data | `data:read` |
-| Memories | `/memories` | data | `data:read` · `data:write` |
-| Graph | `/graph` | data | `data:read` · `data:write` |
-| Uploads | `/uploads` | data | `data:write` |
-| **Crawlers** | `/crawlers` | control | `config:write` |
-| Webhooks | `/webhooks` | control | `config:write` |
-| Integrations | `/integrations` | control | `config:write` |
-| AI config | `/ai/users/{uid}/…` | control | `config:write` |
-| Organizations | `/organizations` | control | `admin:*` |
-| API keys | `/api-keys` | control | `admin:*` |
-| Infrastructure | `/pods` | control | `admin:*` |
-| MCP | `/mcp/sse` | **data only** | `data:read` · `data:write` |
-
-Capability scope becomes a property of the **key**, checked at the router. An MCP key is
-*structurally incapable* of reaching `/organizations` — not because the caller lacks a role, but
-because the credential does not carry the scope.
-
-### Conventions
-
-| Concern | Today | Needs to be |
-|---------|-------|-------------|
-| Identifiers | ULID with type prefix — `data_`, `mem_`, `whk_`, `org_`, `proj_` | keep — time-sortable and self-describing |
-| Pagination | `?limit=&offset=` | **cursor-based** — deep offsets scan; at 50M rows this is the wrong primitive |
-| Errors | **two formats** — `{detail, status_code}` and `{error:{code,message,details,request_id}}` | **converge** on the structured envelope; keep `detail` as a deprecated mirror with a stated removal version |
-| Correlation | `X-Request-Id` echoed | **extend** — propagate into the pipeline, not just the API |
-| Idempotency | none on writes | **idempotency key** — providers redeliver; so do retrying clients |
-| Quota responses | `429` + `Retry-After` + structured code | keep |
-| Spec | OpenAPI + Swagger/ReDoc | keep — drives SDK codegen |
-
-### Endpoints the design adds
-
-| Endpoint | Why |
-|----------|-----|
-| `POST /uploads`, `POST /uploads/{id}/complete` | Presigned direct-to-storage flow |
-| `CRUD /crawlers`, `POST /crawlers/{id}/runs`, `POST /crawlers/{id}/dry-run`, `PATCH /runs/{id}` | Crawler configs and run control |
-| **`POST /write`** | The one write endpoint. `items[]` always, `207` always — batch is not a separate verb, just the same verb with more items |
-| **`/agents/{id}/config`** — get effective + provenance, set, revert, **test**, **impact**, lock | Extraction prompts, schemas, tiers and flags per data type — defaults shipped, overridable per org and project |
-| **`PUT /cases`** · `/cases/{id}/members` · `/timeline` · `/retrieve` · `/similar` | Subject correlation — patient timelines, legal matters, asset histories |
-| `POST /retrieve` | Composable retrieval; the five modes become presets over it |
-| `POST /reprocess` | W7 — rebuild derived artifacts by selector |
-| `GET /artifacts/stale` | What needs rebuilding, and why |
-| `CRUD /schemas`, `/mappings` | Normalization customization |
-| `PATCH /connections/{id}` | Set `personal` / `shared` scope — the ACL-inheritance root |
-| `POST /tokens/ephemeral` | Short-lived project-bound token for embeddable widgets |
-| **`DELETE /data/{id}`** · **`POST /deletions`** with a selector · project and org purge | Cleanup and erasure. Beyond one item it is a job — see [deletion](#deletion) |
-
-### Six personas, not four roles
-
-| Persona | Scope | Gap today |
-|---------|-------|-----------|
-| **Platform operator** | deployment, infra, secrets | **missing** — the unscoped global key does this job, unattributably |
-| **Org owner** | billing, delete org, all members | — |
-| **Org admin** | members, projects, quotas, policy | — |
-| **Member** | own data, connections, AI config | the "simple user" |
-| **Viewer** | read-only | — |
-| **Service identity** | host app, CI, agent | **missing** — every key is a person today |
-
-#### Surface × persona
-
-| Surface | Operator | Owner / Admin | Member | Service |
-|---------|----------|---------------|--------|---------|
-| **Web UI** | infra only | full control plane | own settings only | — |
-| **CLI** | primary | scripting | rare | CI |
-| **SDK** | — | some config | data plane | primary |
-| **MCP** | — | **no admin tools** | data plane | agent |
-| **Chat agent** | — | — | data plane | — |
-| **REST** | platform creds | scoped by role | scoped by role | scoped key |
-
-### Config precedence, with locking
-
-| Level | Owns | Persona |
-|-------|------|---------|
-| **Platform** | storage backend, encryption keys, deployment | operator |
-| **Org** | quotas, allowed providers, sharing policy | admin |
-| **User** | own engines, agent configs, connections | member |
-
-Model Garden is per-user today. An org admin will need to mandate "only our approved provider", so
-precedence needs a **lock** flag: org sets policy, user customizes within it, admin can pin.
-
-### SDK layering
-
-Three layers, not one flat client, so the capability boundary is visible at the call site:
-
-| Layer | Contents |
-|-------|----------|
-| **Simple facade** | `add()` / `search()` / `chat()` — the 90% case |
-| **Full client** | Typed CRUD, scoping, pagination, crawler config builders |
-| **Admin client** | Org, members, quotas, keys, run control — **separate import, separate key** |
-
-### Embeddable UI
-
-The host contract forbids end-user browsers holding durable secrets. That rules out shipping a
-widget with an embedded key — but not embeddable UI:
-
-```
-host backend ──mints──▶ short-lived scoped token ──▶ browser widget
-                        (project-bound, read-only, minutes not days)
-```
-
-Without it, every host rebuilds retrieval UI from scratch.
-
-### Stability policy
-
-Hosts pin against this surface. Write down what may change inside `/api/v1` — additive fields, new
-optional parameters, new endpoints — versus what forces `/api/v2`: removed fields, changed types,
-altered defaults, narrowed enums.
-
-### Handle with care
-
-**Conversational admin is appealing and dangerous.** "Delete the marketing project", sent over a
-messaging app, executed by an LLM that resolved identity from a phone number, is a bad failure
-mode. Keep the chat agent strictly data-plane; gate destructive actions behind confirmation in an
-authenticated surface.
-
 
 ---
 
@@ -6697,6 +7107,8 @@ limit.
 
 ---
 
+---
+
 ## Token Accounting
 
 `FR-OBS-4` requires tracking LLM token usage per user, per model and per agent. That is the right
@@ -6883,6 +7295,8 @@ Extends `FR-OBS-4`:
   without losing recoverable progress.
 - **FR-TOK-10** Raw usage events and long-retention rollups MUST have separate retention.
 
+
+---
 
 ---
 
@@ -7095,319 +7509,311 @@ Each slice's exit criterion is a test, not a demo.
 
 ---
 
-## Technology Choices
+---
 
-Everything in the design docs is stated in **roles**. This is where roles meet products. Keeping
-the two separate is not pedantry: the same design runs on three very different stacks, and a role
-that names a product cannot be re-filled.
+## Implementation Plan & Stack
 
-### Role → implementation
+*Proposals to validate against the codebase, not settled decisions. This was written from the
+design documents; dependency manifests and the pipeline's existing framework may already provide
+several of these, or already have an established alternative in-repo.*
 
-| Role | Chosen | Viable alternatives | Swap cost |
-|------|--------|--------------------|-----------|
-| `record store` | Postgres 16 | any mature RDBMS | **high** — system of record |
-| `vector index` | pgvector, inside the record store | Qdrant, Weaviate, Pinecone | medium |
-| `lexical index` | Postgres `tsvector` | OpenSearch, Elasticsearch | medium |
-| `data access` | Kong + PostgREST via `supabase-py` | raw psycopg | **high** — `storage.py` is ~6,400 lines |
-| `blob store` | GCS | S3, Azure Blob, filesystem | **low** — abstracted by `STORAGE_BACKEND` |
-| `durable queue` | NATS JetStream / **Pub/Sub in cloud** | Kafka, SQS, Redis Streams | medium — **already swapped per variant** |
-| `temporal graph store` | Neo4j + Graphiti | FalkorDB, Memgraph, none | **low** — gated by `is_graphiti_enabled()` |
-| `credential broker` | Nango, self-hosted | Paragon, Merge, custom | medium |
-| `inference layer` | **MVP: Gemini Flash + Gemini embeddings, plus Ollama Cloud (token-authenticated).** Later: local Ollama | any OpenAI-compatible endpoint | **low** — the catalog abstracts it |
-| `identity provider` | GoTrue → Firebase / local | any OIDC provider | **high today** (hardcoded at two sites); **low after abstraction** |
-| `orchestrator` | Kubernetes + KEDA / Cloud Run | ECS, Nomad | medium |
+### Constraints
 
-### The bet has a cost
+1. **No new languages.** Python 3.12 and TypeScript. The channel agent stays Node.
+2. **No new infrastructure unless a role demands it.** Reach for Postgres before adding a service.
+3. **Every choice must work in all three variants** — or be behind the interface that lets them
+   differ.
 
-Colocating the **vector index and lexical index inside the record store** is what makes "only two
-required roles" possible — no extra infrastructure, no sync problem, joins and ACL filters in one
-query. It is also why the capacity plan says *"Postgres is the shared fate"*: every workspace
-competes for the same instance, and filtered ANN search over tens of millions of rows is the
-load-bearing risk.
-
-**The floor is low because the ceiling is shared.**
-
-### MVP inference: Gemini for RAG, Ollama Cloud alongside it
-
-MVP registers **two engines**:
-
-| Engine | Auth | Used for |
-|--------|------|----------|
-| **Gemini** — latest Flash, plus Gemini embeddings | API key | **Generation and all embeddings** |
-| **Ollama Cloud** — open-weight models | Account token | Generation, alternative and comparison |
-
-No local engine yet, and no tiered routing policy — but two engines rather than one, which is a
-better MVP than it looks.
-
-#### Two engines exercises the seam that one engine does not
-
-A catalog abstraction filled with exactly one entry is untested. Every assumption baked into it —
-that `model_id` is recorded, that `served_by_model` is populated, that the per-project allow-list
-is consulted, that credentials are held per engine and encrypted — is unfalsifiable while there is
-only one thing to select between.
-
-**Registering a second engine at MVP proves the seam works before anything depends on it.**
-
-And the second engine is well chosen for a reason beyond capability: **Ollama Cloud speaks the same
-protocol as local Ollama.** The air-gapped variant — the one that restores the $0 and
-no-data-leaves-the-machine claims — becomes largely a *base URL and credential change* against an
-adapter already in production, rather than a new integration attempted late under pressure.
-
-The riskiest deferred capability in the plan gets de-risked by a choice made for other reasons.
-Worth naming so it is not lost.
-
-Three consequences still need a decision now.
-
-#### Embeddings stay on one engine, and that is not negotiable
-
-Generation may be served by either engine. **Embeddings may not.**
-
-Two embedding models produce **incomparable vector spaces**. Mixed vectors in one index do not
-error — they silently corrupt ranking, and without a `model_id` column the affected rows cannot
-even be identified afterwards. A second engine that *can* embed is precisely the condition under
-which this happens by accident.
-
-So: Gemini embeddings for RAG, exclusively, and `embed.distinct_models_per_index` is the metric
-that catches a violation. Ollama Cloud is a generation engine in this design regardless of what
-else it can do.
-
-#### Credentials: two providers, one path
-
-The Ollama Cloud token is a provider credential and takes the existing path — held in the model
-catalog, **encrypted, failing closed**, never in an environment variable on a worker, never
-reaching enrichment code. Same as the Gemini key. Two providers is the point at which "we have a
-credential path" stops being a claim.
-
-The per-project allow-list also stops being theoretical. With two engines, *"this project may not
-use provider X"* is an enforceable statement rather than a placeholder — which matters for the
-regulated case, where the answer is that the chain **fails closed** rather than falling through to
-an unapproved provider.
-
-#### Pin the version. Never point at a floating alias
-
-`generator_version` is a hash over prompt, **model id**, schema, parser and chunker. Point the
-config at a rolling alias like `-latest` and the provider can change the model underneath it
-without the id changing.
-
-> **The fingerprint would then be a lie**, and every guarantee resting on it — reproducibility,
-> staleness detection, reprocess targeting, trend pinning — silently stops holding while
-> continuing to look correct.
-
-So the configured value is an explicit pinned version, and moving to a new one is a deliberate
-change that enqueues W7 reprocess. "Latest Flash" is a **procurement decision reviewed
-periodically**, not a runtime behaviour.
-
-This applies with more force to the embedding model. A silently-swapped embedding model produces
-**incomparable vectors in the same index** — the corruption `embed.distinct_models_per_index`
-exists to catch, arriving through the one door nobody is watching.
-
-#### Expanding the Ollama Cloud model set is a later-stage catalog operation
-
-Once the adapter is in production, adding models from Ollama Cloud is **registering catalog
-entries**, not integration work — which is the payoff for building the seam properly at MVP. Later
-stages widen the set: larger open-weight models for harder extraction, smaller ones for cheap
-high-volume classification, and per-purpose assignment across them.
-
-Three gates apply, and they are the ones already established rather than new ones:
-
-| Gate | Why |
-|------|-----|
-| **Each model is a distinct `model_id`** | It enters `generator_version`, so output is attributable and reproducible |
-| **Reassigning a purpose enqueues W7 reprocess** | Or the corpus is knowingly mixed — the same rule as any config change |
-| **Embeddings remain on a single engine** | Regardless of how many generation models are registered |
-
-The sandbox A/B comparison is what makes the widened set useful rather than
-merely available: *is the larger model worth it on my corpus?* is a question with a
-corpus-specific answer, and registering ten models without a way to compare them is ten guesses.
-
-#### Choose the embedding dimension deliberately — it is not changeable later
-
-Gemini embeddings support several output dimensions. The choice sets the pgvector column width,
-and **changing it is a full re-embed of the corpus**, not a migration.
-
-| | Smaller (e.g. 768) | Larger (e.g. 3072) |
-|---|---|---|
-| Index size and memory | Lower | ~4× |
-| Filtered ANN latency at scale | Better | Worse — and this is the named load-bearing risk |
-| Recall ceiling | Slightly lower | Higher |
-
-Given that *"Postgres is the shared fate"* and filtered ANN over tens of millions of rows is the
-scaling risk already on record, **the smaller dimension is the better default** — with the caveat
-that it should be measured on a real corpus in the sandbox, which is exactly
-the A/B comparison that surface exists for.
-
-#### What a cloud-only MVP costs, stated rather than discovered
-
-| Claim in the positioning | Status under a Gemini-only MVP |
-|--------------------------|-------------------------------|
-| Self-hosted | Still true — the platform runs locally |
-| **Air-gapped** | **Not true in MVP.** Every enrichment call leaves the machine |
-| **$0 local inference** | **Not true in MVP.** Flash is cheap, not free |
-| Regulated / BAA workloads | **Requires a provider agreement** — with no local engine there is nothing to fail closed *to*, so the allow-list refuses rather than degrades |
-
-This is a reasonable MVP trade: one provider is dramatically simpler, and Flash plus its embeddings
-are cheap enough that cost is not the constraint at MVP volume. **But air-gap and $0 are load-bearing
-in the competitive positioning**, and they return only when the local engine does.
-
-The mitigation is already designed and now partly proven: the catalog seam, `model_id` on every
-artifact, and the per-project allow-list stay in place — and **the Ollama adapter is in production
-from MVP**, pointed at Ollama Cloud. Restoring air-gap later means pointing that same adapter at a
-local endpoint and registering it, not building an integration. The allow-list then prevents a
-regulated project from reaching any cloud provider at all.
-
-### Abstract the queue before you need to
-
-NATS JetStream and Pub/Sub differ in ack deadlines, ordering guarantees and redelivery semantics.
-The cloud variant already replaces one with the other, so the queue must sit behind an interface —
-otherwise there are two ingestion paths to keep correct and the worker retry policy has to be
-written twice.
+That third constraint is the one that does the work. It is why the queue, the scheduler, the
+object store and the identity provider all need interfaces, and why almost nothing else does.
 
 ---
 
-## Deployment Variants
+### Component stack
 
-The variants are not scaled versions of each other — they make different technology choices and
-therefore support different subsets of the use-case families.
+| Component | Tech | Why this one |
+|-----------|------|-------------|
+| Content contract | Pydantic discriminated union (`Field(discriminator=...)`) | Closed sum type *with* runtime validation; `is_downloaded` as `computed_field` so it is structurally unsettable |
+| MIME sniffing | `filetype` / `puremagic` | Pure-Python, no native dep in slim images. libmagic is more accurate where you can carry it |
+| Queue abstraction | `Protocol` over `nats-py`, `google-cloud-pubsub`, and an in-process impl | The interface is small; the *semantics* differ — ack deadlines, ordering keys, redelivery |
+| Fetch worker | `httpx` streaming + resumable upload | Bytes never buffer |
+| Retry / backoff | `tenacity` | Composable, jitter built in |
+| Rate limiting | Redis token bucket via Lua | Must be atomic **across replicas** — in-process limiters silently fail past one pod |
+| Crawl scheduling | Postgres schedule table + `pg_try_advisory_lock` | Leader election with zero new infrastructure, identical across variants |
+| Crawl state | Postgres (`crawl_runs`, `crawl_frontier`) | Durable and resumable — precisely what Redis is wrong for |
+| robots.txt | `protego` | Handles crawl-delay and wildcards; stdlib `robotparser` does not |
+| HTML parsing | `selectolax` | Substantially faster than BeautifulSoup at crawl volumes |
+| Field mapping | `jmespath` | Well-specified and boring. Do not invent a DSL |
+| Chunking | `semantic-text-splitter` | Standalone; avoids pulling a framework in for one function |
+| Password hashing | `argon2-cffi` | Argon2id |
+| Token verification | `PyJWT` RS256 + JWKS cache, behind a `TokenVerifier` Protocol | Local and OIDC implementations from one seam |
+| Trace propagation | OTel `TraceContextTextMapPropagator` | Inject into message headers, extract in the worker — closes the queue-hop gap |
+| Model catalog | Static YAML → Pydantic, merged with discovery | Same pattern as `nango_provider_meta.py`; air-gap friendly |
+| Config UI forms | `react-hook-form` + `zod` | Crawler configs need schema-driven forms with live validation |
+| Integration tests | `testcontainers` + `respx` | Real Postgres and queue in tests; mock HTTP at the boundary |
 
-### Role fulfilment by variant
+#### Three non-obvious calls
 
-| Role | Local | GKE (dev today) | Cloud (prod v1) |
-|------|-------|-----------------|-----------------|
-| `record store` | Postgres in compose | Supabase in-cluster | Cloud SQL PG16 + pgvector |
-| `data access` | Kong + PostgREST | Kong + PostgREST | Kong + PostgREST on Cloud Run |
-| `blob store` | filesystem | GCS | GCS |
-| `durable queue` | **in-process** — one instance, nothing to distribute | NATS in-cluster | **Pub/Sub** |
-| `inference` | **Ollama local** — free | Ollama pods, tiered | **Ollama Cloud + Gemini**, no GPU pool |
-| `temporal graph` | off | Neo4j optional | **deferred** |
-| `credential broker` | Nango in compose | Nango in-cluster | Nango on Cloud Run |
-| `identity` | **local password** | GoTrue | **Firebase Auth** |
-| `conversational agent` | optional | DigiMe in cluster | **cut** |
-| `crawl scheduling` | in-process ticker | cluster CronJob + advisory lock | managed scheduler → HTTP |
-| `crawl execution` | background task | Deployment | **Cloud Run Jobs** — a 3h backfill is not a request |
-| `rate-limit store` | in-process | Redis pod | Memorystore |
-| `secrets` | `.env` | k8s Secrets | Secret Manager |
-| `scaling` | n/a | KEDA | Cloud Run, `min-instances ≥ 1` |
+**API keys hash with SHA-256, not Argon2.** Passwords need a slow KDF because they are low-entropy
+and human-chosen. API keys are high-entropy random tokens — a slow hash buys nothing and costs you
+on every request. Different threat model, different primitive.
 
-### The three
+**`generator_version` is a fingerprint, not a number.**
+`sha256(canonical_json({prompt, model_id, schema, parser_version, chunker_version}))`. Staleness
+detection becomes a join rather than a manual bump someone forgets, and it catches changes nobody
+thought to version.
 
-**Local** — laptop or Mac Mini. Single user or household. Docker Compose, local models, filesystem
-blobs. **$0 recurring and genuinely air-gap capable** — the only variant that satisfies the privacy
-pillar in full, and the only one that sidesteps the compliance apparatus entirely.
+**Postgres advisory locks instead of an orchestrator.** The obvious answer for crawl scheduling is
+Temporal or Airflow. Both are real dependencies with their own operational burden, and Temporal in
+particular is hard to justify in the local variant. A schedule table plus `pg_try_advisory_lock`
+covers scheduling, leader election and resumability at target scale.
 
-**GKE** — dev today. Self-hosted cluster across six namespaces, tiered inference pods, KEDA
-autoscaling. Richest capability set — the only variant running every component at once.
+#### Deliberately not added
 
-**Cloud** — prod v1. Serverless: Cloud Run plus managed services, no cluster at all. Reverses the
-dev topology. Two components were forcing a cluster; one was cut and the other verified
-request-scoped.
+**Celery** — its worker model does not fit queue-driven asyncio, and you would run two queue
+systems. **A separate vector DB** — pgvector-in-the-record-store *is* the architectural bet.
+**Kafka** — the chosen brokers suffice. **Playwright** — ship `traverse` without JS rendering; add
+it opt-in per config if real sites demand it. **A second graph database.**
 
-### Which variant serves which use case
+---
 
-| Family | Local | GKE | Cloud | Note |
-|--------|:-----:|:---:|:-----:|------|
-| A · Personal memory | ● | ● | ○ | Cloud loses conversational access with the agent cut |
-| B · Team memory | — | ● | ○ | Cloud defers the temporal graph, weakening institutional recall |
-| C · Agent infrastructure | ● | ● | ● | MCP works everywhere |
-| D · Embedded backend | — | ○ | ● | Cloud is the intended host-SaaS target |
-| E · Governance | ○ | ○ | ● | Managed tier makes audit and residency tractable |
+### Per-variant realisation
 
-### Where security artifacts live
+| Concern | Local | GKE | GCP (Cloud Run) |
+|---------|-------|-----|-----------------|
+| Record store | Postgres container | Supabase in-cluster | Cloud SQL PG16 + pgvector |
+| **Pooling** | direct, small pool | PgBouncer / pooler | **Cloud SQL connector + PgBouncer — mandatory** |
+| Data access | Kong + PostgREST | Kong + PostgREST | Kong + PostgREST on Cloud Run |
+| Queue | **in-process** (single instance) | NATS StatefulSet | Pub/Sub |
+| Queue client | in-memory impl | `nats-py` | `google-cloud-pubsub` |
+| Blob store | filesystem | GCS | GCS |
+| **Presigned upload** | local signed-token endpoint | GCS signed URL | GCS signed URL via IAM `SignBlob` |
+| Inference | Ollama container | Ollama pods, tiered | Ollama Cloud + Gemini |
+| Scheduler | in-process ticker | CronJob + advisory lock | Cloud Scheduler → HTTP |
+| **Crawl execution** | background task | Deployment | **Cloud Run Jobs** |
+| Enrich / fetch workers | asyncio tasks | Deployments + KEDA | Cloud Run services on Pub/Sub push |
+| Stream workers (W6) | n/a | **StatefulSet + sharding** | not supported — needs a cluster |
+| Rate-limit store | in-process | Redis pod | Memorystore |
+| Auth | local password | GoTrue → abstracted | Firebase Auth |
+| Secrets | `.env` | k8s Secrets | Secret Manager |
+| Autoscale | none | KEDA on queue depth | Cloud Run concurrency, `min-instances ≥ 1` |
+| Telemetry sink | stdout / local collector | OTel → Prometheus + Grafana | Cloud Trace + Monitoring |
 
-"Secrets go in Secret Manager" is too coarse. Five distinct classes with different requirements,
-and conflating them is how a KEK ends up retrievable as a string.
+#### GCP — five things that will bite
 
-| Artifact | Local | GKE | **Cloud (GCP)** |
-|----------|-------|-----|-----------------|
-| **Key-encryption key (KEK)** | file, dev-only | k8s Secret | **Cloud KMS** — never leaves |
-| **Per-tenant data keys (DEK)** | wrapped, in the record store | same | same — wrapped by KMS, ciphertext in Cloud SQL |
-| **Per-tenant secrets** — AI provider keys, webhook signing | envelope-encrypted in the record store | same | same — **not** Secret Manager |
-| **OAuth tokens** | credential broker's own store | same | broker's Cloud SQL, AES-256-GCM |
-| **Platform secrets** — broker encryption key, third-party platform keys | `.env` | k8s Secret | **Secret Manager** |
-| **JWT signing key** | file | k8s Secret | **Cloud KMS asymmetric signing** |
-| **`md_*` API keys** | hashed in the record store | same | same — hashed, never encrypted |
-| **Policy and settings** | record store | same | Cloud SQL — not secrets |
+**1. Connection exhaustion.** Cloud Run can spin up a hundred instances; each holding a pool of ten
+is a thousand connections against a Cloud SQL instance that allows far fewer. This is *the* classic
+serverless-plus-Postgres failure. Small pools, lazy initialisation, and a pooler in front — not
+optional.
 
-#### Secret Manager and KMS are not interchangeable
+**2. `/tmp` is memory.** Cloud Run's filesystem is in-memory and counts against the instance's
+memory limit. Buffering a 500 MB download to disk does not degrade — it OOMs. Streaming straight
+to the object store is **mandatory here**, where elsewhere it is merely correct.
 
-**Secret Manager stores and returns a value.** Correct for something the application must hold —
-the credential broker's encryption key, a platform-level third-party key.
+**3. Ack deadline versus inference latency.** Pub/Sub push has a maximum ack deadline. A slow
+enrichment call plus a fallback chain can exceed it, causing redelivery and duplicate work. Either
+ack on receipt and track completion separately, or use pull subscriptions with `min-instances ≥ 1`.
+Decide deliberately; the default will bite.
 
-**KMS performs cryptographic operations without releasing the key.** Correct for the KEK, because
-the whole point of envelope encryption is that the key-encryption key never enters application
-memory. Putting a KEK in Secret Manager gives you one string away from total compromise, which is
-the situation envelope encryption exists to avoid.
+**4. Crawl runs are jobs, not requests.** A three-hour backfill does not fit a request-driven
+service. Cloud Run **Jobs** are the right primitive — task-based, long-running, resumable via the
+checkpoint in Postgres. Enrich and fetch stay as push-driven services.
 
-Same reasoning for JWT signing: **KMS asymmetric signing** means the private key never exists in a
-process, so a memory disclosure cannot forge tokens.
+**5. Signed URLs need a signer.** The service account needs
+`roles/iam.serviceAccountTokenCreator` on itself to sign without a key file. Easy to miss, fails
+only at runtime.
 
-#### Per-tenant secrets do not belong in Secret Manager
+#### Local — three things that will bite
 
-Secret Manager is built for a bounded set of platform secrets, not one entry per tenant per
-provider. Wrong quota model, wrong access model, and no way to scope reads per tenant.
+**1. Presigned uploads have no signer.** Filesystem storage cannot issue a presigned URL. Two
+options: run MinIO for S3 parity, or keep the API shape and have the local backend return a URL
+pointing at a local upload endpoint with a signed token. **Prefer the second** — same contract,
+one fewer container, and the contract is what matters.
 
-Per-tenant secrets are **envelope-encrypted in the record store**: plaintext → tenant DEK → wrapped
-by the KMS KEK → ciphertext in Cloud SQL. Rotation is a KMS key version bump plus a DEK re-wrap,
-not a re-encrypt of the corpus.
+**2. The full stack does not fit a laptop.** Postgres, NATS, Redis, Ollama, Kong, PostgREST, Nango,
+API and UI is a lot of memory before a model is loaded. Ship a **lean profile**: drop Nango (no
+integrations), drop Redis (in-process limiting is correct at one instance), and run the **queue
+in-process** — with one instance there is nothing to distribute. This is the third payoff of the
+queue interface.
 
-#### Two credentials that should not exist at all
+**3. Model choice is constrained by the machine.** This is where the catalog's hardware-feasibility
+check earns its place: offering a 70B model to a 16GB laptop is a bad first experience.
 
-| Removed by | What it removes |
-|-----------|-----------------|
-| **Workload Identity** | Service account **key files**. Cloud Run services assume an identity; there is no key to leak, rotate or commit |
-| **Cloud SQL IAM database authentication** | The database **password**. The service account authenticates directly |
+#### GKE — two things that will bite
 
-Both matter given the launch blocker already on record — secrets committed to git history. The best
-defence is a credential that does not exist.
+**1. Stream workers are not Deployments.** W6 holds one connection per account. A Deployment with
+three replicas ingests everything three times. It needs a StatefulSet with account sharding and
+leader election — a different deployment shape from every other worker.
 
-Signed URLs still require the service account to hold `roles/iam.serviceAccountTokenCreator` **on
-itself**, which is easy to miss and fails only at runtime.
+**2. KEDA needs queue depth exposed.** Scaling enrich workers on CPU is wrong; they are blocked on
+inference, not compute. Scale on consumer lag, which means the broker's metrics have to reach KEDA.
 
-#### Where the audit log physically lives
+---
 
-[Privacy foundations](#privacy-foundations) requires an append-only audit record on
-every read, with retention in years. That is not Cloud Logging — wrong retention model, awkward for
-"who accessed this record in March", and it is operational logging rather than a compliance
-artifact.
+### Build order — where to actually start
 
-**Write to Cloud SQL, export to BigQuery.**
+The phases say *what*. This says *what you do on Monday*.
 
-- The write is **transactional with the read it records**, so no code path can skip it
-- Immutability is enforced by the database: the application role holds `INSERT` and `SELECT` on the
-  audit table and **no `UPDATE` or `DELETE` grant**. Immutable by permission, not by discipline
-- Cloud SQL keeps a hot window; BigQuery holds the long tail cheaply and answers the year-scale
-  question
-- Separate from `tracing` memories entirely — those are sampled, three-day, and observability
+#### Step 0 — read the codebase
 
-### Two capability gaps worth naming
+Everything in this document was derived from documentation. Nobody has opened `api/` or `webhook/`
+while writing it, so several choices below will change on contact.
 
-**Cloud cuts the conversational agent**, so "reach your memory from any messaging app" — a
-headline capability and the only genuinely unique one — exists only on self-hosted variants.
+| Read | Because |
+|------|---------|
+| Dependency manifests | Several proposed libraries may already be present, or have an established in-repo alternative |
+| `storage.py` and the PostgREST path | ~6,400 lines whose shape constrains the schema work |
+| The two JWT verify sites in `main.py` | The `TokenVerifier` seam is a refactor of these, not a greenfield |
+| The pipeline's ADK framework | It may already provide a worker or queue abstraction that would otherwise be duplicated |
+| Existing migrations and table shapes | Determines whether Phase 1's schema is additive or a parallel set |
 
-**Cloud defers the temporal graph**, one of the two differentiated capabilities.
+Roughly half a day. Do it before writing anything.
 
-Prod v1 therefore ships without the two features that most distinguish the product. That may be
-correct for a first release, but it should be a stated trade rather than an emergent one.
+**In parallel and non-blocking: rotate the committed secrets.** They are in git history, that is
+live exposure, and it has no dependency on the build order.
 
-### Launch blockers on record
+#### Steps 1–8 — to the first milestone
 
-- **Committed secrets** in `k8s/nango/nango-secrets.yaml` and `k8s/lean/*` — present in git
-  history, so **rotation** is required, not deletion
-- **`minReplicaCount: 0`** across the autoscaling manifests, which fights any availability target
-- **Gmail watch state persisted only to `/data`**, which does not survive beyond one volume — the
-  dead `_WATCH_BLOB_KEY` constant shows blob storage was the original intent
+Order is dependency-driven; each step is unblocked by the one before it.
 
-### Verify before provisioning
+| # | Step | Why here |
+|---|------|----------|
+| **1** | **Schema** — orgs, projects, members, groups, **`identities`**, **`api_keys`**, producers (with `inbound_auth`), data items with `org_id`/`project_id`/`access_level`/principal `shared_with`, `derived_artifacts` with source **list** + `served_by_model` + `fallback_depth`, `generator_versions` registry, `audit_events`, embeddings with `model_id`/`dim` | Everything in Phase 1b is columns. Design them **once, together**. Highest-leverage single artifact in the plan — get it wrong and every later slice inherits a migration |
+| **2** | **Crypto foundation** — KMS envelope encryption, encrypt/decrypt helpers, **failing closed** | Nothing can safely store a credential before this, and step 3 needs to |
+| **3** | **Auth seam + producer registry** — `TokenVerifier` with the API-key verifier; `identities` and `api_keys` tables; capability scopes; producer `inbound_auth` | Every write needs a producer and a credential. Firebase and the gateway arrive later **behind this seam**, so building it now costs an implementation and skipping it costs a fork |
+| **4** | **Model config, minimal** — one engine, one embedding assignment, `generator_versions` populated | Step 6 embeds. This is the difference between provenance from row one and a corpus-wide staleness event later |
+| **5** | **Write endpoint** — `POST /write`, `Inline` only, `items[]`, `207`, commit, ACL from producer, **audit record written** | The spine's first half |
+| **6** | **Embed path** — queue abstraction with the in-process implementation, `model_id` recorded, defer-never-fallback | Makes what was written findable |
+| **7** | **Read** — `GET /data/{id}` and `POST /retrieve`, vector + lexical + hybrid, **ACL applied inside the query** | Closes the spine |
+| **8** | **Invariant gate** — adversarial cross-tenant across every retrieval path, kill-after-`2xx` durability, `distinct(model_id) == 1` property | The exit criterion |
 
-Deploy the credential broker image to Cloud Run **in dev first**, to confirm the self-hosted build
-tolerates a request-scoped lifecycle. It is the one component whose internals are outside our
-control, and the cloud topology assumes it holds no background workers.
+Tests are written **alongside** each step. Step 8 is the gate, not when testing begins — see
+[testing.md](#testing).
+
+#### The milestone
+
+> Write an item into a project owned by an org with an access level → a search scoped to that
+> project finds it → the response cites it → the read is audited → the row records which model
+> embedded it.
+
+At that point both halves of the system are real and every later slice widens a spine that works.
+
+#### Nothing open blocks starting
+
+Worth stating plainly, because it is easy to assume otherwise:
+
+| Open decision | When it is needed |
+|---------------|------------------|
+| Own auth vs hosted IdP | Deferred by the `TokenVerifier` seam — Phase 6 |
+| Materialisation policy | Phase 4, with uploads and fetch |
+| Default ACL for a team upload | Phase 4 |
+| Media in v1 scope | Phase 4–5 |
+| Backfill depth on first connect | Phase 5 |
+| Cross-project cases | Phase 7 |
+
+**None of them gates step 1.** That is itself an argument for this ordering — the work that must
+be decided last is also the work that happens last.
+
+#### UI, in this window
+
+Slice 1 needs a **thin console** — one page: write something, search, inspect a result. Not a
+product surface. It exists because retrieval quality cannot be judged from a JSON body, and it is
+built after step 7, against the API rather than beside it.
+
+Full UI sequencing is in [the roadmap](#roadmap).
+
+### Phased implementation
+
+#### Phase 0 — correctness
+
+**No new dependencies.** A Pydantic model change, two columns, a config value, and a rotation.
+
+| Work | Tech |
+|------|------|
+| Content contract | Pydantic discriminated union; `computed_field` |
+| MIME sniffing at ingest | `filetype` |
+| `model_id` + `dim` on embeddings | migration |
+| Disable embedding fallback | config + guard in the model client |
+| Rotate committed secrets | `git-filter-repo` awareness — rotation, not history rewriting alone |
+
+#### Phase 1 — foundation
+
+The phase that introduces the interfaces.
+
+| Work | Tech |
+|------|------|
+| Queue abstraction | `Protocol` + three impls (in-process, NATS, Pub/Sub) |
+| Trace propagation across the hop | OTel propagator into message headers |
+| `TokenVerifier` seam | `PyJWT`, JWKS cache via `httpx` + TTL |
+| Asymmetric signing | RS256 keypair; serve JWKS |
+| Worker split (W1/W2) | asyncio, `httpx` streaming, `tenacity` |
+| Per-(provider, user) limits | Redis Lua token bucket — in-process impl for local |
+| Staleness fields | Postgres tables; fingerprint via `sha256(canonical_json(...))` |
+| Capability-scoped keys | FastAPI dependency; SHA-256 key hashes + prefix column |
+| Classification-gated inference | Policy check before the fallback chain |
+
+#### Phase 2 — demo (GKE)
+
+| Work | Tech |
+|------|------|
+| Backfill-on-connect | `enumerate` strategy only; Postgres checkpoint |
+| Crawl scheduling | schedule table + `pg_try_advisory_lock` |
+| `minReplicas ≥ 1` | manifest change |
+| Watch state → Postgres | migration off the volume |
+
+#### Phase 3 — local MVP
+
+| Work | Tech |
+|------|------|
+| Lean compose profile | in-process queue, no Redis, no Nango |
+| Local password auth | `argon2-cffi`, lockout counters, reset tokens |
+| Local upload signer | signed-token endpoint behind the same API shape |
+| Model catalog + hardware check | static YAML → Pydantic; VRAM detection or declared |
+| **Air-gap acceptance test** | disconnect network in CI; full flow must pass |
+
+#### Phase 4 — cloud MVP
+
+| Work | Tech |
+|------|------|
+| **Broker lifecycle spike** | deploy the credential broker to Cloud Run *in dev* first |
+| Pub/Sub impl | `google-cloud-pubsub`, push subscriptions |
+| Crawl runs as jobs | Cloud Run Jobs |
+| Pooling | Cloud SQL connector + PgBouncer; audit pool sizes against max connections |
+| Scheduler | Cloud Scheduler → authenticated HTTP |
+| Secrets | Secret Manager |
+| Signed URLs | IAM `SignBlob`; grant `serviceAccountTokenCreator` |
+| Telemetry sink | OTel exporter → Cloud Trace / Monitoring |
+
+#### Phase 4b — full crawlers
+
+Remaining strategies (`query`, `tree`, `feed`, `search`, then `traverse`), dry-run, politeness via
+`protego`, `selectolax` parsing, per-host concurrency, config UI with `react-hook-form` + `zod`.
+
+#### Phases 5–6 — team, scale, compliance
+
+Permission sync from source systems; SSO via OIDC behind the existing `TokenVerifier` seam; SCIM;
+immutable audit log as a separate append-only store with real retention; delete cascade; k6 soak.
+
+---
+
+### Spikes to run before committing
+
+| Spike | Question it answers | Blocks |
+|-------|--------------------|--------|
+| **Credential broker on Cloud Run** | Does the self-hosted image tolerate a request-scoped lifecycle? | Phase 4 topology |
+| **Pub/Sub ack deadline vs enrichment p99** | Push or pull? | Phase 4 worker shape |
+| **Cloud SQL connection ceiling under Cloud Run fan-out** | What pool size survives max instances? | Phase 4 sizing |
+| **In-process queue parity** | Does the local impl satisfy the same contract tests? | Phase 3 |
+| **Broker sync engine overlap** | Does the credential broker's own sync engine replace part of the crawler? | Phase 4b scope |
+
+The last one could remove work rather than add it — worth running early.
 
 
+---
 
-# Part VIII · The plan
+# Part IX · The plan
 
-*Sequence, decisions, and the market*
-
+*Sequence, open decisions, and the market*
 
 ---
 
@@ -7782,304 +8188,6 @@ Stack choices and per-variant realisation are in
 
 ---
 
-## Implementation Plan & Stack
-
-*Proposals to validate against the codebase, not settled decisions. This was written from the
-design documents; dependency manifests and the pipeline's existing framework may already provide
-several of these, or already have an established alternative in-repo.*
-
-### Constraints
-
-1. **No new languages.** Python 3.12 and TypeScript. The channel agent stays Node.
-2. **No new infrastructure unless a role demands it.** Reach for Postgres before adding a service.
-3. **Every choice must work in all three variants** — or be behind the interface that lets them
-   differ.
-
-That third constraint is the one that does the work. It is why the queue, the scheduler, the
-object store and the identity provider all need interfaces, and why almost nothing else does.
-
----
-
-### Component stack
-
-| Component | Tech | Why this one |
-|-----------|------|-------------|
-| Content contract | Pydantic discriminated union (`Field(discriminator=...)`) | Closed sum type *with* runtime validation; `is_downloaded` as `computed_field` so it is structurally unsettable |
-| MIME sniffing | `filetype` / `puremagic` | Pure-Python, no native dep in slim images. libmagic is more accurate where you can carry it |
-| Queue abstraction | `Protocol` over `nats-py`, `google-cloud-pubsub`, and an in-process impl | The interface is small; the *semantics* differ — ack deadlines, ordering keys, redelivery |
-| Fetch worker | `httpx` streaming + resumable upload | Bytes never buffer |
-| Retry / backoff | `tenacity` | Composable, jitter built in |
-| Rate limiting | Redis token bucket via Lua | Must be atomic **across replicas** — in-process limiters silently fail past one pod |
-| Crawl scheduling | Postgres schedule table + `pg_try_advisory_lock` | Leader election with zero new infrastructure, identical across variants |
-| Crawl state | Postgres (`crawl_runs`, `crawl_frontier`) | Durable and resumable — precisely what Redis is wrong for |
-| robots.txt | `protego` | Handles crawl-delay and wildcards; stdlib `robotparser` does not |
-| HTML parsing | `selectolax` | Substantially faster than BeautifulSoup at crawl volumes |
-| Field mapping | `jmespath` | Well-specified and boring. Do not invent a DSL |
-| Chunking | `semantic-text-splitter` | Standalone; avoids pulling a framework in for one function |
-| Password hashing | `argon2-cffi` | Argon2id |
-| Token verification | `PyJWT` RS256 + JWKS cache, behind a `TokenVerifier` Protocol | Local and OIDC implementations from one seam |
-| Trace propagation | OTel `TraceContextTextMapPropagator` | Inject into message headers, extract in the worker — closes the queue-hop gap |
-| Model catalog | Static YAML → Pydantic, merged with discovery | Same pattern as `nango_provider_meta.py`; air-gap friendly |
-| Config UI forms | `react-hook-form` + `zod` | Crawler configs need schema-driven forms with live validation |
-| Integration tests | `testcontainers` + `respx` | Real Postgres and queue in tests; mock HTTP at the boundary |
-
-#### Three non-obvious calls
-
-**API keys hash with SHA-256, not Argon2.** Passwords need a slow KDF because they are low-entropy
-and human-chosen. API keys are high-entropy random tokens — a slow hash buys nothing and costs you
-on every request. Different threat model, different primitive.
-
-**`generator_version` is a fingerprint, not a number.**
-`sha256(canonical_json({prompt, model_id, schema, parser_version, chunker_version}))`. Staleness
-detection becomes a join rather than a manual bump someone forgets, and it catches changes nobody
-thought to version.
-
-**Postgres advisory locks instead of an orchestrator.** The obvious answer for crawl scheduling is
-Temporal or Airflow. Both are real dependencies with their own operational burden, and Temporal in
-particular is hard to justify in the local variant. A schedule table plus `pg_try_advisory_lock`
-covers scheduling, leader election and resumability at target scale.
-
-#### Deliberately not added
-
-**Celery** — its worker model does not fit queue-driven asyncio, and you would run two queue
-systems. **A separate vector DB** — pgvector-in-the-record-store *is* the architectural bet.
-**Kafka** — the chosen brokers suffice. **Playwright** — ship `traverse` without JS rendering; add
-it opt-in per config if real sites demand it. **A second graph database.**
-
----
-
-### Per-variant realisation
-
-| Concern | Local | GKE | GCP (Cloud Run) |
-|---------|-------|-----|-----------------|
-| Record store | Postgres container | Supabase in-cluster | Cloud SQL PG16 + pgvector |
-| **Pooling** | direct, small pool | PgBouncer / pooler | **Cloud SQL connector + PgBouncer — mandatory** |
-| Data access | Kong + PostgREST | Kong + PostgREST | Kong + PostgREST on Cloud Run |
-| Queue | **in-process** (single instance) | NATS StatefulSet | Pub/Sub |
-| Queue client | in-memory impl | `nats-py` | `google-cloud-pubsub` |
-| Blob store | filesystem | GCS | GCS |
-| **Presigned upload** | local signed-token endpoint | GCS signed URL | GCS signed URL via IAM `SignBlob` |
-| Inference | Ollama container | Ollama pods, tiered | Ollama Cloud + Gemini |
-| Scheduler | in-process ticker | CronJob + advisory lock | Cloud Scheduler → HTTP |
-| **Crawl execution** | background task | Deployment | **Cloud Run Jobs** |
-| Enrich / fetch workers | asyncio tasks | Deployments + KEDA | Cloud Run services on Pub/Sub push |
-| Stream workers (W6) | n/a | **StatefulSet + sharding** | not supported — needs a cluster |
-| Rate-limit store | in-process | Redis pod | Memorystore |
-| Auth | local password | GoTrue → abstracted | Firebase Auth |
-| Secrets | `.env` | k8s Secrets | Secret Manager |
-| Autoscale | none | KEDA on queue depth | Cloud Run concurrency, `min-instances ≥ 1` |
-| Telemetry sink | stdout / local collector | OTel → Prometheus + Grafana | Cloud Trace + Monitoring |
-
-#### GCP — five things that will bite
-
-**1. Connection exhaustion.** Cloud Run can spin up a hundred instances; each holding a pool of ten
-is a thousand connections against a Cloud SQL instance that allows far fewer. This is *the* classic
-serverless-plus-Postgres failure. Small pools, lazy initialisation, and a pooler in front — not
-optional.
-
-**2. `/tmp` is memory.** Cloud Run's filesystem is in-memory and counts against the instance's
-memory limit. Buffering a 500 MB download to disk does not degrade — it OOMs. Streaming straight
-to the object store is **mandatory here**, where elsewhere it is merely correct.
-
-**3. Ack deadline versus inference latency.** Pub/Sub push has a maximum ack deadline. A slow
-enrichment call plus a fallback chain can exceed it, causing redelivery and duplicate work. Either
-ack on receipt and track completion separately, or use pull subscriptions with `min-instances ≥ 1`.
-Decide deliberately; the default will bite.
-
-**4. Crawl runs are jobs, not requests.** A three-hour backfill does not fit a request-driven
-service. Cloud Run **Jobs** are the right primitive — task-based, long-running, resumable via the
-checkpoint in Postgres. Enrich and fetch stay as push-driven services.
-
-**5. Signed URLs need a signer.** The service account needs
-`roles/iam.serviceAccountTokenCreator` on itself to sign without a key file. Easy to miss, fails
-only at runtime.
-
-#### Local — three things that will bite
-
-**1. Presigned uploads have no signer.** Filesystem storage cannot issue a presigned URL. Two
-options: run MinIO for S3 parity, or keep the API shape and have the local backend return a URL
-pointing at a local upload endpoint with a signed token. **Prefer the second** — same contract,
-one fewer container, and the contract is what matters.
-
-**2. The full stack does not fit a laptop.** Postgres, NATS, Redis, Ollama, Kong, PostgREST, Nango,
-API and UI is a lot of memory before a model is loaded. Ship a **lean profile**: drop Nango (no
-integrations), drop Redis (in-process limiting is correct at one instance), and run the **queue
-in-process** — with one instance there is nothing to distribute. This is the third payoff of the
-queue interface.
-
-**3. Model choice is constrained by the machine.** This is where the catalog's hardware-feasibility
-check earns its place: offering a 70B model to a 16GB laptop is a bad first experience.
-
-#### GKE — two things that will bite
-
-**1. Stream workers are not Deployments.** W6 holds one connection per account. A Deployment with
-three replicas ingests everything three times. It needs a StatefulSet with account sharding and
-leader election — a different deployment shape from every other worker.
-
-**2. KEDA needs queue depth exposed.** Scaling enrich workers on CPU is wrong; they are blocked on
-inference, not compute. Scale on consumer lag, which means the broker's metrics have to reach KEDA.
-
----
-
-### Build order — where to actually start
-
-The phases say *what*. This says *what you do on Monday*.
-
-#### Step 0 — read the codebase
-
-Everything in this document was derived from documentation. Nobody has opened `api/` or `webhook/`
-while writing it, so several choices below will change on contact.
-
-| Read | Because |
-|------|---------|
-| Dependency manifests | Several proposed libraries may already be present, or have an established in-repo alternative |
-| `storage.py` and the PostgREST path | ~6,400 lines whose shape constrains the schema work |
-| The two JWT verify sites in `main.py` | The `TokenVerifier` seam is a refactor of these, not a greenfield |
-| The pipeline's ADK framework | It may already provide a worker or queue abstraction that would otherwise be duplicated |
-| Existing migrations and table shapes | Determines whether Phase 1's schema is additive or a parallel set |
-
-Roughly half a day. Do it before writing anything.
-
-**In parallel and non-blocking: rotate the committed secrets.** They are in git history, that is
-live exposure, and it has no dependency on the build order.
-
-#### Steps 1–8 — to the first milestone
-
-Order is dependency-driven; each step is unblocked by the one before it.
-
-| # | Step | Why here |
-|---|------|----------|
-| **1** | **Schema** — orgs, projects, members, groups, **`identities`**, **`api_keys`**, producers (with `inbound_auth`), data items with `org_id`/`project_id`/`access_level`/principal `shared_with`, `derived_artifacts` with source **list** + `served_by_model` + `fallback_depth`, `generator_versions` registry, `audit_events`, embeddings with `model_id`/`dim` | Everything in Phase 1b is columns. Design them **once, together**. Highest-leverage single artifact in the plan — get it wrong and every later slice inherits a migration |
-| **2** | **Crypto foundation** — KMS envelope encryption, encrypt/decrypt helpers, **failing closed** | Nothing can safely store a credential before this, and step 3 needs to |
-| **3** | **Auth seam + producer registry** — `TokenVerifier` with the API-key verifier; `identities` and `api_keys` tables; capability scopes; producer `inbound_auth` | Every write needs a producer and a credential. Firebase and the gateway arrive later **behind this seam**, so building it now costs an implementation and skipping it costs a fork |
-| **4** | **Model config, minimal** — one engine, one embedding assignment, `generator_versions` populated | Step 6 embeds. This is the difference between provenance from row one and a corpus-wide staleness event later |
-| **5** | **Write endpoint** — `POST /write`, `Inline` only, `items[]`, `207`, commit, ACL from producer, **audit record written** | The spine's first half |
-| **6** | **Embed path** — queue abstraction with the in-process implementation, `model_id` recorded, defer-never-fallback | Makes what was written findable |
-| **7** | **Read** — `GET /data/{id}` and `POST /retrieve`, vector + lexical + hybrid, **ACL applied inside the query** | Closes the spine |
-| **8** | **Invariant gate** — adversarial cross-tenant across every retrieval path, kill-after-`2xx` durability, `distinct(model_id) == 1` property | The exit criterion |
-
-Tests are written **alongside** each step. Step 8 is the gate, not when testing begins — see
-[testing.md](#testing).
-
-#### The milestone
-
-> Write an item into a project owned by an org with an access level → a search scoped to that
-> project finds it → the response cites it → the read is audited → the row records which model
-> embedded it.
-
-At that point both halves of the system are real and every later slice widens a spine that works.
-
-#### Nothing open blocks starting
-
-Worth stating plainly, because it is easy to assume otherwise:
-
-| Open decision | When it is needed |
-|---------------|------------------|
-| Own auth vs hosted IdP | Deferred by the `TokenVerifier` seam — Phase 6 |
-| Materialisation policy | Phase 4, with uploads and fetch |
-| Default ACL for a team upload | Phase 4 |
-| Media in v1 scope | Phase 4–5 |
-| Backfill depth on first connect | Phase 5 |
-| Cross-project cases | Phase 7 |
-
-**None of them gates step 1.** That is itself an argument for this ordering — the work that must
-be decided last is also the work that happens last.
-
-#### UI, in this window
-
-Slice 1 needs a **thin console** — one page: write something, search, inspect a result. Not a
-product surface. It exists because retrieval quality cannot be judged from a JSON body, and it is
-built after step 7, against the API rather than beside it.
-
-Full UI sequencing is in [the roadmap](#roadmap).
-
-### Phased implementation
-
-#### Phase 0 — correctness
-
-**No new dependencies.** A Pydantic model change, two columns, a config value, and a rotation.
-
-| Work | Tech |
-|------|------|
-| Content contract | Pydantic discriminated union; `computed_field` |
-| MIME sniffing at ingest | `filetype` |
-| `model_id` + `dim` on embeddings | migration |
-| Disable embedding fallback | config + guard in the model client |
-| Rotate committed secrets | `git-filter-repo` awareness — rotation, not history rewriting alone |
-
-#### Phase 1 — foundation
-
-The phase that introduces the interfaces.
-
-| Work | Tech |
-|------|------|
-| Queue abstraction | `Protocol` + three impls (in-process, NATS, Pub/Sub) |
-| Trace propagation across the hop | OTel propagator into message headers |
-| `TokenVerifier` seam | `PyJWT`, JWKS cache via `httpx` + TTL |
-| Asymmetric signing | RS256 keypair; serve JWKS |
-| Worker split (W1/W2) | asyncio, `httpx` streaming, `tenacity` |
-| Per-(provider, user) limits | Redis Lua token bucket — in-process impl for local |
-| Staleness fields | Postgres tables; fingerprint via `sha256(canonical_json(...))` |
-| Capability-scoped keys | FastAPI dependency; SHA-256 key hashes + prefix column |
-| Classification-gated inference | Policy check before the fallback chain |
-
-#### Phase 2 — demo (GKE)
-
-| Work | Tech |
-|------|------|
-| Backfill-on-connect | `enumerate` strategy only; Postgres checkpoint |
-| Crawl scheduling | schedule table + `pg_try_advisory_lock` |
-| `minReplicas ≥ 1` | manifest change |
-| Watch state → Postgres | migration off the volume |
-
-#### Phase 3 — local MVP
-
-| Work | Tech |
-|------|------|
-| Lean compose profile | in-process queue, no Redis, no Nango |
-| Local password auth | `argon2-cffi`, lockout counters, reset tokens |
-| Local upload signer | signed-token endpoint behind the same API shape |
-| Model catalog + hardware check | static YAML → Pydantic; VRAM detection or declared |
-| **Air-gap acceptance test** | disconnect network in CI; full flow must pass |
-
-#### Phase 4 — cloud MVP
-
-| Work | Tech |
-|------|------|
-| **Broker lifecycle spike** | deploy the credential broker to Cloud Run *in dev* first |
-| Pub/Sub impl | `google-cloud-pubsub`, push subscriptions |
-| Crawl runs as jobs | Cloud Run Jobs |
-| Pooling | Cloud SQL connector + PgBouncer; audit pool sizes against max connections |
-| Scheduler | Cloud Scheduler → authenticated HTTP |
-| Secrets | Secret Manager |
-| Signed URLs | IAM `SignBlob`; grant `serviceAccountTokenCreator` |
-| Telemetry sink | OTel exporter → Cloud Trace / Monitoring |
-
-#### Phase 4b — full crawlers
-
-Remaining strategies (`query`, `tree`, `feed`, `search`, then `traverse`), dry-run, politeness via
-`protego`, `selectolax` parsing, per-host concurrency, config UI with `react-hook-form` + `zod`.
-
-#### Phases 5–6 — team, scale, compliance
-
-Permission sync from source systems; SSO via OIDC behind the existing `TokenVerifier` seam; SCIM;
-immutable audit log as a separate append-only store with real retention; delete cascade; k6 soak.
-
----
-
-### Spikes to run before committing
-
-| Spike | Question it answers | Blocks |
-|-------|--------------------|--------|
-| **Credential broker on Cloud Run** | Does the self-hosted image tolerate a request-scoped lifecycle? | Phase 4 topology |
-| **Pub/Sub ack deadline vs enrichment p99** | Push or pull? | Phase 4 worker shape |
-| **Cloud SQL connection ceiling under Cloud Run fan-out** | What pool size survives max instances? | Phase 4 sizing |
-| **In-process queue parity** | Does the local impl satisfy the same contract tests? | Phase 3 |
-| **Broker sync engine overlap** | Does the credential broker's own sync engine replace part of the crawler? | Phase 4b scope |
-
-The last one could remove work rather than add it — worth running early.
-
-
 ---
 
 ## Competitive Landscape
@@ -8276,6 +8384,8 @@ and are dated March 2026. They need a refresh pass and the corrections listed ab
 
 ---
 
+---
+
 ## mem-dog vs Onyx: Detailed Comparison
 
 **Last updated:** August 2026
@@ -8438,6 +8548,8 @@ the permission gap because that one is a correctness issue regardless of competi
 - [NeuralChainAI — Self-Hosted Enterprise Search: Onyx for Regulated Teams](https://neuralchainai.com/solutions/self-hosted-enterprise-search-ai/)
 - [elest.io — Onyx: Free Open Source AI Platform with Connectors, Agents & Knowledge Base](https://blog.elest.io/onyx-free-open-source-ai-platform-with-connectors-agents-knowledge-base/)
 
+
+---
 
 ---
 

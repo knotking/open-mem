@@ -1,5 +1,29 @@
 # API Contract & Surfaces
 
+## How we define the API
+
+An API accumulated endpoint by endpoint ends up with three ways to write, two batch variants, four
+error shapes and a privilege model nobody can state. These rules come first; the surface is what
+falls out of them.
+
+| # | Rule | What it prevents |
+|---|------|------------------|
+| 1 | **One verb per operation, never a variant per caller.** One write endpoint for gateway, crawler, SDK, upload and ETL alike | Five write paths that drift, each with its own ACL bug |
+| 2 | **Collections always, singletons never.** `items[]` even for one item, `207` even when nothing failed | A separate batch endpoint, and clients that handle partial failure only in the batch case |
+| 3 | **Nothing writes anonymously.** Every call resolves to a registered producer or principal | Unattributable data — which cannot be ACL'd, rate-limited, billed or erased on request |
+| 4 | **State is returned, not inferred.** Readiness is a field: `stored` / `searchable` / `enriched` | Every client inventing its own polling heuristic |
+| 5 | **Options tune cost, never access.** `enrich` and `priority` are tunable; ACL, validation and redaction are not | A caller setting `redact: false` and turning a control into decoration |
+| 6 | **Capability is expressed in the surface**, so a key can hold `data:read` without `admin:*` | A search key that can delete the organization |
+| 7 | **Destructive and high-cost operations preview before they apply**, computed against real data | A dry-run returning JSON nobody reads, which prevents nothing |
+| 8 | **The API is a superset of the console.** Anything the UI can do is doable through the API — never the reverse | A UI reaching past the API, which is a bug in the API and blocks every embedding host |
+
+**Rule 3 is the one that pays for the others.** Producer identity is what makes rules 5, 6 and 7
+enforceable at all — ACL derivation, rate limits, quota, admission control and freshness detection
+are all functions of *who is writing*. An endpoint accepting anonymous input does not merely lack
+attribution; it removes the enforcement point every other rule depends on.
+
+## What falls out
+
 Everything reaches the platform through `/api/v1/` — UI, SDKs, MCP server, gateway,
 conversational agent and host applications alike. That uniformity is a strength; the problem is
 that **privilege is not expressed in the surface**.

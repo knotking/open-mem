@@ -16,14 +16,15 @@ is the same material as one continuous page.
 
 | Part | Covers | Documents |
 |------|--------|-----------|
-| **I · Why this exists** | The problem, the bet, who owns what | [use-cases](use-cases.md) · [use-case catalog](use-cases-catalog.md) · [design-principles](design-principles.md) |
+| **I · Why this exists** | The problem, the bet, who owns what | [use-cases](use-cases.md) · [use-case catalog](use-cases-catalog.md) · [feature matrix](feature-matrix.md) · [design-principles](design-principles.md) |
 | **II · What the things are** | The data model everything else operates on | [memories](memories.md) · [cases](cases.md) · [normalization](ingestion/normalization.md) |
-| **III · Getting data in** | One write path, and every producer that uses it | [write-api](ingestion/write-api.md) · [customization](ingestion/write-customization.md) · [workers](ingestion/workers.md) · [custom workers](ingestion/custom-workers.md) · [sources](ingestion/sources.md) · [connectors](ingestion/connectors.md) · [formats](ingestion/formats.md) · [uploads](ingestion/uploads.md) · [crawlers](ingestion/crawlers.md) · [bulk](operations/bulk-operations.md) |
-| **IV · Making it useful** | Indexes, models, keeping derived data honest | [indexes](retrieval/indexes.md) · [quality](retrieval/quality.md) · [multilingual](multilingual.md) · [model catalog](operations/model-catalog.md) · [model routing](operations/model-routing.md) · [versioning](retrieval/versioning.md) |
-| **V · Lifecycle** | Removing things, correctly | [deletion](operations/deletion.md) |
+| **III · Write, read, delete** | **One record, its whole life — in one place** | [write-api](ingestion/write-api.md) · [indexes](retrieval/indexes.md) · [quality](retrieval/quality.md) · [versioning](retrieval/versioning.md) · [deletion](operations/deletion.md) |
+| **IV · Ingestion at scale** | Every producer that uses the write path, and how far it bends | [workers](ingestion/workers.md) · [custom workers](ingestion/custom-workers.md) · [customization](ingestion/write-customization.md) · [sources](ingestion/sources.md) · [connectors](ingestion/connectors.md) · [formats](ingestion/formats.md) · [uploads](ingestion/uploads.md) · [crawlers](ingestion/crawlers.md) · [bulk](operations/bulk-operations.md) |
+| **V · Models and the sandbox** | Choosing what runs, and proving it works on your data | [model catalog](operations/model-catalog.md) · [model routing](operations/model-routing.md) · [sandbox](ui-sandbox.md) · [multilingual](multilingual.md) |
 | **VI · Access and privacy** | Who sees what, and what we can prove | [tenancy](security/tenancy.md) · [access model](security/access-model.md) · [auth](security/auth.md) · [privacy foundations](security/privacy-foundations.md) · [compliance](security/compliance.md) |
-| **VII · Interfaces and operations** | The contract, and running the thing | [api](api.md) · [telemetry](operations/telemetry.md) · [testing](operations/testing.md) · [technology](operations/technology.md) · [deployment variants](operations/deployment-variants.md) |
-| **VIII · The plan** | Sequence, decisions, the market | [roadmap](roadmap.md) · [implementation](operations/implementation.md) · [competition](competition/README.md) |
+| **VII · How we define the API** | The rules the surface obeys, before any endpoint exists | [api](api.md) · [ui design](ui-design.md) |
+| **VIII · How we implement it** | Stack, variants, observability, and the tests that close each slice | [technology](operations/technology.md) · [deployment variants](operations/deployment-variants.md) · [telemetry](operations/telemetry.md) · [testing](operations/testing.md) · [implementation](operations/implementation.md) |
+| **IX · The plan** | Sequence, open decisions, the market | [roadmap](roadmap.md) · [competition](competition/README.md) |
 
 ## Start here
 
