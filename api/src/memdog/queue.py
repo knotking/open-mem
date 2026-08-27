@@ -51,17 +51,13 @@ class InProcessQueue:
         self._workers: list[asyncio.Task] = []
         self._max_attempts = max_attempts
         self._base_delay = base_delay
-        self._inflight = 0
+        self._active = 0
         self.dead_letters: list[tuple[Message, str]] = []
-        self._idle = asyncio.Event()
-        self._idle.set()
 
     def _queue(self, topic: str) -> asyncio.Queue[Message]:
         return self._queues.setdefault(topic, asyncio.Queue())
 
     async def publish(self, topic: str, body: dict, headers: dict[str, str] | None = None) -> None:
-        self._idle.clear()
-        self._inflight += 1
         await self._queue(topic).put(Message(topic, body, headers or {}))
 
     def subscribe(self, topic: str, handler: Handler) -> None:
@@ -72,8 +68,25 @@ class InProcessQueue:
         return sum(q.qsize() for q in self._queues.values())
 
     async def drain(self, timeout: float = 10.0) -> None:
-        """Test and shutdown affordance: wait until nothing is in flight."""
-        await asyncio.wait_for(self._idle.wait(), timeout)
+        """Wait until every *subscribed* topic is quiet.
+
+        Deliberately not "until every queue is empty": a message published to a
+        topic nobody consumes can never complete, so waiting on it is a hang
+        rather than a wait. That distinction is not hypothetical -- it is
+        exactly the state an item is in between `searchable` and `enriched` when
+        the enrich worker is down.
+        """
+        async def quiet() -> bool:
+            pending = sum(
+                self._queues[t].qsize() for t in self._handlers if t in self._queues
+            )
+            return pending == 0 and self._active == 0
+
+        async def wait() -> None:
+            while not await quiet():
+                await asyncio.sleep(0.005)
+
+        await asyncio.wait_for(wait(), timeout)
 
     async def close(self) -> None:
         for task in self._workers:
@@ -87,6 +100,7 @@ class InProcessQueue:
         queue, handler = self._queue(topic), self._handlers[topic]
         while True:
             message = await queue.get()
+            self._active += 1
             try:
                 await handler(message)
             except Exception as exc:
@@ -106,6 +120,4 @@ class InProcessQueue:
                 )
             finally:
                 queue.task_done()
-            self._inflight -= 1
-            if self._inflight == 0:
-                self._idle.set()
+                self._active -= 1

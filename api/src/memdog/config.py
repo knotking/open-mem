@@ -44,6 +44,8 @@ class Settings:
     embed_dim: int = field(default_factory=lambda: int(_env("EMBED_DIM", "768")))
     embed_engine: str = field(default_factory=lambda: _env("EMBED_ENGINE", "local"))
     embed_model: str = field(default_factory=lambda: _env("EMBED_MODEL", ""))
+    extract_engine: str = field(default_factory=lambda: _env("EXTRACT_ENGINE", "local"))
+    extract_model: str = field(default_factory=lambda: _env("EXTRACT_MODEL", ""))
     ollama_url: str = field(
         default_factory=lambda: _env("OLLAMA_URL", "http://localhost:11434")
     )

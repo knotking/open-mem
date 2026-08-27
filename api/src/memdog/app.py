@@ -22,8 +22,9 @@ from .crypto import Envelope
 from .db import create_pool, migrate
 from .inference import build_embedder
 from .queue import InProcessQueue
-from .retrieval import NotFound, get_item, retrieve
-from .workers import EmbedWorker, verify_index_dimension
+from .retrieval import NotFound, get_artifacts, get_item, retrieve, stale_artifacts
+from .extraction import build_extractor
+from .workers import EmbedWorker, EnrichWorker, verify_index_dimension
 from .write import EMBED_TOPIC, AdmissionError, write_items
 
 
@@ -37,14 +38,26 @@ async def lifespan(app: FastAPI):
     # Refuse to serve against an index this engine cannot write to.
     await verify_index_dimension(pool, embedder)
     queue = InProcessQueue()
-    worker = EmbedWorker(pool, embedder, settings)
-    await worker.ensure_generator()
-    worker.register(queue, EMBED_TOPIC)
+    embed_worker = EmbedWorker(pool, embedder, settings, queue=queue)
+    await embed_worker.ensure_generator()
+    embed_worker.register(queue, EMBED_TOPIC)
+
+    extractor = build_extractor(settings)
+    enrich_worker = EnrichWorker(pool, extractor, settings)
+    await enrich_worker.ensure_generator()
+    enrich_worker.register(queue)
 
     app.state.settings = settings
     app.state.pool = pool
     app.state.queue = queue
     app.state.embedder = embedder
+    app.state.extractor = extractor
+    # What "current" means for staleness: the generator each purpose is
+    # assigned right now.
+    app.state.current_generators = {
+        "embedding": embed_worker.generator_version,
+        "extraction": enrich_worker.generator_version,
+    }
     app.state.blobs = FilesystemBlobStore(Path(os.environ.get("BLOB_ROOT", "./.blobs")))
     app.state.envelope = Envelope.from_settings(settings)
     app.state.verifier: TokenVerifier = ApiKeyVerifier(pool)
@@ -119,6 +132,29 @@ async def read_item(
     except NotFound as exc:
         raise HTTPException(status_code=404, detail="not found") from exc
     return {k: v for k, v in row.items()}
+
+
+@app.get("/api/v1/data/{data_id}/artifacts")
+async def read_artifacts(
+    request: Request, data_id: str, actor: Principal = Depends(principal)
+) -> dict:
+    try:
+        return {"artifacts": await get_artifacts(request.app.state.pool, actor, data_id)}
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/artifacts/stale")
+async def read_stale(
+    request: Request, actor: Principal = Depends(principal), limit: int = 100
+) -> dict:
+    try:
+        rows = await stale_artifacts(
+            request.app.state.pool, actor, request.app.state.current_generators, limit
+        )
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    return {"stale": rows, "current": request.app.state.current_generators}
 
 
 @app.post("/api/v1/retrieve", response_model=RetrieveResponse)

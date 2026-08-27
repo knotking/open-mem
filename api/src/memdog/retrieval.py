@@ -224,3 +224,71 @@ async def retrieve(
         )
 
     return RetrieveResponse(query_id=query_id, results=citations, model_id=embedder.model_id)
+
+
+async def get_artifacts(
+    pool: asyncpg.Pool, principal: Principal, data_id: str
+) -> list[dict]:
+    """The derived layer for one item, with the ACL applied to the *artifact*.
+
+    Sharing an item does not publish what was derived from it, so the artifact's
+    own access level is what governs here -- not the source's.
+    """
+    principal.require(DATA_READ)
+    org_id, user_id, principals = visibility_params(principal)
+    predicate = visibility_sql("a", 2, 3, 4)
+    rows = await pool.fetch(
+        f"""
+        SELECT a.artifact_id, a.kind, a.title, a.description, a.summary,
+               a.keywords, a.language, a.fields, a.model_id, a.generator_version,
+               a.served_by_model, a.fallback_depth, a.access_level, a.created_at,
+               s.span_start, s.span_end
+        FROM artifacts a
+        JOIN artifact_sources s ON s.artifact_id = a.artifact_id
+        WHERE s.data_id = $1 AND {predicate}
+        ORDER BY a.created_at DESC
+        """,
+        data_id,
+        org_id,
+        user_id,
+        principals,
+    )
+    await record_access(
+        pool, principal, action="artifacts.read", data_id=data_id
+    )
+    return [dict(r) for r in rows]
+
+
+async def stale_artifacts(
+    pool: asyncpg.Pool, principal: Principal, current: dict[str, str], limit: int = 100
+) -> list[dict]:
+    """What needs rebuilding, and why.
+
+    Staleness is a join, not a flag somebody remembers to set: an artifact whose
+    `generator_version` is not the one currently assigned for its purpose is
+    stale by construction. That is the payoff of the fingerprint -- it catches
+    prompt, model, schema, parser and chunker changes nobody thought to version.
+    """
+    principal.require(DATA_READ)
+    org_id, user_id, principals = visibility_params(principal)
+    predicate = visibility_sql("a", 2, 3, 4)
+    rows = await pool.fetch(
+        f"""
+        SELECT a.artifact_id, a.kind, a.generator_version, g.purpose, g.model_id,
+               s.data_id
+        FROM artifacts a
+        JOIN generators g ON g.generator_version = a.generator_version
+        JOIN artifact_sources s ON s.artifact_id = a.artifact_id
+        WHERE a.org_id = $1 AND {predicate}
+          AND a.generator_version <> COALESCE($5::jsonb ->> g.purpose, a.generator_version)
+        ORDER BY a.created_at
+        LIMIT $6
+        """,
+        org_id,
+        org_id,
+        user_id,
+        principals,
+        current,
+        limit,
+    )
+    return [dict(r) for r in rows]

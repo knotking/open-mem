@@ -1,6 +1,7 @@
-# `api/` — the Phase 1 spine
+# `api/` — the spine, and the depth on top of it
 
-Write → store → read, end to end. This is slice 1 of [the roadmap](../docs/roadmap.md),
+Write → store → read, end to end, plus the first stage of enrichment. Slice 1 of
+[the roadmap](../docs/roadmap.md),
 built in the order [implementation.md](../docs/operations/implementation.md#build-order--where-to-actually-start)
 gives: schema, crypto, auth seam, model config, write, embed, read, invariant gate.
 
@@ -43,6 +44,31 @@ carry `model_id = local-hash-v1`, so the day a real engine is assigned the old
 vectors are identifiable and re-embeddable rather than quietly mixed in. It is
 also what makes the air-gap acceptance test possible later.
 
+## Slice 2 — what enrichment adds
+
+`searchable` → `enriched`, by a second worker on a second topic. The handoff is
+the point: an item is searchable whether or not enrichment ever succeeds, and a
+broken extractor costs the rung the item already reached rather than the item.
+
+- **One envelope, whatever the type** — `title`, `description`, `summary`,
+  `keywords`, `language`. Core fields are columns, not `jsonb`, because every
+  list view and citation reads them.
+- **A title is always produced**, including for records that never reach a
+  model. `LocalHeuristicExtractor` is not a stand-in for the LLM path; it is the
+  answer for the majority of a corpus, where a model adds nothing.
+- **Nulls where nothing can be determined.** The local extractor returns no
+  `description` and no `language` rather than inventing plausible ones.
+- **Derived artifacts inherit the strictest source ACL**, with principal lists
+  intersected. A summary spanning a public document and two private ones stays
+  private — otherwise sharing one item leaks two.
+- **Staleness is a join.** An artifact whose `generator_version` is not the one
+  currently assigned for its purpose is stale by construction, so changing a
+  prompt, model, schema, parser or chunker is detected without anyone
+  remembering to bump a number.
+- **Content is fenced as data.** The injection defence is identical across
+  agents — a per-agent variation is a per-agent hole — and the fence carries a
+  per-request nonce so a document cannot close its own fence.
+
 ## What the invariant gate actually checks
 
 `tests/test_invariants.py`. Each of these is silent when it breaks, which is why
@@ -70,8 +96,9 @@ Named because "not present" and "overlooked" should not look the same:
 | Not here | Where it belongs |
 |----------|------------------|
 | Fetch worker for `Pending` content | slice 3 — the item lands with `is_downloaded = false`, which is the correct state, not a gap |
-| Memories, cases, `memory_members` | slice 2 / 7. The write API's `memory` and `case` fields parse and are ignored |
-| Enrichment, artifacts, entities | slice 2. `artifacts` / `artifact_sources` are in the schema because the erasure reverse lookup cannot be retrofitted |
+| Memories, cases, `memory_members` | slice 7. The write API's `memory` and `case` fields parse and are ignored |
+| Entities, claims, questions, the standard envelope fields | slice 2, continued. The core envelope ships; `entities` and the rest are the next extraction |
+| W7 reprocess — rebuilding what a stale generator produced | slice 2, continued. `GET /artifacts/stale` identifies the work; nothing performs it yet |
 | Content-hash dedupe of the derived layer | slice 4, where the second copy first arrives |
 | Presigned uploads, crawlers, connectors | slices 3–5 |
 | Control-plane endpoints | `bootstrap.py` performs the same sequence they will |

@@ -15,7 +15,8 @@ from memdog.config import load_settings  # noqa: E402
 from memdog.db import create_pool, migrate  # noqa: E402
 from memdog.inference import build_embedder  # noqa: E402
 from memdog.queue import InProcessQueue  # noqa: E402
-from memdog.workers import EmbedWorker  # noqa: E402
+from memdog.extraction import build_extractor  # noqa: E402
+from memdog.workers import EmbedWorker, EnrichWorker  # noqa: E402
 from memdog.write import EMBED_TOPIC  # noqa: E402
 
 
@@ -49,11 +50,23 @@ def embedder(settings):
 
 
 @pytest.fixture
-async def queue(pool, embedder, settings):
+def extractor():
+    return build_extractor(load_settings())
+
+
+@pytest.fixture
+async def queue(pool, embedder, extractor, settings):
     queue = InProcessQueue()
-    worker = EmbedWorker(pool, embedder, settings)
-    await worker.ensure_generator()
-    worker.register(queue, EMBED_TOPIC)
+    embed = EmbedWorker(pool, embedder, settings, queue=queue)
+    await embed.ensure_generator()
+    embed.register(queue, EMBED_TOPIC)
+    enrich = EnrichWorker(pool, extractor, settings)
+    await enrich.ensure_generator()
+    enrich.register(queue)
+    queue.generators = {
+        "embedding": embed.generator_version,
+        "extraction": enrich.generator_version,
+    }
     try:
         yield queue
     finally:

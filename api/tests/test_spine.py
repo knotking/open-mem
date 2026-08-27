@@ -21,7 +21,7 @@ from memdog.contracts import (
     WriteRequest,
 )
 from memdog.retrieval import NotFound, get_item, retrieve
-from memdog.write import AdmissionError, write_items
+from memdog.write import EMBED_TOPIC, AdmissionError, write_items
 
 pytestmark = pytest.mark.asyncio
 
@@ -65,7 +65,7 @@ async def test_write_then_retrieve_cites_the_item(
     citation = found.results[0]
     # The citation points at a span of the source, not just at the document.
     assert TEXT[citation.span_start : citation.span_end] == citation.text
-    assert citation.state == "searchable"
+    assert citation.state == "enriched"   # drained all the way up the staircase
 
     # The row records which model embedded it.
     models = await pool.fetch("SELECT DISTINCT model_id FROM embeddings")
@@ -84,22 +84,41 @@ async def test_write_then_retrieve_cites_the_item(
 
 
 async def test_state_is_a_staircase(
-    pool, queue, blobs, settings, embedder, tenant, principal_for
+    pool, blobs, settings, embedder, extractor, tenant, principal_for
 ):
-    """'I just uploaded it and search cannot find it' is a support ticket, not a
-    bug -- but only if the state is visible while it is true."""
+    """Three rungs, and each is reached by its own worker.
+
+    'I just uploaded it and search cannot find it' is a support ticket, not a
+    bug -- but only if the state is visible while it is true. The middle rung is
+    observable here precisely because enrichment is a separate consumer: an item
+    is searchable whether or not enrichment ever succeeds.
+    """
+    from memdog.queue import InProcessQueue
+    from memdog.workers import EmbedWorker, EnrichWorker
+
     actor = await principal_for(tenant.api_key)
+    queue = InProcessQueue()
+    embed = EmbedWorker(pool, embedder, settings, queue=queue)
+    await embed.ensure_generator()
+    embed.register(queue, EMBED_TOPIC)
+
     response = await _write(
         pool, queue, blobs, settings, actor, tenant.producer_id,
         [WriteItem(external_id="s-1", content=Inline(text=TEXT))],
     )
     data_id = response.results[0].data_id
+    assert (await get_item(pool, actor, data_id))["state"] == "stored"
 
-    before = await get_item(pool, actor, data_id)
-    assert before["state"] == "stored"
     await queue.drain()
-    after = await get_item(pool, actor, data_id)
-    assert after["state"] == "searchable"
+    # Enrichment was published but nothing consumes it yet.
+    assert (await get_item(pool, actor, data_id))["state"] == "searchable"
+
+    enrich = EnrichWorker(pool, extractor, settings)
+    await enrich.ensure_generator()
+    enrich.register(queue)
+    await queue.drain()
+    await queue.close()
+    assert (await get_item(pool, actor, data_id))["state"] == "enriched"
 
 
 async def test_pending_content_is_not_downloaded(
