@@ -286,8 +286,10 @@ part (clinical, legal) has `none` for exactly that reason.
 | `queries` · `query_sources` | What was asked, what was retrieved and why it was excluded, what it cost |
 | `runs` · `run_items` | The shared run entity — bulk write, selector delete, account delete, reprocess |
 | `redaction_events` | rule id and version, action, **match count** — never the content |
-| `engines` | Registered models with **encrypted** credentials, failing closed |
-| `model_assignments` | Which model per purpose |
+| `engines` | Registered providers with **encrypted** credentials, failing closed |
+| **`model_cards`** | Capabilities, hardware, licence, pricing, `verified_at` and `declared_by` per claim — the data the mapping is derived from |
+| **`data_type_profiles`** | What a type *requires*: capabilities, context floor, **sensitivity class**, volume |
+| `model_assignments` | Which model per `(purpose, data_type, scope)` |
 | `usage_records` | Tokens per user, model and agent — estimate against actual |
 | `budgets` | Enforced at **user and project** scope |
 

@@ -266,6 +266,116 @@ is not.
 **Correcting the earlier guidance:** smaller-by-default was the wrong call. The right call is
 **store large, index at whatever performs**, and keep the option.
 
+## Cards are stored, and they drive the mapping
+
+A card that only documents is a wiki page. A card the **system reads** is what turns assignment
+from a decision someone has to research into one it can propose and check.
+
+So cards are a **stored, queryable entity** — not prose, not a config file read at boot:
+
+```
+model_cards
+  model_id · family · version · variant
+  architecture · params_total · params_active
+  license · license_restrictions[]
+  context_window · max_input_tokens        ← the embedding constraint lives here
+  capabilities        text · vision · audio · tools · thinking ·
+                      structured_output · embedding · domain:{medical,code,legal}
+  hardware            min_vram_gb per quantization · quantizations[]
+  serving             providers[] · pricing_in · pricing_out · hosting {local,cloud}
+  quality_signals     benchmark · score · as_of
+  status              recommended | available | deprecated | superseded_by
+  card_url
+  verified_at
+  declared_by         vendor | measured | benchmark        ← per capability
+```
+
+### Every capability claim carries who said so
+
+`declared_by` is the field that stops the card being a marketing document.
+
+> A vendor claiming `structured_output` and a model that honours it 95% of the time are different
+> facts, and the second only becomes visible after a corpus has been processed.
+
+So a capability is `vendor` until we have run it, then `measured`. The UI shows the difference, and
+the [sandbox](../ui-sandbox.md) is where a vendor claim becomes a measured one — run the model
+against a sample of the tenant's own data of that type and the claim is either confirmed on their
+corpus or is not.
+
+`verified_at` matters for the same reason `status` does: **a card with no date is a claim about a
+model that may no longer exist**, and prices rot faster than capabilities.
+
+## Data types declare requirements; models declare capabilities; the mapping is derived
+
+The pairing in the next section is currently something a person authors by knowing the catalog. It
+should be something the system **derives and proposes**, because the knowledge needed to author it
+is exactly what the cards contain.
+
+```
+data_type_profiles
+  data_type          medical_record
+  requires           [vision, domain:medical, context>=32k]
+  sensitivity        phi | pii | confidential | internal | public
+  volume_class       low | medium | high
+  quality_floor      the minimum acceptable tier
+```
+
+Matching is then mechanical:
+
+```
+candidates = cards
+  WHERE capabilities ⊇ profile.requires
+    AND context_window ≥ profile.context_min
+    AND hosting ∈ allow_list(project, profile.sensitivity)
+    AND hardware.min_vram_gb ≤ available_vram
+    AND license acceptable for this deployment
+  RANK BY quality_signals, then cost ascending
+```
+
+### Sensitivity in the profile is what makes the allow-list automatic
+
+This is the part that changes behaviour rather than convenience.
+
+The [fail-closed allow-list](technology.md) currently depends on someone remembering to configure a
+clinical project correctly. With `sensitivity: phi` on the data-type profile, **a cloud engine is
+never a candidate for that type in the first place** — not rejected at runtime, not caught by
+review, simply absent from the list of models the system will offer.
+
+Getting it wrong stops being possible through the normal path, which is a stronger guarantee than
+getting it right being the documented practice.
+
+### The system proposes; a person assigns
+
+**Derivation never auto-applies.** Same rule as
+[crawler routing and memory promotion](../memories.md): an agent may propose, a person or a rule
+applies.
+
+The reason is specific here. Cards are refreshed — new models appear, `status` changes, a benchmark
+is updated. If assignment were derived live, **a catalog refresh would silently change which model
+runs**, which changes `generator_version`, which makes the corpus stale without anyone deciding
+anything. A model swap must always be an act.
+
+So the surface is a ranked proposal with its reasoning shown:
+
+```
+medical_record · enrich
+
+  ▸ medgemma                    recommended
+    domain:medical ✓  vision ✓  local ✓ (required by sensitivity: phi)
+    128K context ✓    16GB @ Q4 — fits    licence: Gemma terms ⚠ review
+
+  ▸ qwen3.6-27b                 possible
+    domain:medical ✗ — general model, no medical tuning
+    local ✓  24GB @ Q4 — fits   licence: Apache-2.0 ✓
+
+  ▸ gemini-3.1-pro              excluded
+    hosting: cloud — not permitted for sensitivity: phi
+```
+
+**The exclusions are the useful part.** A recommendation with no visible reasoning is either
+ignored or accepted blindly, and both are worse than no recommendation. Showing *why* Gemini is
+absent is what stops someone adding it manually next week.
+
 ## Assignment is per (purpose, data type)
 
 Assignment was previously keyed on **purpose alone** — one model for enrichment, one for chat, one

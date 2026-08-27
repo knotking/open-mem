@@ -109,7 +109,11 @@ Every feature in the platform, with the phase that ships it and whether it is in
 | Tenant `extensions` | Namespaced so a future platform field cannot collide with one in use | 6 | ○ |
 | **Chunk size validated against embedding input limit** | Over-long chunks truncate silently — indexed by keyword, invisible to vector search | 1 | ● |
 | Per-provider tokenizer for cost estimates | `$/MTok` is not comparable across vendors; tokenizers differ | 2 | ◐ |
-| Model cards — license, VRAM, quantizations, status | What no provider API returns and every selection needs | 6 | ○ |
+| **Model cards stored and queryable** | Licence, VRAM, context, capabilities, pricing — what no provider API returns | 2 | ◐ |
+| `declared_by` per capability | Vendor claim vs measured — a claim becomes measured in the sandbox | 6 | ○ |
+| **Data-type profiles** | What a type requires, including its **sensitivity class** | 2 | ◐ |
+| **Derived assignment proposals** | Ranked candidates with exclusions and reasons shown — proposed, never auto-applied | 6 | ○ |
+| Sensitivity-driven allow-list | A cloud engine is never a *candidate* for PHI, rather than rejected later | 2 | ● |
 | Staleness impact preview | What changing this model or prompt invalidates | 6 | ○ |
 
 ## Security and privacy
