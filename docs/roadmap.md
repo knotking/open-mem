@@ -39,17 +39,17 @@ the embedding-model column from the first commit, so those defects have nowhere 
 
 ## The plan at a glance
 
-| Phase | Goal | Exits when |
-|-------|------|-----------|
-| **0 · Unblock** | Two independent urgencies | Secrets rotated, replicas above zero |
-| **1 · Spine** | Write → store → read | An item is written into a project with an ACL, found by scoped search, cited, and the read is audited |
-| **2 · Depth** | Make what is stored good | Items classify, summarise and entity-extract; changing a prompt can rebuild what the old one produced |
-| **3 · Connectors** | Data arrives on its own | Connect a mailbox; mail ingests, enriches and is findable without an API call |
-| **4 · Uploads &amp; bulk** | The other producer shapes | A 500 MB file ingests from a browser; ten thousand records land without stalling the platform |
-| **5 · Crawlers** | Pull from what will not push | A connector backfills three years and stays current on a schedule |
-| **6 · Variants** | Local and cloud harden | **Unplug the network and everything still works** |
-| **7 · Team &amp; cases** | Sharing and correlation | A patient timeline assembles across sources, ordered by event time |
-| **8 · Scale &amp; compliance** | Enterprise-addressable | Erasure completes and verifies; soak holds at target |
+| Phase | Goal | Exits when | UI it ships |
+|-------|------|-----------|-------------|
+| **0 · Unblock** | Two independent urgencies | Secrets rotated, replicas above zero | — |
+| **1 · Spine** | Write → store → read | An item is written into a project with an ACL, found by scoped search, cited, and the read is audited | The **sandbox**: upload, staircase, search, **retrieval trace**. No chat |
+| **2 · Depth** | Make what is stored good | Items classify, summarise and entity-extract; changing a prompt can rebuild what the old one produced | Enrichment inspector · prompt editor with test-before-save |
+| **3 · Connectors** | Data arrives on its own | Connect a mailbox; mail ingests, enriches and is findable without an API call | **Connect flows** — blocking, there is no API-only OAuth path |
+| **4 · Uploads &amp; bulk** | The other producer shapes | A 500 MB file ingests from a browser; ten thousand records land without stalling the platform | Drag-and-drop, progress, per-item results |
+| **5 · Crawlers** | Pull from what will not push | A connector backfills three years and stays current on a schedule | **Crawler dry-run preview** — blocking; a guardrail whose value is visual |
+| **6 · Variants** | Local and cloud harden | **Unplug the network and everything still works** | First-run setup · **model catalog UX** with proposals and feasibility |
+| **7 · Team &amp; cases** | Sharing and correlation | A patient timeline assembles across sources, ordered by event time | Sharing, members, groups, **case timeline** |
+| **8 · Scale &amp; compliance** | Enterprise-addressable | Erasure completes and verifies; soak holds at target | Admin console · audit search · **deletion preview** |
 
 **Every exit is a test, not a demo** — see [operations/testing.md](operations/testing.md).
 
@@ -61,32 +61,12 @@ the embedding-model column from the first commit, so those defects have nowhere 
 | **Tenancy model** | **1** | Columns, not features. Retrofitting multi-tenancy is the expensive migration |
 | **Observability, broader** | 2 → 8 | Detectors ship with the thing they watch, never after |
 | **Domain event store** | 2 | The audit substrate must exist before events accumulate |
-| **Token accounting** | 2 → 5 | Usage records with depth; estimate-vs-actual with crawler dry-run |
-| **Model selection mechanism** | **1** | Engine registration and per-artifact provenance — not retrofittable |
-| **Model catalog UX** | 6 | Cards, hardware feasibility, staleness-impact preview. Needs staleness fields (2) |
-| **Trace context across the queue** | 1 | Span links, with the queue abstraction |
-| **Deletion** | 1 → 8 | Single item in 1 · selector jobs and dry-run in 4 with the job machinery · entity refcounting and summary rebuild in 5 with reprocess · erasure, legal hold and verification in 8 |
+| **Token accounting** | 2 → 5 | Usage records with depth; estimate-vs-actual with crawler dry-ru## Where the UI is genuinely blocking
 
----
-
-## UI, placed by phase
-
-Each slice ships the interface for what that slice made possible. There is no "UI phase", because
-the parity requirement — everything settable in the UI is settable through the API — means **the UI
-can never be ahead of the API**. That sequences it automatically.
-
-| Slice | What the UI gains | Why then |
-|-------|------------------|----------|
-| **1 · Spine** | The **sandbox**, in its first form: upload a dataset, watch the readiness staircase, search, and **inspect the retrieval trace**. No chat yet | You cannot judge retrieval quality from a JSON body — and if retrieval is wrong, chat cannot be right, so a chat layer would let you ship without noticing. See [ui-sandbox.md](ui-sandbox.md) |
-| **2 · Depth** | Enrichment inspector — viewpoint, entities, classification layer reached; **prompt override editor with test-before-save and staleness preview** | You cannot tune a prompt without seeing what the last one produced, or what changing it invalidates |
-| **3 · Connectors** | **Connect flows**, connection health, reauthorise | **On the critical path** — see below |
-| **4 · Uploads** | Drag-and-drop, progress, per-item results | Uploads are inherently a browser feature |
-| **5 · Crawlers** | **Config editor with dry-run preview**, run history, per-item errors | **On the critical path** — see below |
+ errors | **On the critical path** — see below |
 | **6 · Variants** | First-run setup, model picker with hardware feasibility | Local onboarding is the product's first impression |
 | **7 · Team & cases** | Sharing, members, groups, **case timeline** | A timeline is inherently visual; a JSON timeline is not a timeline |
 | **8 · Scale** | Admin console, audit search, public-share inventory, **deletion preview and confirmation** | The inventory catches a six-month-old mistake; the deletion preview stops one being made |
-
-### Two places the UI is genuinely blocking
 
 **OAuth connect flows need a browser.** There is no API-only path to connecting Gmail — the user
 must be redirected, consent, and return. Phase 3 does not ship without UI; it is *how you connect
@@ -128,18 +108,12 @@ Independent of the spine. Neither blocks it; both are urgent on their own terms.
 
 **Goal: write an item, find it by search, get it back.**
 
-### The rule that keeps this a slice and not a foundation phase
-
-Several concerns are **high priority but not fully built here**. The distinction:
-
 > **Phase 1 ships the column and the enforcement point. The surface follows later.**
 
 A column cannot be backfilled truthfully — you cannot reconstruct which org owned a row, which
-model embedded it, or who read it last March. An enforcement point cannot be retrofitted cheaply —
-adding ACL filtering to every query path afterwards touches everything. **A UI can be built any
-time.**
-
-So each concern below appears twice: what must exist now, and what deliberately does not.
+model embedded it, or who read it last March. An enforcement point cannot be retrofitted cheaply.
+**A UI can be built any time.** So §1b lists each concern twice: what must exist now, and what
+deliberately does not.
 
 ### 1a · The write and read path
 
@@ -157,59 +131,26 @@ So each concern below appears twice: what must exist now, and what deliberately 
 | **Account deletion** | `DELETE /users/{id}/data` — **revoke first**, then cascade as a run · `personal` connections deleted, `shared` retained with attribution removed · the deletion's own audit record survives it |
 | **Auth** | `TokenVerifier` seam, API-key verifier behind it |
 
-### Bulk is in Phase 1 because the sandbox already needs it
+### Why bulk and account deletion are here rather than Phase 4
 
-Bulk was previously Phase 4. Moving it forward is less of an addition than it looks: **the run
-entity was already latent in Phase 1 and simply unnamed.**
+**The run entity was already latent in Phase 1 and simply unnamed.** The
+[sandbox](ui-sandbox.md) ships here, and its core interaction — *upload a dataset, watch the
+staircase, see per-item results* — **is a run**. Building it once as a sandbox one-off and again
+properly later is the worse version of the same work. The write verb is already bulk: `items[]`
+with a `207` from the first commit.
 
-The [sandbox](ui-sandbox.md) ships in Phase 1 and its core interaction is *upload a dataset, watch
-the readiness staircase, see per-item results*. That is a run — a durable job with progress,
-checkpointing and per-item outcomes. Building it as a one-off for the sandbox and then rebuilding
-it properly in Phase 4 is the worse version of the same work.
+| Lands in Phase 1 | Stays later |
+|------------------|-------------|
+| The run entity · bulk write at scale · **selector-based delete** · **account data deletion** | Bulk reprocess, update and export — **empty boxes, not deferrals**, since their subjects do not exist yet |
 
-And the write verb is **already** bulk: `items[]` with a `207` from the first commit. What Phase 1
-adds is the machinery around many items rather than a second endpoint for them.
+Two conditions move with it. **Dry-run and preview are Phase 1 too** — a selector delete without a
+preview, against a corpus the user just uploaded, removes the guardrail while keeping the feature.
+And account deletion **revokes before it cascades**: a live account that is half-deleted is a leak
+that regenerates, where a revoked one is inert.
 
-| Operation | Lands in Phase 1? | Why |
-|-----------|:-----------------:|-----|
-| **The run entity** | **Yes** | Shared by five operations; the sandbox needs it regardless |
-| **Bulk write at scale** | **Yes** | The verb already takes `items[]`; this adds queue-depth admission control and an `enrich: false` default |
-| **Selector-based delete** | **Yes** | Erasure becomes real from day one, which is what family E being "built early" actually means |
-| **Account data deletion** | **Yes** | A selector delete with a revoke step in front. GDPR Art 17 and employee offboarding are the same operation, and both are asked for early |
-| Bulk reprocess (W7) | No — Phase 2 | There are no derived artifacts to rebuild yet |
-| Bulk update / retag | No — Phase 2 | ACL changes must re-check derived artifacts, which do not exist yet |
-| Bulk export | No — Phase 8 | Needs a portability format and the full artifact graph |
-
-**The last three are not deferrals, they are empty boxes.** Their subjects do not exist in Phase 1,
-so moving them forward would move nothing.
-
-> **The condition: dry-run moves with it, not after.**
->
-> Selector-based delete without a preview is the most dangerous thing that could be put in Phase 1
-> — *"delete everything matching X"* on a system where the user is still learning what X matches,
-> against a corpus they just uploaded. The [preview-and-confirm component](ui-design.md) is
-> therefore Phase 1 scope too, computed against real data: **how many items, how many held by no
-> other memory, what cascades.**
->
-> Shipping the selector without the preview removes the guardrail while keeping the feature — the
-> same failure the crawler dry-run exists to prevent.
-
-Account deletion rides on the same run entity, with one addition that is **not** optional:
-**revoke keys, sessions, connections and producers before the cascade starts.** Delete first and
-the cascade races the pipeline — items land behind the checkpoint, the run reports success, and the
-account is left half-deleted and quietly re-populating. A revoked account that is half-deleted is
-inert; a live one is a leak that regenerates.
-
-It also inherits the answer to the question that otherwise blocks it: *a departing employee wrote
-4,000 messages in a shared channel — whose are they?* **Connection scope already decided that at
-write time.** `personal` data is deleted; `shared` data stays with the project and loses the
-account's attribution. No new mechanism, and the dry-run states both counts separately.
-
-**Honest cost:** this is real scope added to a phase whose discipline is that it stays a slice. The
-run entity, checkpointing, a preview and the revoke path are perhaps a week to ten days Phase 1 did
-not have. The trade is that **erasure works from the first release** — which matters more than
-usual here, because family E was always meant to be built early and this is what "early" means in
-practice — and four later phases inherit the machinery instead of each inventing a job runner.
+**Cost:** roughly a week to ten days Phase 1 did not have, against erasure working from the first
+release and four later phases inheriting the machinery. Full treatment in
+[bulk-operations.md](operations/bulk-operations.md) and [deletion.md](operations/deletion.md).
 
 ### 1b · Write-time facts — column and enforcement only
 
@@ -242,17 +183,14 @@ Expressed as tests rather than a demo — see [operations/testing.md](operations
 
 ### Deliberately absent
 
-No enrichment agents. No gateway. No fetch worker. No uploads. No crawlers. No graph. No cases.
-No normalization. No settings UI. No share links.
+No enrichment agents. No gateway. No fetch worker. No connectors. No crawlers. No graph. No cases.
+No normalization. No customization of any kind. No settings surface beyond the API.
 
-### Two things built right rather than deferred
-
-**The content contract from the start.** `ContentRef` is defined with all three cases even though
-only `Inline` is implemented, so `Stored` and `Pending` slot in later without the enrichment side
-ever learning to branch on provenance.
-
-**Embeddings never fall back.** Defer-on-unavailable ships with the first embedding call, not after
-a corpus has been contaminated.
+**Two things are built right rather than deferred**, because both are cheap now and corrupting
+later: `ContentRef` is defined with all three cases though only `Inline` is implemented, so
+`Stored` and `Pending` slot in without enrichment ever learning to branch on provenance — and
+**embeddings never fall back**, shipped with the first embedding call rather than after a corpus
+has been contaminated.
 
 ---
 
