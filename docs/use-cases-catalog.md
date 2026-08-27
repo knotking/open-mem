@@ -227,6 +227,13 @@ errors; the answer comes back fine. The chain must therefore be **allow-listed p
 fail closed** — refusing to answer is the correct behaviour when every covered provider is
 unavailable.
 
+> **A capable open medical model changes the shape of this.** Running something like MedGemma
+> locally removes the sub-processor entirely — there is no third party to sign an agreement with,
+> because the content never leaves the deployment. The allow-list is still what makes it *true*
+> rather than merely *possible*: a clinical project permits local engines only, and the chain fails
+> closed. See [model-catalog.md](operations/model-catalog.md). It also puts DICOM interpretation —
+> currently out of v1 — back within reach.
+
 **Unit normalization is where lab data goes wrong.** Glucose in mg/dL and mmol/L differ by a
 factor of eighteen. A facet storing the number without the unit produces a range query that is
 confidently, silently wrong. The normalization schema carries units as part of the value, not as

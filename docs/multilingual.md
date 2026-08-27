@@ -1,5 +1,10 @@
 # Multi-Language
 
+> **An open translation model keeps foreign-language content local.** TranslateGemma covers 55
+> languages as open weights, so multilingual ingestion does not require routing content a
+> deployment considers sensitive to a frontier API — which matters most for exactly the deployments
+> that are multilingual *and* regulated. See [model-catalog.md](operations/model-catalog.md).
+
 Absent from the design until now, and **Phase 1 relevant** — because two of the decisions it forces
 are made when the first row is written, and both are corpus migrations afterwards.
 

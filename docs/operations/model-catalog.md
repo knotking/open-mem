@@ -152,8 +152,9 @@ the practical differences are large.
 | **Qwen3.6 35B-A3B** | 35B / 3B active | Apache-2.0 | Best all-round at 32GB — MoE keeps active params low |
 | **Qwen3.7** | large | Apache-2.0 | Coding-focused |
 | **Llama 4 Scout / Maverick** | large | community | Up to 1M context. **License restricts some commercial use — surface it** |
-| **Gemma 3 / 4 · 12B–27B** | 12–27B | Gemma terms | Strong multimodal; good laptop and single-4090 fit |
-| **Gemma 4 e2b / e4b** | 2–4B | Gemma terms | Edge and low-RAM |
+| **Gemma 4** · 12B / 26B / 31B | 12–31B | Gemma terms | Strong multimodal; 12B is the practical laptop fit, 26B/31B a single 4090 |
+| **Gemma 4** · E2B / E4B | 2–4B | Gemma terms | Edge and low-RAM |
+| **Gemma 3 270M** | 0.27B | Gemma terms | Hyper-efficient. See the classifier note below |
 | **Mistral Medium 3.5** | 128B dense | — | 256K context, strong multilingual |
 | **Phi-4-mini** | small | MIT | Very small footprint |
 
@@ -163,6 +164,61 @@ Two card fields do the work here that a benchmark score cannot:
   whether a user can use a model at all, and no provider API returns it.
 - **`license`.** Apache-2.0 and MIT are unrestricted; Llama's community licence and Gemma's terms
   carry use restrictions that a commercial deployment must see **before** selecting, not after.
+
+### Specialised open models solve specific problems here — several of them ones already open
+
+General-purpose model size is the wrong axis for some of this pipeline's work. Google's Gemma
+family in particular ships **task-specific open variants**, and four of them land directly on
+constraints these documents already record as unresolved.
+
+| Variant | What it is | The mem-dog problem it addresses |
+|---------|-----------|----------------------------------|
+| **MedGemma** / **MedGemma 1.5** | Medical text and imaging interpretation | **The HIPAA constraint** — see below. Also the one credible route to DICOM interpretation, currently out of v1 |
+| **TranslateGemma** | Translation across 55 languages | [Multilingual](../multilingual.md) ingestion without routing foreign-language content to a frontier API |
+| **EmbeddingGemma** | On-device embeddings | Embeddings in the **air-gapped** variant, where the Gemini embedding dependency currently breaks the story |
+| **Gemma 3 270M** | 0.27B, hyper-efficient | **Classification layer 7.** A 270M model deciding a type is a rounding error next to sending the same content to a 27B one |
+| **ShieldGemma 2** | Content-safety classifier | The `classification flag at ingest` that Phase 1 requires, as a deterministic step rather than a prompt |
+| **FunctionGemma** | Function calling at the edge | Structured-output reliability on small hardware |
+| **VaultGemma** | Differentially private LLM | Worth evaluating where enrichment output itself is a disclosure risk |
+| **T5Gemma / T5Gemma 2** | Encoder–decoder | Extraction tasks where an encoder–decoder beats a decoder-only model of the same size |
+
+Sizes and context windows for the specialised variants are not published alongside the core sizes;
+the registry records what each provider actually returns rather than assuming parity with the base
+family.
+
+#### MedGemma changes the clinical story, not just the model list
+
+[use-cases-catalog.md](../use-cases-catalog.md) records the sharpest legal constraint in this
+system: a hosted deployment processing PHI needs a BAA with **every sub-processor touching it,
+including the inference provider** — which is why the clinical use case is documented as
+self-hosted-only unless the cloud inference choice changes.
+
+**A capable open medical model run locally removes the sub-processor entirely.** There is no third
+party to sign an agreement with, because the content never leaves the deployment. That converts the
+clinical scenario from *"self-hosted only, and even then check your provider"* into *"self-hosted,
+and the model is part of what you host"*.
+
+Two things follow, and neither is a licence to relax anything:
+
+- **The [per-project allow-list](technology.md) becomes the enforcement point that makes this
+  real.** A clinical project allow-lists local engines only, and the chain **fails closed** rather
+  than falling through to a cloud model. The model choice is what makes compliance *possible*; the
+  allow-list is what makes it *true*.
+- **Gemma terms carry use restrictions.** A medical open model is not automatically cleared for
+  clinical use, and "open weights" is not "approved for diagnosis". The card surfaces the licence;
+  the deployment decision remains a decision.
+
+#### A 270M classifier is the right size for layer 7
+
+The [classification cascade](../ingestion/workers.md) resolves roughly 80% of traffic
+deterministically and sends the remainder to a model. That remainder is currently described as "a
+small-tier model", which in practice means whatever the deployment configured — often a 27B
+general model deciding whether something is a CSV.
+
+**Gemma 3 270M is roughly a hundredth the size for a task that is classification, not reasoning.**
+Reserving the large model for extraction and giving classification a purpose-sized one is the
+cheapest quality-neutral saving available in the pipeline, and it makes the "80% never reach an
+LLM" figure matter less, because the other 20% stops being expensive.
 
 ## Tier 3 · Embeddings — catalogued separately, because they are not interchangeable
 

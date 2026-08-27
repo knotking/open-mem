@@ -133,8 +133,21 @@ traffic.
 | 4 | Payload heuristic | `latitude`/`longitude` → `sensor_gps` |
 | 5 | MIME registry | `application/json` → `structured_json` |
 | 6 | URL extension | `.csv` → `structured_csv` |
-| 7 | LLM classifier (fallback) | small-tier model on ambiguous content |
+| 7 | LLM classifier (fallback) | **purpose-sized** model on ambiguous content — see below |
 | — | Catch-all | binary-blob agent |
+
+### Layer 7 wants a classifier, not a reasoner
+
+The 20% that reaches layer 7 is currently described as going to "a small-tier model", which in
+practice means whatever the deployment configured — often a 27B general model deciding whether
+something is a CSV.
+
+**Classification is not reasoning, and it should be sized accordingly.** A sub-1B purpose-built
+classifier (Gemma 3 270M is roughly a hundredth the size of a mid-tier general model) is the
+cheapest quality-neutral saving in the pipeline, and it makes the *"80% never reach an LLM"* figure
+matter less — because the other 20% stops being expensive.
+
+Reserve the large model for extraction, where the reasoning actually is.
 
 ## Extraction prompts — standard, or overridden
 
