@@ -46,6 +46,7 @@ Every feature in the platform, with the phase that ships it and whether it is in
 | **Memories** | Type = name + TTL + expiry policy; type mutable, not in the id | 1 | ● |
 | Many-to-many membership | Mutable after write, individually and by selector | 1 | ● |
 | `memory_key` | Natural key unique per `(project, type)`; writes upsert | 1 | ● |
+| **Per-user default memory** | Unattached writes land in the writer's default, keyed on `user_id`; `shared`-scope items default to the project | 1 | ● |
 | Effective expiry | Max across memberships, **computed never stored**, with its reason | 1 | ● |
 | `orphan_delete` | Expiry never deletes something another memory holds | 1 | ● |
 | `memory_links` | `part_of` / `derived_from` / `about` / `continues` / `supersedes` | 1 | ◐ |

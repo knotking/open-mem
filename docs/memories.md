@@ -47,6 +47,48 @@ project → org → shipped, with admin locks.
 rule lands there. Without it, unattached data is invisible from the memory side entirely — which
 would leave a hole in exactly the view memories are for.
 
+### The default is per user, not per project
+
+A single project-wide `default` memory is a junk drawer shared by strangers. In a team project it
+mixes every member's unattached data into one container — reads are ACL-filtered so nobody *sees*
+anyone else's items, but the container, its counts and its lifecycle are shared, and "the project's
+default memory" is not a thing any individual can reason about.
+
+So the default is scoped **per (project, user)**, created on first unattached write.
+
+**This needs no new mechanism.** It is the existing natural key doing its job:
+
+```
+memory_key = user_id     within (project, type='default')
+```
+
+Writes already upsert on `(project, type, memory_key)`, so the first unattached write from a user
+creates their default memory and every subsequent one lands in the same place — from any producer,
+after any restart, forever. Same pattern as a thread id creating a `conversation` memory.
+
+It also works **because nothing writes anonymously**. Every producer resolves to a principal, so
+there is always a user to attribute an unattached item to. Had the write path allowed anonymous
+input, this rule would have no subject.
+
+#### One refinement: shared-scope data belongs to the project, not the connector
+
+Sending *all* unattached data to a user default has an edge that matters. A `shared`-scope
+connection — a team Slack, a shared drive — produces **org-visible** items. Filing them in the
+connecting user's personal default puts team data in one person's container, and then
+[account deletion](operations/deletion.md) has an awkward case: the data is retained as shared, but
+the memory holding it belonged to someone who left.
+
+The resolution is the rule already used everywhere else — **the default memory follows the same
+scope as the ACL**:
+
+| Connection scope | Unattached items land in |
+|------------------|--------------------------|
+| `personal`, uploads, direct writes | The **user's** default memory |
+| `shared` | The **project's** default memory |
+
+Which makes account deletion fall out cleanly: the personal default is deleted with its members;
+shared items sit in a project container that was never the departing user's to begin with.
+
 ### Type is mutable, so it is not in the identifier
 
 ```
@@ -209,8 +251,8 @@ verb and the API does not let them be confused.
 
 ### Nothing becomes orphaned
 
-Removing an item's **last** membership moves it to the project's `default` memory rather than
-leaving it unattached. The invariant holds: every item is in at least one memory, so the memory
+Removing an item's **last** membership moves it to the default memory — **the owner's**, or the
+project's for `shared`-scope items — rather than leaving it unattached. The invariant holds: every item is in at least one memory, so the memory
 view is always complete and "which memories hold this?" always has an answer.
 
 ### Static and dynamic membership
@@ -394,8 +436,12 @@ policy, a memory browser showing members and time remaining, and the reverse loo
   and by selector, the latter as a job.
 - **FR-MEMT-17** Removing a member MUST NOT delete the data item; unmapping and deletion MUST be
   distinct operations.
-- **FR-MEMT-18** Removing an item's last membership MUST place it in the project's `default`
+- **FR-MEMT-18** Removing an item's last membership MUST place it in the applicable `default`
   memory. No item may be left unattached.
+- **FR-MEMT-24** An item written with no memory and no matching routing rule MUST land in a
+  **per-(project, user)** default memory, keyed on `user_id` and created by upsert on first use.
+- **FR-MEMT-25** Items from `shared`-scope connections MUST default to the **project's** default
+  memory rather than the connecting user's, so the default follows the same scope as the ACL.
 - **FR-MEMT-19** Memories MUST support dynamic membership defined by a bounded selector, and
   dynamic membership MUST be recorded as `routed` rather than `explicit`.
 - **FR-MEMT-20** A membership change MUST mark memory-level derived artifacts stale.

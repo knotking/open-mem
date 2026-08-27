@@ -127,6 +127,12 @@ Idempotency-Key: 9f2c...
 
 ### Memory and case association happen at write time
 
+**An item with no `memory` and no matching routing rule is not left unattached** — it lands in the
+writer's default memory, keyed on `user_id` within `(project, 'default')`. Items arriving through a
+`shared`-scope connection land in the project's default instead, so the container follows the same
+scope as the ACL. Either way the write response reports the membership, because
+[the caller should not have to query to discover where their item went](../memories.md).
+
 `memory` upserts by `(project, type, key)` — so a producer writing many messages from one thread
 collects them into one memory without tracking session state or pre-creating anything. Omit it and
 the producer's default type plus any routing rule applies; if neither matches, the item lands in
