@@ -96,6 +96,26 @@ producers. Four gaps close that contract — all small, all Phase 1 or 2:
 | Converge the two error formats onto the structured envelope | 1 |
 | Rate-limit and quota headers so clients self-throttle | 2 |
 
+### Observability
+
+Telemetry is not a Phase 6 concern — several signals exist specifically to detect failures that
+produce no error, and they must be in place *before* the thing they watch.
+
+| Work | Phase |
+|------|-------|
+| `connection.seconds_since_last_item` per connection | **0** — the highest-value detector, and cheap |
+| `embed.distinct_models_per_index` | **0** — ships with the embedding fix it verifies |
+| Trace context across the queue hop (span links) | 1 — with the queue abstraction |
+| `enrich.classification_layer`, queue lag, fallback depth | 1 |
+| Domain event store, separate from logs and traces | 1 — the audit substrate has to exist before events accumulate |
+| Full metric catalogue, cardinality rules, rollups | 2 |
+| `search.result_shortfall`, `facts.stale_valid` | 3 |
+| Crawl and case metrics | 4 |
+| SLI dashboards, alerting, runbooks | 5 |
+
+See [operations/telemetry.md](operations/telemetry.md) and
+[operations/token-accounting.md](operations/token-accounting.md).
+
 ### Cases (subject correlation)
 
 Additive once its substrate exists, which is convenient — it depends entirely on work already
