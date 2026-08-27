@@ -96,6 +96,25 @@ producers. Four gaps close that contract — all small, all Phase 1 or 2:
 | Converge the two error formats onto the structured envelope | 1 |
 | Rate-limit and quota headers so clients self-throttle | 2 |
 
+### Cases (subject correlation)
+
+Additive once its substrate exists, which is convenient — it depends entirely on work already
+planned. Prerequisites: **normalization** (`identifiers[]` and `event_time` are the correlation
+substrate), **staleness fields** (case artifacts are derived like any other), and
+**connection-scoped ACL** (case ACL composes with it).
+
+| Work | Phase |
+|------|-------|
+| `identifiers[]` + `event_time` as required canonical fields | with normalization |
+| Case primitive, membership with asserted/inferred provenance | 4 |
+| Deterministic identifier correlation | 4 |
+| Case-scoped retrieval and timeline | 4 |
+| Case-level derived artifacts + similar-case embedding | 5 |
+| Break-glass, ethical walls, per-case audit | 5 |
+| Legal hold and its interaction with the delete cascade | 6 |
+
+See [cases.md](cases.md).
+
 ### Model catalog
 
 Model cards, capability-validated assignment and the capacity × capability routing change fit

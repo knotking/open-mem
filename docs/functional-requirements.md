@@ -431,6 +431,48 @@ and **MAY** carry their usual RFC 2119 meaning.
 
 ---
 
+## 10d. Cases (Subject Correlation)
+
+- **FR-CASE-1** The system MUST provide a first-class **case** primitive for correlating
+  heterogeneous data around a long-lived subject — patient, legal matter, asset, incident.
+- **FR-CASE-2** Cases MUST be **declared, not inferred**. A case MUST NOT be created by
+  entity extraction, and case identity MUST NOT be subject to entity-resolution merging.
+- **FR-CASE-3** Cases MUST carry a caller-supplied `external_id`, unique per
+  (project, case_type), and creation MUST be idempotent on it.
+- **FR-CASE-4** Cases MUST support typed, schema-validated attributes per case type, using
+  the same schema-versioning mechanism as normalization.
+- **FR-CASE-5** Membership MUST record whether it was **asserted** or **inferred**, and
+  inferred membership MUST carry a confidence value and be reviewable.
+- **FR-CASE-6** Correlation MUST support explicit assignment and **deterministic identifier
+  matching** before any probabilistic mechanism.
+- **FR-CASE-7** `identifiers[]` MUST be a canonical normalized field so correlation is a
+  join rather than an inference.
+- **FR-CASE-8** `event_time` MUST be a canonical normalized field, distinct from ingestion
+  time. Timelines MUST order by `event_time`; items lacking it MUST be visibly marked rather
+  than silently ordered by ingestion time.
+- **FR-CASE-9** The system MUST retain both event time and ingestion time.
+- **FR-CASE-10** Cases MUST support derived artifacts — rolling summary, timeline, key facts,
+  contradiction set, and a case-level embedding supporting similar-case retrieval.
+- **FR-CASE-11** A membership change MUST mark case-level derived artifacts stale.
+- **FR-CASE-12** A case MUST have its own access control, and effective access MUST be the
+  **most restrictive** of item ACL and case ACL. A case MUST NOT widen access to an item.
+- **FR-CASE-13** The system MUST support break-glass access with mandatory justification and
+  an immutable audit record.
+- **FR-CASE-14** The system MUST support case-level deny lists (ethical walls) that survive
+  membership changes.
+- **FR-CASE-15** Cases MUST support retention policy including **legal hold**.
+- **FR-CASE-16** An erasure request touching a case under legal hold MUST return a **partial
+  completion** naming what was withheld and why. It MUST NOT silently delete held data, and
+  MUST NOT silently ignore the request.
+- **FR-CASE-17** Releasing a legal hold MUST re-queue any erasure deferred by it.
+- **FR-CASE-18** Retrieval MUST support case as a filter dimension, case-scoped RAG, and
+  similar-case search.
+- **FR-CASE-19** Writes MUST accept case assignment inline, including per-item assignment in
+  bulk writes.
+- **FR-CASE-20** Case access MUST be individually auditable — who viewed which case, when.
+
+---
+
 ## 11. Conversational Agent (DigiMe)
 
 - **FR-DM-1** A single agent instance MUST serve multiple users across 25+

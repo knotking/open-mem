@@ -70,6 +70,18 @@ the tenancy model.
 Authoring path, increasing in power: use a standard type → extend it → define a custom type →
 override the provider mapping. Most users stop at step one or two.
 
+## Two required fields
+
+Correlation depends on these, so they are not optional extras — see [cases.md](../cases.md).
+
+| Field | Why |
+|-------|-----|
+| **`identifiers[]`** | MRN, docket number, serial, VIN. Makes subject correlation a **join** rather than an inference |
+| **`event_time`** | When the thing happened, distinct from when it was ingested. Without it, any timeline built over backfilled data is wrong in a way that looks right |
+
+Both must be extracted per source in the field mapping. An item with no extractable `event_time`
+must record that fact rather than silently inheriting ingestion time.
+
 ## Two invariants
 
 **Raw is truth; normalized is a derived view.** Never discard the original — normalization is
