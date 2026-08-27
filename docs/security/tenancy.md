@@ -67,7 +67,9 @@ This is what reconciles personal and team memory, and it closes the proxy hole i
 | `public` | Any authenticated user **in the organization** — internal, not public |
 | `restricted` | Only users in `shared_with` |
 
-See [compliance.md](compliance.md) on why "public" needs disambiguating.
+**The `public` level is renamed `org`**, and `public` becomes genuine external sharing — see
+[access-model.md](access-model.md), which also covers principals, groups, share links and the
+admin dual-role.
 
 ## Scale posture
 

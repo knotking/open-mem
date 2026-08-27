@@ -100,6 +100,23 @@ The distinction that matters: **the selection mechanism is Phase 1; the catalog 
 If models stay hardcoded until then, every artifact produced in phases 1–5 carries no provenance
 and the catalog's arrival becomes a corpus-wide staleness event.
 
+#### Access model and settings
+
+| Work | Why now |
+|------|---------|
+| **Rename `public` → `org`; `public` means external** | After both meanings exist it is a migration against a field people already reasoned about wrongly |
+| **`shared_with` holds principals**, not user IDs | Enumerating users breaks on every membership change and silently fails to revoke |
+| **Groups** as a sharing target | Sharing with *engineering* rather than eleven people is what makes the model get used correctly |
+| **Platform grants orthogonal to org roles** | Also what retires the global unscoped key |
+| **Admin sees metadata, not content** | Support tooling showing customer content by default is a privacy hole arriving as a feature |
+| Settings precedence with **locks** | "Only approved providers", "public sharing off" must be enforced, not suggested |
+| API/UI parity | The UI is a client of the API, never a privileged path |
+
+*Phase 2–3:* share links with expiry and inventory · break-glass · access-history view.
+*Later:* SCIM-managed groups, ethical walls.
+
+See [security/access-model.md](security/access-model.md).
+
 #### Privacy
 
 Privacy has the same property as tenancy, and one control is not merely expensive to retrofit but
