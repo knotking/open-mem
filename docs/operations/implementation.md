@@ -137,6 +137,78 @@ inference, not compute. Scale on consumer lag, which means the broker's metrics 
 
 ---
 
+## Build order — where to actually start
+
+The phases say *what*. This says *what you do on Monday*.
+
+### Step 0 — read the codebase
+
+Everything in this document was derived from documentation. Nobody has opened `api/` or `webhook/`
+while writing it, so several choices below will change on contact.
+
+| Read | Because |
+|------|---------|
+| Dependency manifests | Several proposed libraries may already be present, or have an established in-repo alternative |
+| `storage.py` and the PostgREST path | ~6,400 lines whose shape constrains the schema work |
+| The two JWT verify sites in `main.py` | The `TokenVerifier` seam is a refactor of these, not a greenfield |
+| The pipeline's ADK framework | It may already provide a worker or queue abstraction that would otherwise be duplicated |
+| Existing migrations and table shapes | Determines whether Phase 1's schema is additive or a parallel set |
+
+Roughly half a day. Do it before writing anything.
+
+**In parallel and non-blocking: rotate the committed secrets.** They are in git history, that is
+live exposure, and it has no dependency on the build order.
+
+### Steps 1–8 — to the first milestone
+
+Order is dependency-driven; each step is unblocked by the one before it.
+
+| # | Step | Why here |
+|---|------|----------|
+| **1** | **Schema** — orgs, projects, members, groups, producers, data items with `org_id`/`project_id`/`access_level`/principal `shared_with`, `derived_artifacts` with source **list** + `served_by_model`, `generator_versions` registry, `audit_events`, embeddings with `model_id`/`dim` | Everything in Phase 1b is columns. Design them **once, together**. Highest-leverage single artifact in the plan — get it wrong and every later slice inherits a migration |
+| **2** | **Crypto foundation** — KMS envelope encryption, encrypt/decrypt helpers, **failing closed** | Nothing can safely store a credential before this, and step 3 needs to |
+| **3** | **Auth seam + producer registry** — `TokenVerifier` with only the API-key verifier; capability scopes | Every write needs a producer and a credential, so this precedes the write path |
+| **4** | **Model config, minimal** — one engine, one embedding assignment, `generator_versions` populated | Step 6 embeds. This is the difference between provenance from row one and a corpus-wide staleness event later |
+| **5** | **Write endpoint** — `POST /write`, `Inline` only, `items[]`, `207`, commit, ACL from producer, **audit record written** | The spine's first half |
+| **6** | **Embed path** — queue abstraction with the in-process implementation, `model_id` recorded, defer-never-fallback | Makes what was written findable |
+| **7** | **Read** — `GET /data/{id}` and `POST /retrieve`, vector + lexical + hybrid, **ACL applied inside the query** | Closes the spine |
+| **8** | **Invariant gate** — adversarial cross-tenant across every retrieval path, kill-after-`2xx` durability, `distinct(model_id) == 1` property | The exit criterion |
+
+Tests are written **alongside** each step. Step 8 is the gate, not when testing begins — see
+[testing.md](testing.md).
+
+### The milestone
+
+> Write an item into a project owned by an org with an access level → a search scoped to that
+> project finds it → the response cites it → the read is audited → the row records which model
+> embedded it.
+
+At that point both halves of the system are real and every later slice widens a spine that works.
+
+### Nothing open blocks starting
+
+Worth stating plainly, because it is easy to assume otherwise:
+
+| Open decision | When it is needed |
+|---------------|------------------|
+| Own auth vs hosted IdP | Deferred by the `TokenVerifier` seam — Phase 6 |
+| Materialisation policy | Phase 4, with uploads and fetch |
+| Default ACL for a team upload | Phase 4 |
+| Media in v1 scope | Phase 4–5 |
+| Backfill depth on first connect | Phase 5 |
+| Cross-project cases | Phase 7 |
+
+**None of them gates step 1.** That is itself an argument for this ordering — the work that must
+be decided last is also the work that happens last.
+
+### UI, in this window
+
+Slice 1 needs a **thin console** — one page: write something, search, inspect a result. Not a
+product surface. It exists because retrieval quality cannot be judged from a JSON body, and it is
+built after step 7, against the API rather than beside it.
+
+Full UI sequencing is in [the roadmap](../roadmap.md).
+
 ## Phased implementation
 
 ### Phase 0 — correctness

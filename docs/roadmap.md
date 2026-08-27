@@ -34,6 +34,9 @@ the embedding-model column from the first commit, so those defects have nowhere 
 
 ---
 
+> **Where to actually start** — the step-by-step build order to the first milestone is in
+> [operations/implementation.md](operations/implementation.md#build-order--where-to-actually-start).
+
 ## Phase 0 — unblock
 
 Independent of the spine. Neither blocks it; both are urgent on their own terms.
