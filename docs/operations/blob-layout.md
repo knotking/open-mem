@@ -59,6 +59,49 @@ So deduplication is scoped: identical bytes within one item collapse to one key,
 tenants they do not. The storage saved by global dedupe is not worth an unsatisfiable erasure
 request.
 
+## No timestamp segment — the path already carries one
+
+There is deliberately no `{yyyy}/{mm}/` in the key, and the reason is not that time does not matter.
+
+**`data_id` is a ULID, and ULIDs are lexicographically sortable by their embedded millisecond
+timestamp.** So the path is already time-ordered and a creation time is already recoverable from
+the key without a database lookup. A date segment would restate what is there.
+
+The operational arguments for date-partitioned keys mostly do not apply here:
+
+| Usual reason for a date prefix | Why it does not apply |
+|--------------------------------|----------------------|
+| Lifecycle rules — "move to cold after 90 days" | Object stores evaluate an **`age` condition** natively. No prefix needed |
+| Scoping a reconciliation scan by period | The ULID prefix already orders by time; a range scan works on `data_id` |
+| Avoiding sequential-prefix hot-spotting | The `org_id` prefix already distributes writes across tenants, which is the dimension that actually spreads |
+
+### The version that would be a real mistake
+
+> **`event_time` must never appear in a path.**
+
+`event_time` is when the thing *happened*; `ingested_at` is when we learned about it. They differ —
+a 2019 X-ray ingested today is the canonical example — and `event_time` is **correctable**. A
+backfill, a better parse, or a normalization fix can change it after the fact.
+
+Objects are immutable. A path segment derived from a mutable field means that correcting the field
+forces a **copy-and-delete** of every affected object — the one operation this layout exists to
+avoid — and until that copy completes the record store and the blob store disagree about where the
+bytes are.
+
+If a date segment were ever added, it could only be `ingested_at`: known at write, never revised.
+Which is precisely what the ULID already encodes.
+
+### Where time *is* a partition key
+
+In the record store, not in the path:
+
+| Table | Partitioned by | Why |
+|-------|---------------|-----|
+| `access_log` | month | Written on every read, queried by time range, retained on its own schedule |
+| `usage_records` | month | Same shape — high volume, time-range queries, periodic rollup |
+
+The difference is that a table partition can be reorganised. An object key cannot.
+
 ## Objects are immutable
 
 Written once, never modified. A revision writes a **new** object under a new checksum; the record
@@ -151,3 +194,5 @@ why the blob store is rated **low swap cost** in [technology.md](technology.md).
 - **FR-BLOB-6** Encrypted credentials MUST NOT share a bucket with tenant data.
 - **FR-BLOB-7** Object encryption MUST use a KMS-managed key, not a secret-store value.
 - **FR-BLOB-8** Paths below the bucket root MUST be identical across deployment variants.
+- **FR-BLOB-9** Object keys MUST NOT contain a segment derived from a mutable field.
+  `event_time` in particular MUST NOT appear in a path.
