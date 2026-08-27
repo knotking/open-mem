@@ -26,6 +26,9 @@ is the same material as one continuous page.
 | **VIII · How we implement it** | Stack, variants, observability, and the tests that close each slice | [schema](operations/schema.md) · [onboarding](operations/onboarding.md) · [technology](operations/technology.md) · [blob layout](operations/blob-layout.md) · [deployment variants](operations/deployment-variants.md) · [telemetry](operations/telemetry.md) · [testing](operations/testing.md) · [implementation](operations/implementation.md) |
 | **IX · The plan** | Sequence, open decisions, the market | [roadmap](roadmap.md) · [competition](competition/README.md) |
 
+> **[TBD.md](../TBD.md)** — twelve decisions that are designed but not decided, ordered by how
+> expensive each becomes if made late.
+
 ## Start here
 
 | Document | Read it for |
