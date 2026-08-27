@@ -266,6 +266,81 @@ is not.
 **Correcting the earlier guidance:** smaller-by-default was the wrong call. The right call is
 **store large, index at whatever performs**, and keep the option.
 
+## Assignment is per (purpose, data type)
+
+Assignment was previously keyed on **purpose alone** — one model for enrichment, one for chat, one
+for embeddings. That is too coarse the moment the catalog contains specialised models: it forces a
+single enrichment model to handle clinical notes, source code and chat messages equally badly, or
+forces the whole deployment onto the most expensive option because one data type needs it.
+
+The key is a pair, resolved most-specific-first:
+
+```
+(purpose, data_type)  →  model
+
+classify · *                →  gemma-3-270m          a classifier, not a reasoner
+enrich   · medical_record   →  medgemma              local, and no sub-processor
+enrich   · code             →  qwen3-coder-30b       256K context, code-tuned
+enrich   · transcript       →  qwen3.6-27b
+enrich   · *                →  qwen3.6-27b           the default everything falls back to
+translate· *                →  translategemma
+chat     · *                →  gemini-3.1-pro
+embed    · *                →  gemini-embedding-001  ← and only ever one, see below
+```
+
+Same precedence as every other setting: **project → org → shipped default**, with admin locks. A
+`*` row is required at every purpose, so no data type can be unassigned.
+
+### Prompt, schema and model are one object, not three settings
+
+Prompt overrides are already keyed `(data_type, scope)`. Model assignment now uses the identical
+key — and they should be **the same configuration object**, because all three feed the same
+`generator_version`:
+
+```
+agent_config (data_type, scope)
+  prompt          the type-specific block
+  output_schema   extensions and disabled standard fields
+  model           the assignment for this type
+```
+
+Keyed independently, they drift: a deployment ends up with a carefully tuned medical prompt running
+against a code model, because two settings screens were edited three weeks apart. **One object, one
+version, one fingerprint** — which also means the [test-before-save](../ingestion/workers.md)
+sample run exercises the actual combination that will run in production, rather than a prompt
+against whichever model happens to be assigned today.
+
+### Embeddings are excluded from per-type assignment, deliberately
+
+This is the guard that matters, because per-type assignment is **exactly the mechanism that would
+let someone put two embedding models into one index through a settings page.**
+
+> Assign `embed · medical_record → medgemma-embedding` and `embed · * → gemini-embedding-001`, and
+> the index now contains **two incomparable vector spaces**. Nothing errors. Ranking degrades in a
+> way that looks like poor retrieval quality rather than a configuration mistake.
+
+So `embed` accepts **only** a `*` assignment. A per-type embedding row is refused at configuration
+time with the reason stated, not accepted and then detected later by
+`embed.distinct_models_per_index` — that metric is the backstop for drift, not a substitute for
+refusing the setting.
+
+The same restriction does not apply to enrichment, where a per-type model produces *differently
+good* output rather than *incomparable* output.
+
+### Per-type assignment makes model changes cheaper to make and to undo
+
+An unexpected benefit worth naming. Under purpose-only assignment, switching the enrichment model
+invalidates **every artifact in the corpus** — so W7 reprocess is a whole-corpus job and changing
+your mind is expensive enough to discourage improving anything.
+
+Keyed per type, changing `enrich · code` marks **only code artifacts stale**. Reprocess scopes to
+the affected data type, which is a fraction of the corpus, and the
+[staleness-impact preview](../ui-sandbox.md) can state the real number before the change is
+applied: *"this affects 4,102 items of 380,000."*
+
+**Precision in the key buys affordability in the change.** That is what makes per-type model tuning
+something a team will actually do, rather than a capability that exists and is never touched.
+
 ## Selection → routing
 
 Once a user assigns models, routing **validates** rather than trusting:
@@ -277,6 +352,8 @@ Once a user assigns models, routing **validates** rather than trusting:
 | **Context window** | Long documents silently truncated because the assigned model has a 32K window |
 | **License** | A use-restricted model assigned in a commercial deployment |
 | **Provider reachability** | A model assigned but not served by any configured engine |
+| **Per-type embedding refused** | Two vector spaces in one index, arrived at through a settings page |
+| **`*` row present per purpose** | A data type with no assignment, failing at ingest rather than at config |
 
 Validation runs at **assignment time** with clear errors, and again at startup. The current failure
 mode — discovering the mismatch when a document fails to process at 3am — is what this removes.

@@ -89,7 +89,10 @@ Every feature in the platform, with the phase that ships it and whether it is in
 | Per-provider credentials | Encrypted in the catalog, failing closed — two providers makes the path real | 1 | ● |
 | **Pinned model versions** | Never a rolling alias — a floating `-latest` makes `generator_version` a lie | 1 | ● |
 | Model catalog | Engine registration, encrypted, failing closed — the seam, filled once in MVP | 1 | ◐ |
-| Assignment per purpose | Different models for embed, enrich, chat | 1 | ◐ |
+| Assignment per `(purpose, data_type)` | MedGemma for clinical, a 270M classifier for layer 7, coder model for code — most specific wins | 2 | ◐ |
+| **`agent_config` as one object** | Prompt, schema and model keyed together — they feed one `generator_version` and drift if keyed apart | 2 | ◐ |
+| **Per-type embedding refused at config** | The one place per-type assignment would put two vector spaces in one index | 1 | ● |
+| Scoped W7 reprocess | Changing one type's model invalidates only that type — what makes tuning affordable | 2 | ○ |
 | Expanded Ollama Cloud model set | Larger models for hard extraction, smaller for cheap classification — **catalog entries, not integration** | 6 | ○ |
 | Per-purpose assignment across engines | Which model embeds, enriches, chats — with reprocess on reassignment | 6 | ○ |
 | Local inference (Ollama) | Returns air-gap and $0 — a **base-URL change** against the adapter already shipped for Ollama Cloud | 6 | ○ |
