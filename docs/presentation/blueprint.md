@@ -107,6 +107,7 @@ ending in a test rather than a demo.
 - [Deployment Variants](#deployment-variants)
 - [Telemetry](#telemetry)
 - [Token Accounting](#token-accounting)
+- [Billing](#billing)
 - [Testing](#testing)
 - [Implementation Plan & Stack](#implementation-plan--stack)
 
@@ -960,6 +961,13 @@ Every feature in the platform, with the phase that ships it and whether it is in
 | `embed.distinct_models_per_index` | Catches the incomparable-vector-space corruption | 1 | ● |
 | ingest → searchable · → enriched | The two SLIs component metrics cannot show | 1 | ● |
 | Token accounting | Per user, model and agent; estimate against actual | 1 | ● |
+| **Durable usage-event emission** | A dropped event is revenue lost **silently** — the characteristic failure again | 1 | ● |
+| **Query cost metered** | The one activity a user can run in a loop, currently uncounted | 1 | ● |
+| Async metering and rating | Off the critical path — a billing outage must not stop ingestion | 2 | ○ |
+| `rate_card_version` on rated events | A rated amount without it is unauditable and uncorrectable | 2 | ○ |
+| **Reconciliation against provider APIs** | Under-counting looks like nothing being wrong | 8 | ○ |
+| Storage as byte-days | A level, not an event — summing storage events double-counts | 4 | ○ |
+| Invoicing · credit notes · drill-down | Closed invoices immutable; corrections are credit notes | 8 | ○ |
 | **Budgets at user and project scope** | One person's experiment must not spend the team's month | 1 | ● |
 | Queue abstraction | NATS and Pub/Sub differ in acks, ordering, redelivery | 1 | ● |
 | Dashboards · alerting | The full surface | 8 | ○ |
@@ -7849,7 +7857,12 @@ part (clinical, legal) has `none` for exactly that reason.
 | **`model_cards`** | Capabilities, hardware, licence, pricing, `verified_at` and `declared_by` per claim — the data the mapping is derived from |
 | **`data_type_profiles`** | What a type *requires*: capabilities, context floor, **sensitivity class**, volume |
 | `model_assignments` | Which model per `(purpose, data_type, scope)` |
-| `usage_records` | Tokens per user, model and agent — estimate against actual |
+| `usage_events` | Raw metered units, durably emitted — the source everything else derives from |
+| `usage_records` | Rated events, stamped with **`rate_card_version`** so any period can be re-rated |
+| `usage_rollups` | Hourly and daily aggregates per (account, dimension), with pointers to their event range |
+| `storage_snapshots` | Daily levels in byte-days — **idempotent per (account, day)**, because storage is a level, not an event |
+| `rate_cards` | Immutable price lists with `effective_from` |
+| `invoices` · `invoice_lines` · `credit_notes` | Closed periods, **immutable**; a correction is a credit note, never an edit |
 | `budgets` | Enforced at **user and project** scope |
 
 `access_log` is separate from everything else because its volume, retention and access pattern all
@@ -9111,6 +9124,9 @@ limit.
 
 ## Token Accounting
 
+> **This covers the meter.** Rating, aggregation, invoicing and the async pipeline that
+> computes them are in billing.md.
+
 `FR-OBS-4` requires tracking LLM token usage per user, per model and per agent. That is the right
 instinct and not enough to bill on, budget against, or explain a surprise.
 
@@ -9182,8 +9198,8 @@ crosses from free to paid deserves its own counter, because it is a category cha
 degradation.
 
 The same structural defect appears three times now: fallback that is safe for availability and
-unsafe for something else — [correctness](#versioning-staleness) with embeddings,
-[legality](#privacy-compliance) with regulated content, and cost here.
+unsafe for something else — correctness with embeddings,
+legality with regulated content, and cost here.
 
 #### 6. The new primitives need attribution
 
@@ -9273,7 +9289,7 @@ same store as user content without becoming a meaningful share of it.
 - **Rollups** — hourly aggregates by (org, model, purpose, status), retained long
 - Reporting reads rollups; investigation reads raw
 
-Same shape as the [tracing-memories concern](#telemetry): observability whose volume scales with
+Same shape as the tracing-memories concern: observability whose volume scales with
 ingest volume needs its own retention story, decided deliberately.
 
 ### Requirements
@@ -9295,8 +9311,251 @@ Extends `FR-OBS-4`:
   without losing recoverable progress.
 - **FR-TOK-10** Raw usage events and long-retention rollups MUST have separate retention.
 
+---
+
+## Billing
+
+token-accounting.md covers the **meter** — what a usage record must carry
+and the six ways a naive counter under-reports. This covers everything after it: turning usage into
+money, aggregating it per account, and letting someone see and dispute the number.
 
 ---
+
+### Three stages, and conflating them is the mistake
+
+```
+METER  ─────────▶  RATE  ─────────▶  BILL
+raw units          units × price      aggregate per account, per period
+per event          per event          → an invoice someone can query
+```
+
+They are separated for one reason that only becomes visible later:
+
+> **Prices change, and prices are sometimes wrong.**
+
+If cost is computed once at meter time and the units are discarded, a price correction cannot be
+applied to what already happened — the only options are re-deriving from an approximation or
+absorbing the error. Keeping the **units** means any period can be re-rated; keeping only the
+**cost** means the past is frozen at whatever the rate card said that day, including its mistakes.
+
+#### Every rated event records which rate card produced it
+
+Same shape as `generator_version`, for the same reason:
+
+```
+rate_card_version = sha256(canonical_json({ prices, effective_from, currency }))
+```
+
+**A rated amount with no rate-card version is unauditable.** You cannot explain why a line item is
+what it is, you cannot reproduce it, and when a customer asks why last month cost more you are
+reasoning from memory. With it, *"this was rated under card `v7`, which raised enrichment output
+by 15% on the 12th"* is one query.
+
+---
+
+### The pipeline is asynchronous, and that has a cost of its own
+
+Metering must **never** be on the critical path of a write or a query. A billing outage that stops
+ingestion is a billing outage that becomes an availability incident.
+
+```
+  worker / API ──emit──▶  usage events  ──▶  metering service  ──▶  rollups  ──▶  invoices
+   (fire and forget)         (durable)          (async)            (periodic)     (on close)
+```
+
+| Stage | Runs | Produces |
+|-------|------|----------|
+| **Emit** | Inline, non-blocking | One event per billable action |
+| **Meter** | Continuous consumer | Validated, deduplicated, attributed events |
+| **Rate** | Continuous | Cost per event, stamped with `rate_card_version` |
+| **Roll up** | Hourly, then daily | Aggregates per (account, dimension, period) |
+| **Invoice** | On period close | An immutable statement with pointers to its rollups |
+
+#### Emission must be as durable as the operation it describes
+
+"Fire and forget" is right for *latency* and wrong for *durability*. An event dropped because a
+queue was full is **revenue lost silently** — and silence is this system's characteristic failure
+everywhere else too.
+
+So emission is a durable local append that a shipper drains, not an in-memory best effort. The
+operation and its usage event commit together or the event is replayed.
+
+#### Async metering needs reconciliation, or drift is invisible
+
+This is the finding that async billing usually learns the hard way.
+
+If the meter under-counts — a dropped event, a consumer restart, a bug in attribution — **nothing
+looks wrong**. The invoice is smaller. No alarm fires because a smaller number is not obviously an
+error, and the first signal is a margin that quietly stops matching the provider's own bill.
+
+So the meter is **reconciled against independent sources**:
+
+| Reconcile | Against | Detects |
+|-----------|---------|---------|
+| Metered tokens per model, per day | The **provider's own usage API** | Dropped events, attribution bugs |
+| Metered enrichments | `COUNT(artifacts)` with recorded token usage | Consumer gaps |
+| Metered storage | Actual bucket and table sizes | Snapshot failures |
+
+`billing.reconciliation_drift_pct` is the metric, and it is alertable in **both** directions —
+under-counting loses money, over-counting bills a customer for work not done, and the second is
+worse.
+
+---
+
+### What is metered
+
+| Dimension | Unit | Notes |
+|-----------|------|-------|
+| **Enrichment tokens** | input · output · cached, per model | Three rates, not one |
+| **Embedding tokens** | input | Cheap per unit, enormous in volume |
+| **Query tokens** | input · output | **Read-side cost, currently a stated gap** — see below |
+| **Items ingested** | count | The unit customers actually reason about |
+| **Storage — blobs** | byte-days | A level, not an event — see below |
+| **Storage — records and indexes** | byte-days | Vector indexes are the surprise here |
+| **Egress** | bytes | Exports and bulk downloads |
+
+#### Read-side cost has to be metered, and currently is not
+
+A query costs an embedding call plus a generation call. Today that is unmetered, which means the
+one activity a user can perform in an unbounded loop is the one nobody is counting.
+
+The console shows query cost next to the answer — **the cheapest possible
+governance**, since read-side spend is otherwise invisible to the person generating it.
+
+#### Storage is a level, not an event
+
+Tokens are events: they happen, you sum them. Storage is a **level**: it persists, and summing
+"bytes stored" events double-counts every byte on every day it exists.
+
+So storage is **sampled daily and billed in byte-days**. A missed snapshot is a hole, not a
+mis-sum — which is why it is in the reconciliation table above, and why the snapshot job is
+idempotent per (account, day) so a re-run repairs rather than duplicates.
+
+---
+
+### Attribution follows connection scope
+
+Who pays for an ingested item is the same question as who can see it and what happens to it on
+account deletion — so it has the same answer:
+
+| Connection scope | Attributed to |
+|------------------|---------------|
+| `personal`, uploads, direct writes | The **user**, and their project |
+| `shared` | The **project**, not the connecting user |
+
+**This is the fourth mechanism connection scope decides**, after the ACL, account deletion and the
+default memory. That consistency is the point: a member who connects the team's Slack should not
+personally own its ingestion bill, for exactly the reason they do not personally own its data.
+
+Every event carries `user_id`, `project_id` and `org_id`, so rollups exist at all three levels
+without re-deriving attribution later.
+
+#### Excluded from billing, deliberately
+
+The demo tenant and internal test orgs are **ordinary data with a known org id**,
+excluded in the **reporting layer** — never by a flag consulted in the data path. Same rule as
+their exclusion from tenant counts.
+
+---
+
+### Money is an integer, and rounding happens once
+
+Two rules that are boring until they are not:
+
+- **Store amounts as integer minor units** — never a float. Floating-point currency produces
+  invoices that do not sum to their own line items, and the bug surfaces at a customer.
+- **Round once, at the invoice.** Rounding each event and summing produces drift proportional to
+  event count — and this system's event counts are large. Rate at full precision, round at the
+  boundary where money becomes a number someone pays.
+
+### An invoice must be explainable down to its events
+
+*"Why is this $412?"* has to be answerable, or a dispute has no resolution path.
+
+```
+invoice ──▶ line items ──▶ rollups ──▶ the event range each rollup covers
+```
+
+Rollups keep pointers to the event range that produced them, so drilling from a total to the
+underlying calls is a query rather than an investigation. An invoice you cannot decompose is one
+the customer has to take on trust — and the first time they do not, you find out whether your
+metering was right.
+
+**Invoices are immutable once closed.** A correction is a **credit note**, never an edit — the same
+principle as versioning and audit: the record of what you charged is not something that changes
+because the charge was wrong.
+
+---
+
+### Where it is viewed
+
+#### API
+
+```
+GET /api/v1/usage?scope=user|project|org&period=…&granularity=day|month
+GET /api/v1/usage/current                      the open period, against budget
+GET /api/v1/usage/estimate                     what an operation would cost, before running it
+GET /api/v1/invoices · /invoices/{id}          closed periods, with line items
+GET /api/v1/invoices/{id}/breakdown            line item → rollup → event range
+```
+
+`usage/estimate` is the one worth calling out: **a cost that can only be discovered after the fact
+is a cost nobody controls.** It backs the bulk-import estimate, the crawler dry-run, and the
+sandbox's *"enrich the rest?"* decision.
+
+#### UI
+
+| Surface | Sees |
+|---------|------|
+| **A user** | Their own usage against their own budget · **what each query cost** |
+| **An org admin** | Per-project and per-member breakdown · budget management · invoices |
+| **Platform admin** | Cross-org aggregates and margin against provider cost — **metadata only** |
+
+The user-level view is not a courtesy. Budgets are enforced at
+user scope as well as project, so a user who can be stopped by a limit must be able
+to see the limit and their position against it.
+
+---
+
+### Where it lands
+
+| Phase | Work |
+|-------|------|
+| **1** | Usage events emitted durably · `usage_records` with input/output/cached split · budgets at user and project scope · **query cost metered** |
+| **2** | The async metering consumer · rating with `rate_card_version` · hourly and daily rollups |
+| **4** | Storage snapshots as byte-days · `usage/estimate` backing bulk and crawler previews |
+| **6** | Per-provider tokenizer for accurate estimates · cost comparison in the sandbox A/B |
+| **8** | Invoicing, credit notes, breakdown drill-down, reconciliation against provider APIs |
+
+**Emission is Phase 1** for the usual reason: it is a **column**. Usage not recorded at the moment
+of the call cannot be reconstructed afterwards — the provider's aggregate bill will not tell you
+which user, project or data type it belonged to.
+
+---
+
+### Requirements
+
+- **FR-BILL-1** Metering, rating and billing MUST be separate stages. Raw units MUST be retained so
+  any period can be re-rated.
+- **FR-BILL-2** Every rated event MUST record `rate_card_version`.
+- **FR-BILL-3** Metering MUST NOT be on the critical path of a write or a read.
+- **FR-BILL-4** Usage event emission MUST be durable — an event MUST NOT be lost because a consumer
+  is unavailable.
+- **FR-BILL-5** Metered totals MUST be reconciled against independent sources, and drift MUST be
+  alertable in both directions.
+- **FR-BILL-6** Read-side cost MUST be metered.
+- **FR-BILL-7** Storage MUST be sampled as a level and billed in byte-days, with an idempotent
+  snapshot per (account, day).
+- **FR-BILL-8** Attribution MUST follow connection scope: `personal` to the user, `shared` to the
+  project.
+- **FR-BILL-9** Every event MUST carry user, project and org, so rollups exist at all three levels.
+- **FR-BILL-10** Amounts MUST be stored as integer minor units, and rounding MUST occur once, at
+  the invoice.
+- **FR-BILL-11** An invoice MUST be decomposable to the events that produced it.
+- **FR-BILL-12** Closed invoices MUST be immutable; corrections MUST be credit notes.
+- **FR-BILL-13** A cost estimate MUST be available before an expensive operation runs.
+- **FR-BILL-14** A user MUST be able to see their own usage and their position against any budget
+  that constrains them.
 
 ---
 
@@ -10001,6 +10260,7 @@ The invite *UI* can wait; the mechanism cannot.
 | **Admin** | Platform grants **orthogonal** to org roles · admin sees metadata, **never content** · global unscoped key retired | Platform console · usage reporting · support tooling |
 | **Settings** | Precedence user → project → org → platform, with **lock** semantics · reads return **effective value, source level and lock state** · key capabilities default to **nothing granted** · activity capture **off**, user-only | Full settings surface · policy editor · full register |
 | **Customization** | **Write phase order fixed, ACL assigned before any hook point** · security fields **read-only** in the item envelope · **`handler_digest` in the `generator_version` input set**, constant for built-ins | Normalization schema editor · redaction rules · validation policy · custom worker handlers · all of it |
+| **Billing** | **Usage events emitted durably** — input/output/cached split, `user`/`project`/`org` on every event · **query cost metered** · budgets at user and project scope | Rating · rollups · invoicing · reconciliation |
 | **Telemetry** | `write.*` counters by producer and reason · **`producer.seconds_since_last_item`** · **`embed.distinct_models_per_index`** · ingest→searchable | Dashboards · alerting · full catalogue |
 
 Eight rows, not forty-four items. Each left-hand cell is something that becomes a migration — or,
@@ -10055,6 +10315,7 @@ has been contaminated.
 | **Assignment per `(purpose, data_type)`** | MedGemma for clinical, a 270M classifier for layer 7 · **embeddings accept `*` only** |
 | **Sensitivity-driven candidacy** | A cloud engine is never a *candidate* for a `phi` type |
 | **W7 reprocess** | You will want to tune prompts on day two. Without this, tuning is write-only |
+| **Async metering consumer** | Rating with `rate_card_version` · hourly and daily rollups — off the critical path of every write and read |
 | **Demo grows to support + personal** | Question index and connection-scope ACLs become demonstrable once agents exist |
 | Telemetry | `enrich.classification_layer` — measures the ~80% claim rather than asserting it |
 
@@ -10092,6 +10353,7 @@ Both are producer shapes the spine already anticipates.
 | Presigned upload flow | `Stored` content; bytes never traverse the API |
 | Local upload signer | Filesystem storage has no signer — same API shape, local token |
 | MIME sniffing server-side | Declared type is a hint, never the router |
+| Storage snapshots · `usage/estimate` | Byte-days as a level; the estimate backing bulk and crawler previews |
 | Bulk **export** | Portability and workspace offboarding — long-running, resumable, produces an archive |
 
 **Bulk write, the run entity and selector-based delete moved to Phase 1** — see
@@ -10153,8 +10415,8 @@ could *remove* work — the broker's own sync engine may replace part of Phase 5
 
 ### Phase 8 — scale and compliance
 
-Quotas before raising ceilings · SSO/SAML · SCIM · immutable audit log · **erasure with
-verification** · legal hold and partial completion · composable retrieval primitives · soak to target
+Quotas before raising ceilings · SSO/SAML · SCIM · immutable audit log · **invoicing, credit
+notes and reconciliation against provider APIs** · **erasure with verification** · legal hold and partial completion · composable retrieval primitives · soak to target
 workspace count.
 
 > **Design the delete-cascade hooks in Phase 2**, when derived artifacts first exist. Retrofitting
