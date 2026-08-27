@@ -231,6 +231,50 @@ workspace count.
 > **Every phase gate is a test, not a demo.** See [operations/testing.md](operations/testing.md)
 > for the per-phase gates and the invariant suite.
 
+## UI is not a phase
+
+Each slice ships the interface for what that slice made possible. There is no "UI phase", because
+the parity requirement — everything settable in the UI is settable through the API — means **the UI
+can never be ahead of the API**. That sequences it automatically.
+
+| Slice | What the UI gains | Why then |
+|-------|------------------|----------|
+| **1 · Spine** | A **thin console**: write something, search, inspect a result | You cannot judge retrieval quality from a JSON body. One page, not a product |
+| **2 · Depth** | Enrichment inspector — viewpoint, entities, classification layer reached; agent prompt editor | You cannot tune a prompt without seeing what the last one produced |
+| **3 · Connectors** | **Connect flows**, connection health, reauthorise | **On the critical path** — see below |
+| **4 · Uploads** | Drag-and-drop, progress, per-item results | Uploads are inherently a browser feature |
+| **5 · Crawlers** | **Config editor with dry-run preview**, run history, per-item errors | **On the critical path** — see below |
+| **6 · Variants** | First-run setup, model picker with hardware feasibility | Local onboarding is the product's first impression |
+| **7 · Team & cases** | Sharing, members, groups, **case timeline** | A timeline is inherently visual; a JSON timeline is not a timeline |
+| **8 · Scale** | Admin console, audit search, public-share inventory | The inventory view is what catches a six-month-old mistake |
+
+### Two places the UI is genuinely blocking
+
+**OAuth connect flows need a browser.** There is no API-only path to connecting Gmail — the user
+must be redirected, consent, and return. Phase 3 does not ship without UI; it is *how you connect
+at all*.
+
+**Crawler dry-run is a safety mechanism whose value is visual.** A dry-run that returns JSON nobody
+reads does not prevent the mistake it exists to prevent. "This will create 47,213 items, take six
+hours and consume 84% of your monthly budget" only works if someone sees it. Shipping the crawler
+without the preview UI removes the guardrail while keeping the feature.
+
+Everywhere else the UI can lag by a slice without harm.
+
+### Relationship to the UI that exists
+
+The running deployment has a working UI — dashboard, AI Studio, playground, settings. Same
+strangler posture as the rest: it keeps serving the current system while the new console is built
+against the new API. Convergence or retirement is a decision for around slice 3, once the connector
+path has moved.
+
+### It is also a reference implementation
+
+Hosts embedding the platform build their own surfaces, and the
+[ephemeral-token pattern](api.md) exists so they can do so without holding durable credentials.
+Our UI is therefore the reference client as much as it is the product — which is a useful
+discipline, because anything it can do only by reaching past the API is a bug in the API.
+
 ## Cross-cutting, placed by phase
 
 | Capability | Lands | Note |
