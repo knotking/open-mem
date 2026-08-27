@@ -834,11 +834,6 @@ policy, a memory browser showing members and time remaining, and the reverse loo
 - **FR-MEMT-11** Memories MUST support typed relationships to other memories and to cases.
 - **FR-MEMT-12** Correlation MUST record whether it was declared or derived, and **derived
   correlation MUST NOT drive access or lifecycle decisions**.
-- **FR-MEMT-10** A memory MUST support an optional natural key, unique within (project, type), and
-  writes MUST upsert on it.
-- **FR-MEMT-11** Memories MUST support typed relationships to other memories and to cases.
-- **FR-MEMT-12** Correlation MUST record whether it was declared or derived, and **derived
-  correlation MUST NOT drive access or lifecycle decisions**.
 - **FR-MEMT-13** A memory's type MUST be mutable, and the identifier MUST NOT encode it.
 - **FR-MEMT-14** Re-typing MUST recompute TTL. Moving to a shorter TTL MUST preview what would be
   deleted before applying.
@@ -6225,7 +6220,7 @@ appears in no comparison document. See [comparison-onyx.md](#mem-dog-vs-onyx-det
 | **Connectors** | 300+ (900+ reachable) | 40+ | 100+ | — | — | — | few |
 | Ingestion mode | channels + connectors + API | connectors | connectors | SDK only | SDK only | SDK only | files + web |
 | **Messaging channels** | ● 25+ | — | — | — | — | — | ○ |
-| Typed memory + TTL | ● 10 types | — | — | ○ scopes | ○ implicit | ○ | — |
+| Typed memory + TTL | ● open type set | — | — | ○ scopes | ○ implicit | ○ | — |
 | Temporal knowledge graph | ○ optional | ○ LLM KG | — | ○ graph tier | ● native | ● | — |
 | **Permission-aware retrieval** | ○ designed | ● ACL sync, pre-filter | ● | ○ scoping | ○ scoping | ○ | — |
 | Multi-modal (audio/video) | ○ planned | ○ | ○ | — | — | ○ | — |
@@ -6244,7 +6239,7 @@ appears in no comparison document. See [comparison-onyx.md](#mem-dog-vs-onyx-det
 | Factor | Against whom |
 |--------|-------------|
 | **Messaging-channel ingestion and conversational access** | Nobody else treats WhatsApp, Telegram, Signal and Slack as first-class memory channels |
-| **Typed memory model** — 10 types, TTL, categories, versioning | mem0 has scopes; Zep is implicit; Onyx and Glean have no memory model at all |
+| **Typed memory model** — configurable types, TTL, expiry policy, many-to-many membership, versioning | mem0 has scopes; Zep is implicit; Onyx and Glean have no memory model at all |
 | **Typed enrichment across 60+ data types** | Others index documents; none classify IoT, medical, geospatial or sensor data |
 | **Connector breadth** | 2× Glean, 7× Onyx; the memory layers have none |
 
@@ -6417,7 +6412,7 @@ right shape, but it is a design and theirs is shipped.
 
 | Feature | mem-dog | Onyx |
 |---------|---------|------|
-| Typed memories | 10 types across 4 categories | None — it is a search index |
+| Typed memories | Open type set — name + TTL + expiry policy, re-typable | None — it is a search index |
 | TTL / expiry | Per-type defaults, overridable | None |
 | Versioning | Every mutation, with diffs | Re-index on change |
 | Compression | LLM summarization with archive | None |

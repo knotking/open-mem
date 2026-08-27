@@ -386,11 +386,6 @@ policy, a memory browser showing members and time remaining, and the reverse loo
 - **FR-MEMT-11** Memories MUST support typed relationships to other memories and to cases.
 - **FR-MEMT-12** Correlation MUST record whether it was declared or derived, and **derived
   correlation MUST NOT drive access or lifecycle decisions**.
-- **FR-MEMT-10** A memory MUST support an optional natural key, unique within (project, type), and
-  writes MUST upsert on it.
-- **FR-MEMT-11** Memories MUST support typed relationships to other memories and to cases.
-- **FR-MEMT-12** Correlation MUST record whether it was declared or derived, and **derived
-  correlation MUST NOT drive access or lifecycle decisions**.
 - **FR-MEMT-13** A memory's type MUST be mutable, and the identifier MUST NOT encode it.
 - **FR-MEMT-14** Re-typing MUST recompute TTL. Moving to a shorter TTL MUST preview what would be
   deleted before applying.

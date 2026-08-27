@@ -69,7 +69,7 @@ right shape, but it is a design and theirs is shipped.
 
 | Feature | mem-dog | Onyx |
 |---------|---------|------|
-| Typed memories | 10 types across 4 categories | None — it is a search index |
+| Typed memories | Open type set — name + TTL + expiry policy, re-typable | None — it is a search index |
 | TTL / expiry | Per-type defaults, overridable | None |
 | Versioning | Every mutation, with diffs | Re-index on change |
 | Compression | LLM summarization with archive | None |

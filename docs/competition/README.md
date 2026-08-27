@@ -71,7 +71,7 @@ appears in no comparison document. See [comparison-onyx.md](comparison-onyx.md).
 | **Connectors** | 300+ (900+ reachable) | 40+ | 100+ | — | — | — | few |
 | Ingestion mode | channels + connectors + API | connectors | connectors | SDK only | SDK only | SDK only | files + web |
 | **Messaging channels** | ● 25+ | — | — | — | — | — | ○ |
-| Typed memory + TTL | ● 10 types | — | — | ○ scopes | ○ implicit | ○ | — |
+| Typed memory + TTL | ● open type set | — | — | ○ scopes | ○ implicit | ○ | — |
 | Temporal knowledge graph | ○ optional | ○ LLM KG | — | ○ graph tier | ● native | ● | — |
 | **Permission-aware retrieval** | ○ designed | ● ACL sync, pre-filter | ● | ○ scoping | ○ scoping | ○ | — |
 | Multi-modal (audio/video) | ○ planned | ○ | ○ | — | — | ○ | — |
@@ -90,7 +90,7 @@ appears in no comparison document. See [comparison-onyx.md](comparison-onyx.md).
 | Factor | Against whom |
 |--------|-------------|
 | **Messaging-channel ingestion and conversational access** | Nobody else treats WhatsApp, Telegram, Signal and Slack as first-class memory channels |
-| **Typed memory model** — 10 types, TTL, categories, versioning | mem0 has scopes; Zep is implicit; Onyx and Glean have no memory model at all |
+| **Typed memory model** — configurable types, TTL, expiry policy, many-to-many membership, versioning | mem0 has scopes; Zep is implicit; Onyx and Glean have no memory model at all |
 | **Typed enrichment across 60+ data types** | Others index documents; none classify IoT, medical, geospatial or sensor data |
 | **Connector breadth** | 2× Glean, 7× Onyx; the memory layers have none |
 
