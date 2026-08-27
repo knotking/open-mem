@@ -130,6 +130,8 @@ deliberately does not.
 | **Bulk** | **The run entity** — checkpointed, resumable, dry-run, per-item results · bulk write at scale with admission control on queue depth · `enrich: false` default for bulk · **selector-based delete as a job** |
 | **Account deletion** | `DELETE /users/{id}/data` — **revoke first**, then cascade as a run · `personal` connections deleted, `shared` retained with attribution removed · the deletion's own audit record survives it |
 | **Auth** | `TokenVerifier` seam, API-key verifier behind it |
+| **Onboarding** | **Bootstrap-once admin** · `registration_mode` defaulting to **`invite_only`** · invite create and redeem, audited on both |
+| **Seed** | `seed --demo` — org, team, project, two users, two connection scopes, ~50 items — **through the real API, not a fixture path** |
 
 ### Why bulk and account deletion are here rather than Phase 4
 
@@ -151,6 +153,21 @@ that regenerates, where a revoked one is inert.
 **Cost:** roughly a week to ten days Phase 1 did not have, against erasure working from the first
 release and four later phases inheriting the machinery. Full treatment in
 [bulk-operations.md](operations/bulk-operations.md) and [deletion.md](operations/deletion.md).
+
+### The seed is the exit criterion, made runnable
+
+Phase 1 exits when an item is written into a project owned by an org with an access level, found by
+scoped search, cited, audited, and recording which model embedded it. **Seeding a demo tenant does
+exactly that** — so run through the real API, a successful seed *is* the end-to-end verification,
+and a failing one localises the break before anyone logs in.
+
+Which is why there is no fixture path: a seed that inserts rows directly tests the seed. Full
+treatment in [onboarding.md](operations/onboarding.md), including why demo credentials are
+generated per deployment and why bootstrap must refuse to run twice.
+
+**Invite-only is Phase 1 rather than Phase 7** because the alternative is open registration —
+and shipping open, then closing it later, means everyone who signed up in between is already inside.
+The invite *UI* can wait; the mechanism cannot.
 
 ### 1b · Write-time facts — column and enforcement only
 
