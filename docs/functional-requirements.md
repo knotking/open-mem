@@ -314,8 +314,9 @@ and **MAY** carry their usual RFC 2119 meaning.
 
 ## 10. Integrations
 
-- **FR-INT-1** The system MUST support OAuth2 connections to 300+ third-party
-  providers, including authorization-code and PKCE flows.
+- **FR-INT-1** The system MUST support OAuth2 connections across the credential
+  broker's full catalog — **900+ providers** — including authorization-code and PKCE
+  flows. (~300 are documented today; the reachable ceiling is roughly triple that.)
 - **FR-INT-2** Access tokens MUST be refreshed automatically before expiry;
   callers MUST NOT need to perform manual refresh.
 - **FR-INT-3** Integration credentials MUST be encrypted at rest with
@@ -331,6 +332,102 @@ and **MAY** carry their usual RFC 2119 meaning.
   (`?normalize=contact|calendar_event`) into unified schemas.
 - **FR-INT-8** Provider metadata not tracked upstream (`app_category`,
   `capabilities`, `channel_key`) MUST be synthesised from a local mapping.
+
+---
+
+## 10a. Crawlers (Pull Ingestion)
+
+- **FR-CRAWL-1** The system MUST support scheduled, configurable pull-based ingestion
+  as a first-class entry point alongside webhooks, uploads and direct API writes.
+- **FR-CRAWL-2** Crawlers MUST support at least six discovery strategies: `enumerate`
+  (paginate a collection), `query` (scheduled query with a cursor), `traverse` (follow
+  links), `tree` (walk a hierarchy), `feed` (read an index), `search` (repeat a query).
+- **FR-CRAWL-3** Backfill and polling MUST be expressed as *schedules* of the crawler,
+  not as separate worker classes.
+- **FR-CRAWL-4** Crawler configurations MUST be declarative, versioned, stored in the
+  record store, and read per run — taking effect without redeployment.
+- **FR-CRAWL-5** A crawler MUST be created disabled. Enabling MUST require a successful
+  dry-run against the **current config version**; editing scope or strategy MUST
+  invalidate that dry-run.
+- **FR-CRAWL-6** Dry-run MUST enumerate and report discovered counts and estimated bytes,
+  jobs, tokens, cost and duration **without fetching, writing or spending**.
+- **FR-CRAWL-7** The config version MUST be pinned at run start so that edits during a
+  long run do not take effect partway through it.
+- **FR-CRAWL-8** Runs MUST be checkpointed and resumable. A run interrupted by worker
+  loss MUST resume from its checkpoint, not restart.
+- **FR-CRAWL-9** The incremental watermark MUST advance **only on successful completion**.
+  A partial or failed run MUST NOT advance it.
+- **FR-CRAWL-10** Crawlers MUST deduplicate at three layers: `external_id` upsert,
+  etag/last-modified (skip before fetching), and content hash (skip enrichment).
+- **FR-CRAWL-11** Re-discovered content that has changed MUST be treated as a revision —
+  producing a new version and invalidating facts derived from the superseded version —
+  not as a new item.
+- **FR-CRAWL-12** Crawled items MUST inherit their access level from the source
+  connection's scope. A crawler MUST NOT be able to widen access.
+- **FR-CRAWL-13** Runs MUST support pause, resume and cancel. Cancel MUST preserve the
+  checkpoint so that a long run remains resumable.
+- **FR-CRAWL-14** Crawl work MUST respect per-provider and per-host rate limits, and bulk
+  priority MUST NOT starve event-driven ingestion.
+- **FR-CRAWL-15** Web (`traverse`) crawling MUST honour `robots.txt` and crawl-delay,
+  send an identifying user-agent with a contact URL, cap per-host concurrency, and scope
+  by **allowlist rather than blocklist**.
+- **FR-CRAWL-16** The system MUST NOT perform authenticated crawling of third-party sites.
+  Credentials belong to connections, not to crawlers.
+- **FR-CRAWL-17** Publicly-sourced content MUST be tagged as such at ingest so retrieval
+  can distinguish it from tenant data.
+- **FR-CRAWL-18** Customization MUST be declarative — templated requests, declared
+  pagination shapes, and side-effect-free expressions. The system MUST NOT execute
+  user-supplied code inside a worker.
+- **FR-CRAWL-19** A `401`/`403` during discovery MUST be terminal for the run, MUST mark
+  the connection as requiring re-authentication, and MUST NOT advance the watermark.
+- **FR-CRAWL-20** Runs MUST emit a heartbeat, and stalled runs MUST be reclaimable.
+
+---
+
+## 10b. External Producers
+
+- **FR-EXT-1** The public ingest API MUST be sufficient for an external system to act as
+  a data producer. Built-in crawlers MUST NOT hold privileges or use paths unavailable to
+  external callers.
+- **FR-EXT-2** The system MUST support project-scoped service keys carrying only the
+  capabilities a producer needs.
+- **FR-EXT-3** Writes MUST support `external_id` upsert, preserving the item identifier
+  across re-ingestion.
+- **FR-EXT-4** Writes MUST accept an idempotency key so client retries cannot duplicate.
+- **FR-EXT-5** The API MUST provide a **batch write endpoint** returning per-item results,
+  so that a partial failure does not fail the batch.
+- **FR-EXT-6** Rate limit and quota state MUST be exposed in response headers so clients
+  can self-throttle rather than discovering limits through `429`s.
+- **FR-EXT-7** Errors MUST carry a machine-readable `code` in a single, consistent envelope.
+
+---
+
+## 10c. Model Catalog
+
+- **FR-CAT-1** The system MUST provide a curated catalog of model cards, not merely a list
+  of provider-supplied identifiers.
+- **FR-CAT-2** Each card MUST declare: capabilities (text, vision, audio, tools, thinking,
+  structured output, embedding), context window, architecture, hardware requirements per
+  quantization, license, serving providers, cost, and lifecycle status including
+  supersession.
+- **FR-CAT-3** Models offered to a user MUST be the intersection of the curated registry,
+  what their configured engines actually serve, and what their hardware can run.
+- **FR-CAT-4** A model the user has access to MUST NOT be hidden because it is absent from
+  the registry; it MUST be shown as unvalidated with undeclared capabilities.
+- **FR-CAT-5** Model assignment MUST be validated at configuration time against capability
+  match, hardware feasibility, context window, license restrictions and provider
+  reachability.
+- **FR-CAT-6** Routing MUST select on **capacity tier × required capabilities**. The
+  `multimodal` and `omni` tiers MUST be retained only as deprecated aliases.
+- **FR-CAT-7** A model assignment forms part of the generator version of every artifact its
+  tier produces. Changing it MUST present a staleness impact estimate — artifacts affected,
+  rebuild duration and cost — before the change is applied.
+- **FR-CAT-8** Changing an embedding model MUST be presented as a guided corpus migration
+  with a rollback path, never as a configuration setting.
+- **FR-CAT-9** Embedding calls MUST NOT use the fallback chain. If the assigned embedder is
+  unavailable the item MUST be deferred, never embedded by a substitute model.
+- **FR-CAT-10** Every inference call MUST record the model that **actually served** it, not
+  the one configured.
 
 ---
 

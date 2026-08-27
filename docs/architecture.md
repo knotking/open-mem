@@ -5,6 +5,13 @@ Status: baseline, derived from the published mem-dog documentation set
 
 Companion document: [Functional Requirements](functional-requirements.md).
 
+> **Scope note.** This document describes the system *as deployed*, with technologies named.
+> The design work that postdates it — the content contract, the eight-class worker model,
+> crawlers, the model catalog and the staleness model — lives in
+> [design-principles.md](design-principles.md), [ingestion/](ingestion/README.md),
+> [retrieval/](retrieval/README.md) and [operations/](operations/README.md). Where the two
+> disagree, those documents are current.
+
 ---
 
 ## 1. System Overview
@@ -14,13 +21,13 @@ services. Ingestion, enrichment, storage and retrieval are separate tiers so
 that each can fail, scale and be replaced independently.
 
 ```
-  300+ Apps                        Users                      MCP Clients
+  900+ Apps                        Users                      MCP Clients
   Slack, WhatsApp, Telegram…       Web UI (Next.js)           Claude Desktop, Cursor
         │                                │                          │
         ▼                                ▼                          ▼
   Webhook Gateway ───────────────▶  API (FastAPI)  ◀────────  MCP Server (SSE)
   per-user endpoints (whk_<ulid>)      │   │   │   │
-  normalise → UniversalEnvelope        │   │   │   └──▶ Nango — OAuth, tokens, 300+ providers
+  normalise → UniversalEnvelope        │   │   │   └──▶ Nango — OAuth, tokens, 900+ providers
         │                              │   │   └──────▶ Object store — raw binary
         ▼                              │   └──────────▶ Neo4j + Graphiti — temporal graph
   Webhook Pipeline                     ▼
@@ -48,7 +55,8 @@ that each can fail, scale and be replaced independently.
 | **API** | Python 3.12, FastAPI | 70+ REST endpoints, storage abstraction, auth, graph writes | Kubernetes (`mem-dog`), port 8080 |
 | **UI** | Next.js 14, React 18, TypeScript | Dashboard, AI Studio, Playground, Settings | Serverless container, port 3000 |
 | **Webhook Gateway** | Python 3.12, FastAPI, LiteLLM | Channel normalisation, identity resolution, integration tagging, API proxy | Kubernetes (`webhook-gateway`), port 8080 |
-| **Webhook Pipeline** | Python 3.12, NATS JetStream, ADK | ~40 typed enrichment agents | Kubernetes (`webhook-pipeline`), port 8080 |
+| **Webhook Pipeline** | Python 3.12, NATS JetStream, ADK | ~40 typed enrichment agents |
+| **Crawl workers** | Python 3.12, scheduled, checkpointed | Pull ingestion — discovery and emission only | Kubernetes (`webhook-pipeline`), port 8080 |
 | **DigiMe Agent** | Node.js, OpenClaw runtime | Conversational agent across 25+ channels | Kubernetes (`webhook-gateway`), port 18789 |
 | **MCP Server** | Python 3.12, FastMCP, SSE | 8 tools for MCP clients | Co-located with API |
 | **Postgres / Supabase** | Postgres 16 + pgvector, GoTrue, Kong | Structured data, embeddings, FTS, auth | Kubernetes (`supabase`), port 5432 |
@@ -120,6 +128,33 @@ resolve roughly 80% of traffic:
 **Agent families** — documents (8), media (4), communication (6), structured
 (6), code and logs (4), sensor (5), spatial (2), specialised medical / legal /
 financial (3), binary (2).
+
+### 3.3a Crawl ingestion
+
+Scheduled pull, for the majority of sources that never push. A leader-elected scheduler creates a
+checkpointed run; the crawl worker discovers resources through the credential-injecting proxy,
+deduplicates against what it has seen, and **emits** — records through `POST /api/v1/data` with
+`external_id` upsert, files as a pending reference into the fetch queue.
+
+The crawler neither fetches bytes nor enriches. It writes through the same public API an external
+producer would, so a crawled record and a webhook-delivered one are indistinguishable downstream.
+The watermark advances only on successful completion. See
+[ingestion/crawlers.md](ingestion/crawlers.md).
+
+### 3.3b The content contract
+
+Enrichment agents must not be able to observe how content arrived. All producers — inline payloads,
+fetch workers, uploads, crawlers — converge on a two-case type:
+
+```
+ContentRef =
+  │ Inline (text | bytes)
+  │ Stored (storage_ref, mime_type, size, checksum)
+```
+
+`is_downloaded` is derived, never assignable; routing keys off server-sniffed MIME with
+`source_type` demoted to a hint. This retires the class of defect where agents branched on
+caller-supplied provenance fields. See [ingestion/workers.md](ingestion/workers.md).
 
 ### 3.4 Knowledge-graph dual write
 
@@ -270,7 +305,7 @@ Credential resolution order in the pipeline: **user engine** (5-minute cache) �
 UI (IntegrationsManager)
   └─▶ API /api/v1/integrations — adapter layer, stable contract
         └─▶ Nango (self-hosted)
-              ├── 300+ provider templates
+              ├── 900+ provider templates
               ├── OAuth2 authorization-code and PKCE flows
               ├── automatic token refresh before expiry
               └── AES-256-GCM credential encryption

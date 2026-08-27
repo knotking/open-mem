@@ -83,6 +83,18 @@ week" does not function.
 The `enumerate` strategy with a bounded window (30 days) is MVP-critical and belongs in Phase 2.
 The full crawler framework — remaining strategies, scheduling, web traversal — stays at 4b.
 
+### External producers
+
+The public ingest API is the universal crawler interface, so external systems are first-class
+producers. Four gaps close that contract — all small, all Phase 1 or 2:
+
+| Gap | Phase |
+|-----|-------|
+| **`POST /data/batch`** with per-item results | 1 — bulk ETL is unusable without it |
+| Idempotency key on writes | 1 — retries currently duplicate |
+| Converge the two error formats onto the structured envelope | 1 |
+| Rate-limit and quota headers so clients self-throttle | 2 |
+
 ### Model catalog
 
 Model cards, capability-validated assignment and the capacity × capability routing change fit
