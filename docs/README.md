@@ -107,6 +107,7 @@ is the same material as one continuous page.
 |----------|--------|
 | [competition/](competition/README.md) | Landscape, feature matrix, honest scorecard |
 | [competition/comparison-onyx.md](competition/comparison-onyx.md) | The closest competitor, previously undocumented |
+| [competition/comparison-glean.md](competition/comparison-glean.md) | The category leader, and the market it structurally cannot serve |
 
 ---
 

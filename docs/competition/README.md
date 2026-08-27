@@ -168,6 +168,7 @@ Two further considerations:
 | Document | Covers |
 |----------|--------|
 | [comparison-onyx.md](comparison-onyx.md) | Onyx — the closest competitor; previously undocumented |
+| [comparison-glean.md](comparison-glean.md) | Glean — the category leader, and the market it structurally cannot serve |
 
 Existing comparisons live in `docs/comparisons/` (mem0, Zep, BerryDB, Nango, Snowflake/Databricks)
 and are dated March 2026. They need a refresh pass and the corrections listed above.
