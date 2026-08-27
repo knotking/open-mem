@@ -100,7 +100,7 @@ Idempotency-Key: 9f2c...
     {
       "external_id": "img-4410",
       "content": { "kind": "stored",
-                   "storage_ref": "gs://.../upl_01JQRS/img-4410",
+                   "storage_ref": "gs://memdog-raw-prod/org_01J8…/prj_01J9…/data_01JQRS…/raw/9f2c8e….heic",
                    "mime_type": "image/heic",
                    "size": 3841204,
                    "checksum": "sha256:..." }

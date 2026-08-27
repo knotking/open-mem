@@ -23,7 +23,7 @@ is the same material as one continuous page.
 | **V · Models and the sandbox** | Choosing what runs, and proving it works on your data | [model catalog](operations/model-catalog.md) · [model routing](operations/model-routing.md) · [sandbox](ui-sandbox.md) · [multilingual](multilingual.md) |
 | **VI · Access and privacy** | Who sees what, and what we can prove | [tenancy](security/tenancy.md) · [access model](security/access-model.md) · [auth](security/auth.md) · [privacy foundations](security/privacy-foundations.md) · [compliance](security/compliance.md) |
 | **VII · How we define the API** | The rules the surface obeys, before any endpoint exists | [api](api.md) · [ui design](ui-design.md) |
-| **VIII · How we implement it** | Stack, variants, observability, and the tests that close each slice | [technology](operations/technology.md) · [deployment variants](operations/deployment-variants.md) · [telemetry](operations/telemetry.md) · [testing](operations/testing.md) · [implementation](operations/implementation.md) |
+| **VIII · How we implement it** | Stack, variants, observability, and the tests that close each slice | [technology](operations/technology.md) · [blob layout](operations/blob-layout.md) · [deployment variants](operations/deployment-variants.md) · [telemetry](operations/telemetry.md) · [testing](operations/testing.md) · [implementation](operations/implementation.md) |
 | **IX · The plan** | Sequence, open decisions, the market | [roadmap](roadmap.md) · [competition](competition/README.md) |
 
 ## Start here
