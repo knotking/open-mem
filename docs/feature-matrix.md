@@ -24,12 +24,16 @@ Every feature in the platform, with the phase that ships it and whether it is in
 | W6 stream worker | Persistent socket sources | 5 | ○ |
 | W7 reprocess worker | Config or schema change re-runs derived work | 2 | ◐ |
 | W8 mutate worker | Upstream revision → new version, never in place | 2 | ○ |
-| W9 retract worker | Delete and erasure cascade | 1 | ◐ single item |
+| W9 retract worker | Delete and erasure cascade | 1 | ● |
+| **Selector-based delete** | Deletion by query, as a resumable job, **with a mandatory preview** | 1 | ● |
+| **Account data deletion** | **Revoke first**, then cascade · `personal` deleted, `shared` retained with attribution removed | 1 | ● |
 | **W10 standing query** | Match new writes against saved selectors, deliver to a target | — | △ |
 | Source adapters | `resolve` / `materialise` / `export` / `read` per source family | 3 | ○ |
 | Connector catalog | 300+ documented, ~900 reachable through the credential broker | 3 | ○ |
 | Direct upload | Text, file, URL, camera, voice, video | 4 | ○ |
-| Bulk operations | Dry-run, per-item results, resumable runs | 4 | ○ |
+| **The run entity** | Checkpointed, resumable, dry-run, per-item results — shared by five operations | 1 | ● |
+| **Bulk write at scale** | Same verb, more items; queue-depth admission control, `enrich: false` default | 1 | ● |
+| Bulk export | Portability and offboarding — needs an artifact graph worth exporting | 8 | ○ |
 | Format handling | 60+ types; PDF, Docs via `export`, media gated on cost | 4 | ◐ text only |
 | Fan-out | One reference expands to N independently retryable jobs | 4 | ○ |
 | Per-provider rate limits | Token buckets keyed `(provider, user)`; backfill deprioritised | 5 | ○ |
@@ -107,7 +111,7 @@ Every feature in the platform, with the phase that ships it and whether it is in
 | Credential proxy | Workers receive references, never secrets | 2 | ◐ |
 | Encryption failing closed | Never store a provider key in plaintext with a warning | 1 | ● |
 | **Audit on every read** | Impossible to retrofit — March cannot be reconstructed | 1 | ● |
-| Deletion cascade | Chunks, embeddings, blobs, entity contributions, summaries | 1 | ◐ single item |
+| Deletion cascade | Chunks, embeddings, blobs, entity contributions, summaries — **grows as the artifacts do** | 1 | ● |
 | Provenance as a source **list** | What makes erasure through compression possible | 1 | ● |
 | Legal hold | Suppresses expiry; refuses erasure **with a reason** | 7 | ○ |
 | DSAR tooling · export | Data subject requests end to end | 8 | ○ |

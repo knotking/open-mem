@@ -1,5 +1,16 @@
 # Bulk Operations
 
+> **Phase 1, not Phase 4.** The run entity, bulk write at scale, selector-based delete and account
+> data deletion all land in the first slice — because the [sandbox](../ui-sandbox.md) ships in
+> Phase 1 and its core interaction (*upload a dataset, watch the staircase, see per-item results*)
+> **is** a run. Building it once as a sandbox one-off and again properly later is the worse version
+> of the same work. Bulk reprocess, bulk update and bulk export stay later, because their subjects
+> — derived artifacts, an artifact graph — do not exist yet.
+>
+> The condition that moves with it: **dry-run and preview are Phase 1 too.** A selector delete
+> without a preview, on a corpus the user just uploaded and is still learning the shape of, removes
+> the guardrail while keeping the feature.
+
 A batch endpoint sounds like an API convenience. It is actually a capacity control, because
 **the write is the cheap part**.
 

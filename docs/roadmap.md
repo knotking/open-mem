@@ -153,7 +153,63 @@ So each concern below appears twice: what must exist now, and what deliberately 
 | **Read** | `GET /data/{id}` · `POST /api/v1/retrieve` — vector, lexical, hybrid |
 | **Memories** | Type registry with TTL and expiry policy · many-to-many membership · both mapping directions |
 | **Delete** | `DELETE /data/{id}` — single item, cascade over its own derived artifacts |
+| **Bulk** | **The run entity** — checkpointed, resumable, dry-run, per-item results · bulk write at scale with admission control on queue depth · `enrich: false` default for bulk · **selector-based delete as a job** |
+| **Account deletion** | `DELETE /users/{id}/data` — **revoke first**, then cascade as a run · `personal` connections deleted, `shared` retained with attribution removed · the deletion's own audit record survives it |
 | **Auth** | `TokenVerifier` seam, API-key verifier behind it |
+
+### Bulk is in Phase 1 because the sandbox already needs it
+
+Bulk was previously Phase 4. Moving it forward is less of an addition than it looks: **the run
+entity was already latent in Phase 1 and simply unnamed.**
+
+The [sandbox](ui-sandbox.md) ships in Phase 1 and its core interaction is *upload a dataset, watch
+the readiness staircase, see per-item results*. That is a run — a durable job with progress,
+checkpointing and per-item outcomes. Building it as a one-off for the sandbox and then rebuilding
+it properly in Phase 4 is the worse version of the same work.
+
+And the write verb is **already** bulk: `items[]` with a `207` from the first commit. What Phase 1
+adds is the machinery around many items rather than a second endpoint for them.
+
+| Operation | Lands in Phase 1? | Why |
+|-----------|:-----------------:|-----|
+| **The run entity** | **Yes** | Shared by five operations; the sandbox needs it regardless |
+| **Bulk write at scale** | **Yes** | The verb already takes `items[]`; this adds queue-depth admission control and an `enrich: false` default |
+| **Selector-based delete** | **Yes** | Erasure becomes real from day one, which is what family E being "built early" actually means |
+| **Account data deletion** | **Yes** | A selector delete with a revoke step in front. GDPR Art 17 and employee offboarding are the same operation, and both are asked for early |
+| Bulk reprocess (W7) | No — Phase 2 | There are no derived artifacts to rebuild yet |
+| Bulk update / retag | No — Phase 2 | ACL changes must re-check derived artifacts, which do not exist yet |
+| Bulk export | No — Phase 8 | Needs a portability format and the full artifact graph |
+
+**The last three are not deferrals, they are empty boxes.** Their subjects do not exist in Phase 1,
+so moving them forward would move nothing.
+
+> **The condition: dry-run moves with it, not after.**
+>
+> Selector-based delete without a preview is the most dangerous thing that could be put in Phase 1
+> — *"delete everything matching X"* on a system where the user is still learning what X matches,
+> against a corpus they just uploaded. The [preview-and-confirm component](ui-design.md) is
+> therefore Phase 1 scope too, computed against real data: **how many items, how many held by no
+> other memory, what cascades.**
+>
+> Shipping the selector without the preview removes the guardrail while keeping the feature — the
+> same failure the crawler dry-run exists to prevent.
+
+Account deletion rides on the same run entity, with one addition that is **not** optional:
+**revoke keys, sessions, connections and producers before the cascade starts.** Delete first and
+the cascade races the pipeline — items land behind the checkpoint, the run reports success, and the
+account is left half-deleted and quietly re-populating. A revoked account that is half-deleted is
+inert; a live one is a leak that regenerates.
+
+It also inherits the answer to the question that otherwise blocks it: *a departing employee wrote
+4,000 messages in a shared channel — whose are they?* **Connection scope already decided that at
+write time.** `personal` data is deleted; `shared` data stays with the project and loses the
+account's attribution. No new mechanism, and the dry-run states both counts separately.
+
+**Honest cost:** this is real scope added to a phase whose discipline is that it stays a slice. The
+run entity, checkpointing, a preview and the revoke path are perhaps a week to ten days Phase 1 did
+not have. The trade is that **erasure works from the first release** — which matters more than
+usual here, because family E was always meant to be built early and this is what "early" means in
+practice — and four later phases inherit the machinery instead of each inventing a job runner.
 
 ### 1b · Write-time facts — column and enforcement only
 
@@ -178,6 +234,9 @@ data whenever it is wanted.
 An SDK call writes an item **into a project, owned by an org, with an access level**; a semantic
 search **scoped to that project** finds it; the response cites it; the read is **audited**; and the
 row records **which model embedded it**.
+
+And it can be taken back: **a selector deletes a set after showing what it would delete, and an
+account deletion revokes, cascades, and reports what it retained.**
 
 Expressed as tests rather than a demo — see [operations/testing.md](operations/testing.md).
 
@@ -245,9 +304,11 @@ Both are producer shapes the spine already anticipates.
 | Presigned upload flow | `Stored` content; bytes never traverse the API |
 | Local upload signer | Filesystem storage has no signer — same API shape, local token |
 | MIME sniffing server-side | Declared type is a hint, never the router |
-| Bulk writes at scale | Same verb, more items; admission control on queue depth |
-| `enrich: false` default for bulk | Full enrichment must be asked for and budgeted |
-| **Selector-based deletion as a job** | Same run entity as bulk import — checkpointed, dry-run, per-item errors |
+| Bulk **export** | Portability and workspace offboarding — long-running, resumable, produces an archive |
+
+**Bulk write, the run entity and selector-based delete moved to Phase 1** — see
+[above](#bulk-is-in-phase-1-because-the-sandbox-already-needs-it). What remains here is the upload
+half, plus export once there is an artifact graph worth exporting.
 
 **Exit:** drag a 500 MB file into the UI and it ingests; push ten thousand records and the platform
 stays responsive.
