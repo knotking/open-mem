@@ -34,7 +34,7 @@ what an [account deletion](deletion.md) takes.
 
 ```
 data_items
-  data_id            ULID, primary key
+  data_id            ULID — the first 10 chars ARE the creation timestamp
   org_id             ─┐ cannot be backfilled — no way to reconstruct
   project_id         ─┤ which org owned a row after the fact
   producer_id        ─┘
@@ -58,6 +58,38 @@ data_items
 
   created_at · updated_at · deleted_at
 ```
+
+### The identifier already carries a timestamp
+
+Every id in the system is a ULID, and a ULID is **not** a random string. It is a 48-bit millisecond
+timestamp followed by 80 bits of randomness, Crockford-base32 encoded:
+
+```
+data_01JQRS3M4X 7Y8Z9A0B1C2D3E
+     └────┬────┘└──────┬──────┘
+   48-bit ms time   80-bit random
+   (10 chars)       (16 chars)
+```
+
+Three properties fall out, and they are the reason for the choice:
+
+| Property | What it buys |
+|----------|-------------|
+| **Lexicographically sortable by time** | `ORDER BY data_id` is chronological. A range scan over an id prefix is a time-range scan |
+| **Creation time recoverable without a lookup** | Decode the first 10 characters. Useful in logs, in [blob keys](blob-layout.md), and during recovery when the database is what is unavailable |
+| **Generated client- or server-side without coordination** | No sequence, no round trip, no collision risk at our volume |
+
+**So there is no separate timestamp column to add** — `data_id` carries creation time, and
+`ingested_at` stores it explicitly for querying. The two agree by construction because both are set
+at insert.
+
+> **`event_time` is a different thing and must stay a column.** It is when the event *happened*,
+> which may precede the id by years and is **correctable** afterwards. It cannot be derived from an
+> identifier, and it must never be encoded in one — a corrected `event_time` would otherwise mean a
+> changed primary key.
+
+That is the whole `event_time` / `ingested_at` distinction expressed in the identifier: **the id
+tells you when we learned about it; only the column tells you when it happened.**
 
 Two schema-level rules that are easy to lose:
 
@@ -236,6 +268,8 @@ schema telling you what the hard operations actually are.
 - **FR-SCH-7** `access_log` MUST be append-only, partitioned, and MUST survive deletion of the data
   it describes.
 - **FR-SCH-8** ACL predicates MUST be evaluated inside the retrieval query, not applied to results.
+- **FR-SCH-12** Identifiers MUST be ULIDs, so creation time is recoverable from the id and ids sort
+  chronologically. `event_time` MUST remain a column and MUST NOT be encoded in an identifier.
 - **FR-SCH-9** `mime_type` MUST be server-detected and MUST outrank `source_type` for routing.
   `source_type` MUST be treated as a hint.
 - **FR-SCH-10** The normalized projection MUST be stored separately from the original, tagged with

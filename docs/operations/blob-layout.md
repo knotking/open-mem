@@ -63,8 +63,8 @@ request.
 
 There is deliberately no `{yyyy}/{mm}/` in the key, and the reason is not that time does not matter.
 
-**`data_id` is a ULID, and ULIDs are lexicographically sortable by their embedded millisecond
-timestamp.** So the path is already time-ordered and a creation time is already recoverable from
+**`data_id` is a ULID — its first 10 characters *are* a 48-bit millisecond timestamp**, so ids sort
+chronologically and creation time decodes straight out of the key. So the path is already time-ordered and a creation time is already recoverable from
 the key without a database lookup. A date segment would restate what is there.
 
 The operational arguments for date-partitioned keys mostly do not apply here:
