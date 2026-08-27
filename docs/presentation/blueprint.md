@@ -1882,8 +1882,9 @@ and the pipeline cannot fetch authenticated resources itself.
 
 ### Worker taxonomy
 
-Eight classes. Backfill and polling are **not** separate classes — they collapsed into the
-[crawler](#crawlers) once it became clear they are two schedules of the same machinery.
+Eight classes, plus one proposed. Backfill and polling are **not** separate classes — they
+collapsed into the [crawler](#crawlers) once it became clear they are two schedules of the same
+machinery.
 
 | ID | Class | Trigger | Creds | Bounded by | Retry costs |
 |----|-------|---------|:-----:|-----------|-------------|
@@ -1895,8 +1896,27 @@ Eight classes. Backfill and polling are **not** separate classes — they collap
 | **W7** | Reprocess | config or schema change | AI only | model capacity | tokens |
 | **W8** | Mutate | upstream revision | AI only | model capacity | tokens |
 | **W9** | Retract | delete / erasure request | none | — | nothing |
+| **W10** | Standing query | a new item is written | none | registered query count | nothing |
 
-#### Why fetch and enrich must be separate pools
+#### W10 is proposed, not decided
+
+W10 exists because four published use cases — media monitoring, IoT thresholds, legal deadlines
+and compliance retention — want to be *told*, not asked, and every retrieval surface in this design
+is pull-only. It is listed so the taxonomy is complete, and marked proposed because scoping it is
+an open decision. Two rules govern it if it is built:
+
+- **It evaluates against newly written items only, and never re-scans the corpus.** That is the
+  whole reason it is cheap: each item is matched once, against the registered selector set. A
+  standing query that re-scans is a scheduled full-table scan, and someone will register a hundred.
+- **Matches are ACL-filtered at delivery time**, against the owner's rights *at that moment* rather
+  than at registration. Delivery is a read — and it is the one read that bypasses every query-time
+  check, because no query was made.
+
+**Time-based triggers are not standing queries.** *"Thirty days before a due date"* is not a
+predicate over new writes — nothing arrives on that day. Those are a **W4** scheduled sweep over
+date facets. Two mechanisms, deliberately.
+
+### Why fetch and enrich must be separate pools
 
 ```
 FETCH worker                        ENRICH worker
@@ -6274,6 +6294,8 @@ the audit record, costs a question that can never be answered.
 | Decision | Note |
 |----------|------|
 
+| **Scope W10 standing queries?** | Four published use cases need push; media monitoring is *only* a push product. Recommend scoping W10 with media monitoring and stating the deferral for the rest |
+| **`compress` → `derive`?** | Study guides, flashcards, obligation extracts and customer briefings are one operation with different output schemas. Recommend yes — reuses the existing generator registry |
 | **Materialisation policy** | Always store (recommended) / threshold / derived-only |
 | **Default ACL for a team upload** | Private-by-default is consistent; users dragging into a *team* space often expect team visibility |
 | **Is media in scope for v1?** | Transcription infrastructure, and the largest cost exposure of any format group |

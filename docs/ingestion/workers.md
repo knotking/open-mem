@@ -14,8 +14,9 @@ and the pipeline cannot fetch authenticated resources itself.
 
 ## Worker taxonomy
 
-Eight classes. Backfill and polling are **not** separate classes — they collapsed into the
-[crawler](crawlers.md) once it became clear they are two schedules of the same machinery.
+Eight classes, plus one proposed. Backfill and polling are **not** separate classes — they
+collapsed into the [crawler](crawlers.md) once it became clear they are two schedules of the same
+machinery.
 
 | ID | Class | Trigger | Creds | Bounded by | Retry costs |
 |----|-------|---------|:-----:|-----------|-------------|
@@ -27,6 +28,29 @@ Eight classes. Backfill and polling are **not** separate classes — they collap
 | **W7** | Reprocess | config or schema change | AI only | model capacity | tokens |
 | **W8** | Mutate | upstream revision | AI only | model capacity | tokens |
 | **W9** | Retract | delete / erasure request | none | — | nothing |
+| **W10** | Standing query | a new item is written | none | registered query count | nothing |
+
+### W10 is proposed, not decided
+
+W10 exists because four published use cases — [media monitoring, IoT thresholds, legal deadlines
+and compliance retention](../use-cases-catalog.md#gap-1--retrieval-is-pull-only-and-four-use-cases-need-push)
+— want to be *told*, not asked, and every retrieval surface in this design is pull-only.
+
+It is listed here so the taxonomy is complete, and marked proposed because scoping it is an
+[open decision](../roadmap.md#still-open). Two rules govern it if it is built:
+
+- **It evaluates against newly written items only, and never re-scans the corpus.** That is the
+  whole reason it is cheap: each item is matched once, against the registered selector set. A
+  standing query that re-scans is a scheduled full-table scan, and someone will register a hundred.
+- **Matches are ACL-filtered at delivery time**, against the owner's rights *at that moment* rather
+  than at registration. Delivery is a read — and it is the one read that bypasses every query-time
+  check, because no query was made. A match pushed to a principal who can no longer see the item is
+  a leak through the notification channel.
+
+**Time-based triggers are not standing queries.** *"Thirty days before a due date"* is not a
+predicate over new writes — nothing arrives on that day. Those are a **W4** scheduled sweep over
+date facets. Two mechanisms, deliberately: folding them together produces a standing-query engine
+that quietly re-scans on a timer, which is the failure the first rule exists to prevent.
 
 ### Why fetch and enrich must be separate pools
 

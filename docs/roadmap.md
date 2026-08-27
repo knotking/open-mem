@@ -351,6 +351,8 @@ the audit record, costs a question that can never be answered.
 | Decision | Note |
 |----------|------|
 
+| **Scope W10 standing queries?** | Four published use cases need push; media monitoring is *only* a push product, so shipping it without delivery ships nothing. Recommend scoping W10 with media monitoring and stating the deferral for the rest |
+| **`compress` → `derive`?** | Study guides, flashcards, obligation extracts and customer briefings are one operation with different output schemas. Recommend yes — reuses the existing generator registry, and the endpoint has no clients yet |
 | **Materialisation policy** | Always store (recommended) / threshold / derived-only |
 | **Default ACL for a team upload** | Private-by-default is consistent; users dragging into a *team* space often expect team visibility |
 | **Is media in scope for v1?** | Transcription infrastructure, and the largest cost exposure of any format group |
