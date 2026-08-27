@@ -265,6 +265,59 @@ Expiry runs through the same cascade as any other deletion — chunks, embedding
 contributions, summaries marked stale — because an expiring memory that leaves orphaned embeddings
 behind is a slow leak that only shows up as a storage bill.
 
+## Effective TTL is computed, not stored
+
+Many-to-many membership plus mutable membership has a consequence worth stating explicitly:
+
+> **An item's effective TTL is the maximum across all the memories that hold it — and it changes as
+> membership changes.**
+
+An item in a one-hour `conversation` that is then added to a permanent `factual` memory has just
+become permanent. Remove it from the factual memory and it becomes deletable again, subject to
+whatever else still holds it.
+
+That is correct behaviour. The problem is that it makes "when does this expire?" **not a property
+of the item**. There is no `expires_at` column that is true, because the answer is derived from a
+set that changes.
+
+### So expose the computation, do not store the answer
+
+| Anti-pattern | Why it fails |
+|--------------|-------------|
+| An `expires_at` column on the item | Wrong the moment any membership changes, and nothing recomputes it reliably |
+| Earliest membership TTL | Deletes data a permanent memory still depends on — the `orphan_delete` bug in another form |
+| Nothing at all | "Why did this vanish?" and "why is this still here?" become unanswerable |
+
+The reverse lookup carries it:
+
+```http
+GET /api/v1/data/{id}/memories
+```
+
+```json
+{ "effective_expiry": null,
+  "reason": "held by a memory with no TTL",
+  "memberships": [
+    { "memory_id": "mem_01J…", "type": "conversation", "added_by": "routed",
+      "expires_at": "2026-08-27T11:04:00Z" },
+    { "memory_id": "mem_01J…", "type": "factual", "added_by": "explicit",
+      "expires_at": null }
+  ] }
+```
+
+`effective_expiry` with the **reason** is the whole point. "Held by a memory with no TTL" answers
+the question in one read; a list of timestamps the caller has to reduce does not.
+
+The expiry sweeper computes the same thing rather than reading a column — which is what makes
+`orphan_delete` correct by construction instead of by remembering to check.
+
+### Removing a membership can make something deletable
+
+Worth surfacing in the UI, because it is the one non-obvious destructive side effect in the whole
+memory model: unmapping an item from the memory that was keeping it alive schedules its deletion.
+
+The reverse-lookup view should say so before the removal, not after.
+
 ## Compression, and what it does to membership
 
 Compression summarises a memory's members into one artifact and archives the originals. Two
@@ -347,3 +400,9 @@ policy, a memory browser showing members and time remaining, and the reverse loo
 - **FR-MEMT-19** Memories MUST support dynamic membership defined by a bounded selector, and
   dynamic membership MUST be recorded as `routed` rather than `explicit`.
 - **FR-MEMT-20** A membership change MUST mark memory-level derived artifacts stale.
+- **FR-MEMT-21** An item's effective expiry MUST be computed as the **maximum** TTL across its
+  memberships. It MUST NOT be stored as a column on the item.
+- **FR-MEMT-22** The reverse lookup MUST return the effective expiry together with the reason for
+  it and the per-membership detail.
+- **FR-MEMT-23** Removing a membership that would make an item deletable MUST surface that effect
+  before the removal is applied.
