@@ -17,7 +17,7 @@ is the same material as one continuous page.
 | Part | Covers | Documents |
 |------|--------|-----------|
 | **I · Why this exists** | The problem, the bet, who owns what | [use-cases](use-cases.md) · [use-case catalog](use-cases-catalog.md) · [feature matrix](feature-matrix.md) · [design-principles](design-principles.md) |
-| **II · What the things are** | The data model everything else operates on | [memories](memories.md) · [cases](cases.md) · [normalization](ingestion/normalization.md) |
+| **II · What the things are** | The data model everything else operates on | [memories](memories.md) · [activity memory](activity-memory.md) · [cases](cases.md) · [normalization](ingestion/normalization.md) |
 | **III · Write, read, delete** | **One record, its whole life — in one place** | [write-api](ingestion/write-api.md) · [indexes](retrieval/indexes.md) · [quality](retrieval/quality.md) · [versioning](retrieval/versioning.md) · [deletion](operations/deletion.md) |
 | **IV · Ingestion at scale** | Every producer that uses the write path, and how far it bends | [workers](ingestion/workers.md) · [extraction prompts](ingestion/extraction-prompts.md) · [custom workers](ingestion/custom-workers.md) · [customization](ingestion/write-customization.md) · [sources](ingestion/sources.md) · [connectors](ingestion/connectors.md) · [formats](ingestion/formats.md) · [uploads](ingestion/uploads.md) · [crawlers](ingestion/crawlers.md) · [bulk](operations/bulk-operations.md) |
 | **V · Models and the sandbox** | Choosing what runs, and proving it works on your data | [model catalog](operations/model-catalog.md) · [model routing](operations/model-routing.md) · [sandbox](ui-sandbox.md) · [multilingual](multilingual.md) |

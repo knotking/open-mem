@@ -47,6 +47,7 @@ Every feature in the platform, with the phase that ships it and whether it is in
 | Many-to-many membership | Mutable after write, individually and by selector | 1 | ● |
 | `memory_key` | Natural key unique per `(project, type)`; writes upsert | 1 | ● |
 | **Per-user default memory** | Unattached writes land in the writer's default, keyed on `user_id`; `shared`-scope items default to the project | 1 | ● |
+| **Activity memory** | User actions captured as records — **opt-in, off by default**, user-owned, user-deletable | 2 | ○ |
 | Effective expiry | Max across memberships, **computed never stored**, with its reason | 1 | ● |
 | `orphan_delete` | Expiry never deletes something another memory holds | 1 | ● |
 | `memory_links` | `part_of` / `derived_from` / `about` / `continues` / `supersedes` | 1 | ◐ |
@@ -118,7 +119,7 @@ Every feature in the platform, with the phase that ships it and whether it is in
 | Ephemeral token exchange | Key → short-lived JWT → gateway validates against our JWKS | 3 | ○ |
 | Credential proxy | Workers receive references, never secrets | 2 | ◐ |
 | Encryption failing closed | Never store a provider key in plaintext with a warning | 1 | ● |
-| **Audit on every read** | Impossible to retrofit — March cannot be reconstructed | 1 | ● |
+| **Audit on every CRUD operation** | Create, read, update, delete — no exempt principal, **never sampled** | 1 | ● |
 | **Audit on access *changes*** | Who made this public, and when — a share is a state, and a state forgets when it changed | 1 | ● |
 | Config-change audit | Before and after, so "extraction got worse last Tuesday" is answerable | 2 | ◐ |
 | Hash-chained audit log | What "immutable" must mean concretely; until then the claim is *append-only* | 8 | ○ |

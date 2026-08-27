@@ -34,6 +34,10 @@ The system ships a few sensible ones and organisations add their own:
 | `conversation` | 1 hour | `orphan_delete` |
 | `session` | 24 hours | `archive` |
 | `tracing` | 3 days | `orphan_delete` |
+| `activity` | 90 days | `orphan_delete` |
+
+`activity` is the container for [activity memory](activity-memory.md) — **off by default**, and
+created only when a user switches capture on.
 
 Everything else is a type someone defines — commonly `factual`, `episodic`, `semantic`,
 `organizational`, and **`procedural`**.

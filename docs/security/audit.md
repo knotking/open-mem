@@ -24,7 +24,12 @@ are different data with different questions, so they are different tables.
 
 ## What is audited
 
-### Data operations
+### Data operations — every CRUD operation, without exception
+
+**Create, read, update and delete are all audited.** There is no operation on data that leaves no
+trace, and no principal exempt from it — including service identities, internal workers acting on a
+user's behalf, and platform administrators.
+
 
 | Event | Recorded |
 |-------|----------|
@@ -33,6 +38,24 @@ are different data with different questions, so they are different tables.
 | Mutation | Principal, item, version before → after, at |
 | **Deletion** | Principal, scope, counts, `deleted_at` and `purged_at`, at — **and this record survives the deletion** |
 | Export | Principal, scope, item count, destination |
+
+#### Audit cannot be sampled, and that is a real cost
+
+A retrieval returning twenty items writes twenty `access_log` rows. At query volume this is
+comfortably the **highest-volume table in the system** — higher than the data it describes.
+
+The tempting optimisation is to sample. It does not work here, because sampling changes the answer
+from a fact to a probability:
+
+> *"Did anyone read this record?"* → *"Probably not."*
+
+That is not an answer a regulator, an incident review or a data subject accepts, and it is not an
+answer at all if the one read that mattered fell outside the sample. **Aggregate telemetry may be
+sampled; audit may not.**
+
+What can be done instead is bounded storage rather than bounded truth — monthly partitions dropped
+on a stated retention schedule, and rows that carry identifiers rather than content so each is
+small. The volume is accepted deliberately; it is the price of the question being answerable.
 
 ### Access and sharing — the category most often missed
 
@@ -157,6 +180,9 @@ not for the person whose data it is has chosen a side.
 
 - **FR-AUD-1** Reads MUST be recorded in `access_log`; all other audited actions MUST be recorded in
   `audit_events`. They MUST NOT share a table.
+- **FR-AUD-12** **Every CRUD operation on data MUST be audited** — create, read, update and delete —
+  with no exempt principal, including service identities, internal workers and platform admins.
+- **FR-AUD-13** Audit MUST NOT be sampled. Retention MAY bound storage; it MUST NOT bound coverage.
 - **FR-AUD-2** ACL changes, share creation and revocation, group and role changes, and connection
   scope changes MUST be audited as events.
 - **FR-AUD-3** Configuration changes MUST record before and after state.
