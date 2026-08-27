@@ -78,6 +78,55 @@ Two schema-level rules that are easy to lose:
 index cannot be identified, let alone repaired — you know ranking is wrong and cannot tell which
 rows caused it.
 
+### Four different "types", and where each one lives
+
+The word *type* does four jobs in this system. Conflating two of them caused the original routing
+defect — `source_type=DOCUMENT` with `mime_type=text/plain` reaching the PDF agent — so they are
+separate columns with a stated precedence.
+
+| Field | Question it answers | Where it lives | Authority |
+|-------|--------------------|----------------|-----------|
+| **`mime_type`** | What are these bytes? | `data_items` | **Authoritative** — server-sniffed |
+| `source_type` | What did the producer call it? | `data_items` | **Hint only** — it can lie |
+| **`data_type`** | What kind of thing is it? | `data_items` | Output of the classification cascade — decides which agent runs |
+| **`target_type`** | What domain object is it? | `normalized_records` | Output of normalization — `Person`, `Message`, `Transaction` |
+
+> **`mime_type` outranks `source_type`, and that ordering is the fix.** MIME is detected
+> server-side from the bytes; a client-declared type is an injection vector that chooses which
+> agent runs. `source_type` survives only as layer 2 of the
+> [classification cascade](../ingestion/workers.md), below explicit caller intent and above
+> payload heuristics.
+
+The `kind` segment in the [blob path](blob-layout.md) — `raw` / `text` / `derived` — is a fifth
+use of the word and is **not** a database field. It classifies the artifact, not the content.
+
+### The normalized projection
+
+```
+normalized_records
+  data_id           the item this projects
+  target_type       Person | Message | Transaction | <user-defined>
+  schema_version    which schema produced it — never mutated in place
+  payload           jsonb — the canonical object
+  identifiers       text[] — extracted here, mirrored onto data_items
+  status            ok | failed
+  failure_reason    why, when status is failed
+```
+
+**A projection is a derived view, not a replacement.** `data_items` keeps the original; this table
+holds what normalization made of it. That separation is what allows a schema to change and the
+corpus to be re-projected without re-running enrichment — and it is why a normalization failure
+lands the record raw with a reason rather than rejecting the write.
+
+Two consequences worth being explicit about:
+
+- **`target_type` is what makes entity extraction structural rather than inferred.** If a Salesforce
+  record projects to a canonical `Person`, no model needs to guess that a person is present. That
+  is the argument for normalization being its own stage rather than living inside the agents.
+- **`identifiers` is extracted during normalization and mirrored onto `data_items`**, because
+  [correlation](../cases.md) joins on it and the join must not require a second table. The
+  projection is the source; the column on `data_items` is the index.
+
 ### Memories and cases
 
 | Table | Holds |
@@ -170,6 +219,7 @@ tens of millions of rows is the named scaling risk.
 | `artifact_sources (data_id)` | The erasure reverse lookup |
 | `memory_members (data_id)` | The reverse lookup that answers "why is this still here?" |
 | `entity_contributions (data_id)` | Remove the contribution, not the entity |
+| `normalized_records (data_id)` · `(target_type, project_id)` | The projection lookup, and facet queries by domain type |
 | `access_log (org_id, at)` | The audit query, on a partitioned table |
 
 Four of those seven exist for **deletion and diagnosis**, not for retrieval. That ratio is the
@@ -186,3 +236,9 @@ schema telling you what the hard operations actually are.
 - **FR-SCH-7** `access_log` MUST be append-only, partitioned, and MUST survive deletion of the data
   it describes.
 - **FR-SCH-8** ACL predicates MUST be evaluated inside the retrieval query, not applied to results.
+- **FR-SCH-9** `mime_type` MUST be server-detected and MUST outrank `source_type` for routing.
+  `source_type` MUST be treated as a hint.
+- **FR-SCH-10** The normalized projection MUST be stored separately from the original, tagged with
+  the schema version that produced it.
+- **FR-SCH-11** A normalization failure MUST store the record raw with a reason, and MUST remain
+  retryable. It MUST NOT reject the write.
