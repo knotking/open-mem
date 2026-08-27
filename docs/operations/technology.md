@@ -16,7 +16,7 @@ that names a product cannot be re-filled.
 | `durable queue` | NATS JetStream / **Pub/Sub in cloud** | Kafka, SQS, Redis Streams | medium — **already swapped per variant** |
 | `temporal graph store` | Neo4j + Graphiti | FalkorDB, Memgraph, none | **low** — gated by `is_graphiti_enabled()` |
 | `credential broker` | Nango, self-hosted | Paragon, Merge, custom | medium |
-| `inference layer` | **MVP: Gemini Flash + Gemini embeddings only.** Later: Ollama / Ollama Cloud + Gemini | any OpenAI-compatible endpoint | **low** — the catalog abstracts it |
+| `inference layer` | **MVP: Gemini Flash + Gemini embeddings, plus Ollama Cloud (token-authenticated).** Later: local Ollama | any OpenAI-compatible endpoint | **low** — the catalog abstracts it |
 | `identity provider` | GoTrue → Firebase / local | any OIDC provider | **high today** (hardcoded at two sites); **low after abstraction** |
 | `orchestrator` | Kubernetes + KEDA / Cloud Run | ECS, Nomad | medium |
 
@@ -30,13 +30,61 @@ load-bearing risk.
 
 **The floor is low because the ceiling is shared.**
 
-## MVP inference: one provider, one model, both pinned
+## MVP inference: Gemini for RAG, Ollama Cloud alongside it
 
-MVP uses **the latest Gemini Flash for generation and Gemini embeddings for RAG**, and nothing
-else. No tiered routing, no fallback chain, no local engine. The catalog abstraction stays and is
-filled with exactly one engine — the usual pattern: ship the seam, fill it once.
+MVP registers **two engines**:
 
-Three consequences, two of which need a decision now.
+| Engine | Auth | Used for |
+|--------|------|----------|
+| **Gemini** — latest Flash, plus Gemini embeddings | API key | **Generation and all embeddings** |
+| **Ollama Cloud** — open-weight models | Account token | Generation, alternative and comparison |
+
+No local engine yet, and no tiered routing policy — but two engines rather than one, which is a
+better MVP than it looks.
+
+### Two engines exercises the seam that one engine does not
+
+A catalog abstraction filled with exactly one entry is untested. Every assumption baked into it —
+that `model_id` is recorded, that `served_by_model` is populated, that the per-project allow-list
+is consulted, that credentials are held per engine and encrypted — is unfalsifiable while there is
+only one thing to select between.
+
+**Registering a second engine at MVP proves the seam works before anything depends on it.**
+
+And the second engine is well chosen for a reason beyond capability: **Ollama Cloud speaks the same
+protocol as local Ollama.** The air-gapped variant — the one that restores the $0 and
+no-data-leaves-the-machine claims — becomes largely a *base URL and credential change* against an
+adapter already in production, rather than a new integration attempted late under pressure.
+
+The riskiest deferred capability in the plan gets de-risked by a choice made for other reasons.
+Worth naming so it is not lost.
+
+Three consequences still need a decision now.
+
+### Embeddings stay on one engine, and that is not negotiable
+
+Generation may be served by either engine. **Embeddings may not.**
+
+Two embedding models produce **incomparable vector spaces**. Mixed vectors in one index do not
+error — they silently corrupt ranking, and without a `model_id` column the affected rows cannot
+even be identified afterwards. A second engine that *can* embed is precisely the condition under
+which this happens by accident.
+
+So: Gemini embeddings for RAG, exclusively, and `embed.distinct_models_per_index` is the metric
+that catches a violation. Ollama Cloud is a generation engine in this design regardless of what
+else it can do.
+
+### Credentials: two providers, one path
+
+The Ollama Cloud token is a provider credential and takes the existing path — held in the model
+catalog, **encrypted, failing closed**, never in an environment variable on a worker, never
+reaching enrichment code. Same as the Gemini key. Two providers is the point at which "we have a
+credential path" stops being a claim.
+
+The per-project allow-list also stops being theoretical. With two engines, *"this project may not
+use provider X"* is an enforceable statement rather than a placeholder — which matters for the
+regulated case, where the answer is that the chain **fails closed** rather than falling through to
+an unapproved provider.
 
 ### Pin the version. Never point at a floating alias
 
@@ -79,16 +127,17 @@ the A/B comparison that surface exists for.
 | Self-hosted | Still true — the platform runs locally |
 | **Air-gapped** | **Not true in MVP.** Every enrichment call leaves the machine |
 | **$0 local inference** | **Not true in MVP.** Flash is cheap, not free |
-| Regulated / BAA workloads | **Requires the provider agreement to be in place** — there is no local fallback to route to |
+| Regulated / BAA workloads | **Requires a provider agreement** — with no local engine there is nothing to fail closed *to*, so the allow-list refuses rather than degrades |
 
 This is a reasonable MVP trade: one provider is dramatically simpler, and Flash plus its embeddings
 are cheap enough that cost is not the constraint at MVP volume. **But air-gap and $0 are load-bearing
 in the competitive positioning**, and they return only when the local engine does.
 
-The mitigation is already designed and costs nothing now: the catalog seam, `model_id` on every
-artifact, and the per-project allow-list stay in place. Adding Ollama later is registering an
-engine, not re-architecting — and the allow-list means a regulated project can be prevented from
-reaching the cloud provider the moment a local one exists.
+The mitigation is already designed and now partly proven: the catalog seam, `model_id` on every
+artifact, and the per-project allow-list stay in place — and **the Ollama adapter is in production
+from MVP**, pointed at Ollama Cloud. Restoring air-gap later means pointing that same adapter at a
+local endpoint and registering it, not building an integration. The allow-list then prevents a
+regulated project from reaching any cloud provider at all.
 
 ## Abstract the queue before you need to
 

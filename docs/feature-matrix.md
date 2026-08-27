@@ -75,11 +75,13 @@ Every feature in the platform, with the phase that ships it and whether it is in
 
 | Feature | What it does | Phase | MVP |
 |---------|--------------|:-----:|:---:|
-| **MVP inference** | **Gemini Flash + Gemini embeddings only** — one provider, no tiering, no fallback | 1 | ● |
+| **MVP inference** | **Gemini Flash + Gemini embeddings**, plus **Ollama Cloud** as a second generation engine | 1 | ● |
+| **Embeddings on one engine** | Not negotiable — mixed vectors corrupt an index with no error | 1 | ● |
+| Per-provider credentials | Encrypted in the catalog, failing closed — two providers makes the path real | 1 | ● |
 | **Pinned model versions** | Never a rolling alias — a floating `-latest` makes `generator_version` a lie | 1 | ● |
 | Model catalog | Engine registration, encrypted, failing closed — the seam, filled once in MVP | 1 | ◐ |
 | Assignment per purpose | Different models for embed, enrich, chat | 1 | ◐ |
-| Local inference (Ollama) | What returns air-gap and $0 to the story | 6 | ○ |
+| Local inference (Ollama) | Returns air-gap and $0 — a **base-URL change** against the adapter already shipped for Ollama Cloud | 6 | ○ |
 | `model_id` per artifact | Without it, affected rows cannot even be identified | 1 | ● |
 | **`generator_version`** | Hash of prompt, model, schema, parser, chunker — plus handler digest | 1 | ● |
 | `served_by_model` | What actually answered, against what was intended | 1 | ● |
@@ -169,11 +171,18 @@ That is the Phase 1 rule holding: *ship the column and the enforcement point; th
 A UI can be built any time. A column you did not write cannot be truthfully backfilled, and an
 enforcement point retrofitted into every query path touches everything.
 
-**MVP inference is one provider.** Gemini Flash and Gemini embeddings, both pinned. That is a
-deliberate simplification with a stated cost: **air-gapped operation and $0 local inference are
-not true in MVP**, and both are load-bearing in the competitive positioning. They return when the
-local engine is registered — which is a catalog entry, not a re-architecture, because the seam
-ships in Phase 1.
+**MVP inference is two engines: Gemini and Ollama Cloud.** All versions pinned, and **embeddings
+stay on Gemini alone** — a second engine that can embed is exactly the condition under which
+incomparable vectors enter one index by accident.
+
+Two engines is deliberate rather than incidental. A catalog seam filled with one entry is
+untested; a second entry proves `model_id`, `served_by_model`, per-engine credentials and the
+allow-list all work before anything depends on them. And because Ollama Cloud speaks the same
+protocol as local Ollama, **the riskiest deferred capability — air-gapped operation — gets
+de-risked by a choice made for other reasons.**
+
+The stated cost stands: **air-gap and $0 local inference are not true in MVP**, and both are
+load-bearing in the positioning. But the path back is now a base URL, not an integration.
 
 **The `△` rows are decisions, not backlog.** W10 standing queries, redaction, validation policy,
 custom worker code and `derive` are designed but not scoped. Each has a recommendation in

@@ -346,7 +346,7 @@ the audit record, costs a question that can never be answered.
 | Auth provider? | **Firebase for login; user-created API keys validated at the gateway; both resolved to one identity.** Air-gap is served by a local password verifier behind the same seam — so **air-gapped operation is a self-hosted capability, not a property of the hosted product** |
 | Inbound authentication? | **The same user-created keys** where the provider can present one; signature or URL secret otherwise, declared per producer |
 | Separate batch endpoint? | **No** — one write verb, `items[]` |
-| Which models in MVP? | **Gemini Flash for generation, Gemini embeddings for RAG — only.** No tiering, no fallback chain, no local engine. The catalog seam stays and is filled once. **Both versions pinned, never a rolling alias**, or `generator_version` lies. Air-gap and $0 return when the local engine does |
+| Which models in MVP? | **Gemini Flash for generation and Gemini embeddings for RAG, plus Ollama Cloud (token-authenticated) as a second generation engine.** **Embeddings stay on one engine — not negotiable**, since mixed vectors corrupt an index silently. No tiering policy yet. **All versions pinned, never a rolling alias**, or `generator_version` lies. Two engines exercises the catalog seam, and Ollama Cloud's local twin speaks the same protocol — so restoring air-gap later is a base-URL change against an adapter already in production |
 
 ### Still open
 
