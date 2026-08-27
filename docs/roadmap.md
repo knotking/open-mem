@@ -47,26 +47,86 @@ Independent of the spine. Neither blocks it; both are urgent on their own terms.
 
 ## Phase 1 — the spine
 
-**Goal: write an item, find it by search, get it back.** Nothing else.
+**Goal: write an item, find it by search, get it back.** Nothing else — except three things that
+cannot be added afterwards.
+
+### 1a · The write and read path
 
 | Area | Work |
 |------|------|
 | **Write** | Producer registry (client keys only) · `POST /api/v1/write` · `items[]` · `207` · idempotency key |
 | **Content** | `ContentRef` defined in full; only `Inline` implemented |
 | **Commit** | Synchronous, durable, returns `data_id` and readiness state |
-| **Async boundary** | Queue abstraction with the **in-process** implementation — establishes the shape without a broker |
-| **Index** | Chunk · embed with `model_id` + `dim` recorded · lexical index |
+| **Async boundary** | Queue abstraction with the **in-process** implementation — the shape without a broker |
+| **Index** | Chunk · embed · lexical index |
 | **Read** | `GET /data/{id}` · `POST /api/v1/retrieve` with vector, lexical and hybrid |
 | **Auth** | `TokenVerifier` seam, with only the API-key verifier behind it |
-| **Guards** | Capability-scoped keys · admission control (payload size, quota) |
-| **Telemetry** | Write and read counters · `embed.distinct_models_per_index` · queue lag |
+| **Guards** | Capability-scoped keys · admission control |
 
-**Exit:** an SDK call writes an item; a semantic search finds it; the response cites it.
+### 1b · Write-time facts — high priority, and not retrofittable
+
+These are **columns, not features**. Anything that must be recorded on every row from the first row
+cannot be added later: you cannot reconstruct which org owned a row, or which model embedded it,
+after the fact. Retrofitting any of the three means a corpus-wide migration against data whose true
+values are gone.
+
+#### Tenancy — users, orgs, projects
+
+| Work | Why now |
+|------|---------|
+| `org_id` and `project_id` **populated**, not nullable-and-ignored | Backfilling ownership onto existing rows is guesswork |
+| Membership table with roles | The producer registry needs an owner, so tenancy is already implied |
+| Per-item `access_level` + `shared_with` | Data written without an ACL has no defensible default later |
+| **Every query scoped, ACL applied in the query** | Post-rank filtering silently breaks top-K, and retrofitting it into every query path is the expensive version |
+
+*Not yet:* invite flows, role-management UI, ethical walls, break-glass, permission sync.
+
+Retrofitting multi-tenancy is among the most expensive migrations there is. "Single-tenant for now"
+is almost always regretted.
+
+#### Model configuration
+
+| Work | Why now |
+|------|---------|
+| Engine registration — provider, credential, **encrypted, failing closed** | Phase 1 already calls an embedding model; something has to hold that credential |
+| Assignment per purpose | Even with one purpose, the *mechanism* must exist so choice is data rather than a constant |
+| **`model_id` + `dim` recorded on every embedding** | Without it, a contaminated index cannot even be identified retroactively |
+| `generator_version` fingerprint recorded per artifact | Establishes provenance before there is a corpus to fix |
+| Engine reachability validation | Fail at configuration time, not at 3am |
+
+*Not yet:* the curated catalog with model cards, hardware feasibility, staleness-impact preview.
+
+The distinction that matters: **the selection mechanism is Phase 1; the catalog UX is Phase 6.**
+If models stay hardcoded until then, every artifact produced in phases 1–5 carries no provenance
+and the catalog's arrival becomes a corpus-wide staleness event.
+
+#### Write-path telemetry
+
+You cannot tell whether the spine works if you cannot see it work.
+
+| Metric | Purpose |
+|--------|---------|
+| `write.requests` by producer, status | Is anything arriving at all |
+| `write.items` by outcome — created · updated · rejected | Upsert effectiveness |
+| `write.rejected` by reason | Quota, validation, auth, payload size — distinguishable |
+| `write.duration` | The commit must stay a database write |
+| **`producer.seconds_since_last_item`** | Against each producer's own baseline. A silent stop errors nowhere |
+| **`embed.distinct_models_per_index`** | Must be exactly 1. Ships with the first embedding call |
+| **`ingest → searchable` latency** | The user-facing SLI that component metrics cannot show |
+| Queue lag, readiness-state transitions | Where items are stuck |
+
+*Not yet:* the full catalogue, dashboards, alerting, SLI reporting.
+
+### Exit
+
+An SDK call writes an item **into a project, owned by an org, with an ACL**; a semantic search
+scoped to that project finds it; the response cites it; and the write path is observable end to end
+with the model that embedded it recorded on the row.
 
 ### What is deliberately absent
 
 No enrichment agents. No gateway. No fetch worker. No uploads. No crawlers. No graph. No cases. No
-normalization. Single-tenant scoping by `user_id` only.
+normalization.
 
 ### Two things built right rather than deferred
 
@@ -74,8 +134,8 @@ normalization. Single-tenant scoping by `user_id` only.
 only `Inline` is implemented, so `Stored` and `Pending` slot in later without the enrichment side
 ever learning to branch on provenance.
 
-**Embeddings never fall back.** The `model_id` column and the defer-on-unavailable behaviour ship
-with the first embedding call, not after a corpus has been contaminated.
+**Embeddings never fall back.** The defer-on-unavailable behaviour ships with the first embedding
+call, not after a corpus has been contaminated.
 
 ---
 
@@ -160,7 +220,7 @@ The seams from Phase 1 are what make this cheap rather than a fork.
 
 | Variant | Work | Exit |
 |---------|------|------|
-| **Local** | Lean compose · local password auth behind the existing `TokenVerifier` seam · model catalog with hardware feasibility | **Unplug the network and everything still works** |
+| **Local** | Lean compose · local password auth behind the existing `TokenVerifier` seam · **model catalog UX** on top of Phase 1's selection mechanism | **Unplug the network and everything still works** |
 | **Cloud** | Managed queue behind the existing abstraction · hosted auth as another verifier · pooling audit · Secret Manager · crawl runs as jobs | Single-tenant prod, SaaS-ready |
 
 **Gate:** run the credential-broker request-scoped-lifecycle spike before committing to the cloud
@@ -173,7 +233,7 @@ could *remove* work — the broker's own sync engine may replace part of Phase 5
 
 | Work | Depends on |
 |------|-----------|
-| Sharing surface, RBAC enforcement | Connection ACL (3) |
+| Sharing surface, invite flows, role management UI | Tenancy model (1) · connection ACL (3) |
 | **Permission sync from source systems** | The gap competitors already ship |
 | Normalization: `identifiers[]`, `event_time` | Depth (2) |
 | Case primitive, membership, correlation | Normalization + staleness |
@@ -197,10 +257,13 @@ workspace count.
 
 | Capability | Lands | Note |
 |-----------|-------|------|
-| **Observability** | 1 → 8 | Detectors ship with the thing they watch, never after |
+| **Write-path telemetry** | **1** | You cannot tell the spine works if you cannot see it work |
+| **Tenancy model** | **1** | Columns, not features. Retrofitting multi-tenancy is the expensive migration |
+| **Observability, broader** | 2 → 8 | Detectors ship with the thing they watch, never after |
 | **Domain event store** | 2 | The audit substrate must exist before events accumulate |
 | **Token accounting** | 2 → 5 | Usage records with depth; estimate-vs-actual with crawler dry-run |
-| **Model catalog** | 6 | Needs staleness fields (2) for the impact preview |
+| **Model selection mechanism** | **1** | Engine registration and per-artifact provenance — not retrofittable |
+| **Model catalog UX** | 6 | Cards, hardware feasibility, staleness-impact preview. Needs staleness fields (2) |
 | **Trace context across the queue** | 1 | Span links, with the queue abstraction |
 | **Delete cascade** | hooks 2, build 8 | |
 
@@ -213,8 +276,10 @@ conversational agent and defers the temporal graph, shipping without either diff
 most crowded quadrant. Local is cheaper, proves the privacy claim, sidesteps the compliance
 apparatus entirely, and is where the unique capability lives.
 
-**Phase 1 will feel too small.** A write endpoint and a search endpoint is not an impressive demo.
-It is the only slice that proves both halves of the system work, and every later slice assumes it.
+**Phase 1 will feel too small, and is not.** A write endpoint and a search endpoint is not an
+impressive demo — but the slice also carries tenancy, model provenance and write telemetry, because
+all three are write-time facts. The temptation is to cut those to reach a demo faster. Each one cut
+becomes a migration against data whose true values no longer exist.
 
 ---
 
