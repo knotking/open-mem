@@ -178,6 +178,65 @@ Three ways, in precedence order:
 The routing rule is what makes conversation memory work without every caller tracking session
 state. It is also the one that needs a cap: an unbounded key space creates unbounded memories.
 
+## Membership is mutable — memories are formed, not just routed
+
+Routing at write time is the convenience. The primitive is that **any item can be added to or
+removed from any memory at any time**, so memories are formed after the fact as readily as during
+ingestion.
+
+```http
+POST   /api/v1/memories/{id}/members      add — item ids, or a selector
+DELETE /api/v1/memories/{id}/members/{data_id}
+POST   /api/v1/memories/{id}/members:bulk selector-based add or remove, as a job
+```
+
+Adding by **selector** is what makes "create a memory dynamically" a real operation rather than a
+loop: create a memory, point it at everything tagged `incident-4471` from last Tuesday, and it is
+populated.
+
+### Remove is not delete
+
+Removing a member **unmaps** it. The data item is untouched — it keeps its other memberships, its
+embeddings, its entities and its place in retrieval.
+
+Deleting is a [different operation](operations/deletion.md) with a different endpoint and a
+cascade. Conflating them is how someone tidies a memory and loses data, so they are not the same
+verb and the API does not let them be confused.
+
+### Nothing becomes orphaned
+
+Removing an item's **last** membership moves it to the project's `default` memory rather than
+leaving it unattached. The invariant holds: every item is in at least one memory, so the memory
+view is always complete and "which memories hold this?" always has an answer.
+
+### Static and dynamic membership
+
+Two kinds of memory, and the second is where "dynamically" earns its name:
+
+| | **Static** | **Dynamic** |
+|---|---|---|
+| Defined by | An explicit member list | A **selector**, re-evaluated |
+| Changes when | Someone adds or removes | The underlying data changes |
+| Suits | A curated set, an incident, a reading list | "Everything tagged urgent", "this month's invoices" |
+| Membership provenance | `explicit` | `routed` |
+
+A dynamic memory is a saved selector with a lifecycle attached. Its members change without anyone
+touching it — which is powerful and needs two guards:
+
+- **TTL applies to the container, not to computed membership.** A dynamic memory with a one-hour
+  TTL expires the *memory*; `orphan_delete` then only reaches items nothing else holds
+- **Selector evaluation is bounded**, exactly as crawler scope is. An unconstrained selector on a
+  large corpus is an expensive query someone will schedule
+
+### Membership changes are a staleness trigger
+
+A memory-level artifact — a summary, a compression, a memory-scoped embedding — is derived from its
+member set. **Adding or removing a member marks those artifacts stale**, exactly as it does for
+[case artifacts](cases.md).
+
+Which is the same machinery again: the artifact records its member set as a list, the list changed,
+reprocess rebuilds. Nothing new to build.
+
 ## Expiry is deletion, and needs reference counting
 
 **This is the part that goes wrong if it is treated as a cleanup job.**
@@ -279,3 +338,12 @@ policy, a memory browser showing members and time remaining, and the reverse loo
 - **FR-MEMT-14** Re-typing MUST recompute TTL. Moving to a shorter TTL MUST preview what would be
   deleted before applying.
 - **FR-MEMT-15** Bulk re-typing MUST run as a job with dry-run and per-item results.
+- **FR-MEMT-16** Membership MUST be mutable after write — items addable and removable individually
+  and by selector, the latter as a job.
+- **FR-MEMT-17** Removing a member MUST NOT delete the data item; unmapping and deletion MUST be
+  distinct operations.
+- **FR-MEMT-18** Removing an item's last membership MUST place it in the project's `default`
+  memory. No item may be left unattached.
+- **FR-MEMT-19** Memories MUST support dynamic membership defined by a bounded selector, and
+  dynamic membership MUST be recorded as `routed` rather than `explicit`.
+- **FR-MEMT-20** A membership change MUST mark memory-level derived artifacts stale.
