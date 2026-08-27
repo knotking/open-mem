@@ -29,24 +29,139 @@ Concretely: the seeder creates the org through the org endpoint, the project thr
 endpoint, and writes its sample items through `POST /api/v1/write` with a registered producer,
 exactly as an external client would.
 
-## What the demo tenant contains
+## The demo ships working use cases, not a scaffold
 
-Enough to exercise the pipeline, and no more:
+The demo is not fifty assorted rows. It is **six worked domains that answer real questions on first
+login** — and each one exists to demonstrate something the others cannot.
 
-| Fixture | Why it is there |
-|---------|-----------------|
-| One org, one project | The tenancy boundary every query is scoped to |
-| **Two users** — an admin and a member | One-user demos never reveal ACL bugs |
-| A `personal` and a `shared` connection | The two scopes that produce opposite ACL defaults |
-| ~50 items across **four types** | Text, a document, a structured record, a chat thread — enough for the classification cascade to have work to do |
-| One memory with a routing rule | Proves upsert on `memory_key` |
-| One item in **two** memories | Proves effective expiry is computed, not stored |
-| One case with two members | Identifier-join correlation |
-| One item shared, one private | Makes an ACL failure visible instead of theoretical |
+| Domain | Chosen because it is the only one that shows… |
+|--------|-----------------------------------------------|
+| **Sales** — an Acme renewal | Multi-source correlation on a **deal id**, recording **fan-out** into four assets, and commitments as structured fields with actors and due dates |
+| **Clinical** — a patient timeline | **`event_time` ≠ `ingested_at`** — a backdated 2019 report ingested today · **`sensitivity: phi`** making cloud models non-candidates · identifier join on MRN |
+| **Legal** — a matter | **Asserted vs inferred** membership rendered differently · **legal hold beating erasure** with partial completion · deadlines as date facets |
+| **Support** — a ticket history | The **question index** — the ticket says *"it just spins forever"*, the engineer searches *"performance regression"* · sentiment as a bounded facet |
+| **Telemetry** — sensor readings | The **`enrich: false`** path · facet-only retrieval · volume that never reaches a model |
+| **Personal** — one user's own mail | **Connection scope** `personal` vs `shared` producing opposite ACLs in the same org · the per-user default memory |
 
-**The sample data is generated, never borrowed.** No scraped corpus, no anonymised real mail, no
-customer document with the names changed. A fixture ships everywhere the software ships, and
-anything real in it is a disclosure with a very long tail.
+**Six, not twelve.** The selection principle is coverage of *mechanisms*, not breadth of industries.
+A seventh domain that demonstrates nothing the first six do not is corpus weight without
+information — it makes the demo slower to seed and no more convincing.
+
+### Each domain ships its configuration, and that is half the value
+
+A demo that only contains data shows what the product stores. A demo that contains **the
+configuration that made the data useful** shows how to use it — and configuration is the part new
+users get wrong.
+
+So each domain arrives with:
+
+| Shipped | Example |
+|---------|---------|
+| **Memory types** with TTL and expiry policy | `matter` — no TTL, `keep_members` |
+| **A `data_type_profile`** | `medical_record` — `sensitivity: phi`, requires `domain:medical` |
+| **Model assignment** for its types | `enrich · medical_record → medgemma` |
+| The **shipped prompt**, unmodified | So the user can see what a default produces before overriding |
+| **Saved queries that work** | *"What did we promise Acme?"* · *"What is due in the next 30 days?"* |
+
+The saved queries matter more than they look: **a demo corpus with no questions attached is a
+corpus.** The questions are what make it a demonstration, and they double as the acceptance
+assertions — if *"what did we promise Acme?"* stops returning the commitment, something broke.
+
+## The tension this creates, and how it resolves
+
+Two rules already written point in opposite directions here:
+
+> *"Seeding uses the same API a real signup uses. There is no fixture path."*
+>
+> *"The demo must answer real questions on first login."*
+
+Honouring the first means **enriching six domains through real model calls at seed time** — on a
+laptop with local models, that is not minutes. Honouring the second by shipping pre-computed
+artifacts means the seed no longer exercises the pipeline, and proves nothing.
+
+### The resolution: they are two different fixtures with opposite requirements
+
+| | **Test fixture** | **Demo tenant** |
+|---|---|---|
+| Goal | Determinism | Authenticity |
+| Model calls | **None** — recorded responses | **Real**, through the pipeline |
+| Enrichment | Pre-computed, checked in | Produced at seed time |
+| Used by | CI, every test run | A human, once per deployment |
+| If it drifts from reality | The test is wrong | The demo is wrong |
+
+**Tests must not depend on a model.** A test suite whose assertions move when a provider updates a
+model is a test suite people learn to ignore — so the test fixture carries recorded responses, and
+the pipeline is exercised against them.
+
+**The demo must not lie.** Its whole purpose is showing what this system does with data, so it runs
+the real path.
+
+### And the demo's seeding time is a feature, not a cost
+
+Seeding enriches in the background with the **[readiness staircase](../ui-sandbox.md) visible**:
+
+```
+uploaded    ████████████████████████  312
+stored      ████████████████████████  312
+searchable  ████████████████░░░░░░░░  198
+enriched    ███████░░░░░░░░░░░░░░░░░   94   ~6 min remaining
+```
+
+This is the most honest possible first impression, and it teaches the mental model the product
+actually needs the user to hold: **content arrives immediately, becomes searchable shortly after,
+and becomes *understood* later.** A demo that hid that would set an expectation the user's own data
+will not meet.
+
+Two tiers keep it practical:
+
+| Command | Contents | Time |
+|---------|----------|------|
+| `seed --demo` | **One domain** (sales), ~40 items, enriched synchronously | Under a minute |
+| `seed --demo --full` | All six domains, ~300 items, enriched in the background | Minutes, watchable |
+
+## Synthetic data has to be obviously synthetic
+
+This matters far more in clinical and legal than anywhere else, and it is easy to get wrong by
+trying to make a demo look impressive.
+
+| Rule | Why |
+|------|-----|
+| **Reserved names only** — Acme, Contoso, Northwind | A demo company that is a real company is a problem someone else did not agree to |
+| **Documented fake identifier ranges** — `MRN-DEMO-*`, `MATTER-DEMO-*` | A realistic-format MRN could collide with a real one, and a demo record that looks real may be treated as real |
+| **A visible marker** on demo records | Someone eventually screenshots a demo patient timeline into a deck |
+| **Generated, never anonymised** | Anonymised real data is real data that has been processed. Generated data was never anyone's |
+
+> **The goal is a demo nobody can mistake for production data**, including at a glance, in a
+> screenshot, six months later, by someone who was not there when it was seeded.
+
+## A demo that only shows success teaches a false expectation
+
+The instinct is to curate: every record enriched cleanly, every timeline complete, every query
+answered. **That demo is a bad demo**, because the user's own corpus will not look like it, and the
+gap will read as the product failing rather than as normal.
+
+So the fixture deliberately includes:
+
+- **One item that failed normalization** — stored raw with `normalization_status: failed` and a
+  reason, showing that a mapping bug loses nothing
+- **One item still enriching** when the others are done, so the staircase is visible in a steady
+  state, not only during seeding
+- **One item the demo member cannot see** — the admin's `personal` connection data, in the same
+  project, so ACL behaviour is demonstrable rather than asserted
+- **One case with an inferred member** alongside asserted ones, rendered subordinate and excluded
+  from the count
+
+Each of these is a mechanism from these documents that is otherwise invisible until it matters. The
+demo is where they can be *shown* rather than described.
+
+## Reset is the ordinary cascade
+
+`seed --demo --reset` purges the demo org and re-seeds — through
+`DELETE /organizations/{id}?purge=true`, the same path as any offboarding.
+
+**A demo people can break needs a reset, and the reset needs to be the real one.** If resetting the
+demo requires bespoke cleanup, the purge cascade is incomplete — and the demo has found the bug
+before a customer did.
 
 ## Demo credentials are the classic backdoor
 
@@ -147,7 +262,18 @@ with open registration then closing it later means anyone who signed up in betwe
 - **FR-ONB-4** Demo credentials MUST be generated per deployment, shown once, and never fixed in the
   seeder.
 - **FR-ONB-5** Seeding MUST be explicit and MUST NOT run by default.
-- **FR-ONB-6** Sample data MUST be generated, never derived from real content.
+- **FR-ONB-6** Sample data MUST be generated, never derived from or anonymised from real content.
+- **FR-ONB-12** The demo MUST ship worked domains that answer real questions on first login,
+  selected for mechanism coverage rather than industry breadth.
+- **FR-ONB-13** Each demo domain MUST ship its configuration — memory types, data-type profile,
+  model assignment — and saved queries that double as acceptance assertions.
+- **FR-ONB-14** The test fixture and the demo tenant MUST be separate. Tests MUST NOT depend on live
+  model output; the demo MUST run the real pipeline.
+- **FR-ONB-15** Demo entities MUST use reserved names and documented fake identifier ranges, and
+  demo records MUST carry a visible marker.
+- **FR-ONB-16** The demo fixture MUST include a normalization failure, an item mid-enrichment, an
+  item the demo member cannot see, and an inferred case member.
+- **FR-ONB-17** Demo reset MUST use the ordinary purge cascade.
 - **FR-ONB-7** `registration_mode` MUST default to `invite_only`.
 - **FR-ONB-8** Invites MUST be single-use, expiring, org- and role-scoped, revocable, and audited on
   both creation and redemption.

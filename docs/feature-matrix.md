@@ -127,7 +127,11 @@ Every feature in the platform, with the phase that ships it and whether it is in
 | Auth seam | `TokenVerifier` — Firebase hosted, local password air-gapped | 1 | ◐ API key |
 | **Invite-only registration** | Default mode; invites single-use, expiring, email-bound, audited on create and redeem | 1 | ● |
 | **Bootstrap-once admin** | Refuses to run when any user exists — otherwise it is an unauthenticated signup endpoint | 1 | ● |
-| **`seed --demo`** | Org, team, project, two users, ~50 items — **through the real API**, so a successful seed is the Phase 1 verification | 1 | ● |
+| **`seed --demo`** | One worked domain, ~40 items — **through the real API**, so a successful seed is the Phase 1 verification | 1 | ● |
+| **Test fixture with recorded responses** | Separate from the demo — no test may depend on live model output | 1 | ● |
+| Demo ships its **configuration** | Memory types, data-type profiles, model assignments, saved queries — half the value | 2 | ◐ |
+| Demo includes **deliberate imperfection** | A normalization failure, an item mid-enrichment, an item the member cannot see | 2 | ◐ |
+| `seed --demo --full` — six domains | Sales · clinical · legal · support · telemetry · personal | 6 | ○ |
 | **Capability-scoped keys** | A key can only do what was checked at creation | 1 | ● |
 | Ephemeral token exchange | Key → short-lived JWT → gateway validates against our JWKS | 3 | ○ |
 | Credential proxy | Workers receive references, never secrets | 2 | ◐ |

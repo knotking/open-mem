@@ -131,7 +131,8 @@ deliberately does not.
 | **Account deletion** | `DELETE /users/{id}/data` — **revoke first**, then cascade as a run · `personal` connections deleted, `shared` retained with attribution removed · the deletion's own audit record survives it |
 | **Auth** | `TokenVerifier` seam, API-key verifier behind it |
 | **Onboarding** | **Bootstrap-once admin** · `registration_mode` defaulting to **`invite_only`** · invite create and redeem, audited on both |
-| **Seed** | `seed --demo` — org, team, project, two users, two connection scopes, ~50 items — **through the real API, not a fixture path** |
+| **Test fixture** | Separate from the demo — **recorded model responses**, so no test depends on live model output |
+| **Seed** | `seed --demo` — **one worked domain** (sales), ~40 items, enriched synchronously, **through the real API** · reset via the ordinary purge cascade |
 
 ### Why bulk and account deletion are here rather than Phase 4
 
@@ -235,6 +236,7 @@ has been contaminated.
 | **Assignment per `(purpose, data_type)`** | MedGemma for clinical, a 270M classifier for layer 7 · **embeddings accept `*` only** |
 | **Sensitivity-driven candidacy** | A cloud engine is never a *candidate* for a `phi` type |
 | **W7 reprocess** | You will want to tune prompts on day two. Without this, tuning is write-only |
+| **Demo grows to support + personal** | Question index and connection-scope ACLs become demonstrable once agents exist |
 | Telemetry | `enrich.classification_layer` — measures the ~80% claim rather than asserting it |
 
 **Exit:** written items are classified, summarised and entity-extracted; changing a prompt can
@@ -307,7 +309,7 @@ The seams from Phase 1 are what make this cheap rather than a fork.
 
 | Variant | Work | Exit |
 |---------|------|------|
-| **Local** | Lean compose · local password auth behind the existing `TokenVerifier` seam · **model catalog UX** — cards, hardware feasibility, **derived assignment proposals with exclusions shown**, `declared_by` provenance, staleness preview | **Unplug the network and everything still works** — including the models |
+| **Local** | `seed --demo --full` — all six domains · lean compose · local password auth behind the existing `TokenVerifier` seam · **model catalog UX** — cards, hardware feasibility, **derived assignment proposals with exclusions shown**, `declared_by` provenance, staleness preview | **Unplug the network and everything still works** — including the models |
 | **Cloud** | Managed queue behind the existing abstraction · hosted auth as another verifier · pooling audit · Secret Manager · crawl runs as jobs | Single-tenant prod, SaaS-ready |
 
 **Gate:** run the credential-broker request-scoped-lifecycle spike before committing to the cloud
@@ -321,6 +323,7 @@ could *remove* work — the broker's own sync engine may replace part of Phase 5
 | Work | Depends on |
 |------|-----------|
 | Sharing surface, invite flows, role management UI | Tenancy model (1) · connection ACL (3) |
+| **Demo gains clinical and legal** | Cases, asserted-vs-inferred membership and legal hold have nothing to demonstrate before (7) |
 | **Permission sync from source systems** | The gap competitors already ship |
 | Normalization: `identifiers[]`, `event_time` | Depth (2) |
 | Case primitive, membership, correlation | Normalization + staleness |
