@@ -105,6 +105,109 @@ traffic.
 | 7 | LLM classifier (fallback) | small-tier model on ambiguous content |
 | — | Catch-all | binary-blob agent |
 
+## Extraction prompts — standard, or overridden
+
+Each data type is handled by a typed agent with a **standard extraction prompt**. Those defaults
+carry the product's opinion about what matters in a PDF, an email, a support ticket or a sensor
+reading — and they will be wrong for somebody.
+
+A legal team wants contractual obligations and liability clauses pulled from a document. A clinical
+team wants findings and medications. A support team wants sentiment and escalation risk. The same
+`document_pdf` agent, three different extractions.
+
+So four things are overridable per data type:
+
+| Overridable | Effect |
+|-------------|--------|
+| **System prompt** | What the agent looks for and how it reports it |
+| **Output schema** | Extra fields, or a different shape entirely |
+| **Model tier** | Cheaper for high-volume types, larger for nuanced ones |
+| **Processing flags** | `classify` · `summarize` · `extract_entities` · `extract_actions` · `embed` · `extract_topics` · `analyze_sentiment` |
+
+### Precedence, and locks
+
+Same model as normalization schemas and settings — one mechanism, not a third:
+
+```
+project override  →  org override  →  mem-dog standard
+```
+
+Most specific wins, **except where an admin has locked it**. A regulated deployment that must not
+have its clinical extraction prompt edited by individual members locks it at org level, and the
+lock is the enforcement rather than a convention.
+
+### An override is a versioning event
+
+This is the connection that matters, and it costs nothing because the machinery already exists.
+
+A prompt is part of the [`generator_version` fingerprint](../retrieval/versioning.md). Changing it
+produces a new fingerprint, which marks every artifact that agent produced **stale** — and the
+generator registry stores the prompt text, so what produced any given extraction is always
+reconstructible.
+
+Which means the editor owes the same impact preview a model change does:
+
+> Changing this prompt marks **84,000 artifacts** stale for `document_pdf`.
+> Estimated rebuild: **~40 minutes**, **$0** local / **~$12** cloud.
+> [ Rebuild now ] [ Rebuild in background ] [ Leave stale ]
+
+Without it, a prompt edit silently applies to future data only, and the corpus ends up half
+extracted one way and half the other — with nothing recording which is which.
+
+### Test before save
+
+The crawler dry-run pattern, applied to prompts: **run the override against a sample of the
+tenant's own data of that type and show the output** before it can be saved.
+
+A prompt that looks reasonable and returns unparseable output is otherwise discovered at 3am across
+a backfill. This is cheap, it is the same shape as a mechanism already being built, and it is the
+only feedback loop that makes prompt editing a reasonable thing to expose to users at all.
+
+### The schema is the contract, not the prompt
+
+An override may change *what* is extracted. It must not change *the shape the system promises
+downstream*.
+
+Normalization, index construction, entity extraction and the graph all consume agent output by
+shape. So:
+
+- Output is **validated against the declared schema regardless of the prompt**
+- A schema override extends or replaces the declaration — it does not remove validation
+- A response that does not conform fails as a schema violation and is retried, then dead-lettered
+  **with the raw output attached**, exactly as any other agent failure
+
+A prompt cannot widen the contract by asking nicely.
+
+### Content is untrusted; the prompt is only semi-trusted
+
+Two distinct risks, and they need separating.
+
+**Prompt injection from ingested content.** Everything this system processes is untrusted by
+definition — it arrives from mailboxes, channels and crawled pages. Content is placed in a
+delimited section, instructions are never taken from it, output is schema-constrained, and no agent
+gets tool access that content could redirect.
+
+**The override itself.** An org admin's prompt runs over members' data, including data the admin
+cannot read. That is legitimate — it is org policy — but it means prompt overrides need the same
+treatment as any other privileged configuration: authored by admins, audited on change, and subject
+to length and cost caps so a pathological prompt cannot quietly multiply the corpus-wide bill.
+
+### Requirements
+
+- **FR-PROMPT-1** Each data type MUST have a standard extraction prompt, overridable per project
+  and per org with precedence project → org → standard.
+- **FR-PROMPT-2** An administrator MUST be able to lock an override against lower-level change.
+- **FR-PROMPT-3** A prompt, schema, tier or flag override MUST form part of the artifact's
+  `generator_version`, and the change MUST present a staleness impact estimate before applying.
+- **FR-PROMPT-4** The generator registry MUST store the prompt text, so any extraction's provenance
+  is reconstructible.
+- **FR-PROMPT-5** An override MUST be testable against sample data before it can be saved.
+- **FR-PROMPT-6** Agent output MUST be schema-validated irrespective of the prompt; an override
+  MUST NOT be able to bypass validation.
+- **FR-PROMPT-7** Ingested content MUST be treated as untrusted: delimited, never a source of
+  instructions, and never able to redirect tool use.
+- **FR-PROMPT-8** Override changes MUST be audited, and MUST be subject to length and cost caps.
+
 ## Failure policy diverges by class
 
 Fetch failures are usually *about the connection*; enrich failures are usually *about capacity*.

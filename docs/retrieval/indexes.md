@@ -35,7 +35,7 @@ mismatch between how people ask and how documents state, and one extra call per 
 Six index types per item means up to 6× the LLM calls. A log line does not need a question index;
 a contract does.
 
-The control surface already exists — the per-agent processing flags (`extract_entities`,
+The control surface already exists — see [extraction prompts](../ingestion/workers.md) — the per-agent processing flags (`extract_entities`,
 `extract_actions`, `extract_topics`, `embed`) **are** index-selection flags.
 
 ## Build cheap eagerly, expensive lazily

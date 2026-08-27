@@ -243,7 +243,7 @@ can never be ahead of the API**. That sequences it automatically.
 | Slice | What the UI gains | Why then |
 |-------|------------------|----------|
 | **1 · Spine** | A **thin console**: write something, search, inspect a result | You cannot judge retrieval quality from a JSON body. One page, not a product |
-| **2 · Depth** | Enrichment inspector — viewpoint, entities, classification layer reached; agent prompt editor | You cannot tune a prompt without seeing what the last one produced |
+| **2 · Depth** | Enrichment inspector — viewpoint, entities, classification layer reached; **prompt override editor with test-before-save and staleness preview** | You cannot tune a prompt without seeing what the last one produced, or what changing it invalidates |
 | **3 · Connectors** | **Connect flows**, connection health, reauthorise | **On the critical path** — see below |
 | **4 · Uploads** | Drag-and-drop, progress, per-item results | Uploads are inherently a browser feature |
 | **5 · Crawlers** | **Config editor with dry-run preview**, run history, per-item errors | **On the critical path** — see below |
