@@ -154,6 +154,13 @@ Every feature in the platform, with the phase that ships it and whether it is in
 | `embed.distinct_models_per_index` | Catches the incomparable-vector-space corruption | 1 | ● |
 | ingest → searchable · → enriched | The two SLIs component metrics cannot show | 1 | ● |
 | Token accounting | Per user, model and agent; estimate against actual | 1 | ● |
+| **Durable usage-event emission** | A dropped event is revenue lost **silently** — the characteristic failure again | 1 | ● |
+| **Query cost metered** | The one activity a user can run in a loop, currently uncounted | 1 | ● |
+| Async metering and rating | Off the critical path — a billing outage must not stop ingestion | 2 | ○ |
+| `rate_card_version` on rated events | A rated amount without it is unauditable and uncorrectable | 2 | ○ |
+| **Reconciliation against provider APIs** | Under-counting looks like nothing being wrong | 8 | ○ |
+| Storage as byte-days | A level, not an event — summing storage events double-counts | 4 | ○ |
+| Invoicing · credit notes · drill-down | Closed invoices immutable; corrections are credit notes | 8 | ○ |
 | **Budgets at user and project scope** | One person's experiment must not spend the team's month | 1 | ● |
 | Queue abstraction | NATS and Pub/Sub differ in acks, ordering, redelivery | 1 | ● |
 | Dashboards · alerting | The full surface | 8 | ○ |

@@ -1,5 +1,8 @@
 # Token Accounting
 
+> **This covers the meter.** Rating, aggregation, invoicing and the async pipeline that
+> computes them are in [billing.md](billing.md).
+
 `FR-OBS-4` requires tracking LLM token usage per user, per model and per agent. That is the right
 instinct and not enough to bill on, budget against, or explain a surprise.
 

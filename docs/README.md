@@ -25,7 +25,7 @@ is the same material as one continuous page.
 | **VII · Models** | Choosing what runs, on which data, and what it costs | [model catalog](operations/model-catalog.md) · [model routing](operations/model-routing.md) · [multilingual](multilingual.md) |
 | **VIII · Security and privacy** | Who can see what, and what we can prove afterwards | [tenancy](security/tenancy.md) · [access model](security/access-model.md) · [auth](security/auth.md) · [privacy foundations](security/privacy-foundations.md) · [compliance](security/compliance.md) · [audit](security/audit.md) · [activity memory](activity-memory.md) |
 | **IX · The console** | One application, three audiences, six tensions | [ui design](ui-design.md) |
-| **X · Operations** | Getting it running, keeping it honest, and knowing when it is not | [onboarding](operations/onboarding.md) · [technology](operations/technology.md) · [deployment variants](operations/deployment-variants.md) · [telemetry](operations/telemetry.md) · [testing](operations/testing.md) · [implementation](operations/implementation.md) |
+| **X · Operations** | Getting it running, keeping it honest, and knowing when it is not | [onboarding](operations/onboarding.md) · [billing](operations/billing.md) · [technology](operations/technology.md) · [deployment variants](operations/deployment-variants.md) · [telemetry](operations/telemetry.md) · [testing](operations/testing.md) · [implementation](operations/implementation.md) |
 | **XI · The plan** | Sequence, open decisions, the market | [roadmap](roadmap.md) · [TBD](../TBD.md) · [competition](competition/README.md) |
 
 > **[TBD.md](../TBD.md)** — twelve decisions that are designed but not decided, ordered by how

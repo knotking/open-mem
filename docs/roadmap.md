@@ -182,6 +182,7 @@ The invite *UI* can wait; the mechanism cannot.
 | **Admin** | Platform grants **orthogonal** to org roles · admin sees metadata, **never content** · global unscoped key retired | Platform console · usage reporting · support tooling |
 | **Settings** | Precedence user → project → org → platform, with **lock** semantics · reads return **effective value, source level and lock state** · key capabilities default to **nothing granted** · activity capture **off**, user-only | Full settings surface · policy editor · [full register](settings.md) |
 | **Customization** | **Write phase order fixed, ACL assigned before any hook point** · security fields **read-only** in the item envelope · **`handler_digest` in the `generator_version` input set**, constant for built-ins | Normalization schema editor · redaction rules · validation policy · custom worker handlers · all of it |
+| **Billing** | **Usage events emitted durably** — input/output/cached split, `user`/`project`/`org` on every event · **query cost metered** · budgets at user and project scope | Rating · rollups · invoicing · reconciliation |
 | **Telemetry** | `write.*` counters by producer and reason · **`producer.seconds_since_last_item`** · **`embed.distinct_models_per_index`** · ingest→searchable | Dashboards · alerting · full catalogue |
 
 Eight rows, not forty-four items. Each left-hand cell is something that becomes a migration — or,
@@ -236,6 +237,7 @@ has been contaminated.
 | **Assignment per `(purpose, data_type)`** | MedGemma for clinical, a 270M classifier for layer 7 · **embeddings accept `*` only** |
 | **Sensitivity-driven candidacy** | A cloud engine is never a *candidate* for a `phi` type |
 | **W7 reprocess** | You will want to tune prompts on day two. Without this, tuning is write-only |
+| **Async metering consumer** | Rating with `rate_card_version` · hourly and daily rollups — off the critical path of every write and read |
 | **Demo grows to support + personal** | Question index and connection-scope ACLs become demonstrable once agents exist |
 | Telemetry | `enrich.classification_layer` — measures the ~80% claim rather than asserting it |
 
@@ -273,6 +275,7 @@ Both are producer shapes the spine already anticipates.
 | Presigned upload flow | `Stored` content; bytes never traverse the API |
 | Local upload signer | Filesystem storage has no signer — same API shape, local token |
 | MIME sniffing server-side | Declared type is a hint, never the router |
+| Storage snapshots · `usage/estimate` | Byte-days as a level; the estimate backing bulk and crawler previews |
 | Bulk **export** | Portability and workspace offboarding — long-running, resumable, produces an archive |
 
 **Bulk write, the run entity and selector-based delete moved to Phase 1** — see
@@ -334,8 +337,8 @@ could *remove* work — the broker's own sync engine may replace part of Phase 5
 
 ## Phase 8 — scale and compliance
 
-Quotas before raising ceilings · SSO/SAML · SCIM · immutable audit log · **erasure with
-verification** · legal hold and partial completion · composable retrieval primitives · soak to target
+Quotas before raising ceilings · SSO/SAML · SCIM · immutable audit log · **invoicing, credit
+notes and reconciliation against provider APIs** · **erasure with verification** · legal hold and partial completion · composable retrieval primitives · soak to target
 workspace count.
 
 > **Design the delete-cascade hooks in Phase 2**, when derived artifacts first exist. Retrofitting

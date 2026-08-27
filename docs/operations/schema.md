@@ -290,7 +290,12 @@ part (clinical, legal) has `none` for exactly that reason.
 | **`model_cards`** | Capabilities, hardware, licence, pricing, `verified_at` and `declared_by` per claim — the data the mapping is derived from |
 | **`data_type_profiles`** | What a type *requires*: capabilities, context floor, **sensitivity class**, volume |
 | `model_assignments` | Which model per `(purpose, data_type, scope)` |
-| `usage_records` | Tokens per user, model and agent — estimate against actual |
+| `usage_events` | Raw metered units, durably emitted — the source everything else derives from |
+| `usage_records` | Rated events, stamped with **`rate_card_version`** so any period can be re-rated |
+| `usage_rollups` | Hourly and daily aggregates per (account, dimension), with pointers to their event range |
+| `storage_snapshots` | Daily levels in byte-days — **idempotent per (account, day)**, because storage is a level, not an event |
+| `rate_cards` | Immutable price lists with `effective_from` |
+| `invoices` · `invoice_lines` · `credit_notes` | Closed periods, **immutable**; a correction is a credit note, never an edit |
 | `budgets` | Enforced at **user and project** scope |
 
 `access_log` is separate from everything else because its volume, retention and access pattern all
