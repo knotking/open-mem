@@ -134,10 +134,26 @@ and **changing it is a full re-embed of the corpus**, not a migration.
 | Filtered ANN latency at scale | Better | Worse — and this is the named load-bearing risk |
 | Recall ceiling | Slightly lower | Higher |
 
-Given that *"Postgres is the shared fate"* and filtered ANN over tens of millions of rows is the
-scaling risk already on record, **the smaller dimension is the better default** — with the caveat
-that it should be measured on a real corpus in the [sandbox](../ui-sandbox.md), which is exactly
-the A/B comparison that surface exists for.
+**Gemini embeddings are Matryoshka-trained, which changes this decision.** The first N dimensions
+are a valid embedding on their own, so reducing 3072 → 768 later is a **truncation of stored
+vectors** — no API calls, no re-embed. Increasing is still a full re-embed, because the information
+was never stored.
+
+That makes the asymmetry the deciding factor: **store at the larger dimension and index at whatever
+performs.** Storage and filtered-ANN latency are real costs, but they are recoverable decisions;
+re-embedding a corpus is not. Measure the retrieval quality difference on a real corpus in the
+[sandbox](../ui-sandbox.md) — that is the A/B comparison that surface exists for.
+
+### The embedding model caps input at 2,048 tokens — that is a chunker constraint
+
+`gemini-embedding-001` accepts **2,048 input tokens**, the smallest among flagship embedding models.
+Chunk size must be at or below it, and this is a Phase 1 constraint rather than a tuning knob.
+
+A chunker configured beyond the limit does not fail loudly — it truncates, and the tail of every
+long chunk is silently absent from the vector index while remaining keyword-findable, with nothing
+recording that it happened. The registration path therefore **validates chunk size against the
+embedding model's declared input limit and refuses the configuration**, rather than leaving it to
+be discovered.
 
 ### What a cloud-only MVP costs, stated rather than discovered
 

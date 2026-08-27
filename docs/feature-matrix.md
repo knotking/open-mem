@@ -104,6 +104,9 @@ Every feature in the platform, with the phase that ships it and whether it is in
 | **Standard output envelope** | `title` · `description` · `summary` · `keywords` · `language` on every type — core, never removable | 2 | ● |
 | Standard fields | entities · claims · intents · questions · key_dates · sentiment, with spans — individually disableable | 2 | ◐ |
 | Tenant `extensions` | Namespaced so a future platform field cannot collide with one in use | 6 | ○ |
+| **Chunk size validated against embedding input limit** | Over-long chunks truncate silently — indexed by keyword, invisible to vector search | 1 | ● |
+| Per-provider tokenizer for cost estimates | `$/MTok` is not comparable across vendors; tokenizers differ | 2 | ◐ |
+| Model cards — license, VRAM, quantizations, status | What no provider API returns and every selection needs | 6 | ○ |
 | Staleness impact preview | What changing this model or prompt invalidates | 6 | ○ |
 
 ## Security and privacy

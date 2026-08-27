@@ -94,27 +94,121 @@ Models discovered from a provider but absent from the registry still appear — 
 `status: available`, unvalidated, with a note that capabilities are undeclared. **Never hide a
 model the user has access to**; just be honest about what is unknown.
 
-## Indicative catalog (August 2026)
+## The catalog is data, and it is dated
 
-Illustrative of the shape and of what "current" means. Expect this to be stale within months.
+Everything below is **a snapshot, verified August 2026**, and it is the fastest-rotting content in
+these documents. It lives in the registry as rows, not in prose — what this section fixes is the
+*shape* and the reasoning, not the values.
 
-| Model | Capacity | Capabilities | Context | Notes |
-|-------|----------|--------------|---------|-------|
-| `gemma4:e2b` / `e4b` | small | text, vision, audio, tools | — | Nano variants — edge and low-RAM |
-| `gemma4:12b` | medium | text, vision, audio, tools, thinking | — | Practical laptop model |
-| `gemma4:26b` / `31b` | large | text, vision, audio, tools, thinking | — | Strong vision/multimodal |
-| `qwen3.5:4b` | small | natively multimodal, tools, thinking | — | Multimodal at 4B |
-| `qwen3.6:27b` | large | text, tools, thinking | — | Fits 24GB at Q4; strong agentic/coding |
-| `qwen3.6:35b-a3b` | large | MoE, 3B active | — | Best all-round at 32GB |
-| `qwen3-coder:30b` | large | code | 256K | Long-context coding |
-| `llama4-scout` / `maverick` | large | text | up to 1M | Long-context retrieval leader |
-| `deepseek-v4` | large | text, reasoning | — | High-end reasoning, serious hardware |
-| `glm-5.2` | large | text | — | Strong all-round open-weight |
-| `mistral-medium-3.5` | large | text | 256K | 128B dense |
-| `phi-4-mini` | small | text | — | Very small footprint |
+Every quality and price figure carries the date it was checked. A benchmark score with no date is a
+claim about a model that may no longer exist.
 
-Embedding models are catalogued separately — see below, because they are not interchangeable in
-the way these are.
+---
+
+## Tier 1 · Frontier — hosted API only
+
+Not self-hostable. Selected when capability matters more than locality, and **excluded entirely by
+the allow-list** on projects that cannot send data to a third party.
+
+| Model | In / out per 1M | Context | Notes |
+|-------|-----------------|---------|-------|
+| **Claude Fable 5** | $10 / $50 | — | Top capability tier |
+| **Claude Opus 5** | $5 / $25 | — | Strong general reasoning |
+| **Claude Sonnet 5** | $2 / $10 | — | The workhorse rate |
+| **Claude Haiku 4.5** | $1 / $5 | — | Cheapest first-party from a US frontier lab |
+| **GPT-5.6 Sol** | $5 / $30 | — | Tiered pricing strategy |
+| **Gemini 3.1 Pro** | $2 / $12 | **1M** | Long-context leader among hosted |
+| **Grok 4.5** | $2 / $6 | — | Aggressive output pricing |
+| **DeepSeek V4 Flash** | **$0.14 / $0.28** | — | Cheapest credible API by a wide margin |
+
+### Price per million tokens is not comparable across providers
+
+This is a real trap, and it sits directly under the
+[token accounting](token-accounting.md) design.
+
+> **Tokenizers differ between vendors.** The same document is a different number of tokens
+> depending on who counts it — Anthropic's tokenizer change is a documented example of per-MTok
+> comparisons quietly skewing.
+
+So a catalog that ranks models by `$/MTok` is ranking them **in different units**. Two consequences:
+
+- **Cost estimates must use the target provider's own tokenizer**, not a shared approximation. A
+  budget that estimates with one tokenizer and is charged against another drifts in one direction
+  and only shows up on an invoice.
+- **Comparisons in the UI should be expressed per document, not per token** — "about $0.004 to
+  enrich a typical email" is both comparable and meaningful, where `$2/MTok` is neither.
+
+## Tier 2 · Open weight — self-hostable
+
+The tier that makes air-gapped operation possible. **License is a first-class card field** because
+the practical differences are large.
+
+| Model | Params | License | Notes |
+|-------|--------|---------|-------|
+| **Kimi K3** | 2.8T total / 104B active | open weights | Top open benchmark scores; 1M context. Serious hardware |
+| **DeepSeek V4 Pro** | large MoE | **MIT** | High-end reasoning and coding |
+| **GLM-5.2** | large | **MIT** | Strongest under a plain MIT license |
+| **Qwen3.6 27B** | 27B dense | Apache-2.0 | **Runs on one 24GB GPU at Q4.** The practical high-water mark for single-GPU |
+| **Qwen3.6 35B-A3B** | 35B / 3B active | Apache-2.0 | Best all-round at 32GB — MoE keeps active params low |
+| **Qwen3.7** | large | Apache-2.0 | Coding-focused |
+| **Llama 4 Scout / Maverick** | large | community | Up to 1M context. **License restricts some commercial use — surface it** |
+| **Gemma 3 / 4 · 12B–27B** | 12–27B | Gemma terms | Strong multimodal; good laptop and single-4090 fit |
+| **Gemma 4 e2b / e4b** | 2–4B | Gemma terms | Edge and low-RAM |
+| **Mistral Medium 3.5** | 128B dense | — | 256K context, strong multilingual |
+| **Phi-4-mini** | small | MIT | Very small footprint |
+
+Two card fields do the work here that a benchmark score cannot:
+
+- **`hardware.min_vram_gb` per quantization.** *"Runs at Q4 on 24GB"* is the fact that decides
+  whether a user can use a model at all, and no provider API returns it.
+- **`license`.** Apache-2.0 and MIT are unrestricted; Llama's community licence and Gemma's terms
+  carry use restrictions that a commercial deployment must see **before** selecting, not after.
+
+## Tier 3 · Embeddings — catalogued separately, because they are not interchangeable
+
+| Model | Dims | Context | Notes |
+|-------|------|---------|-------|
+| **Qwen3-Embedding** 0.6B / 4B / 8B | **32–7168** (Matryoshka) | 32K | Open-source leader on MTEB multilingual; 100+ languages; task-prefix instructions gain 1–5% |
+| **gemini-embedding-001** | 3072 / 1536 / 768 | **2048 input tokens** | The MVP choice. See the constraint below |
+| **BGE-M3** | 1024 | 8K | **MIT.** Dense + sparse + multi-vector from one model — hybrid retrieval without two systems |
+| **EmbeddingGemma-300M** | small | — | On-device, multilingual, tiny |
+
+### Gemini embeddings cap input at 2,048 tokens, and that constrains the chunker
+
+The MVP decision is Gemini embeddings for RAG. Its input limit is **2,048 tokens — the smallest
+among flagship embedding models** — which is not a footnote:
+
+> **Chunk size must be ≤ 2,048 tokens, and this is a Phase 1 constraint, not a tuning parameter.**
+
+A chunker configured for 4,096-token chunks against this model does not fail loudly. It truncates,
+and the second half of every long chunk is silently absent from the index — retrievable by keyword,
+invisible to vector search, with nothing recording that it happened. Exactly the class of failure
+these documents keep finding: **no error, a corrupted store, and no column that reveals it.**
+
+`chunker_version` is already part of `generator_version`, so a chunk-size change is already a
+versioning event. What this adds is a **validation at registration**: an embedding model declares
+its input limit, and configuring a chunker beyond it is refused rather than discovered.
+
+### Matryoshka dimensions soften the "changing dimension is a full re-embed" warning
+
+An earlier statement in these documents — that choosing an embedding dimension is irreversible
+without re-embedding the corpus — is **too strong for Matryoshka-trained models**, which both
+leading options are.
+
+Matryoshka training makes the **first N dimensions a valid embedding in their own right**. So:
+
+| Direction | Cost |
+|-----------|------|
+| **Reducing** 3072 → 768 | **Truncate the stored vectors.** No API calls, no re-embedding |
+| **Increasing** 768 → 3072 | **A full re-embed.** The information was never stored |
+
+Which inverts the earlier recommendation: **store at the larger dimension if the budget allows**,
+because reduction stays available and expansion does not. The storage cost is real and the
+filtered-ANN latency cost is real — but they are recoverable decisions, and re-embedding a corpus
+is not.
+
+**Correcting the earlier guidance:** smaller-by-default was the wrong call. The right call is
+**store large, index at whatever performs**, and keep the option.
 
 ## Selection → routing
 
