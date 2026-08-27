@@ -81,6 +81,8 @@ Every feature in the platform, with the phase that ships it and whether it is in
 | **Pinned model versions** | Never a rolling alias — a floating `-latest` makes `generator_version` a lie | 1 | ● |
 | Model catalog | Engine registration, encrypted, failing closed — the seam, filled once in MVP | 1 | ◐ |
 | Assignment per purpose | Different models for embed, enrich, chat | 1 | ◐ |
+| Expanded Ollama Cloud model set | Larger models for hard extraction, smaller for cheap classification — **catalog entries, not integration** | 6 | ○ |
+| Per-purpose assignment across engines | Which model embeds, enriches, chats — with reprocess on reassignment | 6 | ○ |
 | Local inference (Ollama) | Returns air-gap and $0 — a **base-URL change** against the adapter already shipped for Ollama Cloud | 6 | ○ |
 | `model_id` per artifact | Without it, affected rows cannot even be identified | 1 | ● |
 | **`generator_version`** | Hash of prompt, model, schema, parser, chunker — plus handler digest | 1 | ● |

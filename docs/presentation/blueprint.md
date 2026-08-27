@@ -879,6 +879,8 @@ Every feature in the platform, with the phase that ships it and whether it is in
 | **Pinned model versions** | Never a rolling alias — a floating `-latest` makes `generator_version` a lie | 1 | ● |
 | Model catalog | Engine registration, encrypted, failing closed — the seam, filled once in MVP | 1 | ◐ |
 | Assignment per purpose | Different models for embed, enrich, chat | 1 | ◐ |
+| Expanded Ollama Cloud model set | Larger models for hard extraction, smaller for cheap classification — **catalog entries, not integration** | 6 | ○ |
+| Per-purpose assignment across engines | Which model embeds, enriches, chats — with reprocess on reassignment | 6 | ○ |
 | Local inference (Ollama) | Returns air-gap and $0 — a **base-URL change** against the adapter already shipped for Ollama Cloud | 6 | ○ |
 | `model_id` per artifact | Without it, affected rows cannot even be identified | 1 | ● |
 | **`generator_version`** | Hash of prompt, model, schema, parser, chunker — plus handler digest | 1 | ● |
@@ -7198,6 +7200,25 @@ periodically**, not a runtime behaviour.
 This applies with more force to the embedding model. A silently-swapped embedding model produces
 **incomparable vectors in the same index** — the corruption `embed.distinct_models_per_index`
 exists to catch, arriving through the one door nobody is watching.
+
+#### Expanding the Ollama Cloud model set is a later-stage catalog operation
+
+Once the adapter is in production, adding models from Ollama Cloud is **registering catalog
+entries**, not integration work — which is the payoff for building the seam properly at MVP. Later
+stages widen the set: larger open-weight models for harder extraction, smaller ones for cheap
+high-volume classification, and per-purpose assignment across them.
+
+Three gates apply, and they are the ones already established rather than new ones:
+
+| Gate | Why |
+|------|-----|
+| **Each model is a distinct `model_id`** | It enters `generator_version`, so output is attributable and reproducible |
+| **Reassigning a purpose enqueues W7 reprocess** | Or the corpus is knowingly mixed — the same rule as any config change |
+| **Embeddings remain on a single engine** | Regardless of how many generation models are registered |
+
+The sandbox A/B comparison is what makes the widened set useful rather than
+merely available: *is the larger model worth it on my corpus?* is a question with a
+corpus-specific answer, and registering ten models without a way to compare them is ten guesses.
 
 #### Choose the embedding dimension deliberately — it is not changeable later
 

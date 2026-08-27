@@ -104,6 +104,25 @@ This applies with more force to the embedding model. A silently-swapped embeddin
 **incomparable vectors in the same index** — the corruption `embed.distinct_models_per_index`
 exists to catch, arriving through the one door nobody is watching.
 
+### Expanding the Ollama Cloud model set is a later-stage catalog operation
+
+Once the adapter is in production, adding models from Ollama Cloud is **registering catalog
+entries**, not integration work — which is the payoff for building the seam properly at MVP. Later
+stages widen the set: larger open-weight models for harder extraction, smaller ones for cheap
+high-volume classification, and per-purpose assignment across them.
+
+Three gates apply, and they are the ones already established rather than new ones:
+
+| Gate | Why |
+|------|-----|
+| **Each model is a distinct `model_id`** | It enters `generator_version`, so output is attributable and reproducible |
+| **Reassigning a purpose enqueues W7 reprocess** | Or the corpus is knowingly mixed — the same rule as any config change |
+| **Embeddings remain on a single engine** | Regardless of how many generation models are registered |
+
+The [sandbox A/B comparison](../ui-sandbox.md) is what makes the widened set useful rather than
+merely available: *is the larger model worth it on my corpus?* is a question with a
+corpus-specific answer, and registering ten models without a way to compare them is ten guesses.
+
 ### Choose the embedding dimension deliberately — it is not changeable later
 
 Gemini embeddings support several output dimensions. The choice sets the pgvector column width,
