@@ -47,121 +47,61 @@ Independent of the spine. Neither blocks it; both are urgent on their own terms.
 
 ## Phase 1 — the spine
 
-**Goal: write an item, find it by search, get it back.** Nothing else — except three things that
-cannot be added afterwards.
+**Goal: write an item, find it by search, get it back.**
+
+### The rule that keeps this a slice and not a foundation phase
+
+Several concerns are **high priority but not fully built here**. The distinction:
+
+> **Phase 1 ships the column and the enforcement point. The surface follows later.**
+
+A column cannot be backfilled truthfully — you cannot reconstruct which org owned a row, which
+model embedded it, or who read it last March. An enforcement point cannot be retrofitted cheaply —
+adding ACL filtering to every query path afterwards touches everything. **A UI can be built any
+time.**
+
+So each concern below appears twice: what must exist now, and what deliberately does not.
 
 ### 1a · The write and read path
 
 | Area | Work |
 |------|------|
-| **Write** | Producer registry (client keys only) · `POST /api/v1/write` · `items[]` · `207` · idempotency key |
+| **Write** | Producer registry · `POST /api/v1/write` · `items[]` · `207` · idempotency key |
 | **Content** | `ContentRef` defined in full; only `Inline` implemented |
 | **Commit** | Synchronous, durable, returns `data_id` and readiness state |
-| **Async boundary** | Queue abstraction with the **in-process** implementation — the shape without a broker |
+| **Async boundary** | Queue abstraction with the **in-process** implementation |
 | **Index** | Chunk · embed · lexical index |
-| **Read** | `GET /data/{id}` · `POST /api/v1/retrieve` with vector, lexical and hybrid |
-| **Auth** | `TokenVerifier` seam, with only the API-key verifier behind it |
-| **Guards** | Capability-scoped keys · admission control |
+| **Read** | `GET /data/{id}` · `POST /api/v1/retrieve` — vector, lexical, hybrid |
+| **Auth** | `TokenVerifier` seam, API-key verifier behind it |
 
-### 1b · Write-time facts — high priority, and not retrofittable
+### 1b · Write-time facts — column and enforcement only
 
-These are **columns, not features**. Anything that must be recorded on every row from the first row
-cannot be added later: you cannot reconstruct which org owned a row, or which model embedded it,
-after the fact. Retrofitting any of the three means a corpus-wide migration against data whose true
-values are gone.
+| Concern | **Phase 1 — column + enforcement** | **Later — the surface** |
+|---------|-----------------------------------|------------------------|
+| **Tenancy** | `org_id` / `project_id` **populated** · membership with roles · **every query scoped** | Invite flows · role management UI · org switcher |
+| **Access** | `shared_with` holds **principals** · `public` renamed **`org`** · groups table + query-time resolution · **derived artifacts inherit strictest source** | Groups UI · share links with expiry · public-share inventory · ethical walls |
+| **Privacy** | **Audit record written on every read** · **provenance as a source *list* on every derived artifact** · encryption at rest failing closed · classification flag at ingest | DSAR tooling · export · break-glass · access-history view · delete cascade |
+| **Model config** | Engine registration, encrypted, failing closed · assignment per purpose · **`model_id` and `generator_version` recorded per artifact** | Curated catalog · model cards · hardware feasibility · staleness-impact preview |
+| **Admin** | Platform grants **orthogonal** to org roles · admin sees metadata, **never content** · global unscoped key retired | Platform console · usage reporting · support tooling |
+| **Settings** | Precedence user → project → org → platform, with **lock** semantics | Full settings surface · policy editor |
+| **Telemetry** | `write.*` counters by producer and reason · **`producer.seconds_since_last_item`** · **`embed.distinct_models_per_index`** · ingest→searchable | Dashboards · alerting · full catalogue |
 
-#### Tenancy — users, orgs, projects
-
-| Work | Why now |
-|------|---------|
-| `org_id` and `project_id` **populated**, not nullable-and-ignored | Backfilling ownership onto existing rows is guesswork |
-| Membership table with roles | The producer registry needs an owner, so tenancy is already implied |
-| Per-item `access_level` + `shared_with` | Data written without an ACL has no defensible default later |
-| **Every query scoped, ACL applied in the query** | Post-rank filtering silently breaks top-K, and retrofitting it into every query path is the expensive version |
-
-*Not yet:* invite flows, role-management UI, ethical walls, break-glass, permission sync.
-
-Retrofitting multi-tenancy is among the most expensive migrations there is. "Single-tenant for now"
-is almost always regretted.
-
-#### Model configuration
-
-| Work | Why now |
-|------|---------|
-| Engine registration — provider, credential, **encrypted, failing closed** | Phase 1 already calls an embedding model; something has to hold that credential |
-| Assignment per purpose | Even with one purpose, the *mechanism* must exist so choice is data rather than a constant |
-| **`model_id` + `dim` recorded on every embedding** | Without it, a contaminated index cannot even be identified retroactively |
-| `generator_version` fingerprint recorded per artifact | Establishes provenance before there is a corpus to fix |
-| Engine reachability validation | Fail at configuration time, not at 3am |
-
-*Not yet:* the curated catalog with model cards, hardware feasibility, staleness-impact preview.
-
-The distinction that matters: **the selection mechanism is Phase 1; the catalog UX is Phase 6.**
-If models stay hardcoded until then, every artifact produced in phases 1–5 carries no provenance
-and the catalog's arrival becomes a corpus-wide staleness event.
-
-#### Access model and settings
-
-| Work | Why now |
-|------|---------|
-| **Rename `public` → `org`; `public` means external** | After both meanings exist it is a migration against a field people already reasoned about wrongly |
-| **`shared_with` holds principals**, not user IDs | Enumerating users breaks on every membership change and silently fails to revoke |
-| **Groups** as a sharing target | Sharing with *engineering* rather than eleven people is what makes the model get used correctly |
-| **Platform grants orthogonal to org roles** | Also what retires the global unscoped key |
-| **Admin sees metadata, not content** | Support tooling showing customer content by default is a privacy hole arriving as a feature |
-| Settings precedence with **locks** | "Only approved providers", "public sharing off" must be enforced, not suggested |
-| API/UI parity | The UI is a client of the API, never a privileged path |
-
-*Phase 2–3:* share links with expiry and inventory · break-glass · access-history view.
-*Later:* SCIM-managed groups, ethical walls.
-
-See [security/access-model.md](security/access-model.md).
-
-#### Privacy
-
-Privacy has the same property as tenancy, and one control is not merely expensive to retrofit but
-**impossible**: "who accessed this record in March?" has no answer if you were not recording in
-March. See [security/privacy-foundations.md](security/privacy-foundations.md).
-
-| Work | Why now |
-|------|---------|
-| **Access audit on every read** — append-only, separate store | Past access is unknowable. No migration recovers it |
-| **Provenance on every derived artifact** — source set as a *list* | A summary spanning forty items, written without its source list, is **unerasable** later |
-| **Encryption at rest, failing closed** | Retrofitting per-tenant keys onto a single-key corpus is a full re-encrypt |
-| **Classification flag at ingest** — regulated / personal | Gates the inference fallback; without the field, classification means re-scanning the corpus |
-| **Classification-gated inference** | Every call made before this exists is an untracked disclosure |
-| Log discipline — never content, never prompts | Zero cost, irreversible if wrong |
-
-*Not yet:* DSAR tooling, export UX, SSO, break-glass, ethical walls, legal hold, residency, the
-delete-cascade implementation — its hooks are the provenance row above.
-
-#### Write-path telemetry
-
-You cannot tell whether the spine works if you cannot see it work.
-
-| Metric | Purpose |
-|--------|---------|
-| `write.requests` by producer, status | Is anything arriving at all |
-| `write.items` by outcome — created · updated · rejected | Upsert effectiveness |
-| `write.rejected` by reason | Quota, validation, auth, payload size — distinguishable |
-| `write.duration` | The commit must stay a database write |
-| **`producer.seconds_since_last_item`** | Against each producer's own baseline. A silent stop errors nowhere |
-| **`embed.distinct_models_per_index`** | Must be exactly 1. Ships with the first embedding call |
-| **`ingest → searchable` latency** | The user-facing SLI that component metrics cannot show |
-| Queue lag, readiness-state transitions | Where items are stuck |
-
-*Not yet:* the full catalogue, dashboards, alerting, SLI reporting.
+Seven rows, not forty-four items. Each left-hand cell is something that becomes a migration — or,
+for audit, becomes *impossible* — if deferred. Each right-hand cell can be built against existing
+data whenever it is wanted.
 
 ### Exit
 
-An SDK call writes an item **into a project, owned by an org, with an ACL**; a semantic search
-scoped to that project finds it; the response cites it; and the write path is observable end to end
-with the model that embedded it recorded on the row.
+An SDK call writes an item **into a project, owned by an org, with an access level**; a semantic
+search **scoped to that project** finds it; the response cites it; the read is **audited**; and the
+row records **which model embedded it**.
 
-### What is deliberately absent
+Expressed as tests rather than a demo — see [operations/testing.md](operations/testing.md).
 
-No enrichment agents. No gateway. No fetch worker. No uploads. No crawlers. No graph. No cases. No
-normalization.
+### Deliberately absent
+
+No enrichment agents. No gateway. No fetch worker. No uploads. No crawlers. No graph. No cases.
+No normalization. No settings UI. No share links.
 
 ### Two things built right rather than deferred
 
@@ -169,8 +109,8 @@ normalization.
 only `Inline` is implemented, so `Stored` and `Pending` slot in later without the enrichment side
 ever learning to branch on provenance.
 
-**Embeddings never fall back.** The defer-on-unavailable behaviour ships with the first embedding
-call, not after a corpus has been contaminated.
+**Embeddings never fall back.** Defer-on-unavailable ships with the first embedding call, not after
+a corpus has been contaminated.
 
 ---
 
@@ -314,10 +254,13 @@ conversational agent and defers the temporal graph, shipping without either diff
 most crowded quadrant. Local is cheaper, proves the privacy claim, sidesteps the compliance
 apparatus entirely, and is where the unique capability lives.
 
-**Phase 1 will feel too small, and is not.** A write endpoint and a search endpoint is not an
-impressive demo — but the slice also carries tenancy, model provenance and write telemetry, because
-all three are write-time facts. The temptation is to cut those to reach a demo faster. Each one cut
-becomes a migration against data whose true values no longer exist.
+**Phase 1 looks small and carries a lot.** A write endpoint and a search endpoint is not an
+impressive demo, and the slice also carries tenancy, access principals, audit, provenance, model
+recording and write telemetry. The temptation is to cut those to reach the demo faster.
+
+Apply the rule instead of cutting: ship the **column and the enforcement point**, defer the
+**surface**. Cutting a surface costs a sprint later. Cutting a column costs a migration — and for
+the audit record, costs a question that can never be answered.
 
 ---
 
