@@ -219,9 +219,9 @@ practice — and four later phases inherit the machinery instead of each inventi
 | **Access** | `shared_with` holds **principals** · `public` renamed **`org`** · groups table + query-time resolution · **derived artifacts inherit strictest source** | Groups UI · share links with expiry · public-share inventory · ethical walls |
 | **Memories** `P0` | **Type = name + TTL + expiry policy**, definable · type **mutable**, not in the id · `default` type so nothing is orphaned · **`memory_key`** unique per (project, type), upsert · many-to-many membership, **mutable after write** (add/remove, single and by selector) · **`memory_links`** · both mapping directions, with **effective expiry computed, never stored** · **`orphan_delete`** expiry | Type editor · memory browser · compression · automatic promotion rules · derived correlation as a retrieval signal |
 | **Privacy** | **Audit record written on every read** · **`audit_events` for access changes — ACL, shares, roles, key grants** · **provenance as a source *list* on every derived artifact** · encryption at rest failing closed · classification flag at ingest | DSAR tooling · export · break-glass · access-history view · delete cascade |
-| **Model config** | Engine registration, encrypted, failing closed · assignment per purpose · **`model_id` and `generator_version` recorded per artifact** | Curated catalog · model cards · hardware feasibility · staleness-impact preview |
+| **Model config** | Engine registration, encrypted, failing closed · assignment per purpose · **`model_id` and `generator_version` recorded per artifact** · **model allow-list per project, failing closed** · **chunk size validated against the embedding model's input limit** | Curated catalog · cards · hardware feasibility · staleness preview |
 | **Admin** | Platform grants **orthogonal** to org roles · admin sees metadata, **never content** · global unscoped key retired | Platform console · usage reporting · support tooling |
-| **Settings** | Precedence user → project → org → platform, with **lock** semantics | Full settings surface · policy editor |
+| **Settings** | Precedence user → project → org → platform, with **lock** semantics · reads return **effective value, source level and lock state** · key capabilities default to **nothing granted** · activity capture **off**, user-only | Full settings surface · policy editor · [full register](settings.md) |
 | **Customization** | **Write phase order fixed, ACL assigned before any hook point** · security fields **read-only** in the item envelope · **`handler_digest` in the `generator_version` input set**, constant for built-ins | Normalization schema editor · redaction rules · validation policy · custom worker handlers · all of it |
 | **Telemetry** | `write.*` counters by producer and reason · **`producer.seconds_since_last_item`** · **`embed.distinct_models_per_index`** · ingest→searchable | Dashboards · alerting · full catalogue |
 
@@ -258,6 +258,14 @@ a corpus has been contaminated.
 
 ## Phase 2 — depth
 
+> **Why the catalog lands in Phase 2 rather than Phase 6.** The *surface* — cards, feasibility,
+> proposals — is Phase 6 UX. But `model_cards` and `data_type_profiles` are **tables the assignment
+> resolves against**, and the sensitivity field is what makes the allow-list automatic rather than
+> remembered. Ship the tables with the second engine, and the proposal UI has something to read
+> when it arrives. Ship them late and every assignment made in between is hand-authored against
+> knowledge nobody wrote down.
+
+
 **Goal: make what is stored good.** The spine already proves it is findable.
 
 | Work | Notes |
@@ -267,6 +275,10 @@ a corpus has been contaminated.
 | Typed agents | Start with a handful, not forty |
 | Entity extraction → graph layer 1 | Record store tables; no external graph yet |
 | **Staleness fields + `generator_version` fingerprint** | `sha256(canonical_json(config))` |
+| **`model_cards` + `data_type_profiles`** | Stored and queryable — what the mapping is derived from |
+| **`agent_config` as one object** | Prompt + schema + model per `data_type`, so they cannot drift apart |
+| **Assignment per `(purpose, data_type)`** | MedGemma for clinical, a 270M classifier for layer 7 · **embeddings accept `*` only** |
+| **Sensitivity-driven candidacy** | A cloud engine is never a *candidate* for a `phi` type |
 | **W7 reprocess** | You will want to tune prompts on day two. Without this, tuning is write-only |
 | Telemetry | `enrich.classification_layer` — measures the ~80% claim rather than asserting it |
 
@@ -340,7 +352,7 @@ The seams from Phase 1 are what make this cheap rather than a fork.
 
 | Variant | Work | Exit |
 |---------|------|------|
-| **Local** | Lean compose · local password auth behind the existing `TokenVerifier` seam · **model catalog UX** on top of Phase 1's selection mechanism | **Unplug the network and everything still works** |
+| **Local** | Lean compose · local password auth behind the existing `TokenVerifier` seam · **model catalog UX** — cards, hardware feasibility, **derived assignment proposals with exclusions shown**, `declared_by` provenance, staleness preview | **Unplug the network and everything still works** — including the models |
 | **Cloud** | Managed queue behind the existing abstraction · hosted auth as another verifier · pooling audit · Secret Manager · crawl runs as jobs | Single-tenant prod, SaaS-ready |
 
 **Gate:** run the credential-broker request-scoped-lifecycle spike before committing to the cloud
