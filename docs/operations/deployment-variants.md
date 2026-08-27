@@ -45,6 +45,73 @@ request-scoped.
 | D · Embedded backend | — | ○ | ● | Cloud is the intended host-SaaS target |
 | E · Governance | ○ | ○ | ● | Managed tier makes audit and residency tractable |
 
+## Where security artifacts live
+
+"Secrets go in Secret Manager" is too coarse. Five distinct classes with different requirements,
+and conflating them is how a KEK ends up retrievable as a string.
+
+| Artifact | Local | GKE | **Cloud (GCP)** |
+|----------|-------|-----|-----------------|
+| **Key-encryption key (KEK)** | file, dev-only | k8s Secret | **Cloud KMS** — never leaves |
+| **Per-tenant data keys (DEK)** | wrapped, in the record store | same | same — wrapped by KMS, ciphertext in Cloud SQL |
+| **Per-tenant secrets** — AI provider keys, webhook signing | envelope-encrypted in the record store | same | same — **not** Secret Manager |
+| **OAuth tokens** | credential broker's own store | same | broker's Cloud SQL, AES-256-GCM |
+| **Platform secrets** — broker encryption key, third-party platform keys | `.env` | k8s Secret | **Secret Manager** |
+| **JWT signing key** | file | k8s Secret | **Cloud KMS asymmetric signing** |
+| **`md_*` API keys** | hashed in the record store | same | same — hashed, never encrypted |
+| **Policy and settings** | record store | same | Cloud SQL — not secrets |
+
+### Secret Manager and KMS are not interchangeable
+
+**Secret Manager stores and returns a value.** Correct for something the application must hold —
+the credential broker's encryption key, a platform-level third-party key.
+
+**KMS performs cryptographic operations without releasing the key.** Correct for the KEK, because
+the whole point of envelope encryption is that the key-encryption key never enters application
+memory. Putting a KEK in Secret Manager gives you one string away from total compromise, which is
+the situation envelope encryption exists to avoid.
+
+Same reasoning for JWT signing: **KMS asymmetric signing** means the private key never exists in a
+process, so a memory disclosure cannot forge tokens.
+
+### Per-tenant secrets do not belong in Secret Manager
+
+Secret Manager is built for a bounded set of platform secrets, not one entry per tenant per
+provider. Wrong quota model, wrong access model, and no way to scope reads per tenant.
+
+Per-tenant secrets are **envelope-encrypted in the record store**: plaintext → tenant DEK → wrapped
+by the KMS KEK → ciphertext in Cloud SQL. Rotation is a KMS key version bump plus a DEK re-wrap,
+not a re-encrypt of the corpus.
+
+### Two credentials that should not exist at all
+
+| Removed by | What it removes |
+|-----------|-----------------|
+| **Workload Identity** | Service account **key files**. Cloud Run services assume an identity; there is no key to leak, rotate or commit |
+| **Cloud SQL IAM database authentication** | The database **password**. The service account authenticates directly |
+
+Both matter given the launch blocker already on record — secrets committed to git history. The best
+defence is a credential that does not exist.
+
+Signed URLs still require the service account to hold `roles/iam.serviceAccountTokenCreator` **on
+itself**, which is easy to miss and fails only at runtime.
+
+### Where the audit log physically lives
+
+[Privacy foundations](../security/privacy-foundations.md) requires an append-only audit record on
+every read, with retention in years. That is not Cloud Logging — wrong retention model, awkward for
+"who accessed this record in March", and it is operational logging rather than a compliance
+artifact.
+
+**Write to Cloud SQL, export to BigQuery.**
+
+- The write is **transactional with the read it records**, so no code path can skip it
+- Immutability is enforced by the database: the application role holds `INSERT` and `SELECT` on the
+  audit table and **no `UPDATE` or `DELETE` grant**. Immutable by permission, not by discipline
+- Cloud SQL keeps a hot window; BigQuery holds the long tail cheaply and answers the year-scale
+  question
+- Separate from `tracing` memories entirely — those are sampled, three-day, and observability
+
 ## Two capability gaps worth naming
 
 **Cloud cuts the conversational agent**, so "reach your memory from any messaging app" — a

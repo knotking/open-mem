@@ -114,6 +114,10 @@ Anything that logs "who did this" as *nobody* is incompatible with the privacy m
    store as ingested content.
 5. **`md_*` storage is unspecified.** If plaintext, one read yields every tenant's credentials.
 
+> Where each of these physically lives per deployment variant — and why Secret Manager and KMS are
+> not interchangeable — is in
+> [operations/deployment-variants.md](../operations/deployment-variants.md).
+
 ## The fix is symmetry
 
 Integration credentials already have the right pattern — a proxy injects them so the caller never
