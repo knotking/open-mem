@@ -8,19 +8,37 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from urllib.parse import quote
 
 
 def _env(name: str, default: str) -> str:
     return os.environ.get(name, default)
 
 
+def _database_url() -> str:
+    """One DSN, or the parts.
+
+    A secret manager injects one value per secret, so a managed deployment has
+    the password on its own and everything else in plain configuration. Joining
+    them here keeps the alternative -- baking a password into a connection
+    string that shows up in `describe` output -- from being the easy path.
+    """
+    explicit = os.environ.get("DATABASE_URL")
+    if explicit:
+        return explicit
+    host = os.environ.get("DB_HOST")
+    if not host:
+        return "postgresql://memdog:memdog@localhost:54329/memdog"
+    user = quote(os.environ.get("DB_USER", "postgres"), safe="")
+    password = quote(os.environ.get("DB_PASSWORD", ""), safe="")
+    port = os.environ.get("DB_PORT", "5432")
+    name = os.environ.get("DB_NAME", "memdog")
+    return f"postgresql://{user}:{password}@{host}:{port}/{name}"
+
+
 @dataclass(frozen=True)
 class Settings:
-    database_url: str = field(
-        default_factory=lambda: _env(
-            "DATABASE_URL", "postgresql://memdog:memdog@localhost:54329/memdog"
-        )
-    )
+    database_url: str = field(default_factory=_database_url)
     # TBD.md #1: store at the larger dimension. Reducing is a truncation of
     # stored vectors; only increasing costs a corpus-wide re-embed.
     embed_dim: int = field(default_factory=lambda: int(_env("EMBED_DIM", "768")))
