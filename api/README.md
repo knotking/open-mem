@@ -76,24 +76,33 @@ Named because "not present" and "overlooked" should not look the same:
 | Presigned uploads, crawlers, connectors | slices 3–5 |
 | Control-plane endpoints | `bootstrap.py` performs the same sequence they will |
 
-## Two places the documents disagreed
+## Three places the documents disagreed, now fixed in `docs/`
 
-Found by building, not by reading. Both are resolved in code with the reasoning
-in a comment at the resolution site.
+Found by building, not by reading. Each is corrected at the source with the
+reasoning left in place, so the next reader sees why rather than just what.
 
-1. **The classification cascade contradicts the MIME precedence rule.**
-   `schema.md` says `mime_type` outranks `source_type`; `workers.md` puts
-   `source_type` at layer 2, *above* the MIME registry at layer 5. Taken
-   literally, a caller declaring `source_type: pdf` over JSON bytes routes to
-   the PDF agent — the exact defect the rule exists to prevent. Resolved in
-   `classify.py`: `source_type` keeps layer 2, but a hint that *contradicts* the
-   sniffed MIME is discarded.
+1. **The cascade let a lying `source_type` outrank sniffed MIME.**
+   `schema.md` says `mime_type` is authoritative; the cascade in `workers.md`
+   listed `source_type` above the MIME registry, so read literally a caller
+   declaring `"source_type": "pdf"` over JSON bytes routed to the PDF agent —
+   the exact defect the rule exists to prevent. Position in that table is *cost
+   order, not authority*: `source_type` is still checked early because it is
+   free, but a hint contradicting the sniffed bytes is discarded.
 
-2. **`state` has two vocabularies.** `data_items.state` is
-   `stored | searchable | enriched`; the write-API response example shows
-   `queued` and `fetch_pending`. The staircase is the one clients are told to
-   poll on, so the column wins and the response reports `stored`. The example
-   needs updating.
+2. **A layer that short-circuits everything sat below two layers it
+   short-circuits.** Explicit `data_type` was numbered 3. It is layer 1 now, and
+   `classified_by_layer` records it as such.
+
+3. **`state` had two vocabularies.** The write-API example answered `queued` and
+   `fetch_pending`; the column holds `stored | searchable | enriched`. A client
+   polling on those would wait for a state that never arrives. What the example
+   was reaching for is not a state at all — whether the bytes are here yet is
+   `is_downloaded`, derived from the content columns. An item awaiting a fetch is
+   `stored` with `is_downloaded: false`, and the write response now carries that
+   field so a client need not fetch to find out.
+
+Also corrected: the `data_items` sketch in `schema.md` omitted `restricted` from
+`access_level`, which `access-model.md` defines and the migration enforces.
 
 ## One bug the live run found that the tests did not
 

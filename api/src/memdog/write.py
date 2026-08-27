@@ -190,7 +190,7 @@ async def write_items(
                 # five hundred must not roll back the other four hundred and
                 # ninety-nine. That is what 207 is for.
                 async with conn.transaction():
-                    data_id, created, needs_embed = await _write_one(
+                    data_id, created, downloaded = await _write_one(
                         conn, blobs, principal, producer, item
                     )
                 results.append(
@@ -199,9 +199,10 @@ async def write_items(
                         status="created" if created else "updated",
                         data_id=data_id,
                         state="stored",
+                        is_downloaded=downloaded,
                     )
                 )
-                if needs_embed and request.options.enrich:
+                if downloaded and request.options.enrich:
                     embed_jobs.append(data_id)
             except Exception as exc:  # noqa: BLE001 -- reported per item, not raised
                 results.append(WriteResult(index=index, status="failed", error=str(exc)))
@@ -380,4 +381,4 @@ async def _write_one(
             "classified_by_layer": layer,
         },
     )
-    return data_id, created, content_text is not None
+    return data_id, created, pending_ref is None

@@ -114,6 +114,10 @@ async def test_pending_content_is_not_downloaded(
             content=Pending(provider="google-drive", resource_id="1AbC"),
         )],
     )
+    # The write response says so too, so a client need not fetch to find out.
+    assert response.results[0].state == "stored"
+    assert response.results[0].is_downloaded is False
+
     item = await get_item(pool, actor, response.results[0].data_id)
     assert item["is_downloaded"] is False
     assert item["pending_ref"]["provider"] == "google-drive"
@@ -138,7 +142,7 @@ async def test_mime_is_sniffed_and_outranks_source_type(
     assert item["mime_type"] == "application/json"   # sniffed, not declared
     assert item["source_type"] == "pdf"              # kept as the hint it is
     assert item["data_type"] == "sensor_gps"         # resolved by the payload heuristic
-    assert item["classified_by_layer"] == 4
+    assert item["classified_by_layer"] == 4          # layer 3's hint was discarded
 
 
 async def test_upsert_on_the_natural_key(
@@ -218,3 +222,23 @@ async def test_idempotency_key_replays_and_rejects_mismatch(
             idempotency_key="k-1",
         )
     assert exc.value.status == 409
+
+
+async def test_explicit_data_type_short_circuits_at_layer_one(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """A layer that short-circuits everything cannot sit below what it
+    short-circuits -- which is why it is layer 1 and not layer 3."""
+    actor = await principal_for(tenant.api_key)
+    response = await _write(
+        pool, queue, blobs, settings, actor, tenant.producer_id,
+        [WriteItem(
+            external_id="explicit-1",
+            content=Inline(text='{"latitude": 51.5, "longitude": -0.12}'),
+            source_type="pdf",
+            data_type="clinical_note",
+        )],
+    )
+    item = await get_item(pool, actor, response.results[0].data_id)
+    assert item["data_type"] == "clinical_note"
+    assert item["classified_by_layer"] == 1

@@ -125,6 +125,9 @@ class WriteResult(BaseModel):
     status: Literal["created", "updated", "failed", "dropped"]
     data_id: str | None = None
     state: str | None = None
+    # Derived, never assignable. An item awaiting a fetch is `stored` with
+    # is_downloaded false -- that is not a fourth rung on the staircase.
+    is_downloaded: bool | None = None
     error: str | None = None
 
 
