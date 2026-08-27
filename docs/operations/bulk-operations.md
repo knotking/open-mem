@@ -29,10 +29,14 @@ One malformed row must not fail 9,999 good ones. Bulk producers expect to retry 
 failures, not resubmit everything.
 
 ```http
-POST /api/v1/data/batch
+POST /api/v1/write
 Idempotency-Key: 9f2c...
-{ "items": [ {...}, {...} ], "enrich": false }
+{ "producer_id": "key_01J...", "items": [ {...}, {...} ],
+  "options": { "enrich": false } }
 ```
+
+There is no separate batch endpoint — bulk is the same verb with more items. See
+[write-api.md](../ingestion/write-api.md).
 
 ```json
 207 Multi-Status

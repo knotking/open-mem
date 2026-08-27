@@ -91,7 +91,8 @@ that each can fail, scale and be replaced independently.
 3. The gateway fetches the user's active integration connections, tags each
    with a relevance label, and injects the references (not the credentials)
    into `meta_data.integrations`.
-4. The gateway forwards the envelope to the API via `POST /api/v1/ingest`.
+4. The gateway forwards the envelope to the API via `POST /api/v1/write`. It is a translator in
+   front of the single write path, not a second write path.
 5. The API stores the raw payload, creates a `tracing` memory, and publishes
    to NATS.
 6. The pipeline consumes the message, classifies it, routes it to a typed
@@ -99,7 +100,8 @@ that each can fail, scale and be replaced independently.
 
 ### 3.2 Direct ingestion
 
-1. `POST /api/v1/data` stores content plus metadata and returns `data_<ulid>`.
+1. `POST /api/v1/write` stores content plus metadata and returns `data_<ulid>` — the same
+   endpoint every producer uses.
 2. Text content is additionally submitted to Graphiti as an episode,
    fire-and-forget, so graph latency never affects the write path.
 3. Optionally, the item is forwarded to the pipeline for enrichment.
@@ -133,8 +135,9 @@ financial (3), binary (2).
 
 Scheduled pull, for the majority of sources that never push. A leader-elected scheduler creates a
 checkpointed run; the crawl worker discovers resources through the credential-injecting proxy,
-deduplicates against what it has seen, and **emits** — records through `POST /api/v1/data` with
-`external_id` upsert, files as a pending reference into the fetch queue.
+deduplicates against what it has seen, and **emits** — all items through `POST /api/v1/write`
+with `external_id` upsert, records carrying `Inline` content and files carrying a `Pending`
+reference the API converts into a fetch job.
 
 The crawler neither fetches bytes nor enriches. It writes through the same public API an external
 producer would, so a crawled record and a webhook-delivered one are indistinguishable downstream.

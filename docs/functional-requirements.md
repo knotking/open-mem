@@ -51,8 +51,22 @@ and **MAY** carry their usual RFC 2119 meaning.
 
 ### 2.2 Direct ingestion
 
-- **FR-ING-8** `POST /api/v1/data` MUST store content together with caller
-  metadata and return a data item identifier.
+- **FR-ING-8** The system MUST expose a **single write endpoint** used by every producer —
+  inbound channels, crawlers, client SDKs, uploads and external systems alike. No producer may have
+  a privileged write path unavailable to others.
+- **FR-ING-8a** The write endpoint MUST accept an array of items, each carrying a `ContentRef`
+  that is `Inline`, `Stored` or `Pending`, and MUST return per-item results.
+- **FR-ING-8b** A `Pending` reference MUST be resolvable through the public write path, so an
+  external producer can ingest file-bearing content without access to internal queues.
+- **FR-ING-8c** Every write MUST be attributed to a **registered producer**. Nothing writes
+  anonymously.
+- **FR-ING-8d** The producer record MUST carry ACL scope, defaults, rate limits, quota, budget and
+  enrichment policy, so these are derived in one place rather than per write path.
+- **FR-ING-8e** A disabled producer MUST accept and discard writes without processing them, and
+  the discard MUST be counted.
+- **FR-ING-8f** The write MUST be **synchronous and durable**; only enrichment is queued.
+- **FR-ING-8g** Items MUST expose a readiness state — `stored`, `searchable`, `enriched` — on both
+  the write response and on read.
 - **FR-ING-9** Text content ingested directly SHOULD also be submitted to the
   temporal graph as an episode, fire-and-forget, without blocking the response.
 - **FR-ING-10** Direct ingestion MUST support optional forwarding to the

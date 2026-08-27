@@ -2,7 +2,7 @@
 
 ## Where the current path breaks
 
-Today uploads go to `POST /api/v1/data` with content in the body. Three limits:
+Today uploads put content in the request body of an ordinary write. Three limits:
 
 1. **The load balancer allows 120s** on the API path. Anything slower dies at the edge.
 2. **The API is the wrong place for bytes.** It is the sole writer of record running min 2 / max
@@ -15,8 +15,8 @@ Today uploads go to `POST /api/v1/data` with content in the body. Three limits:
 ```
 1. POST /api/v1/uploads          → check quota, issue presigned URL + upload_id
 2. PUT  <presigned URL>          → client streams DIRECTLY to object store
-3. POST /api/v1/uploads/{id}/complete
-                                 → validate, sniff MIME, create data item, enqueue enrich
+3. POST /api/v1/write            → completion is an ordinary write carrying `Stored`
+                                   content; the API validates and sniffs MIME
 ```
 
 The API handles two small JSON calls; the object store handles the bytes. Resumable and multipart

@@ -30,6 +30,7 @@ can be filled three different ways.
 | Document | Covers |
 |----------|--------|
 | [ingestion/](ingestion/README.md) | Entry points and the push/pull split |
+| [ingestion/write-api.md](ingestion/write-api.md) | **The single write path** — one endpoint, registered producers |
 | [ingestion/workers.md](ingestion/workers.md) | Eight worker classes, the content contract, failure policy |
 | [ingestion/crawlers.md](ingestion/crawlers.md) | The pull half — scheduled, configurable discovery |
 | [ingestion/uploads.md](ingestion/uploads.md) | Presigned direct-to-storage uploads |

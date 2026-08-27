@@ -171,11 +171,14 @@ POST /api/v1/cases/similar                 # case-level embedding search
 Writes accept membership inline, so a host does not need two round trips:
 
 ```json
-POST /api/v1/data
+POST /api/v1/write
 {
-  "content": "...",
-  "case": { "external_id": "MRN-A12345", "case_type": "patient" },
-  "event_time": "2019-03-14T09:20:00Z"
+  "producer_id": "key_01JQRS...",
+  "items": [{
+    "content": { "kind": "inline", "text": "..." },
+    "case": { "external_id": "MRN-A12345", "case_type": "patient" },
+    "event_time": "2019-03-14T09:20:00Z"
+  }]
 }
 ```
 

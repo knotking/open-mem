@@ -25,10 +25,11 @@ crawler config (stored, versioned)
       │              ↓
       │        dedupe store (external_id · etag · hash)
       │              ↓
-      └── emit ──┬──▶ W2 fetch      (files, binaries)
-                 └──▶ POST /data    (records)
-                              ↓
-                        W1 enrich (unchanged)
+      └── emit ──▶ POST /api/v1/write
+                        │   records → Inline
+                        │   files   → Pending  → W2 fetch
+                        ↓
+                  W1 enrich (unchanged)
 ```
 
 Because crawlers write through the same contracts as every other producer, a crawled Salesforce
@@ -212,7 +213,7 @@ has the data and just needs somewhere to put it.
 | A **project-scoped service key** with `data:write` and nothing more | Designed — see [api.md](../api.md) |
 | **`external_id` upsert** so re-runs update rather than duplicate | Specified in the host contract |
 | **Idempotency key** on writes so retries are safe | Gap |
-| **Batch write endpoint** — `POST /api/v1/data/batch` | **Gap, and it matters** |
+| **One write endpoint** taking `items[]` — `POST /api/v1/write` | Specified — see [write-api.md](write-api.md) |
 | Documented **rate limits and quota headers** so a client can self-throttle | Partial |
 | Structured errors with a machine-readable `code` | Partial — two error formats today |
 | Client helpers in the SDKs | Partial |
@@ -385,9 +386,10 @@ strategy invalidates the dry-run and requires another.
    - otherwise insert into `crawl_frontier` with `status='queued'`
    - **checkpoint after every page** — cursor plus frontier state, so a crash resumes here
 5. **Emit loop**, concurrent with discovery:
-   - record-shaped → `POST /api/v1/data` carrying `external_id`, which upserts and returns
-     `{data_id, created|updated}`
-   - file-shaped → publish a `Pending` ContentRef to `ingest.fetch`
+   - every item goes through **`POST /api/v1/write`** carrying `external_id`, which upserts
+   - records carry `Inline` content; files carry a **`Pending`** reference that the API turns
+     into a fetch job — the crawler never publishes to an internal queue, which is what keeps an
+     *external* crawler able to do everything a managed one can
    - `updated` rather than `created` means this is a **mutation**, so it routes into W8: new
      version, re-embed, and invalidate facts derived from the superseded version
 6. **Advance the watermark only on successful completion**
