@@ -134,6 +134,175 @@ domain allowlist and a full decision log.
 | **Infrastructure** | Own worker pool with its own ceiling — never colocated with enrich |
 | **Scheduling** | Per variant: cron container locally, cluster CronJob on GKE, managed scheduler in cloud — behind one interface |
 
+## Worked example: creating a crawler
+
+### 1 — Create the config
+
+Created **disabled**. You cannot schedule a crawler that has never been dry-run.
+
+```http
+POST /api/v1/crawlers
+Authorization: Bearer md_...
+
+{
+  "name": "Salesforce opportunities",
+  "source":      { "connection_id": "conn_01JQRS..." },
+  "strategy":    "enumerate",
+  "scope":       { "object": "Opportunity",
+                   "filter": "StageName != 'Closed Lost'" },
+  "incremental": { "mode": "watermark", "field": "SystemModstamp" },
+  "schedule":    { "type": "interval", "every": "1h" },
+  "limits":      { "max_items": 50000, "rate_per_sec": 5,
+                   "token_budget": 200000, "wall_clock": "PT8H" },
+  "mapping":     { "schema": "Transaction@2", "field_map": "map_01JQRS..." },
+  "output":      { "project_id": "proj_01JQRS...",
+                   "memory_type": "factual",
+                   "tags": ["source:salesforce"] },
+  "priority":    "bulk",
+  "overlap":     "skip"
+}
+```
+
+```json
+201 Created
+{ "crawler_id": "crw_01JQRS...", "status": "draft",
+  "acl": "inherited:personal", "enabled": false }
+```
+
+Note `acl` is **reported, not accepted**. Visibility is inherited from the connection's scope —
+a crawler cannot widen access to data the connection produces.
+
+Validation happens here, not at first run: connection exists and is owned or shared · the provider
+profile supports this strategy · scope fields exist (may require a probe call) · the mapping's
+target type matches the schema · limits fit within org quota · for `traverse`, domains are inside
+the allowlist. Failures return `422` with per-field detail.
+
+### 2 — Dry run, which is mandatory
+
+```http
+POST /api/v1/crawlers/crw_01JQRS.../dry-run
+{ "sample_size": 100 }
+```
+
+```json
+202 Accepted
+{ "run_id": "run_01JQRS...", "mode": "dry" }
+```
+
+```http
+GET /api/v1/runs/run_01JQRS...
+```
+
+```json
+{
+  "status": "completed",
+  "mode": "dry",
+  "discovered": 47213,
+  "would_fetch": 47213,
+  "would_skip_unchanged": 0,
+  "estimated": {
+    "bytes": "2.1 GB",
+    "enrich_jobs": 47213,
+    "tokens": 94000000,
+    "cost_usd": 0,
+    "duration": "PT6H20M"
+  },
+  "sample": [ { "external_id": "0064...", "title": "Northwind renewal",
+                "mapped_preview": { "amount": 48000, "stage": "Negotiation" } } ],
+  "warnings": [
+    "17 records have no value for watermark field SystemModstamp",
+    "estimated token spend is 84% of this org's remaining monthly budget"
+  ]
+}
+```
+
+This is the point at which someone learns the job will create forty-seven thousand items and run
+for six hours — **before** it runs, not after.
+
+### 3 — Enable
+
+```http
+PATCH /api/v1/crawlers/crw_01JQRS...
+{ "enabled": true }
+```
+
+Returns `409` if there is no successful dry-run for the current config version. Editing scope or
+strategy invalidates the dry-run and requires another.
+
+---
+
+### What actually happens on a tick
+
+**Scheduler** — one leader, elected by `pg_try_advisory_lock`:
+
+1. Select due rows from `crawler_schedules`
+2. Apply the overlap policy — with `skip`, a still-running previous run means this tick is recorded
+   as skipped rather than queued
+3. Check org crawl concurrency and quota
+4. `INSERT INTO crawl_runs (status='pending')` and publish a `crawl.run` message
+
+**Crawl worker** claims the run:
+
+1. **Pin the config version.** Mid-run edits must not take effect halfway through a six-hour job
+2. Load the watermark from the last *successful* run
+3. `status → running`, start the heartbeat
+4. **Discovery loop** — page through the provider via `/proxy/{provider}`, credentials injected
+   there and never held by the worker. For each record:
+   - compute `dedupe_key = (provider, external_id, version|etag|content_hash)`
+   - look it up in `crawl_seen` — unchanged means increment the skip counter and move on
+   - otherwise insert into `crawl_frontier` with `status='queued'`
+   - **checkpoint after every page** — cursor plus frontier state, so a crash resumes here
+5. **Emit loop**, concurrent with discovery:
+   - record-shaped → `POST /api/v1/data` carrying `external_id`, which upserts and returns
+     `{data_id, created|updated}`
+   - file-shaped → publish a `Pending` ContentRef to `ingest.fetch`
+   - `updated` rather than `created` means this is a **mutation**, so it routes into W8: new
+     version, re-embed, and invalidate facts derived from the superseded version
+6. **Advance the watermark only on successful completion**
+7. `status → completed | partial | failed`
+
+Downstream is entirely unchanged: the fetch worker materialises bytes to the object store and emits
+to `ingest.enrich`; the enrich worker classifies, routes to a typed agent, and writes viewpoint,
+embedding and entities. Nothing downstream can tell the item came from a crawler.
+
+### Step 6 is the one that bites
+
+**Advancing the watermark on a partial run silently loses data forever.** The next run starts after
+records it never actually processed, and nothing ever revisits them. Advance only on
+`completed` — a `partial` run re-covers its ground on the next tick, which is cheap because dedupe
+skips everything that did succeed.
+
+### Tables
+
+| Table | Holds |
+|-------|-------|
+| `crawlers` | Config, versioned |
+| `crawler_schedules` | Next-due, overlap policy, last tick |
+| `crawl_runs` | State, checkpoint, counters, spend, **heartbeat** |
+| `crawl_frontier` | Per-item work queue for the active run |
+| `crawl_seen` | Dedupe — provider, external_id, version hash, last seen run |
+| `crawl_errors` | Per-item failures with reason |
+
+### Failure behaviour
+
+| Condition | Result |
+|-----------|--------|
+| Discovery returns `401` | Run **fails**, connection marked `needs_reauth`, **watermark does not advance** |
+| Single item fails | Recorded in `crawl_errors`; run continues; ends `partial` |
+| Provider returns `429` | Backoff and narrow that provider's bucket — not a failure |
+| Worker dies | Heartbeat goes stale; a reaper marks the run `interrupted`; the next tick resumes from checkpoint |
+| Budget exhausted mid-run | Run stops as `partial` with a reason; no watermark advance |
+
+### Control
+
+```http
+PATCH /api/v1/runs/run_01JQRS...   { "action": "pause" }
+```
+
+`pause` stops claiming new frontier items and lets in-flight work finish, keeping the checkpoint.
+`cancel` stops and marks the run cancelled — but keeps the checkpoint, so it stays resumable.
+Discarding progress on cancel would make cancelling a six-hour job an irreversible decision.
+
 ## Telemetry
 
 Discovery rate · **dedupe hit rate** · frontier depth and size · **run duration against schedule
