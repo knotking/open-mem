@@ -81,47 +81,80 @@ Three constraints sit outside the prompt and are enforced regardless of it, per
 
 ---
 
-## The base viewpoint schema
+## The standard output
 
-Every enrichment agent produces this shape. Type-specific agents extend it; none replace it,
-because retrieval, entity extraction and the graph all consume it by shape.
+**Every extraction returns the same envelope, whatever the type.** That is what lets the
+[item inspector](../ui-design.md), search results, citations and list views render any record with
+one component — without it, every consumer branches on type, which is the provenance-branching
+defect rebuilt one layer up.
 
 ```jsonc
 {
-  "summary":    "string — 1-3 sentences, extractive not interpretive",
-  "entities":   [{ "type": "Person|Organization|Location|Product",
-                   "name": "string", "role": "string|null" }],
-  "claims":     [{ "text": "string", "subject": "string|null",
-                   "span": [start, end] }],
-  "intents":    [{ "kind": "decision|commitment|request|question",
-                   "text": "string", "actor": "string|null",
-                   "due": "ISO date|null", "span": [start, end] }],
-  "questions":  ["string — questions this content ANSWERS, in the asker's words"],
-  "key_dates":  [{ "date": "ISO", "what": "string" }],
-  "sentiment":  { "polarity": -1.0, "confidence": 0.0 },
-  "language":   "ISO 639-1"
+  // ─── core · always present, never removable ──────────────────────────
+  "title":       "Acme renewal — pricing objection",
+  "description": "A sales call transcript in which pricing terms were disputed.",
+  "summary":     "Acme's finance lead pushed back on the 12% uplift. Sales agreed to hold list
+                  pricing through renewal and to send revised terms by Friday.",
+  "keywords":    ["renewal", "pricing", "uplift", "acme", "objection"],
+  "language":    "en",
+
+  // ─── standard · shipped, overridable, removable ──────────────────────
+  "entities":   [{ "type": "Organization", "name": "Acme Corp", "role": "customer" }],
+  "claims":     [{ "text": "The 12% uplift exceeds their approved budget",
+                   "subject": "Acme finance", "span": [412, 468] }],
+  "intents":    [{ "kind": "commitment", "text": "Send revised terms",
+                   "actor": "Dana Ruiz", "due": "2026-08-29", "span": [1204, 1231] }],
+  "questions":  ["Why did the renewal price go up?"],
+  "key_dates":  [{ "date": "2026-08-29", "what": "revised terms due" }],
+  "sentiment":  { "polarity": -0.3, "confidence": 0.8 },
+
+  // ─── extensions · tenant-defined, namespaced ─────────────────────────
+  "extensions": { "deal_stage": "negotiation", "competitor_mentioned": "Northwind" }
 }
 ```
 
-Three fields earn specific comment:
+### The four core fields are different things, and will collapse into one unless defined sharply
 
-**`span` on claims and intents.** Byte offsets into the source. This is what makes a citation
-openable at the sentence, and what [keeps citations working after compression](../use-cases-catalog.md)
-archives the originals. Extracting text without its offset means the quote can be shown but never
-located.
+The predictable failure is three near-identical strings. So each is defined by the **question it
+answers**, and the prompts enforce the distinction:
 
-**`questions` — what the content answers, not what it asks.** This is the
-[support scenario](../use-cases.md) made mechanical: the ticket says *"it just spins forever"* and
-the engineer searches *"performance regression"*. Indexing the answerable question in the author's
-own words bridges vocabulary that embeddings alone often miss.
+| Field | Answers | Shape | Example |
+|-------|---------|-------|---------|
+| **`title`** | What do I *call* this? | Noun phrase, ≤ 80 chars, no trailing period | *"Acme renewal — pricing objection"* |
+| **`description`** | What *kind* of thing is it? | One sentence, about the artefact | *"A sales call transcript in which pricing terms were disputed."* |
+| **`summary`** | What does it *say*? | 1–3 sentences, about the content | *"Acme's finance lead pushed back on the 12% uplift…"* |
+| **`keywords`** | How would someone *find* it? | 3–8 lowercase terms, no phrases | *["renewal", "pricing", "uplift"]* |
 
-**`sentiment` is a bounded number with a confidence**, not prose — because it becomes a facet, and
-because [a trend across two generator versions is fabricated](../use-cases-catalog.md) unless it is
-pinned.
+> **`title` is generated, not copied.** Most records do not have one — a chat message, a sensor
+> batch, a scanned page. An email has a subject line but a thread does not. Making `title` a
+> required generated field is what makes a list view of heterogeneous records legible at all,
+> instead of a column of `data_01JQRS…`.
+
+`keywords` feeds the lexical index and the facet surface, which is why the constraint is *terms,
+not phrases* — a keyword of *"pricing objection handling"* matches nothing that *"pricing"* and
+*"objection"* would not match better.
+
+### Three tiers, and only one is immutable
+
+| Tier | Overridable | Removable | Why |
+|------|:-----------:|:---------:|-----|
+| **Core** — title, description, summary, keywords, language | Prompt only | **No** | Every consumer depends on them. Removing `title` breaks every list view and citation |
+| **Standard** — entities, claims, intents, questions, key_dates, sentiment | Yes | Yes | A deployment that never queries commitments should not pay to extract them |
+| **Extensions** — anything | Yes | n/a | The tenant's own fields, validated against the tenant's own schema |
+
+**Extensions are namespaced, and that is not tidiness.** If tenant-defined fields sat in the top
+level, a tenant using `stage` today would break the day the platform ships its own `stage` — a
+collision that appears as a schema violation across a corpus, caused by an upgrade the tenant did
+not make. A nested object makes the platform's namespace and the tenant's namespace incapable of
+colliding.
 
 ---
 
 ## The defaults, by type
+
+Each prompt is the shared skeleton plus the type-specific block below. The blocks are short on
+purpose: **the schema already specifies the shape, so the prompt only has to say what is
+*interesting* about this type.**
 
 ### `chat_message`
 
@@ -129,28 +162,37 @@ pinned.
 Extract from a chat or instant message. Messages are short, contextual and often
 elliptical — they reference earlier turns you cannot see.
 
-Do not reconstruct missing context. If a message refers to "it" or "that", record
-the reference as written rather than resolving it.
+title:       the topic in a few words, not the message text verbatim
+description: name the channel or medium if evident — "A direct message about…"
+keywords:    the subject matter, never the participants' names
 
-Emphasise: commitments ("I'll send it Friday"), decisions, and requests directed
+Do not reconstruct missing context. If a message refers to "it" or "that",
+record the reference as written rather than resolving it.
+
+Emphasise commitments ("I'll send it Friday"), decisions, and requests directed
 at a person. These are the durable content of a conversation; pleasantries are not.
 
-Set summary to null when the message carries no extractable content — an
-acknowledgement or a reaction. An empty extraction is a correct extraction.
+If the message carries no extractable content — an acknowledgement, a reaction —
+set summary to null and return empty arrays. Still produce a title.
+An empty extraction is a correct extraction.
 ```
 
-**"An empty extraction is a correct extraction"** is doing real work. Without it, a model handed
-*"ok thanks!"* will manufacture significance, and a conversation memory fills with summaries of
-nothing.
+**"Still produce a title"** is the addition that makes the envelope hold: even an empty extraction
+has to be renderable in a list.
 
 ### `email_message`
 
 ```
-Extract from an email. Distinguish the NEW content of this message from quoted
-history beneath it — extract only the new content, but record whether quoted
-material was present.
+Extract from an email.
 
-Signature blocks, disclaimers and footers are not content. Do not extract
+title:       the subject line if it is meaningful; otherwise generate one.
+             Strip "Re:", "Fwd:" and ticket-number prefixes.
+description: "An email from X to Y regarding…" — one sentence.
+
+Distinguish the NEW content of this message from quoted history beneath it.
+Extract only the new content, but note whether quoted material was present.
+
+Signature blocks, disclaimers and footers are NOT content. Do not extract
 entities that appear only in a signature or legal footer.
 
 Attachments are processed separately. Reference them by name only; do not
@@ -159,24 +201,30 @@ speculate about contents you cannot see.
 Emphasise commitments and deadlines. Email is where obligations are created.
 ```
 
-Signature suppression matters more than it sounds: without it every message contributes its
-sender's job title, company and address as fresh entities, and the entity graph fills with
-thousands of identical low-value nodes.
+Signature suppression matters more than it sounds. Without it every message contributes its
+sender's title, company and address as fresh entities, and the graph fills with thousands of
+identical low-value nodes.
 
 ### `document` — PDF, Doc, page, article
 
 ```
-Extract from a document. Preserve its structure: if there are sections, headings
-or a table of contents, reflect that in the summary rather than flattening it.
+Extract from a document.
 
-Extract claims that the document ASSERTS. Distinguish these from claims it
-quotes, cites or attributes to others — set claim.subject to the attributed
-source when the document is not speaking in its own voice.
+title:       the document's own title if present. If generating one, describe the
+             document, not its subject — "Q3 security review" not "Security".
+keywords:    include domain terms a specialist would search, not only common words.
+
+Preserve structure: if there are sections or headings, reflect that in the summary
+rather than flattening it.
+
+Extract claims the document ASSERTS. Distinguish these from claims it quotes,
+cites or attributes to others — set claim.subject to the attributed source when
+the document is not speaking in its own voice.
 
 Tables are data, not prose. Extract their subject and shape; do not transcribe
 cell values into claims.
 
-Record the document's own date if stated, in key_dates, marked "document date".
+Record the document's own date in key_dates, marked "document date".
 ```
 
 The attribution rule is what stops *"the report says the merger will fail"* being indexed as our
@@ -185,47 +233,60 @@ own assertion that the merger will fail.
 ### `transcript` — meeting, call, recording
 
 ```
-Extract from a transcript of spoken conversation. Speech is disfluent; ignore
-filler, repetition and false starts.
+Extract from a transcript of spoken conversation.
+
+title:       what the meeting was ABOUT, not its calendar name. "Renewal pricing
+             objection" beats "Weekly sync".
+description: "A call between X and Y in which…"
+
+Speech is disfluent; ignore filler, repetition and false starts.
 
 Attribute every intent to a speaker. An unattributed commitment is nearly useless
 — if the speaker cannot be determined, set actor to null rather than guessing.
 
-Emphasise decisions reached and actions assigned. Distinguish a decision ("we're
-going with option B") from a proposal that was not resolved ("what if we did B?").
-The second is a question, not a decision.
+Distinguish a decision ("we're going with option B") from a proposal that was not
+resolved ("what if we did B?"). The second is a question, not a decision.
 
 Timestamps in the transcript belong in span offsets, not key_dates. key_dates is
-for dates DISCUSSED, not for positions in the recording.
+for dates DISCUSSED, not positions in the recording.
 ```
 
-The decision-versus-proposal line is the one that decides whether the intent index is trustworthy.
-A meeting where six options were floated and one chosen must not yield six decisions.
+Decision-versus-proposal decides whether the intent index is trustworthy. A meeting where six
+options were floated and one chosen must not yield six decisions.
 
 ### `structured_record` — CRM, ticket, issue, invoice
 
 ```
-This record has already been normalized into typed fields. Do NOT re-extract what
-the structured fields already carry — you will duplicate them less accurately.
+This record has already been normalized into typed fields.
 
-Extract only from the free-text portions: descriptions, comments, notes.
+title:       build from the structured fields — "INV-2291 · Acme · $12,400".
+             Deterministic and useful beats descriptive and invented.
+description: name the record type and its state — "An open support ticket…"
 
-Your job is what the schema could not capture — the reason behind a status, the
-sentiment of a comment thread, the commitment buried in a note.
+Do NOT re-extract what the structured fields already carry. You will duplicate
+them less accurately.
 
-If the free text adds nothing beyond the structured fields, return an empty
-extraction.
+Extract only from free text: descriptions, comments, notes. Your job is what the
+schema could not capture — the reason behind a status, the sentiment of a comment
+thread, the commitment buried in a note.
+
+If the free text adds nothing beyond the structured fields, return core fields
+only and leave the standard arrays empty.
 ```
 
-This one exists because the expensive mistake here is **paying a model to re-derive fields that
-normalization already produced deterministically** — worse output, real cost, and two versions of
-the same value that will eventually disagree.
+The expensive mistake here is **paying a model to re-derive fields normalization already produced
+deterministically** — worse output, real cost, and two versions of the same value that will
+eventually disagree.
 
 ### `code_or_config`
 
 ```
-Extract from source code or configuration. Describe purpose and interface, not
-implementation.
+Extract from source code or configuration.
+
+title:       "path/to/file — what it does"
+keywords:    language, framework, and the systems it touches.
+
+Describe purpose and interface, not implementation.
 
 Do NOT extract secrets, credentials, tokens or keys, even where present. If
 credential-shaped material is found, record its presence in claims as "contains
@@ -235,7 +296,7 @@ Identifiers are entities only when they name a system, service or component —
 not for every variable.
 ```
 
-The credential rule is a containment measure, not a security control — the real control is
+The credential rule is containment, not a security control — the real control is
 [redaction before storage](write-customization.md). But an agent that faithfully extracts an API
 key into a summary has copied it into the index, the embeddings and every summary downstream, past
 the point where redaction can reach it.
@@ -245,26 +306,76 @@ the point where redaction can reach it.
 ```
 The type of this content could not be determined. Extract conservatively.
 
-Describe what the content appears to be before extracting from it, and put that
-in summary.
+title:       describe the artefact plainly — "Unrecognised binary, 2.4 MB"
+description: say what it appears to be, and that classification was uncertain.
 
-Prefer null over a low-confidence value in every field. This path exists because
-classification failed; compounding one uncertainty with another produces data
-nobody should rely on.
+Prefer null over a low-confidence value in every field except title.
+
+This path exists because classification failed. Compounding one uncertainty with
+another produces data nobody should rely on.
 ```
 
 ### What has no prompt at all
 
 | Type | Why |
 |------|-----|
-| `sensor_*`, telemetry, metrics | Ingested with `enrich: false`. **Zero records reach a model** — routing 29M readings a day through an LLM is the failure mode the admission control exists to prevent |
-| Binary with no text layer | The binary-blob agent records type, size and checksum. There is nothing to extract |
-| Records where free text adds nothing | Handled inside `structured_record` above |
+| `sensor_*`, telemetry, metrics | Ingested with `enrich: false`. **Zero records reach a model** — routing 29M readings a day through an LLM is what admission control exists to prevent. Title and keywords come from the normalized fields, deterministically |
+| Binary with no text layer | The binary-blob agent records type, size and checksum, and builds a title from them |
+| Records where free text adds nothing | Handled inside `structured_record` |
 
-**The absence is deliberate and worth stating**, because the natural assumption is that every data
-type gets an agent. Most volume, in most deployments, should never reach one.
+**The absence is deliberate and worth stating.** The natural assumption is that every data type
+gets an agent; in most deployments most volume should never reach one — and those records still get
+a title, built from fields rather than inferred.
 
 ---
+
+## Overriding, at both levels
+
+Two independent things a tenant can change, per the precedence in
+[write-customization.md](write-customization.md) — project → org → shipped, with admin locks.
+
+### Overriding the prompt
+
+Changes *what* is extracted. The shape is unaffected, so nothing downstream needs to know.
+
+```http
+PUT /api/v1/agent-configs/{data_type}    { "prompt": "..." }
+```
+
+The shared skeleton is **prepended regardless** — a tenant prompt replaces the type-specific block,
+never the untrusted-content framing or the null rule. Otherwise the injection defence becomes
+optional, and it would be opted out of by accident within a week.
+
+### Overriding the output schema
+
+Changes the *shape*, within the tier rules above.
+
+```http
+PUT /api/v1/agent-configs/{data_type}
+{
+  "schema_extensions": {
+    "deal_stage":           { "type": "string", "enum": ["discovery","negotiation","closed"] },
+    "competitor_mentioned": { "type": "string" }
+  },
+  "standard_fields": { "sentiment": false }
+}
+```
+
+Extensions land in the namespaced `extensions` object; disabled standard fields stop being
+extracted and stop being paid for.
+
+### Three rules that survive any override
+
+1. **Core fields cannot be removed.** They can be re-described by a prompt; they cannot be dropped.
+   A citation with no title, or a list view with no title, is not a degraded experience — it is a
+   broken one.
+2. **Output is validated against the effective schema regardless of the prompt.** A prompt cannot
+   widen the contract by asking nicely; non-conforming output is a schema violation, retried, then
+   dead-lettered **with the raw output attached**.
+3. **An override is a versioning event.** It changes `generator_version`, so it must
+   [test against a sample first](workers.md#test-before-save) and it enqueues W7 reprocess — or the
+   corpus is knowingly mixed, which is a statement someone has made rather than a state someone
+   discovers.
 
 ## The classifier prompt — layer 7 only
 
@@ -311,3 +422,14 @@ sent, because classification does not improve with more and cost scales linearly
   a nearest match.
 - **FR-PROMPT-10** Types ingested with `enrich: false` MUST have no prompt and MUST NOT reach a
   model.
+- **FR-PROMPT-11** Every extraction MUST return the core envelope — `title`, `description`,
+  `summary`, `keywords`, `language` — whatever the type.
+- **FR-PROMPT-12** `title` MUST be generated when the source has none, including for records that
+  are never sent to a model.
+- **FR-PROMPT-13** Core fields MUST NOT be removable by any override.
+- **FR-PROMPT-14** Tenant-defined fields MUST live in a namespaced `extensions` object, so a future
+  platform field cannot collide with one already in use.
+- **FR-PROMPT-15** Standard fields MUST be individually disableable, so a deployment does not pay to
+  extract what it never queries.
+- **FR-PROMPT-16** A prompt override MUST replace only the type-specific block. The shared skeleton
+  MUST always be prepended.

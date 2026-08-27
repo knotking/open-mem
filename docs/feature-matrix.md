@@ -97,7 +97,9 @@ Every feature in the platform, with the phase that ships it and whether it is in
 | **Allow-list per project, fail closed** | The chain must not cross a legal or cost boundary | 2 | ◐ enforcement |
 | Typed enrichment agents | Output schema is the contract, not the prompt | 2 | ◐ one agent |
 | **Default extraction prompts** | Shipped per type — shared skeleton, nonce delimiter, null-over-guess | 2 | ◐ one agent |
-| **Base viewpoint schema** | summary · entities · claims · intents · questions · key_dates · sentiment, all with spans | 2 | ◐ |
+| **Standard output envelope** | `title` · `description` · `summary` · `keywords` · `language` on every type — core, never removable | 2 | ● |
+| Standard fields | entities · claims · intents · questions · key_dates · sentiment, with spans — individually disableable | 2 | ◐ |
+| Tenant `extensions` | Namespaced so a future platform field cannot collide with one in use | 6 | ○ |
 | Staleness impact preview | What changing this model or prompt invalidates | 6 | ○ |
 
 ## Security and privacy

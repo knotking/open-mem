@@ -181,10 +181,16 @@ Two consequences worth being explicit about:
 
 | Table | Holds |
 |-------|-------|
-| `artifacts` | Viewpoints, summaries, extractions — with `model_id`, `generator_version`, `served_by_model` |
+| `artifacts` | Viewpoints, summaries, extractions — with `model_id`, `generator_version`, `served_by_model`. **Core envelope as columns** (`title`, `description`, `summary`, `keywords[]`, `language`); standard and extension fields as `jsonb` |
 | **`artifact_sources`** | `artifact_id`, `data_id`, `span_start`, `span_end` |
 | `entities` · `entity_contributions` | An entity, and each item that contributed to it |
 | `generators` | Immutable registry — prompt, model, schema, parser, chunker, handler digest |
+
+**The core envelope is columns, not jsonb.** `title` and `keywords` are read by every list view,
+every search result and every citation, and `keywords` feeds the lexical index — all of which want
+an index and a type. The overridable fields stay `jsonb` precisely because their shape is a tenant
+decision. Where a field can change shape, it goes in `jsonb`; where every consumer depends on it,
+it is a column.
 
 **`artifact_sources` is a join table rather than an array column, and that is deliberate.** The
 requirement is that erasure can ask *"which summaries absorbed this item?"* — an indexed reverse
