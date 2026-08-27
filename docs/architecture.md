@@ -232,7 +232,7 @@ breaking migration.
 ### 4.3 Identifier scheme
 
 All identifiers are ULID-based with a type prefix, so they are time-sortable,
-globally unique and self-describing: `data_<ulid>`, `mem_<type>_<ulid>`,
+globally unique and self-describing: `data_<ulid>`, `mem_<ulid>`,
 `whk_<ulid>`, `org_<ulid>`, `proj_<ulid>`, `ent_<ulid>`.
 
 ---

@@ -115,7 +115,8 @@ and **MAY** carry their usual RFC 2119 meaning.
   | User | `user`, `factual`, `semantic` (never expire); `episodic` (temporary); `custom` (varies) | — |
   | Organizational | `organizational` | never |
 
-- **FR-MEM-2** Memory identifiers MUST follow `mem_<type>_<ulid>`.
+- **FR-MEM-2** Memory identifiers MUST follow `mem_<ulid>`. The type is a **mutable field**, not
+  part of the identifier — see [memories](memories.md).
 - **FR-MEM-3** Callers MUST be able to override the default TTL with
   `ttl_hours`, or disable expiry with `no_expiry=true`.
 - **FR-MEM-4** Expired memories MUST be cleaned up automatically.

@@ -11,28 +11,71 @@ specified rather than implied.
 > "how long does this matter?". A case is a **subject** — it answers "what is this about?". A
 > conversation expires; a patient does not.
 
-## Types are configuration, not code
+## A type is a name, a TTL, and what happens at the end
 
-The system ships a working set — `conversation`, `session`, `timeline`, `tracing`, `user`,
-`factual`, `episodic`, `semantic`, `organizational` — and organisations define their own.
+Deliberately three fields. Not a taxonomy.
 
 ```
 MemoryType
-  name              conversation | session | factual | <custom>
-  scope             global | org | project
-  category          conversation | session | user | organizational | custom
-  default_ttl       duration, or null for never
-  compressible      bool
-  compress_after    item count or token threshold
-  on_expiry         orphan_delete | keep_members | archive
-  indexes           which index types to build for members
-  locked            admin lock against lower-scope override
+  name        conversation | session | factual | <anything>
+  ttl         duration, or null for never
+  on_expiry   orphan_delete | keep_members | archive
 ```
 
-Precedence is the same as everywhere else — **project → org → shipped default** — with admin locks.
-One mechanism, not a fourth.
+Earlier drafts shipped ten types across four categories with semantics baked into each. That is a
+lot of product opinion to impose, and most of it is expressible as *a TTL and an expiry policy* —
+so the categories are gone and the set is open.
 
-Per-memory overrides remain: `ttl_hours` on an individual memory, or `no_expiry` to pin one.
+The system ships a few sensible ones and organisations add their own:
+
+| Shipped | TTL | `on_expiry` |
+|---------|-----|-------------|
+| `default` | never | — |
+| `conversation` | 1 hour | `orphan_delete` |
+| `session` | 24 hours | `archive` |
+| `tracing` | 3 days | `orphan_delete` |
+
+Everything else — `factual`, `episodic`, `semantic`, `organizational`, `procedural`, whatever a
+particular deployment needs — is a type someone defines. Precedence for definitions is the usual
+project → org → shipped, with admin locks.
+
+**`default` exists so nothing is orphaned.** An item written with no memory and no matching routing
+rule lands there. Without it, unattached data is invisible from the memory side entirely — which
+would leave a hole in exactly the view memories are for.
+
+### Type is mutable, so it is not in the identifier
+
+```
+mem_<ulid>            not  mem_<type>_<ulid>
+```
+
+If a memory can change type, an identifier encoding the type becomes a lie the moment it does. The
+type is a field.
+
+## Memories move between types
+
+This is what makes three fields enough. You do not need ten types if a memory can be re-typed.
+
+A conversation that turns out to contain durable facts is **promoted** rather than expiring. A
+working set that has gone cold is **demoted** rather than being deleted by hand.
+
+```http
+PATCH /api/v1/memories/{id}   { "type": "factual" }
+```
+
+The TTL is recomputed from the new type, which is where the care is needed:
+
+| Direction | Effect | Handling |
+|-----------|--------|----------|
+| To a longer or null TTL | Expiry is cancelled or pushed out | Safe — apply immediately |
+| **To a shorter TTL** | May be **already expired** under the new type | **Preview before applying** — say what will be deleted, as with any destructive operation |
+
+Bulk re-typing takes a selector and runs as a job, on the same run entity as bulk import and
+deletion. Same dry-run, same per-item results.
+
+Automatic promotion — rules that re-type a memory when it accumulates enough durable content — is
+a later addition. It is the same shape as crawler routing: an agent may **propose** a promotion; a
+rule or a person applies it.
 
 ## Membership is many-to-many
 
@@ -61,7 +104,8 @@ A memory carries an optional `memory_key`, unique within `(project, type)`:
 
 ```
 memory
-  memory_id    mem_<type>_<ulid>     surrogate, stable forever
+  memory_id    mem_<ulid>            surrogate, stable forever
+  type         mutable                type is a field, not part of the id
   memory_key   natural key           unique per (project, type)
 ```
 
@@ -206,10 +250,10 @@ policy, a memory browser showing members and time remaining, and the reverse loo
 
 - **FR-MEMT-1** Memory types MUST be configurable, not hardcoded, with precedence
   project → org → shipped default and admin locks.
-- **FR-MEMT-2** The system MUST ship a working default set; no configuration may be required to
-  store a memory.
-- **FR-MEMT-3** A memory type MUST declare default TTL, compressibility, expiry policy and which
-  index types to build for its members.
+- **FR-MEMT-2** The system MUST ship a small working set including a `default` type, so that an
+  item written with no memory is never orphaned and no configuration is required to store one.
+- **FR-MEMT-3** A memory type MUST be definable as a name, a TTL and an expiry policy. Richer
+  attributes MAY be added later but MUST NOT be required.
 - **FR-MEMT-4** Membership MUST be many-to-many, and MUST record whether it was explicit, routed or
   agent-assigned.
 - **FR-MEMT-5** Expiry MUST NOT delete a data item that another memory still holds. The default
@@ -231,3 +275,7 @@ policy, a memory browser showing members and time remaining, and the reverse loo
 - **FR-MEMT-11** Memories MUST support typed relationships to other memories and to cases.
 - **FR-MEMT-12** Correlation MUST record whether it was declared or derived, and **derived
   correlation MUST NOT drive access or lifecycle decisions**.
+- **FR-MEMT-13** A memory's type MUST be mutable, and the identifier MUST NOT encode it.
+- **FR-MEMT-14** Re-typing MUST recompute TTL. Moving to a shorter TTL MUST preview what would be
+  deleted before applying.
+- **FR-MEMT-15** Bulk re-typing MUST run as a job with dry-run and per-item results.
