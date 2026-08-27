@@ -50,6 +50,77 @@ memory_members
 because the caller said so" and "because a rule put it there" are different claims, and only one of
 them should be silently re-evaluated when the rule changes.
 
+## Memories are unique, and memories correlate
+
+Two properties that depend on each other: **you cannot reliably correlate to something that
+duplicates.**
+
+### Uniqueness — a natural key
+
+A memory carries an optional `memory_key`, unique within `(project, type)`:
+
+```
+memory
+  memory_id    mem_<type>_<ulid>     surrogate, stable forever
+  memory_key   natural key           unique per (project, type)
+```
+
+Writes **upsert** on it. Messages sharing a thread id land in the same `conversation` memory on
+every write, from every producer, forever — rather than accumulating a new memory per batch,
+per restart, or per client that forgot it had one.
+
+Same pattern as `external_id` on data items and cases. Third use, one idea: **a caller-supplied
+natural key, an internal surrogate, and upsert between them.**
+
+Without it, routing creates a new memory whenever the router restarts, correlation points at
+whichever duplicate happened to be current, and TTL expires a fragment of a conversation while the
+rest lives on.
+
+### Correlation — memories form a graph
+
+Memories are not isolated containers. A conversation belongs to a user. A session is part of a
+longer timeline. A summary is derived from the conversations it compressed. A support thread is
+*about* a case.
+
+```
+memory_links
+  from_memory_id, to_memory_id
+  relation      part_of | derived_from | about | continues | supersedes
+  created_by    explicit | routed | agent
+  confidence    for derived links
+```
+
+| Relation | Example |
+|----------|---------|
+| `part_of` | A session inside a timeline |
+| `derived_from` | A compressed summary and the conversations it replaced |
+| `about` | A conversation and the [case](cases.md) it concerns |
+| `continues` | Today's session resuming yesterday's |
+| `supersedes` | A corrected memory replacing an earlier one |
+
+### Declared correlation and derived correlation are different claims
+
+The same distinction that governs [case membership](cases.md), for the same reason:
+
+| | **Declared** | **Derived** |
+|---|---|---|
+| Source | A caller or a routing rule said so | Shared members, shared entities, temporal proximity |
+| Authority | Authoritative | **Suggestive** |
+| Use | Traversal, expiry policy, access decisions | Ranking, "related to this", discovery |
+| Reversal | Explicit unlink | Recomputed whenever the signal changes |
+
+**Derived correlation must never drive an access or lifecycle decision.** Two memories sharing
+eleven data items are probably related; that is a good reason to surface one while reading the
+other, and a bad reason to extend one's TTL because the other was touched.
+
+### What correlation unlocks
+
+- **Traversal at retrieval** — answering from a conversation and the case it is about, in one query
+- **Compression lineage** — a summary that knows what it replaced, which is what makes the
+  originals recoverable and the erasure cascade possible
+- **Expiry that respects structure** — a session `part_of` a live timeline is not silently orphaned
+- **"What else is like this"** — derived correlation as a retrieval signal rather than a link
+
 ## How data gets mapped at write time
 
 Three ways, in precedence order:
@@ -150,3 +221,13 @@ policy, a memory browser showing members and time remaining, and the reverse loo
 - **FR-MEMT-8** A write response MUST report which memories the item was mapped into.
 - **FR-MEMT-9** Routing rules MUST be bounded, so an unbounded key space cannot create unbounded
   memories.
+- **FR-MEMT-10** A memory MUST support an optional natural key, unique within (project, type), and
+  writes MUST upsert on it.
+- **FR-MEMT-11** Memories MUST support typed relationships to other memories and to cases.
+- **FR-MEMT-12** Correlation MUST record whether it was declared or derived, and **derived
+  correlation MUST NOT drive access or lifecycle decisions**.
+- **FR-MEMT-10** A memory MUST support an optional natural key, unique within (project, type), and
+  writes MUST upsert on it.
+- **FR-MEMT-11** Memories MUST support typed relationships to other memories and to cases.
+- **FR-MEMT-12** Correlation MUST record whether it was declared or derived, and **derived
+  correlation MUST NOT drive access or lifecycle decisions**.
