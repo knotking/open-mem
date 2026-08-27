@@ -10,13 +10,16 @@ therefore support different subsets of the use-case families.
 | `record store` | Postgres in compose | Supabase in-cluster | Cloud SQL PG16 + pgvector |
 | `data access` | Kong + PostgREST | Kong + PostgREST | Kong + PostgREST on Cloud Run |
 | `blob store` | filesystem | GCS | GCS |
-| `durable queue` | NATS in compose | NATS in-cluster | **Pub/Sub** |
+| `durable queue` | **in-process** — one instance, nothing to distribute | NATS in-cluster | **Pub/Sub** |
 | `inference` | **Ollama local** — free | Ollama pods, tiered | **Ollama Cloud + Gemini**, no GPU pool |
 | `temporal graph` | off | Neo4j optional | **deferred** |
 | `credential broker` | Nango in compose | Nango in-cluster | Nango on Cloud Run |
 | `identity` | **local password** | GoTrue | **Firebase Auth** |
 | `conversational agent` | optional | DigiMe in cluster | **cut** |
-| `crawl scheduling` | cron container | cluster CronJob | managed scheduler |
+| `crawl scheduling` | in-process ticker | cluster CronJob + advisory lock | managed scheduler → HTTP |
+| `crawl execution` | background task | Deployment | **Cloud Run Jobs** — a 3h backfill is not a request |
+| `rate-limit store` | in-process | Redis pod | Memorystore |
+| `secrets` | `.env` | k8s Secrets | Secret Manager |
 | `scaling` | n/a | KEDA | Cloud Run, `min-instances ≥ 1` |
 
 ## The three
