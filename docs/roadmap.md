@@ -90,7 +90,8 @@ producers. Four gaps close that contract — all small, all Phase 1 or 2:
 
 | Gap | Phase |
 |-----|-------|
-| **`POST /data/batch`** with per-item results | 1 — bulk ETL is unusable without it |
+| **`POST /data/batch`** with per-item results, `207`, admission control | 1 — bulk ETL is unusable without it |
+| Bulk import as a job, reusing the crawl run entity | 4b — same machinery, do not build twice |
 | Idempotency key on writes | 1 — retries currently duplicate |
 | Converge the two error formats onto the structured envelope | 1 |
 | Rate-limit and quota headers so clients self-throttle | 2 |
