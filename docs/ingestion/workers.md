@@ -192,6 +192,62 @@ cannot read. That is legitimate — it is org policy — but it means prompt ove
 treatment as any other privileged configuration: authored by admins, audited on change, and subject
 to length and cost caps so a pathological prompt cannot quietly multiply the corpus-wide bill.
 
+### Defaults ship with the product — and that makes them versioned too
+
+The system arrives with a working prompt for every data type. Nobody has to configure anything to
+get useful extraction; overriding is opting *out* of a default, not filling in a blank.
+
+Which raises something easy to miss: **when we ship an improved default prompt, that is a
+`generator_version` change for every tenant who never overrode it.**
+
+A product update therefore marks artifacts stale across tenants who made no decision at all. The
+handling:
+
+- New defaults apply to **new** data immediately
+- Existing artifacts are marked stale but **never auto-rebuilt** — nobody's bill moves because we
+  shipped a release
+- Affected tenants see a notice with the impact estimate and choose
+- Tenants who have overridden are unaffected, because their fingerprint does not include our
+  default
+
+The alternative — silently rebuilding on release — spends other people's money on a change they
+did not ask for. The other alternative, doing nothing, leaves a corpus permanently split across
+prompt generations with nothing recording the split.
+
+### API
+
+Everything below is available at the same granularity in the UI. The UI is a client of these
+endpoints, never a privileged path.
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /api/v1/agents` | List data types and agents, each with override state and lock state |
+| `GET /api/v1/agents/{id}/config` | **Effective** config, plus where each field came from — `default`, `org` or `project` — and whether it is locked |
+| `PUT /api/v1/agents/{id}/config?scope=org\|project` | Set an override |
+| `DELETE /api/v1/agents/{id}/config?scope=…` | Revert to inherited |
+| `POST /api/v1/agents/{id}/config/test` | **Run a candidate override against sample data** and return the output — before it can be saved |
+| `POST /api/v1/agents/{id}/config/impact` | Staleness estimate — artifacts affected, rebuild duration and cost |
+| `PUT /api/v1/agents/{id}/config/lock` | Admin lock against lower-scope override |
+
+`GET .../config` returning **provenance per field** is the one that carries the UI. "This prompt is
+inherited from org, this schema is a project override, this tier is the product default, and the
+model tier is locked" is the question someone actually has, and it cannot be reconstructed from
+three separate reads.
+
+### UI
+
+| Surface | What it does |
+|---------|-------------|
+| **Agent list** | Every data type, with its effective source, override badge and lock state at a glance |
+| **Editor** | **Side-by-side default vs override** — you cannot sensibly edit a prompt without seeing what you are changing from |
+| **Test panel** | Pick a sample item of that type, run the candidate, see the output and whether it validates |
+| **Impact preview** | Shown before save, not after — artifacts affected, rebuild time, cost |
+| **Revert** | One action back to inherited, at any scope |
+| **Lock** | Admin-only; visibly disables the editor below it rather than failing on save |
+
+The lock behaviour matters: a member who edits a locked prompt and only discovers it at save time
+has wasted their work. Show the lock in the editor.
+
 ### Requirements
 
 - **FR-PROMPT-1** Each data type MUST have a standard extraction prompt, overridable per project
@@ -207,6 +263,14 @@ to length and cost caps so a pathological prompt cannot quietly multiply the cor
 - **FR-PROMPT-7** Ingested content MUST be treated as untrusted: delimited, never a source of
   instructions, and never able to redirect tool use.
 - **FR-PROMPT-8** Override changes MUST be audited, and MUST be subject to length and cost caps.
+- **FR-PROMPT-9** The system MUST ship a working default prompt for every data type; configuration
+  MUST NOT be required to obtain useful extraction.
+- **FR-PROMPT-10** A change to a shipped default MUST apply to new data, MUST mark existing
+  artifacts stale, and MUST NOT trigger an automatic rebuild.
+- **FR-PROMPT-11** Reading an agent's configuration MUST return the **effective** value together
+  with the scope each field was inherited from and whether it is locked.
+- **FR-PROMPT-12** Every configuration operation MUST be available through the API at the same
+  granularity as the UI.
 
 ## Failure policy diverges by class
 

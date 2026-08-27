@@ -70,6 +70,7 @@ because the credential does not carry the scope.
 | `POST /uploads`, `POST /uploads/{id}/complete` | Presigned direct-to-storage flow |
 | `CRUD /crawlers`, `POST /crawlers/{id}/runs`, `POST /crawlers/{id}/dry-run`, `PATCH /runs/{id}` | Crawler configs and run control |
 | **`POST /write`** | The one write endpoint. `items[]` always, `207` always — batch is not a separate verb, just the same verb with more items |
+| **`/agents/{id}/config`** — get effective + provenance, set, revert, **test**, **impact**, lock | Extraction prompts, schemas, tiers and flags per data type — defaults shipped, overridable per org and project |
 | **`PUT /cases`** · `/cases/{id}/members` · `/timeline` · `/retrieve` · `/similar` | Subject correlation — patient timelines, legal matters, asset histories |
 | `POST /retrieve` | Composable retrieval; the five modes become presets over it |
 | `POST /reprocess` | W7 — rebuild derived artifacts by selector |
