@@ -77,7 +77,7 @@ can never be ahead of the API**. That sequences it automatically.
 
 | Slice | What the UI gains | Why then |
 |-------|------------------|----------|
-| **1 · Spine** | A **thin console**: write something, search, inspect a result | You cannot judge retrieval quality from a JSON body. One page, not a product |
+| **1 · Spine** | The **sandbox**, in its first form: upload a dataset, watch the readiness staircase, search, and **inspect the retrieval trace**. No chat yet | You cannot judge retrieval quality from a JSON body — and if retrieval is wrong, chat cannot be right, so a chat layer would let you ship without noticing. See [ui-sandbox.md](ui-sandbox.md) |
 | **2 · Depth** | Enrichment inspector — viewpoint, entities, classification layer reached; **prompt override editor with test-before-save and staleness preview** | You cannot tune a prompt without seeing what the last one produced, or what changing it invalidates |
 | **3 · Connectors** | **Connect flows**, connection health, reauthorise | **On the critical path** — see below |
 | **4 · Uploads** | Drag-and-drop, progress, per-item results | Uploads are inherently a browser feature |

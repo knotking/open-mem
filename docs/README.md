@@ -30,6 +30,7 @@ is the same material as one continuous page.
 | Document | Read it for |
 |----------|-------------|
 | [use-cases.md](use-cases.md) | The five families in scope, how their conflicts resolve, and build order |
+| [ui-sandbox.md](ui-sandbox.md) | Upload a dataset, watch it enrich, chat against it — and see what the chat actually retrieved |
 | [use-cases-catalog.md](use-cases-catalog.md) | All twelve published use cases with their implementation paths and honest status |
 | [design-principles.md](design-principles.md) | The central bet, cross-cutting invariants, capability ownership |
 | [memories.md](memories.md) | Typed lifecycle containers — configurable types, TTL, expiry policy, data mapping |
