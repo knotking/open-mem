@@ -25,6 +25,14 @@ _SOURCE_TYPE_MAP = {
     "chat": "chat_message",
     "html": "document_html",
     "csv": "structured_csv",
+    "calendar": "calendar",
+    "contact": "contact",
+    "audio": "audio",
+    "video": "video",
+    "transcript": "transcript",
+    "log": "log",
+    "spreadsheet": "spreadsheet",
+    "presentation": "presentation",
 }
 
 _MIME_MAP = {
@@ -36,6 +44,77 @@ _MIME_MAP = {
     "image/jpeg": "image",
     "image/png": "image",
     "image/heic": "image",
+    "image/gif": "image",
+    "image/webp": "image",
+    "image/tiff": "image",
+    # Office. Distinct types rather than one "document", because a spreadsheet
+    # and a slide deck raise genuinely different questions -- and routing them
+    # all to the document prompt is what made a table get narrated as prose.
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+        "document_office",
+    "application/vnd.oasis.opendocument.text": "document_office",
+    "application/rtf": "document_office",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "spreadsheet",
+    "application/vnd.oasis.opendocument.spreadsheet": "spreadsheet",
+    "text/tab-separated-values": "spreadsheet",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation":
+        "presentation",
+    "text/calendar": "calendar",
+    "text/vcard": "contact",
+    "text/markdown": "document_markup",
+    "application/xml": "structured_json",
+    "message/rfc822": "message_email",
+    # Media. These had no mapping at all, so an mp3 classified as binary_blob
+    # and was extracted with the generic prompt after being transcribed.
+    "audio/mpeg": "audio",
+    "audio/mp4": "audio",
+    "audio/wav": "audio",
+    "audio/x-wav": "audio",
+    "audio/ogg": "audio",
+    "audio/flac": "audio",
+    "audio/aac": "audio",
+    "audio/opus": "audio",
+    "audio/amr": "audio",
+    "video/mp4": "video",
+    "video/quicktime": "video",
+    "video/webm": "video",
+    "video/x-matroska": "video",
+    "application/zip": "archive",
+    "application/x-tar": "archive",
+    "application/gzip": "archive",
+}
+
+# Extension is a weaker signal than sniffed bytes and is only consulted when
+# sniffing produced nothing -- but it is the only signal that distinguishes a
+# Terraform file from a shell script, since both are text/plain on the wire.
+_EXTENSION_MAP = {
+    "pdf": "document_pdf", "html": "document_html", "htm": "document_html",
+    "txt": "document_text", "rst": "document_markup", "tex": "document_markup",
+    "md": "document_markup",
+    "docx": "document_office", "docm": "document_office", "dotm": "document_office",
+    "odt": "document_office", "rtf": "document_office",
+    "xlsx": "spreadsheet", "xlsm": "spreadsheet", "xlam": "spreadsheet",
+    "ods": "spreadsheet", "csv": "structured_csv", "tsv": "spreadsheet",
+    "pptx": "presentation", "pptm": "presentation",
+    "ics": "calendar", "ical": "calendar",
+    "vcf": "contact", "vcard": "contact",
+    "eml": "message_email", "mbox": "message_email",
+    "json": "structured_json", "jsonl": "structured_json",
+    "ndjson": "structured_json", "xml": "structured_json",
+    "gpx": "geo", "kml": "geo", "geojson": "geo",
+    "log": "log",
+    "yaml": "config", "yml": "config", "toml": "config", "ini": "config",
+    "env": "config", "tf": "config",
+    "py": "code", "js": "code", "ts": "code", "tsx": "code", "go": "code",
+    "rb": "code", "rs": "code", "java": "code", "kt": "code", "swift": "code",
+    "c": "code", "h": "code", "cpp": "code", "cs": "code", "php": "code",
+    "scala": "code", "sh": "code", "sql": "code", "css": "code",
+    "zip": "archive", "tar": "archive", "gz": "archive", "tgz": "archive",
+    "mp3": "audio", "wav": "audio", "m4a": "audio", "ogg": "audio",
+    "flac": "audio", "aac": "audio", "opus": "audio", "amr": "audio",
+    "mp4": "video", "mov": "video", "webm": "video", "mkv": "video",
+    "jpg": "image", "jpeg": "image", "png": "image", "gif": "image",
+    "webp": "image", "heic": "image", "tiff": "image", "svg": "image",
 }
 
 
@@ -113,6 +192,6 @@ def classify(
         return _MIME_MAP[mime_type], 5
     if external_id and "." in external_id:
         ext = external_id.rsplit(".", 1)[-1].lower()
-        if ext in ("csv", "json", "pdf", "html"):
-            return _SOURCE_TYPE_MAP.get(ext, f"structured_{ext}"), 6
+        if ext in _EXTENSION_MAP:
+            return _EXTENSION_MAP[ext], 6
     return "binary_blob", 0

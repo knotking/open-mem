@@ -103,6 +103,31 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   `roles/monitoring.metricWriter`.
 - **New dependencies**: `opentelemetry-exporter-gcp-trace`,
   `opentelemetry-exporter-gcp-monitoring`.
+- **Model routing is an ordered chain, not a single engine.** A provider that
+  rate-limits or errors falls through to the next; the chain always ends at a
+  local engine that needs no network, so an outage becomes a worse answer
+  rather than no answer. This fixes an observed failure: chat returned `429`
+  for an hour on free-tier quota while a working local answerer sat idle.
+- Only **availability** failures fall through. A `429`, a `5xx` or a timeout
+  means the model never answered. A schema or parse failure means it answered
+  badly — a prompt problem a weaker model is unlikely to fix — so those stay
+  terminal and reach the DLQ instead of quietly costing a second call.
+- A circuit breaker stops hammering a dead engine, but is never applied to the
+  last step in a chain: an open breaker on the only remaining engine would turn
+  the protection into the outage.
+- Answers and artifacts now carry `fallback_depth` and `served_by_engine`, and
+  the console shows a chip when something other than the primary answered.
+  Running permanently on a fallback is otherwise invisible — the answers keep
+  arriving, just worse than the ones being paid for. The `generator_version`
+  follows the engine that actually answered, so a fallback artifact is never
+  attributed to the primary's fingerprint.
+- New metrics `inference.fallback_depth` and `inference.attempts` (by engine and
+  outcome: served, unavailable, rejected, skipped).
+- **Manual scheduler tick**: `POST /api/v1/crawl-tick` and a **Run due crawlers**
+  button. Scoped to the caller's organization — the advisory lock stops two
+  passes at once but says nothing about whose crawlers a pass picks up.
+- The chat panel is now called **Chat** rather than Ask, with example questions
+  on the empty state. It was there before and hard to find.
 - `.claude/skills/changelog` and this file.
 
 ### Changed
