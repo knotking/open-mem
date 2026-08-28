@@ -165,7 +165,38 @@ class Citation(BaseModel):
     state: str
 
 
+class Excluded(BaseModel):
+    """Why a record the caller *can* see did not make the answer.
+
+    'The answer is missing something I know is in the data' has several
+    completely different causes with different fixes. Naming which one applies
+    turns an unfalsifiable impression into a diagnosis.
+    """
+
+    data_id: str
+    reason: Literal["threshold", "not_yet_enriched"]
+    score: float | None = None
+    state: str | None = None
+
+
+class Corpus(BaseModel):
+    """What the question was actually answered over (FR-SBX-7)."""
+
+    total: int
+    stored: int
+    searchable: int
+    enriched: int
+
+
 class RetrieveResponse(BaseModel):
     query_id: str
     results: list[Citation]
     model_id: str
+    generator_version: str | None = None
+    corpus: Corpus | None = None
+    excluded: list[Excluded] = Field(default_factory=list)
+    # ACL exclusions are deliberately absent and cannot be added: reporting
+    # "3 records were hidden from you" discloses their existence, which is the
+    # thing the ACL is for. The predicate runs inside the query, so the count
+    # does not exist to be reported.
+    acl_exclusions_reported: bool = False

@@ -20,7 +20,14 @@ from .crypto import Envelope
 from .db import create_pool, migrate
 from .inference import build_embedder
 from .queue import InProcessQueue
-from .retrieval import NotFound, get_artifacts, get_item, retrieve, stale_artifacts
+from .retrieval import (
+    NotFound,
+    get_artifacts,
+    get_item,
+    retrieve,
+    staircase,
+    stale_artifacts,
+)
 from .extraction import build_extractor
 from .workers import EmbedWorker, EnrichWorker, verify_index_dimension
 from .write import EMBED_TOPIC, AdmissionError, write_items
@@ -163,6 +170,16 @@ async def read_artifacts(
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
 
 
+@app.get("/api/v1/projects/{project_id}/staircase")
+async def read_staircase(
+    request: Request, project_id: str, actor: Principal = Depends(principal)
+) -> dict:
+    try:
+        return await staircase(request.app.state.pool, actor, project_id)
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
 @app.get("/api/v1/artifacts/stale")
 async def read_stale(
     request: Request, actor: Principal = Depends(principal), limit: int = 100
@@ -182,7 +199,11 @@ async def retrieve_endpoint(
 ) -> RetrieveResponse:
     try:
         return await retrieve(
-            request.app.state.pool, request.app.state.embedder, actor, body
+            request.app.state.pool,
+            request.app.state.embedder,
+            actor,
+            body,
+            embed_generator=request.app.state.current_generators["embedding"],
         )
     except AuthError as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc

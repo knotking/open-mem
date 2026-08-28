@@ -17,7 +17,7 @@ import asyncpg
 from .acl import visibility_params, visibility_sql
 from .audit import record_access, record_access_many
 from .auth import DATA_READ, Principal
-from .contracts import Citation, RetrieveRequest, RetrieveResponse
+from .contracts import Citation, Corpus, Excluded, RetrieveRequest, RetrieveResponse
 from .db import vector_literal
 from .ids import new_id
 from .inference import EmbeddingEngine
@@ -69,6 +69,7 @@ async def retrieve(
     embedder: EmbeddingEngine,
     principal: Principal,
     request: RetrieveRequest,
+    embed_generator: str | None = None,
 ) -> RetrieveResponse:
     principal.require(DATA_READ)
     org_id, user_id, principals = visibility_params(principal)
@@ -150,7 +151,7 @@ async def retrieve(
     else:
         fused = "MAX(score)"
 
-    limit_p = bind(request.limit)
+    limit_p = bind(request.limit * 2 + 5)
     sql = f"""
         WITH {",".join(arms)},
         fused AS ({union})
@@ -170,7 +171,7 @@ async def retrieve(
     rows = await pool.fetch(sql, *params)
 
     query_id = new_id("qry")
-    citations = [
+    all_hits = [
         Citation(
             data_id=r["data_id"],
             chunk_id=r["chunk_id"],
@@ -183,6 +184,46 @@ async def retrieve(
         )
         for r in rows
     ]
+    # Everything above the limit was retrieved and then cut. That is a
+    # threshold exclusion, and it is the difference between "retrieval did not
+    # find it" and "retrieval found it and ranked it too low".
+    citations = all_hits[: request.limit]
+    kept = {c.data_id for c in citations}
+    excluded = [
+        Excluded(data_id=h.data_id, reason="threshold", score=h.score, state=h.state)
+        for h in all_hits[request.limit :]
+        if h.data_id not in kept
+    ]
+
+    # Records the caller can see that could not have matched, because they are
+    # not searchable yet. This is the cause people most often mistake for bad
+    # retrieval.
+    predicate_c = visibility_sql("d", 2, 3, 4)
+    not_ready = await pool.fetch(
+        f"""
+        SELECT d.data_id, d.state FROM data_items d
+        WHERE d.project_id = $1 AND {predicate_c} AND d.state = 'stored'
+        ORDER BY d.data_id LIMIT 25
+        """,
+        request.filter.project_id, org_id, user_id, principals,
+    )
+    excluded.extend(
+        Excluded(data_id=r["data_id"], reason="not_yet_enriched", state=r["state"])
+        for r in not_ready
+    )
+
+    counts = await pool.fetchrow(
+        f"""
+        SELECT count(*) AS total,
+               count(*) FILTER (WHERE d.state = 'stored') AS stored,
+               count(*) FILTER (WHERE d.state = 'searchable') AS searchable,
+               count(*) FILTER (WHERE d.state = 'enriched') AS enriched
+        FROM data_items d
+        WHERE d.project_id = $1 AND {predicate_c}
+        """,
+        request.filter.project_id, org_id, user_id, principals,
+    )
+    corpus = Corpus(**dict(counts))
 
     async with pool.acquire() as conn, conn.transaction():
         # The question is stored even under the metadata-only default: a query
@@ -214,6 +255,21 @@ async def retrieve(
                 rank,
                 citation.score,
             )
+        # FR-SCH-13: the excluded are recorded too, with the reason. This is
+        # what makes the trace reconstructable after the fact rather than only
+        # visible in the moment.
+        for offset, item in enumerate(excluded, start=len(seen) + 1):
+            if item.data_id in seen:
+                continue
+            seen.add(item.data_id)
+            await conn.execute(
+                """
+                INSERT INTO query_sources (query_id, data_id, rank, score, used, excluded_reason)
+                VALUES ($1, $2, $3, $4, false, $5)
+                ON CONFLICT DO NOTHING
+                """,
+                query_id, item.data_id, offset, item.score, item.reason,
+            )
         await record_access_many(
             conn,
             principal,
@@ -223,7 +279,14 @@ async def retrieve(
             query_id=query_id,
         )
 
-    return RetrieveResponse(query_id=query_id, results=citations, model_id=embedder.model_id)
+    return RetrieveResponse(
+        query_id=query_id,
+        results=citations,
+        model_id=embedder.model_id,
+        generator_version=embed_generator,
+        corpus=corpus,
+        excluded=excluded,
+    )
 
 
 async def get_artifacts(
@@ -292,3 +355,31 @@ async def stale_artifacts(
         limit,
     )
     return [dict(r) for r in rows]
+
+
+async def staircase(
+    pool: asyncpg.Pool, principal: Principal, project_id: str
+) -> dict:
+    """Counts per readiness state (FR-SBX-6).
+
+    Someone uploads five hundred records, immediately asks a question, gets a
+    thin answer and concludes the product does not work. They are wrong for a
+    reason this endpoint can show them.
+    """
+    principal.require(DATA_READ)
+    org_id, user_id, principals = visibility_params(principal)
+    predicate = visibility_sql("d", 2, 3, 4)
+    row = await pool.fetchrow(
+        f"""
+        SELECT count(*) AS total,
+               count(*) FILTER (WHERE d.state = 'stored') AS stored,
+               count(*) FILTER (WHERE d.state = 'searchable') AS searchable,
+               count(*) FILTER (WHERE d.state = 'enriched') AS enriched,
+               count(*) FILTER (WHERE d.pending_ref IS NOT NULL) AS awaiting_fetch,
+               max(d.updated_at) AS last_change
+        FROM data_items d
+        WHERE d.project_id = $1 AND {predicate}
+        """,
+        project_id, org_id, user_id, principals,
+    )
+    return dict(row)
