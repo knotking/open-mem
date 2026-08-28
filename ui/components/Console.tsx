@@ -689,7 +689,16 @@ type Crawler = {
   emitted: number | null;
   skipped: number | null;
   failed: number | null;
+  seconds_since_last_success: number | null;
 };
+
+function staleness(seconds: number | null): { label: string; warn: boolean } | null {
+  if (seconds === null) return null;
+  const hours = seconds / 3600;
+  if (hours < 1) return { label: `fresh — succeeded ${Math.round(seconds / 60)}m ago`, warn: false };
+  if (hours < 48) return { label: `succeeded ${Math.round(hours)}h ago`, warn: false };
+  return { label: `stale — last success ${Math.round(hours / 24)}d ago`, warn: true };
+}
 
 type RunResult = {
   run_id: string;
@@ -879,6 +888,17 @@ function CrawlersSection({ projectId }: { projectId: string }) {
                 {crawler.watermark && (
                   <span className="chip">since {crawler.watermark}</span>
                 )}
+                {(() => {
+                  const fresh = staleness(crawler.seconds_since_last_success);
+                  if (!fresh) {
+                    return crawler.enabled ? (
+                      <span className="chip warnchip">never succeeded</span>
+                    ) : null;
+                  }
+                  return (
+                    <span className={fresh.warn ? "chip warnchip" : "chip"}>{fresh.label}</span>
+                  );
+                })()}
               </div>
               <div className="text">{crawler.name}</div>
               <div className="row" style={{ marginTop: 8 }}>

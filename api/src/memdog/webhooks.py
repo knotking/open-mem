@@ -37,6 +37,7 @@ from typing import Any
 import asyncpg
 
 from .audit import record_audit
+from .telemetry import record, span
 from . import providers as provider_registry
 from .contracts import Inline, MemoryRef, WriteItem, WriteOptions, WriteRequest
 from .ids import new_id
@@ -287,6 +288,33 @@ async def receive(
     query: dict | None = None,
 ) -> Delivery:
     """The whole inbound path: authenticate, dedupe, map, write."""
+    with span("webhook.receive", producer_id=producer_id, bytes=len(raw_body)) as current:
+        delivery = await _receive(
+            pool, queue, blobs, settings, envelope, producer_id=producer_id,
+            raw_body=raw_body, headers=headers, url=url, query=query,
+        )
+        # Set after the fact rather than guessed up front: the outcome is the
+        # attribute worth filtering traces on, and it is not known until here.
+        current.set_attribute("status", delivery.status)
+        current.set_attribute("items", delivery.items)
+        if delivery.reason:
+            current.set_attribute("reason", delivery.reason)
+        return delivery
+
+
+async def _receive(
+    pool: asyncpg.Pool,
+    queue,
+    blobs,
+    settings,
+    envelope,
+    *,
+    producer_id: str,
+    raw_body: bytes,
+    headers: dict[str, str],
+    url: str = "",
+    query: dict | None = None,
+) -> Delivery:
     from .auth import Principal
     from .write import AdmissionError, write_items
 
@@ -321,10 +349,21 @@ async def receive(
                                    len(raw_body), "subscription validation")
             return Delivery("accepted", 0, [], "subscription validation", handshake=answer)
 
-    signature_verified, key_id = await authenticate(
-        pool, envelope, producer, raw_body=raw_body, headers=headers,
-        url=url, query=query,
-    )
+    try:
+        signature_verified, key_id = await authenticate(
+            pool, envelope, producer, raw_body=raw_body, headers=headers,
+            url=url, query=query,
+        )
+    except WebhookError as exc:
+        # Counted here because authentication fails *before* a delivery row
+        # exists, so these never reach the recorder every other path funnels
+        # through. A spike in signature failures is the clearest signal of
+        # either a rotated secret or someone probing the endpoint, and it
+        # would otherwise be invisible in every metric.
+        record("inbound_rejected", 1,
+               provider=(dict(producer["inbound_mapping"]) or {}).get("provider") or "generic",
+               reason="auth", status=exc.status)
+        raise
 
     mapping = dict(producer["inbound_mapping"])
     provider = provider_registry.get(mapping.get("provider"))
@@ -458,6 +497,18 @@ async def _record_delivery(
     unique: bool = True,
 ) -> None:
     from .auth import Principal
+
+    provider = (dict(producer["inbound_mapping"]) or {}).get("provider") or "generic"
+    record("inbound_deliveries", 1, provider=provider, status=status,
+           signature_verified=signature_verified)
+    if status == "dropped":
+        # Its own counter, not a status label on an error metric. A disabled
+        # webhook answers 200 and drops, so the error rate is correctly zero
+        # while data goes nowhere -- the thing to alert on does not look like
+        # a failure.
+        record("ingest_dropped", 1, provider=provider, reason=reason or "unknown")
+    elif status == "rejected":
+        record("inbound_rejected", 1, provider=provider, reason=reason or "unknown")
 
     async with pool.acquire() as conn, conn.transaction():
         await conn.execute(

@@ -686,6 +686,59 @@ async def test_enrichment_is_off_unless_the_crawler_asks_for_it(
     assert enriched > 0
 
 
+async def test_a_run_emits_the_signals_that_detect_a_dead_crawler(
+    pool, queue, blobs, settings, tenant, principal_for, server, monkeypatch
+):
+    """A crawler that finds nothing fails at nothing, so an error rate stays
+    flat while the data goes stale. `crawl.discovered` against its own baseline
+    is the only thing that catches it -- which makes the instrumentation itself
+    worth a test, because nothing else would notice if it stopped firing.
+    """
+    import memdog.crawling as crawling_mod
+
+    emitted: list[tuple] = []
+    monkeypatch.setattr(crawling_mod, "record",
+                        lambda metric, value, **labels: emitted.append((metric, value)))
+
+    actor = await principal_for(tenant.api_key)
+    created = await create_crawler(
+        pool, actor, project_id=tenant.project_id, config=http_config(server),
+        schedule={"type": "interval", "every_seconds": 3600},
+    )
+    worker = await _worker(pool, queue, blobs, settings)
+    await worker.execute((await start_run(pool, actor, created["crawler_id"],
+                                          mode="dry"))["run_id"])
+
+    names = {m for m, _ in emitted}
+    assert {"crawl_runs", "crawl_discovered", "crawl_emitted", "crawl_dedupe_hits",
+            "crawl_duration"} <= names
+    assert dict((m, v) for m, v in emitted)["crawl_discovered"] == 3
+    # Duration against the schedule, because whether a run is too slow is a
+    # question about its interval. Above 1.0 it overlaps forever.
+    assert "crawl_duration_vs_interval" in names
+
+
+async def test_freshness_measures_the_last_success_not_the_last_attempt(
+    pool, queue, blobs, settings, tenant, principal_for, server
+):
+    """A crawler failing every tick has a recent run and stale data."""
+    actor = await principal_for(tenant.api_key)
+    created = await create_crawler(pool, actor, project_id=tenant.project_id,
+                                   config=http_config(server))
+    worker = await _worker(pool, queue, blobs, settings)
+    await worker.execute((await start_run(pool, actor, created["crawler_id"],
+                                          mode="dry"))["run_id"])
+    await set_enabled(pool, actor, created["crawler_id"], True)
+
+    # A dry run is not a success for freshness purposes -- it wrote nothing.
+    listed = await list_crawlers(pool, actor, tenant.project_id)
+    assert listed[0]["seconds_since_last_success"] is None
+
+    await worker.execute((await start_run(pool, actor, created["crawler_id"]))["run_id"])
+    listed = await list_crawlers(pool, actor, tenant.project_id)
+    assert listed[0]["seconds_since_last_success"] is not None
+
+
 async def test_the_run_history_is_listed_with_its_counters(
     pool, queue, blobs, settings, tenant, principal_for, server
 ):

@@ -35,6 +35,33 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   handshake, the retry id and the field mapping as data rather than as branches.
 - Provider presets in the inbound console, so configuring an endpoint is picking
   a name rather than reconstructing a signature scheme by hand.
+- **Crawlers — the ingestion path for data that never announces itself.** A
+  backfill and a poll are two schedules of the same thing, so there is one
+  worker with three discovery strategies: `http` (a templated REST request with
+  declared pagination, which covers enumerate/query/search for most APIs),
+  `feed` (RSS, Atom, sitemap) and `traverse` (bounded link following). The
+  provider-specific strategies in the design — a Drive folder, a Salesforce
+  object — need OAuth connections that do not exist yet.
+- A crawler discovers and emits; it does not fetch and does not enrich. Items
+  leave through `POST /api/v1/write` exactly as an external producer's would, so
+  nothing downstream can tell a crawled record from a webhook-delivered one, and
+  a managed crawler holds no powers an external one lacks.
+- **A dry run is mandatory before a crawler can be enabled**, and editing scope
+  or strategy invalidates it. It walks the same code a live run does and stops
+  short of the write, so its counts cannot drift from what would actually
+  happen. Enabling without one returns `409`.
+- Configs are declarative. Expressions are JMESPath — no side effects, no I/O,
+  no loops — so a tenant-supplied transform cannot hang a worker or reach the
+  network. Invalid expressions are refused at save time with `422`, not at 3am
+  inside a six-hour run.
+- Endpoints: CRUD on `/api/v1/crawlers`, `dry-run`, `run`, `runs`, and
+  `/api/v1/crawl-runs/{run_id}` for detail and pause/resume/cancel. Cancelling
+  keeps the checkpoint, so cancelling a long job is not an irreversible choice.
+- `python -m memdog crawl-tick` runs one scheduler pass and exits, for Cloud
+  Scheduler. It takes a Postgres advisory lock, so running it on several
+  instances is safe rather than merely unlikely to overlap.
+- A **Crawlers** panel in the sandbox with three presets, the dry-run gate
+  enforced in the UI, and what the run found before anything is enabled.
 - `.claude/skills/changelog` and this file.
 
 ### Changed
@@ -52,16 +79,35 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 - `query_sources.used` means *cited* for an answer, not merely *retrieved*.
   Passages the model saw and did not use are recorded as
   `retrieved_not_cited` rather than left claiming the answer rests on them.
+- Crawled items are **not enriched unless the crawler asks**. A crawler is the
+  one producer that can discover fifty thousand records unattended, and
+  enriching them is a model call per chunk on data nobody has queried yet.
+- The audit trail can now say a crawler acted. `actor_mode` admitted only
+  `user` and `platform`, so crawled writes had to masquerade as one of them.
+- Deleting a crawler keeps the data it wrote and disables its producer rather
+  than removing it — the items still point at that producer for provenance.
+- **New dependency**: `jmespath`. `pip install -e .` before deploying.
 
 ### Fixed
 - A model rate limit surfaced as a `502` carrying the upstream provider URL. It
   is now a `429` with `Retry-After` — the same shape admission control already
   uses for a deep queue — and other upstream failures no longer echo the
   outbound request back to the caller.
+- `/api/v1/runs/{run_id}` already existed for deletion and reprocess runs, so
+  the crawler route registered at the same path was silently shadowed and every
+  crawl-run lookup returned 404. Crawl runs now live at `/api/v1/crawl-runs/`.
+- Two tables were minting the `run_` id prefix, so an id could no longer say
+  which thing it identified. Crawl runs are `crun_`.
+- A link crawl stored stylesheets as records: `text/css` passes a bare `text/`
+  prefix check, so every page's stylesheet was fetched and kept, spending the
+  crawl budget on assets. Asset URLs are now skipped before the fetch and the
+  accepted content types are documents only.
 
 ### Migrations
 - `0019_answers.sql` — adds `queries.answer_access_level` and extends the
   `query_sources.excluded_reason` enumeration. Run before deploying.
+- `0020_crawlers.sql` — the six crawler tables, and extends the
+  `audit_events.actor_mode` enumeration to admit `crawler`.
 
 ---
 

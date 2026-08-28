@@ -92,6 +92,56 @@ def setup(service_name: str = "memdog-api") -> None:
         "memdog.model_tokens", description="Tokens spent, by model and purpose"
     )
 
+    # --------------------------------------------------------------- inbound
+    #
+    # A disabled webhook answers 200 and drops the payload, so an error rate
+    # here is correctly zero while data is silently going nowhere. That is why
+    # dropped is its own counter rather than a status label on a failure
+    # metric: the thing you need to alert on does not look like an error.
+    _metrics["ingest_dropped"] = meter.create_counter(
+        "memdog.ingest.dropped",
+        description="Payloads accepted and deliberately not stored, by reason",
+    )
+    _metrics["inbound_deliveries"] = meter.create_counter(
+        "memdog.inbound.deliveries",
+        description="Webhook deliveries, by provider and outcome",
+    )
+    _metrics["inbound_rejected"] = meter.create_counter(
+        "memdog.inbound.rejected",
+        description="Deliveries refused, by reason: auth, signature, body_size, unknown",
+    )
+
+    # ----------------------------------------------------------------- crawl
+    _metrics["crawl_discovered"] = meter.create_counter(
+        "memdog.crawl.discovered",
+        description="Items discovered, per crawler. Trending to zero is the "
+                    "crawler equivalent of a dead connection",
+    )
+    _metrics["crawl_emitted"] = meter.create_counter(
+        "memdog.crawl.emitted", description="Items written, per crawler"
+    )
+    _metrics["crawl_dedupe_hits"] = meter.create_counter(
+        "memdog.crawl.dedupe_hits",
+        description="Items skipped as unchanged -- the work that was avoided",
+    )
+    _metrics["crawl_runs"] = meter.create_counter(
+        "memdog.crawl.runs", description="Runs, by terminal status"
+    )
+    _metrics["crawl_robots_denied"] = meter.create_counter(
+        "memdog.crawl.robots_denied", description="URLs robots.txt disallowed"
+    )
+    _metrics["crawl_duration"] = meter.create_histogram(
+        "memdog.crawl.duration", unit="s", description="Wall clock per run"
+    )
+    # A ratio, not a duration: above 1.0 means a run takes longer than the
+    # interval it is scheduled on, so the next tick always overlaps and the
+    # crawler falls permanently behind. That is invisible in the duration alone
+    # because whether it is too slow depends on the schedule.
+    _metrics["crawl_duration_vs_interval"] = meter.create_histogram(
+        "memdog.crawl.duration_vs_interval",
+        description="Run duration over its schedule interval; above 1.0 overlaps forever",
+    )
+
 
 def tracer() -> trace.Tracer:
     if _tracer is None:

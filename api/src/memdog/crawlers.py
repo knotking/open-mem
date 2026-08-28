@@ -45,7 +45,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from .fetching import FetchError, validate_url
 from .ids import new_id
-from .telemetry import span
+from .telemetry import record, span
 
 
 class CrawlerError(Exception):
@@ -633,6 +633,11 @@ async def discover_traverse(
             except FetchError:
                 continue
             if not robots.allows(url):
+                # Counted, not silent. "The crawler found nothing" and "the
+                # site told us not to look" are different problems with
+                # different fixes, and they are indistinguishable in a bare
+                # discovery count.
+                record("crawl_robots_denied", 1, host=(urlparse(url).hostname or ""))
                 continue
             await throttle.wait(url, extra_delay=max(
                 robots.delay(url), config.politeness.min_delay_seconds))
@@ -689,11 +694,13 @@ async def discover(
 ) -> tuple[list[Discovered], Budget, str | None]:
     budget = Budget(config.limits)
     throttle = Throttle(config.limits.rate_per_sec)
-    with span("crawl.discover", strategy=config.strategy):
+    with span("crawl.discover", strategy=config.strategy,
+              incremental=config.incremental) as current:
         found = await STRATEGIES[config.strategy](
             config, watermark=watermark, budget=budget,
             throttle=throttle, checkpoint=checkpoint,
         )
+        current.set_attribute("discovered", len(found))
     return found, budget, budget.exhausted()
 
 

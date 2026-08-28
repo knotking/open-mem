@@ -9,6 +9,7 @@ this file rather than in the discovery code.
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime, timedelta, timezone
 
 import asyncpg
@@ -28,7 +29,7 @@ from .crawlers import (
 )
 from .ids import new_id
 from .queue import Queue
-from .telemetry import span
+from .telemetry import record, span
 from .write import write_items
 
 # A run whose worker has not checked in for this long is not running; it is
@@ -112,12 +113,23 @@ async def list_crawlers(pool: asyncpg.Pool, principal: Principal, project_id: st
     rows = await pool.fetch(
         """
         SELECT c.*, r.status AS last_status, r.started_at AS last_run_at,
-               r.discovered, r.emitted, r.skipped, r.failed, r.run_id AS last_run_id
+               r.discovered, r.emitted, r.skipped, r.failed, r.run_id AS last_run_id,
+               -- Time since the last run that actually *succeeded*, not since
+               -- the last run. A crawler failing every tick has a recent run
+               -- and stale data, and only this column tells them apart.
+               EXTRACT(EPOCH FROM (now() - ok.finished_at))::bigint
+                   AS seconds_since_last_success
           FROM crawlers c
           LEFT JOIN LATERAL (
               SELECT * FROM crawl_runs WHERE crawler_id = c.crawler_id
                ORDER BY started_at DESC LIMIT 1
           ) r ON true
+          LEFT JOIN LATERAL (
+              SELECT finished_at FROM crawl_runs
+               WHERE crawler_id = c.crawler_id AND status = 'completed'
+                 AND mode = 'live'
+               ORDER BY finished_at DESC LIMIT 1
+          ) ok ON true
          WHERE c.project_id = $1 AND c.org_id = $2
          ORDER BY c.created_at DESC
         """,
@@ -350,8 +362,50 @@ class CrawlWorker:
         self.settings = settings
 
     async def execute(self, run_id: str) -> dict:
-        with span("crawl.run", run_id=run_id):
-            return await self._execute(run_id)
+        started = time.monotonic()
+        with span("crawl.run", run_id=run_id) as current:
+            result = await self._execute(run_id)
+            for key in ("status", "discovered", "emitted", "skipped", "failed"):
+                if result.get(key) is not None:
+                    current.set_attribute(key, result[key])
+            await self._measure(run_id, result, time.monotonic() - started)
+            return result
+
+    async def _measure(self, run_id: str, result: dict, seconds: float) -> None:
+        """The signals the telemetry design calls the most valuable ones.
+
+        `crawl.discovered` trending to zero against its own baseline is the
+        crawler equivalent of a dead connection -- and it is invisible in an
+        error rate, because a crawler that finds nothing fails at nothing.
+        """
+        row = await self.pool.fetchrow(
+            """
+            SELECT c.crawler_id, c.strategy, c.schedule, r.mode
+              FROM crawl_runs r JOIN crawlers c ON c.crawler_id = r.crawler_id
+             WHERE r.run_id = $1
+            """,
+            run_id,
+        )
+        if row is None:
+            return
+        labels = {"crawler_id": row["crawler_id"], "strategy": row["strategy"],
+                  "mode": row["mode"]}
+        record("crawl_runs", 1, status=result.get("status") or "unknown", **labels)
+        record("crawl_discovered", result.get("discovered") or 0, **labels)
+        record("crawl_emitted", result.get("emitted") or 0, **labels)
+        record("crawl_dedupe_hits", result.get("skipped") or 0, **labels)
+        record("crawl_duration", seconds, **labels)
+
+        # Against the schedule, not in isolation: whether a run is too slow is
+        # a question about its interval. Above 1.0 the next tick always lands
+        # on a live run, so the crawler overlaps forever and never catches up.
+        schedule = row["schedule"]
+        if isinstance(schedule, str):
+            schedule = json.loads(schedule)
+        if (schedule or {}).get("type") == "interval":
+            interval = float(schedule.get("every_seconds", 3600) or 3600)
+            if interval > 0:
+                record("crawl_duration_vs_interval", seconds / interval, **labels)
 
     async def _execute(self, run_id: str) -> dict:
         # Claimed with a conditional update, so two workers racing for the same

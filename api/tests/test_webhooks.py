@@ -654,3 +654,55 @@ async def test_zoom_computes_its_challenge_rather_than_echoing_it(
     assert result.handshake.body["encryptedToken"] == m.new(
         b"zoom-secret", b"abc", h.sha256
     ).hexdigest()
+
+
+async def test_a_dropped_delivery_is_counted_separately_from_a_failure(
+    pool, queue, blobs, settings, envelope, tenant, monkeypatch
+):
+    """A disabled webhook answers 200 and drops the payload. The error rate is
+    correctly zero while data goes nowhere, so `ingest.dropped` has to be its
+    own counter -- the thing worth alerting on does not look like a failure.
+    """
+    import memdog.webhooks as webhooks_mod
+
+    emitted: list[tuple] = []
+    monkeypatch.setattr(webhooks_mod, "record",
+                        lambda metric, value, **labels: emitted.append((metric, labels)))
+
+    hook = await _webhook_producer(pool, tenant, envelope, auth="none")
+    await pool.execute(
+        "UPDATE producers SET status = 'disabled' WHERE producer_id = $1", hook
+    )
+    result = await receive(
+        pool, queue, blobs, settings, envelope, producer_id=hook,
+        raw_body=b'{"text": "dropped on the floor"}', headers={},
+    )
+    assert result.status == "dropped"
+    names = {m for m, _ in emitted}
+    assert "ingest_dropped" in names
+    assert "inbound_deliveries" in names
+
+
+async def test_a_signature_failure_is_counted_even_though_it_never_reaches_a_delivery_row(
+    pool, queue, blobs, settings, envelope, tenant, monkeypatch
+):
+    """Authentication fails before a delivery row exists, so these bypass the
+    recorder every other path funnels through. A spike in signature failures is
+    the clearest sign of a rotated secret or someone probing the endpoint, and
+    it would otherwise appear in no metric at all.
+    """
+    import memdog.webhooks as webhooks_mod
+
+    emitted: list[tuple] = []
+    monkeypatch.setattr(webhooks_mod, "record",
+                        lambda metric, value, **labels: emitted.append((metric, labels)))
+
+    hook = await _webhook_producer(pool, tenant, envelope, auth="signature")
+    with pytest.raises(WebhookError):
+        await receive(
+            pool, queue, blobs, settings, envelope, producer_id=hook,
+            raw_body=b'{"text": "forged"}',
+            headers={"X-Hub-Signature-256": "sha256=nonsense"},
+        )
+    rejected = [labels for metric, labels in emitted if metric == "inbound_rejected"]
+    assert rejected and rejected[0]["reason"] == "auth"
