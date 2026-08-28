@@ -116,3 +116,35 @@ curl -H "Authorization: Bearer $TOKEN" -H "X-API-Key: $KEY" "$URL/api/v1/health"
 
 A user account cannot mint a custom-audience identity token, which is why this
 impersonates the service account.
+
+
+## The reconciler, and why the queue is not the record of work
+
+`POST /write` commits and queues. If the instance dies in between, the row is
+durable and the job is not — an in-process queue loses it outright, and every
+broker eventually stops redelivering. The item then sits one rung below where it
+belongs, forever, looking exactly like an item that is merely behind.
+
+So the **rows are the record of outstanding work**, and a scheduled sweep
+republishes what is missing:
+
+```bash
+gcloud run jobs execute memdog-reconcile --region us-central1   # one sweep
+```
+
+`memdog-reconcile-tick` (Cloud Scheduler, every 10 minutes) drives it. Two
+grants are needed and neither is obvious:
+
+- the invoking service account needs `roles/run.developer`
+- **the Cloud Scheduler service agent** (`service-<number>@gcp-sa-cloudscheduler`)
+  needs `roles/iam.serviceAccountTokenCreator` on that service account, because
+  Scheduler impersonates it to mint the OAuth token. Without this the job simply
+  never fires, with no error surfaced on the scheduler job.
+
+A grace period (default 300s) keeps the sweep from racing a worker that is
+already handling an item, and both workers rebuild rather than append, so a
+spurious re-enqueue costs a little compute and changes nothing else.
+
+**A `Pending` item is never swept.** It is not behind — it is waiting for a
+fetch worker that does not exist yet, and re-enqueueing it every ten minutes
+would be a busy loop against a worker that will never come.

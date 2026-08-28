@@ -7,6 +7,7 @@ import sys
 
 from .bootstrap import bootstrap_tenant
 from .config import load_settings
+from .inference import build_embedder
 from .db import create_pool, migrate
 
 
@@ -85,6 +86,39 @@ async def _bootstrap_to_secret(email: str, scope: str, project: str, secret: str
     print(f"user_id     {tenant.user_id}")
     print(f"producer_id {tenant.producer_id}")
     await _store_secret(project, secret, tenant.api_key)
+
+
+async def _reconcile(grace: int) -> None:
+    """One sweep, then exit. Cloud Scheduler drives this as a job.
+
+    It builds its own worker set rather than talking to the running service:
+    the point is that the *rows* are the record of outstanding work, so a
+    process that has never seen the original request can pick it all up.
+    """
+    from .extraction import build_extractor
+    from .queue import InProcessQueue
+    from .reconcile import reconcile
+    from .workers import EmbedWorker, EnrichWorker
+
+    settings = load_settings()
+    pool = await create_pool(settings)
+    queue = InProcessQueue()
+    embed = EmbedWorker(pool, build_embedder(settings), settings, queue=queue)
+    await embed.ensure_generator()
+    embed.register(queue, "embed")
+    enrich = EnrichWorker(pool, build_extractor(settings), settings)
+    await enrich.ensure_generator()
+    enrich.register(queue)
+
+    swept = await reconcile(
+        pool, queue, embed_generator=embed.generator_version, grace_seconds=grace
+    )
+    print(f"re-enqueued: embed={swept.embed} enrich={swept.enrich}")
+    if swept.total:
+        await queue.drain(timeout=600)
+    await queue.close()
+    await pool.close()
+    print("reconcile complete")
 
 
 async def _smoke(url: str, key: str, producer_id: str, project_id: str) -> int:
@@ -179,19 +213,23 @@ async def _smoke(url: str, key: str, producer_id: str, project_id: str) -> int:
 
 def main() -> int:
     if len(sys.argv) < 2 or sys.argv[1] not in (
-        "bootstrap", "smoke", "revoke-key", "bootstrap-to-secret"
+        "bootstrap", "smoke", "revoke-key", "bootstrap-to-secret", "reconcile"
     ):
         print("usage: python -m memdog bootstrap [email] [personal|shared]",
               file=sys.stderr)
         print("       python -m memdog smoke <url> <key> <producer_id> <project_id>",
               file=sys.stderr)
         print("       python -m memdog revoke-key <prefix>", file=sys.stderr)
+        print("       python -m memdog reconcile [grace_seconds]", file=sys.stderr)
         print("       python -m memdog bootstrap-to-secret <email> <scope> "
               "<project> <secret_name>   # for jobs: stdout is Cloud Logging",
               file=sys.stderr)
         return 2
     if sys.argv[1] == "smoke":
         return asyncio.run(_smoke(*sys.argv[2:6]))
+    if sys.argv[1] == "reconcile":
+        asyncio.run(_reconcile(int(sys.argv[2]) if len(sys.argv) > 2 else 300))
+        return 0
     if sys.argv[1] == "revoke-key":
         asyncio.run(_revoke_key(sys.argv[2]))
         return 0
