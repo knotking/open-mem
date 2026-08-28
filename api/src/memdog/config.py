@@ -53,6 +53,12 @@ class Settings:
     # fails closed rather than silently storing plaintext.
     master_key_b64: str = field(default_factory=lambda: _env("MEMDOG_MASTER_KEY", ""))
 
+    # Bytes go to GCS when a bucket is configured, and to the filesystem
+    # otherwise. Cloud Run's filesystem is memory, so the bucket is not optional
+    # there -- it is the difference between durable and gone on the next scale-in.
+    raw_bucket: str = field(default_factory=lambda: _env("RAW_BUCKET", ""))
+    blob_root: str = field(default_factory=lambda: _env("BLOB_ROOT", "./.blobs"))
+
     max_items_per_write: int = field(
         default_factory=lambda: int(_env("MAX_ITEMS_PER_WRITE", "500"))
     )

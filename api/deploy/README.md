@@ -44,8 +44,14 @@ mention editions.
 authenticator. Putting Cloud Run IAM in front as well would mean two bearer
 tokens on one request, and the `Authorization` header can only carry one.
 
-Everything except `GET /healthz` requires an API key. `/healthz` discloses the
+Everything except the health endpoint requires an API key. Health discloses the
 embedding model, its dimension and the queue depth — no tenant data.
+
+**Health is `GET /api/v1/health`, not `/healthz`.** Google Front End intercepts
+exactly `/healthz` and answers 404 before the request reaches the container —
+verified against Google's own `cloudrun/hello` image, where every path returns
+200 except that one. A service can be perfectly healthy and appear to be
+returning 404s for its own liveness probe.
 
 ## Cost
 
@@ -71,3 +77,42 @@ The queue is still in-process, so enrichment is per-instance. With
 `--max-instances 4` a write handled by one instance is embedded by that same
 instance, which is correct but not durable across a restart mid-job — Pub/Sub
 behind the `Queue` seam is the Phase 4 answer.
+
+
+## Issuing the first credential, without putting it in the log
+
+`python -m memdog bootstrap` prints the API key. That is right for a human at a
+terminal and **wrong for a Cloud Run Job**, whose stdout is Cloud Logging — a
+durable, widely-readable store. Same command, very different blast radius.
+
+So the job runs `bootstrap-to-secret`, which writes the credential straight into
+Secret Manager and prints only the ids:
+
+```bash
+gcloud run jobs execute memdog-bootstrap --region us-central1
+gcloud secrets versions access latest --secret memdog-demo-key
+```
+
+`python -m memdog revoke-key <prefix>` revokes one, which is how the first key —
+issued before this existed, and therefore logged — was retired.
+
+**Do not put a credential in a job's `--args` either.** That is config, it is
+readable by anyone who can describe the job, and it outlives the run.
+
+## Reaching the service
+
+Public access is refused by an inherited org policy, so the service requires
+Cloud Run IAM. That means the platform owns the `Authorization` header, and a
+request cannot carry two credentials — hence `X-API-Key`, which reaches the same
+verifier as the bearer path.
+
+```bash
+URL=https://memdog-api-266276359448.us-central1.run.app
+TOKEN=$(gcloud auth print-identity-token \
+  --impersonate-service-account=memdog-api@memdog-dev-506718.iam.gserviceaccount.com \
+  --audiences="$URL" --include-email)
+curl -H "Authorization: Bearer $TOKEN" -H "X-API-Key: $KEY" "$URL/api/v1/health"
+```
+
+A user account cannot mint a custom-audience identity token, which is why this
+impersonates the service account.

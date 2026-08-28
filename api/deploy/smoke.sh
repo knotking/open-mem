@@ -9,13 +9,16 @@
 set -euo pipefail
 
 URL="${1:?service url}"; KEY="${2:?api key}"; PRODUCER="${3:?producer id}"; PROJECT="${4:?project id}"
-AUTH="Authorization: Bearer ${KEY}"
+# X-API-Key rather than Authorization: when the service sits behind Cloud Run
+# IAM, the platform owns the Authorization header and a request cannot carry
+# two credentials. Both headers reach the same verifier.
+AUTH="X-API-Key: ${KEY}"
 JSON="content-type: application/json"
 
 say() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 
 say "health"
-curl -sf "$URL/healthz" | tee /dev/stderr | grep -q '"status":"ok"'
+curl -sf "$URL/api/v1/health" | tee /dev/stderr | grep -q '"status":"ok"'
 
 say "write"
 WRITE=$(curl -s -X POST "$URL/api/v1/write" -H "$AUTH" -H "$JSON" \

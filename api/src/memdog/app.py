@@ -7,15 +7,13 @@ else in the design widens this.
 
 from __future__ import annotations
 
-import os
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from .auth import ApiKeyVerifier, AuthError, Principal, TokenVerifier
-from .blobs import FilesystemBlobStore
+from .blobs import build_blob_store
 from .config import load_settings
 from .contracts import RetrieveRequest, RetrieveResponse, WriteRequest, WriteResponse
 from .crypto import Envelope
@@ -58,7 +56,7 @@ async def lifespan(app: FastAPI):
         "embedding": embed_worker.generator_version,
         "extraction": enrich_worker.generator_version,
     }
-    app.state.blobs = FilesystemBlobStore(Path(os.environ.get("BLOB_ROOT", "./.blobs")))
+    app.state.blobs = build_blob_store(settings)
     app.state.envelope = Envelope.from_settings(settings)
     app.state.verifier: TokenVerifier = ApiKeyVerifier(pool)
     try:
@@ -72,10 +70,25 @@ app = FastAPI(title="mem-dog", version="0.1.0", lifespan=lifespan)
 
 
 async def principal(
-    request: Request, authorization: str = Header(default="")
+    request: Request,
+    authorization: str = Header(default=""),
+    x_api_key: str = Header(default="", alias="X-API-Key"),
 ) -> Principal:
-    scheme, _, token = authorization.partition(" ")
-    if scheme.lower() != "bearer" or not token:
+    """The credential, from either header.
+
+    `Authorization: Bearer` is the contract. `X-API-Key` exists because the
+    platform in front of the service may own the Authorization header itself --
+    Cloud Run IAM puts its own identity token there, and a request cannot carry
+    two. This is not a second auth path: both land on the same verifier and the
+    same principal.
+    """
+    token = x_api_key
+    if not token:
+        scheme, _, bearer = authorization.partition(" ")
+        if scheme.lower() != "bearer":
+            raise HTTPException(status_code=401, detail="bearer credential required")
+        token = bearer
+    if not token:
         raise HTTPException(status_code=401, detail="bearer credential required")
     try:
         return await request.app.state.verifier.verify(token)
@@ -83,6 +96,12 @@ async def principal(
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
 
 
+# `/healthz` is served for local and Kubernetes use, but it is NOT the health
+# path behind Google Front End: GFE intercepts exactly `/healthz` and answers
+# 404 before the request reaches the container. Verified against Google's own
+# hello image, where every path returns 200 except that one. The canonical path
+# is therefore `/api/v1/health`.
+@app.get("/api/v1/health")
 @app.get("/healthz")
 async def healthz(request: Request) -> dict:
     await request.app.state.pool.fetchval("SELECT 1")

@@ -12,6 +12,7 @@ REGION="${REGION:-us-central1}"
 INSTANCE="${INSTANCE:-memdog-spine}"
 SERVICE="${SERVICE:-memdog-api}"
 DB_NAME="${DB_NAME:-memdog}"
+RAW_BUCKET="${RAW_BUCKET:-memdog-spine-raw-dev}"
 TAG="${1:-spine-1}"
 IMAGE="${REGION}-docker.pkg.dev/${PROJECT}/memdog/memdog-api:${TAG}"
 SA="memdog-api@${PROJECT}.iam.gserviceaccount.com"
@@ -37,7 +38,7 @@ gcloud run deploy "$SERVICE" \
   --image "$IMAGE" \
   --service-account "$SA" \
   --network default --subnet default --vpc-egress private-ranges-only \
-  --set-env-vars "DB_HOST=${DB_HOST},DB_NAME=${DB_NAME},DB_USER=postgres,EMBED_DIM=768" \
+  --set-env-vars "DB_HOST=${DB_HOST},DB_NAME=${DB_NAME},DB_USER=postgres,EMBED_DIM=768,RAW_BUCKET=${RAW_BUCKET}" \
   --set-secrets "DB_PASSWORD=memdog-db-password:latest,MEMDOG_MASTER_KEY=memdog-master-key:latest" \
   --allow-unauthenticated \
   --min-instances 0 --max-instances 4 \
