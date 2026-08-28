@@ -429,3 +429,7 @@ select {
   border-left: 2px solid var(--warn);
   padding-left: 12px;
 }
+
+/* Confirmation of a completed action. Distinct from .err in hue, and from
+   .empty in weight — a result, not an absence. */
+.ok { color: var(--accent); font-size: 13.5px; }

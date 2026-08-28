@@ -176,6 +176,49 @@ async def _reconcile(grace: int) -> None:
     print("reconcile complete")
 
 
+async def _crawl_tick(limit: int) -> None:
+    """One scheduler pass, then exit. Cloud Scheduler drives this as a job.
+
+    Scheduling lives outside the request path deliberately: a crawl can run for
+    hours, and a Cloud Run instance that scales to zero between requests is the
+    wrong place to hold one. The advisory lock inside `tick` means running this
+    on several instances is safe rather than merely unlikely to overlap.
+    """
+    from .blobs import build_blob_store
+    from .crawling import CrawlWorker, tick
+    from .extraction import build_extractor
+    from .multimodal import build_multimodal
+    from .queue import InProcessQueue
+    from .workers import EmbedWorker, EnrichWorker, EventWorker, ParseWorker
+
+    settings = load_settings()
+    pool = await create_pool(settings)
+    queue = InProcessQueue()
+    blobs = build_blob_store(settings)
+    ParseWorker(pool, blobs, queue=queue, multimodal=build_multimodal(settings)).register(queue)
+    embed = EmbedWorker(pool, build_embedder(settings), settings, queue=queue)
+    await embed.ensure_generator()
+    embed.register(queue, "embed")
+    enrich = EnrichWorker(pool, build_extractor(settings), settings)
+    await enrich.ensure_generator()
+    enrich.register(queue)
+    EventWorker(pool, queue, embed_worker=embed, enrich_worker=enrich).register(queue)
+
+    result = await tick(pool, CrawlWorker(pool, queue, blobs, settings), limit=limit)
+    if result.get("skipped_lock"):
+        print("another scheduler holds the lock")
+    for run in result.get("runs", []):
+        print(f"{run['run_id']}: {run['status']} discovered={run['discovered']} "
+              f"emitted={run['emitted']} skipped={run['skipped']} failed={run['failed']}"
+              + (f" ({run['reason']})" if run.get("reason") else ""))
+    if not result.get("runs"):
+        print(f"nothing due (skipped={len(result.get('skipped', []))}, "
+              f"reaped={result.get('reaped', 0)})")
+    await queue.drain(timeout=900)
+    await queue.close()
+    await pool.close()
+
+
 async def _smoke(url: str, key: str, producer_id: str, project_id: str) -> int:
     """The milestone, run against a deployed service from inside the project.
 
@@ -269,6 +312,7 @@ async def _smoke(url: str, key: str, producer_id: str, project_id: str) -> int:
 def main() -> int:
     if len(sys.argv) < 2 or sys.argv[1] not in (
         "bootstrap", "smoke", "revoke-key", "bootstrap-to-secret", "reconcile",
+        "crawl-tick",
         "grant-key", "add-member",
     ):
         print("usage: python -m memdog bootstrap [email] [personal|shared]",
@@ -277,12 +321,16 @@ def main() -> int:
               file=sys.stderr)
         print("       python -m memdog revoke-key <prefix>", file=sys.stderr)
         print("       python -m memdog reconcile [grace_seconds]", file=sys.stderr)
+        print("       python -m memdog crawl-tick [max_crawlers]", file=sys.stderr)
         print("       python -m memdog bootstrap-to-secret <email> <scope> "
               "<project> <secret_name>   # for jobs: stdout is Cloud Logging",
               file=sys.stderr)
         return 2
     if sys.argv[1] == "smoke":
         return asyncio.run(_smoke(*sys.argv[2:6]))
+    if sys.argv[1] == "crawl-tick":
+        asyncio.run(_crawl_tick(int(sys.argv[2]) if len(sys.argv) > 2 else 5))
+        return
     if sys.argv[1] == "reconcile":
         asyncio.run(_reconcile(int(sys.argv[2]) if len(sys.argv) > 2 else 300))
         return 0

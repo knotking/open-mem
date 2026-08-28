@@ -23,6 +23,10 @@ dependencies = [
     "selectolax>=0.3.21",
     "PyYAML>=6.0",
     "charset-normalizer>=3.4",
+    # Crawler expressions. A specified query language with no side effects, no
+    # I/O and no loops -- so a tenant-supplied transform cannot hang a worker
+    # or reach the network, which is what lets configs be data rather than code.
+    "jmespath>=1.0",
     # Telemetry. The API and SDK are always present; the OTLP exporter is only
     # used when an endpoint is configured, so local runs stay dependency-light
     # at runtime even though the package is installed.

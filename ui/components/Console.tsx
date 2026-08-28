@@ -30,7 +30,7 @@ import {
 
 type Section =
   | "overview"
-  | "add" | "update" | "search" | "ask" | "inbound"
+  | "add" | "update" | "search" | "ask" | "inbound" | "crawlers"
   | "memory" | "cases"
   | "audit" | "sharing" | "deletion"
   | "settings" | "models" | "prompts"
@@ -54,6 +54,7 @@ const GROUPS: { title: string; items: { key: Section; label: string; hint: strin
       { key: "search", label: "Search", hint: "retrieve, with the trace" },
       { key: "ask", label: "Ask", hint: "answer, with its evidence" },
       { key: "inbound", label: "Inbound", hint: "webhooks providers post to" },
+      { key: "crawlers", label: "Crawlers", hint: "pull what won't push" },
     ],
   },
   {
@@ -195,6 +196,7 @@ export default function Console({
         {section === "search" && <ReadSearch projectId={projectId} />}
         {section === "ask" && <AskSection projectId={projectId} />}
         {section === "inbound" && <InboundSection projectId={projectId} />}
+        {section === "crawlers" && <CrawlersSection projectId={projectId} />}
         {section === "audit" && <Audit projectId={projectId} />}
         {section === "memory" && <MemorySection projectId={projectId} />}
         {section === "cases" && <CasesSection projectId={projectId} />}
@@ -670,7 +672,310 @@ function UpdateData({
   );
 }
 
-/* --------------------------------------------------------------- 3. ask */
+/* ---------------------------------------------------------- 3. crawlers */
+
+type Crawler = {
+  crawler_id: string;
+  name: string;
+  strategy: string;
+  enabled: boolean;
+  config_version: number;
+  dry_run_version: number | null;
+  dry_run_current: boolean;
+  watermark: string | null;
+  last_status: string | null;
+  last_run_id: string | null;
+  discovered: number | null;
+  emitted: number | null;
+  skipped: number | null;
+  failed: number | null;
+};
+
+type RunResult = {
+  run_id: string;
+  status: string;
+  discovered: number;
+  emitted: number;
+  skipped: number;
+  failed: number;
+  reason: string | null;
+};
+
+type RunDetail = RunResult & {
+  mode: string;
+  sample: { external_id: string; url: string | null;
+            payload: { title: string | null; preview: string | null } }[];
+  errors: { external_id: string | null; reason: string }[];
+};
+
+const PRESETS: Record<string, { label: string; blurb: string; build: (v: string) => object }> = {
+  feed: {
+    label: "Feed",
+    blurb: "An RSS, Atom or sitemap index someone else already maintains.",
+    build: (v) => ({ name: "Feed", strategy: "feed", seeds: [v],
+                     incremental: "watermark" }),
+  },
+  traverse: {
+    label: "Website",
+    blurb: "Follow links from a seed page, inside an allowlist, honouring robots.txt.",
+    build: (v) => {
+      let host = "";
+      try { host = new URL(v).hostname; } catch { host = ""; }
+      return { name: "Site", strategy: "traverse", seeds: [v], allow_hosts: host ? [host] : [],
+               limits: { max_depth: 1, max_items: 50, rate_per_sec: 1 } };
+    },
+  },
+  http: {
+    label: "JSON API",
+    blurb: "A templated request with declared pagination — no adapter needed.",
+    build: (v) => ({ name: "API", strategy: "http", request: { method: "GET", url: v },
+                     extract: { items_path: "@" } }),
+  },
+};
+
+function CrawlersSection({ projectId }: { projectId: string }) {
+  const [crawlers, setCrawlers] = useState<Crawler[]>([]);
+  const [kind, setKind] = useState<string>("feed");
+  const [seed, setSeed] = useState("https://blog.google/rss/");
+  const [enrich, setEnrich] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [detail, setDetail] = useState<RunDetail | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const page = await call<{ crawlers: Crawler[] }>(
+        `api/v1/projects/${projectId}/crawlers`,
+      );
+      setCrawlers(page.crawlers);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function act(message: string, work: () => Promise<void>) {
+    setBusy(true);
+    setError(null);
+    setNote(null);
+    try {
+      await work();
+      setNote(message);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function create() {
+    await act("Created, disabled. Dry-run it before enabling.", async () => {
+      await call("api/v1/crawlers", {
+        project_id: projectId,
+        config: { ...PRESETS[kind].build(seed.trim()), enrich },
+      });
+      await load();
+    });
+  }
+
+  async function dryRun(crawler: Crawler) {
+    await act("Dry run finished — nothing was written.", async () => {
+      const result = await call<RunResult>(
+        `api/v1/crawlers/${crawler.crawler_id}/dry-run`, {},
+      );
+      setDetail(await call<RunDetail>(`api/v1/crawl-runs/${result.run_id}`, undefined, "GET"));
+      await load();
+    });
+  }
+
+  async function runNow(crawler: Crawler) {
+    await act("Run finished.", async () => {
+      const result = await call<RunResult>(`api/v1/crawlers/${crawler.crawler_id}/run`, {});
+      setDetail(await call<RunDetail>(`api/v1/crawl-runs/${result.run_id}`, undefined, "GET"));
+      await load();
+    });
+  }
+
+  return (
+    <>
+      <h1>Add / crawlers</h1>
+      <p className="lede">
+        Most data does not announce itself. A crawler discovers it and writes it through the same
+        path everything else uses — so nothing downstream can tell a crawled record from a
+        webhook-delivered one. A backfill and a poll are the same crawler on two schedules.
+      </p>
+
+      <section className="panel">
+        <h2>New crawler</h2>
+        <div className="row">
+          {Object.entries(PRESETS).map(([key, preset]) => (
+            <button
+              key={key}
+              className={kind === key ? "" : "secondary"}
+              onClick={() => setKind(key)}
+              disabled={busy}
+            >
+              {preset.label}
+            </button>
+          ))}
+        </div>
+        <p className="empty" style={{ marginTop: 8 }}>{PRESETS[kind].blurb}</p>
+        <div className="row" style={{ marginTop: 10 }}>
+          <input
+            type="text"
+            value={seed}
+            onChange={(e) => setSeed(e.target.value)}
+            placeholder="Seed URL"
+            style={{ flex: 1 }}
+          />
+          <button onClick={create} disabled={busy || !seed.trim()}>
+            Create
+          </button>
+        </div>
+        <label className="row" style={{ marginTop: 10, gap: 8, alignItems: "center" }}>
+          <input type="checkbox" checked={enrich} onChange={(e) => setEnrich(e.target.checked)} />
+          <span>Enrich what it finds</span>
+        </label>
+        <p className="empty" style={{ marginTop: 2 }}>
+          Off by default. A crawler can discover fifty thousand records unattended, and enriching
+          them is a model call per chunk on data nobody has asked about yet. Leave it off, see what
+          the dry run found, then decide.
+        </p>
+        {note && <p className="ok">{note}</p>}
+        {error && <p className="err">{error}</p>}
+        <p className="empty">
+          Created disabled, always. A website crawler is refused outright unless it declares an
+          allowlist — an unbounded link crawl does not stop on its own.
+        </p>
+      </section>
+
+      <section className="panel">
+        <h2>Configured</h2>
+        {crawlers.length === 0 ? (
+          <p className="empty">Nothing yet.</p>
+        ) : (
+          crawlers.map((crawler) => (
+            <div className="hit" key={crawler.crawler_id}>
+              <div className="meta">
+                <span className="chip on">{crawler.strategy}</span>
+                <span className={`chip ${crawler.enabled ? "enriched" : "stored"}`}>
+                  {crawler.enabled ? "enabled" : "disabled"}
+                </span>
+                {!crawler.dry_run_current && (
+                  <span className="chip warnchip">needs a dry run</span>
+                )}
+                {crawler.last_status && (
+                  <span className="chip">last run {crawler.last_status}</span>
+                )}
+                {crawler.emitted !== null && (
+                  <span className="chip">
+                    {crawler.emitted} written · {crawler.skipped} unchanged
+                  </span>
+                )}
+                {crawler.watermark && (
+                  <span className="chip">since {crawler.watermark}</span>
+                )}
+              </div>
+              <div className="text">{crawler.name}</div>
+              <div className="row" style={{ marginTop: 8 }}>
+                <button className="secondary" disabled={busy} onClick={() => dryRun(crawler)}>
+                  Dry run
+                </button>
+                <button
+                  className="secondary"
+                  disabled={busy || !crawler.dry_run_current}
+                  title={crawler.dry_run_current ? "" : "dry-run this configuration first"}
+                  onClick={() =>
+                    act(crawler.enabled ? "Disabled." : "Enabled.", async () => {
+                      await call(
+                        `api/v1/crawlers/${crawler.crawler_id}`,
+                        { enabled: !crawler.enabled },
+                        "PATCH",
+                      );
+                      await load();
+                    })
+                  }
+                >
+                  {crawler.enabled ? "Disable" : "Enable"}
+                </button>
+                <button
+                  className="secondary"
+                  disabled={busy || !crawler.enabled}
+                  onClick={() => runNow(crawler)}
+                >
+                  Run now
+                </button>
+                <button
+                  className="secondary"
+                  disabled={busy}
+                  onClick={() =>
+                    act("Deleted. The data it wrote is kept.", async () => {
+                      await call(
+                        `api/v1/crawlers/${crawler.crawler_id}`, undefined, "DELETE",
+                      );
+                      await load();
+                    })
+                  }
+                >
+                  Delete
+                </button>
+              </div>
+              <p className="provenance">{crawler.crawler_id}</p>
+            </div>
+          ))
+        )}
+      </section>
+
+      {detail && (
+        <section className="panel">
+          <h2>{detail.mode === "dry" ? "Dry run — nothing written" : "Run"}</h2>
+          <div className="meta">
+            <span className={`chip ${detail.status === "completed" ? "enriched" : "stored"}`}>
+              {detail.status}
+            </span>
+            <span className="chip">{detail.discovered} discovered</span>
+            <span className="chip">{detail.emitted} written</span>
+            <span className="chip">{detail.skipped} unchanged</span>
+            {detail.failed > 0 && <span className="chip warnchip">{detail.failed} failed</span>}
+          </div>
+          {detail.reason && <p className="empty">{detail.reason}</p>}
+          {detail.sample.length > 0 && (
+            <>
+              <h3>What it found</h3>
+              {detail.sample.map((item) => (
+                <div className="hit" key={item.external_id}>
+                  <div className="text">
+                    {item.payload?.title || item.external_id}
+                  </div>
+                  {item.payload?.preview && (
+                    <p className="empty" style={{ marginTop: 4 }}>
+                      {item.payload.preview.slice(0, 200)}
+                    </p>
+                  )}
+                  <p className="provenance">{item.url || item.external_id}</p>
+                </div>
+              ))}
+            </>
+          )}
+          {detail.errors.length > 0 && (
+            <>
+              <h3>Errors</h3>
+              {detail.errors.map((e, i) => (
+                <p className="err" key={i}>{e.external_id}: {e.reason}</p>
+              ))}
+            </>
+          )}
+        </section>
+      )}
+    </>
+  );
+}
+
+/* --------------------------------------------------------------- 4. ask */
 
 type AnswerCitation = {
   marker: number;

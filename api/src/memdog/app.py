@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import Response
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 from .auth import ApiKeyVerifier, AuthError, Principal, TokenVerifier
 from .blobs import build_blob_store
@@ -25,6 +26,8 @@ from .contracts import (
     WriteResponse,
 )
 from .chat import ask, build_answerer
+from .crawlers import CrawlerConfig, CrawlerError
+from . import crawling
 from . import account, agents, cases, control, memories as memories_mod, models, normalize, sharing
 from .account import AccountError
 from .agents import AgentConfigError
@@ -120,6 +123,9 @@ async def lifespan(app: FastAPI):
     app.state.embedder = embedder
     app.state.extractor = extractor
     app.state.answerer = answerer
+    app.state.crawl_worker = crawling.CrawlWorker(
+        pool, queue, app.state.blobs, settings
+    )
     app.state.multimodal = multimodal
     await models.ensure_catalog(pool)
     # Seed the platform-scope value from the deployment's configuration, so
@@ -1490,6 +1496,136 @@ async def read_stale(
     except AuthError as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
     return {"stale": rows, "current": request.app.state.current_generators}
+
+
+class CrawlerBody(BaseModel):
+    project_id: str
+    config: CrawlerConfig
+    schedule: dict | None = None
+    overlap: str = "skip"
+
+
+class CrawlerPatch(BaseModel):
+    config: CrawlerConfig | None = None
+    schedule: dict | None = None
+    overlap: str | None = None
+    enabled: bool | None = None
+
+
+def _crawler_error(exc: CrawlerError) -> HTTPException:
+    return HTTPException(status_code=exc.status, detail=str(exc))
+
+
+@app.post("/api/v1/crawlers", status_code=201)
+async def create_crawler_endpoint(
+    request: Request, body: CrawlerBody, actor: Principal = Depends(principal)
+) -> dict:
+    try:
+        return await crawling.create_crawler(
+            request.app.state.pool, actor, project_id=body.project_id,
+            config=body.config, schedule=body.schedule, overlap=body.overlap,
+        )
+    except CrawlerError as exc:
+        raise _crawler_error(exc) from exc
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/projects/{project_id}/crawlers")
+async def list_crawlers_endpoint(
+    request: Request, project_id: str, actor: Principal = Depends(principal)
+) -> dict:
+    try:
+        return {"crawlers": await crawling.list_crawlers(
+            request.app.state.pool, actor, project_id)}
+    except (CrawlerError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.patch("/api/v1/crawlers/{crawler_id}")
+async def patch_crawler_endpoint(
+    request: Request, crawler_id: str, body: CrawlerPatch,
+    actor: Principal = Depends(principal),
+) -> dict:
+    pool = request.app.state.pool
+    try:
+        if body.config is not None or body.schedule is not None or body.overlap is not None:
+            await crawling.update_crawler(
+                pool, actor, crawler_id, config=body.config,
+                schedule=body.schedule, overlap=body.overlap,
+            )
+        if body.enabled is not None:
+            return await crawling.set_enabled(pool, actor, crawler_id, body.enabled)
+        return await crawling.update_crawler(pool, actor, crawler_id)
+    except (CrawlerError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.delete("/api/v1/crawlers/{crawler_id}")
+async def delete_crawler_endpoint(
+    request: Request, crawler_id: str, actor: Principal = Depends(principal)
+) -> dict:
+    try:
+        return await crawling.delete_crawler(request.app.state.pool, actor, crawler_id)
+    except (CrawlerError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/crawlers/{crawler_id}/dry-run", status_code=202)
+async def dry_run_endpoint(
+    request: Request, crawler_id: str, actor: Principal = Depends(principal)
+) -> dict:
+    """Enumerate and report. Fetches nothing, writes nothing, spends nothing --
+    and walks the same code a live run would, so the estimate cannot drift."""
+    state = request.app.state
+    try:
+        run = await crawling.start_run(state.pool, actor, crawler_id, mode="dry")
+        return await state.crawl_worker.execute(run["run_id"])
+    except (CrawlerError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/crawlers/{crawler_id}/run", status_code=202)
+async def run_crawler_endpoint(
+    request: Request, crawler_id: str, actor: Principal = Depends(principal)
+) -> dict:
+    state = request.app.state
+    try:
+        run = await crawling.start_run(state.pool, actor, crawler_id, mode="live")
+        return await state.crawl_worker.execute(run["run_id"])
+    except (CrawlerError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/crawlers/{crawler_id}/runs")
+async def list_runs_endpoint(
+    request: Request, crawler_id: str, actor: Principal = Depends(principal)
+) -> dict:
+    try:
+        return {"runs": await crawling.list_runs(request.app.state.pool, actor, crawler_id)}
+    except (CrawlerError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/crawl-runs/{run_id}")
+async def get_run_endpoint(
+    request: Request, run_id: str, actor: Principal = Depends(principal)
+) -> dict:
+    try:
+        return await crawling.get_run(request.app.state.pool, actor, run_id)
+    except (CrawlerError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.patch("/api/v1/crawl-runs/{run_id}")
+async def control_run_endpoint(
+    request: Request, run_id: str, body: dict, actor: Principal = Depends(principal)
+) -> dict:
+    try:
+        return await crawling.control_run(
+            request.app.state.pool, actor, run_id, body.get("action", ""))
+    except (CrawlerError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
 
 
 @app.post("/api/v1/ask", response_model=AskResponse)
