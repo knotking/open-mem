@@ -27,6 +27,10 @@ dependencies = [
     # I/O and no loops -- so a tenant-supplied transform cannot hang a worker
     # or reach the network, which is what lets configs be data rather than code.
     "jmespath>=1.0",
+    # Cloud Trace and Cloud Monitoring speak their own protocols, not OTLP, so
+    # these replace standing up a collector purely to translate.
+    "opentelemetry-exporter-gcp-trace>=1.7",
+    "opentelemetry-exporter-gcp-monitoring>=1.7.0a0",
     # Telemetry. The API and SDK are always present; the OTLP exporter is only
     # used when an endpoint is configured, so local runs stay dependency-light
     # at runtime even though the package is installed.

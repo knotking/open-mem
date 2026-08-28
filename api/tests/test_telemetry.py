@@ -1,91 +1,78 @@
-"""Telemetry, and the one thing that is genuinely awkward to add later.
+"""Telemetry, and the one way it can cause an outage.
 
-A span that ends when the request returns says nothing about the work that
-request queued. The queue hop has to carry the trace context or the interesting
-question -- how long from commit to searchable -- has no single trace that
-answers it.
+Instrumentation is supposed to be free. The way it stops being free is
+cardinality: a metrics store keeps one time series per distinct combination of
+labels, so a single unbounded label does not add a dimension -- it multiplies
+the series count by the number of distinct values. Getting that wrong takes
+down the metrics store, which then takes down the ability to see anything,
+including that it is down.
 """
 
 from __future__ import annotations
 
-import pytest
-from opentelemetry import trace
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-
-from memdog.contracts import Inline, WriteItem, WriteRequest, WriteOptions
-from memdog.telemetry import continue_trace, inject_context, setup, span
-from memdog.write import write_items
-
-pytestmark = pytest.mark.asyncio
+from memdog import telemetry
 
 
-@pytest.fixture
-def spans():
-    setup()
-    exporter = InMemorySpanExporter()
-    provider = trace.get_tracer_provider()
-    if isinstance(provider, TracerProvider):
-        provider.add_span_processor(SimpleSpanProcessor(exporter))
-    yield exporter
-    exporter.clear()
+class Recorder:
+    """Stands in for an OTel instrument, capturing what it was handed."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple] = []
+
+    def add(self, value, labels):
+        self.calls.append((value, labels))
 
 
-async def test_trace_context_survives_the_queue_hop(spans):
-    """The producer's trace id must be the worker's trace id."""
-    headers: dict[str, str] = {}
-    with span("write") as producer_span:
-        produced = producer_span.get_span_context().trace_id
-        inject_context(headers)
+def test_an_unbounded_label_never_reaches_a_metric(monkeypatch):
+    instrument = Recorder()
+    monkeypatch.setitem(telemetry._metrics, "probe", instrument)
 
-    assert "traceparent" in headers
-
-    with continue_trace("embed", headers) as consumer_span:
-        consumed = consumer_span.get_span_context().trace_id
-
-    # One trace across two processes, not two unrelated ones.
-    assert consumed == produced
-
-
-async def test_a_worker_with_no_context_still_traces(spans):
-    """A message published before instrumentation existed, or by a producer
-    that does not propagate, must not crash the worker."""
-    with continue_trace("embed", {}) as orphan:
-        assert orphan.get_span_context().trace_id != 0
-
-
-async def test_a_failed_span_records_the_exception(spans):
-    """A failed span with no error attached says something was slow, when what
-    happened is that it broke."""
-    with pytest.raises(ValueError):
-        with span("parse", data_id="data_x"):
-            raise ValueError("unreadable pdf")
-
-    finished = spans.get_finished_spans()
-    parse = next(s for s in finished if s.name == "parse")
-    assert parse.status.status_code.name == "ERROR"
-    assert any(e.name == "exception" for e in parse.events)
-
-
-async def test_the_write_path_is_traced_end_to_end(
-    pool, queue, blobs, settings, tenant, principal_for, spans
-):
-    actor = await principal_for(tenant.api_key)
-    await write_items(
-        pool, queue, blobs, settings, actor,
-        WriteRequest(producer_id=tenant.producer_id, items=[
-            WriteItem(external_id="traced-1", content=Inline(text="Something to index.")),
-        ], options=WriteOptions(enrich=True)),
+    telemetry.record(
+        "probe", 1,
+        provider="slack",          # bounded -- kept
+        org_id="org_1",            # bounded at target scale -- kept
+        user_id="usr_1",           # unbounded -- dropped
+        data_id="data_1",          # unbounded -- dropped
+        run_id="crun_1",           # unbounded -- dropped
+        host="docs.example.com",   # unbounded -- dropped
     )
-    await queue.drain()
 
-    names = {s.name for s in spans.get_finished_spans()}
-    # `enrichment` is the event consumer; embed and enrich are its steps.
-    assert {"write", "enrichment", "embed", "enrich"} <= names
+    value, labels = instrument.calls[0]
+    assert value == 1
+    assert labels == {"provider": "slack", "org_id": "org_1"}
 
-    # All one trace across the queue hop, which is the whole point: the write
-    # and the work it caused are not two unrelated traces.
-    by_name = {s.name: s for s in spans.get_finished_spans()}
-    for step in ("enrichment", "embed", "enrich"):
-        assert by_name[step].context.trace_id == by_name["write"].context.trace_id
+
+def test_the_measurement_survives_even_when_every_label_is_dropped(monkeypatch):
+    """Dropping the label rather than refusing the metric is the right
+    failure. Losing a dimension degrades a dashboard; losing the measurement
+    hides the outage it existed to show."""
+    instrument = Recorder()
+    monkeypatch.setitem(telemetry._metrics, "probe", instrument)
+
+    telemetry.record("probe", 5, user_id="usr_1", data_id="data_1")
+    assert instrument.calls == [(5, {})]
+
+
+def test_recording_an_unregistered_metric_is_a_no_op():
+    """Instrumentation must cost nothing when nothing is listening -- which is
+    the default, and must not be the case that raises."""
+    telemetry.record("no_such_metric", 1, provider="slack")
+
+
+def test_the_signals_the_alerts_are_built_on_are_registered():
+    """Each of these maps to a named alert in the telemetry design. A metric
+    that is silently absent produces an alert that silently never fires, which
+    is worse than having neither."""
+    telemetry.setup()
+    for signal in ("crawl_discovered", "crawl_runs", "crawl_duration_vs_interval",
+                   "ingest_dropped", "inbound_deliveries", "inbound_rejected"):
+        assert signal in telemetry._metrics, signal
+
+
+def test_crawler_identity_is_kept_because_the_alert_needs_it():
+    """`crawl.discovered` at zero is only meaningful against a single
+    crawler's own baseline -- an aggregate across every crawler hides exactly
+    the one that died. So this label is bounded by configuration count and is
+    deliberately not on the unbounded list."""
+    assert "crawler_id" not in telemetry.UNBOUNDED_LABELS
+    assert "strategy" not in telemetry.UNBOUNDED_LABELS

@@ -36,6 +36,22 @@ log = logging.getLogger(__name__)
 _tracer: trace.Tracer | None = None
 _metrics: dict[str, object] = {}
 
+# Labels that must never reach a metric. Each one is unbounded, and a metrics
+# store is a time series per distinct label combination -- so a single
+# `user_id` label does not add a dimension, it multiplies the series count by
+# the number of users. Getting this wrong takes down the metrics store, which
+# then takes down the ability to see anything at all, including that it is
+# down.
+#
+# They are all still perfectly fine on spans, which is where you go when you
+# have a specific id in hand and want to know what happened to it. The split
+# is deliberate: metrics answer "is this healthy", traces answer "what
+# happened to this one".
+UNBOUNDED_LABELS = frozenset({
+    "user_id", "data_id", "case_id", "run_id", "query_id", "chunk_id",
+    "external_id", "delivery_id", "memory_id", "host", "url", "project_id",
+})
+
 
 def setup(service_name: str = "memdog-api") -> None:
     """Configure once at startup. Safe to call twice."""
@@ -49,8 +65,26 @@ def setup(service_name: str = "memdog-api") -> None:
     })
     provider = TracerProvider(resource=resource)
 
+    # Cloud Trace and Cloud Monitoring speak their own protocols rather than
+    # OTLP, so on GCP the Google exporters are used directly instead of
+    # standing up a collector to translate. Selected by env, so the same image
+    # runs locally with nothing configured and exports in Cloud Run.
+    gcp_project = os.environ.get("OTEL_GCP_PROJECT")
+
     endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
-    if endpoint:
+    if gcp_project:
+        try:
+            from opentelemetry.exporter.cloud_trace import CloudTraceSpanExporter
+
+            provider.add_span_processor(
+                BatchSpanProcessor(CloudTraceSpanExporter(project_id=gcp_project))
+            )
+        except Exception as exc:  # noqa: BLE001
+            # Telemetry must never be the reason the service fails to start.
+            # A process that cannot export traces is degraded; one that will
+            # not boot is an outage.
+            log.warning("Cloud Trace exporter unavailable: %s", exc)
+    elif endpoint:
         from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 
         provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
@@ -62,7 +96,22 @@ def setup(service_name: str = "memdog-api") -> None:
 
     trace.set_tracer_provider(provider)
     readers = []
-    if endpoint:
+    if gcp_project:
+        try:
+            from opentelemetry.exporter.cloud_monitoring import (
+                CloudMonitoringMetricsExporter,
+            )
+
+            readers.append(PeriodicExportingMetricReader(
+                CloudMonitoringMetricsExporter(project_id=gcp_project),
+                # Cloud Monitoring rejects points written more often than once
+                # a minute for the same series, so exporting faster does not
+                # produce finer data -- it produces errors.
+                export_interval_millis=60_000,
+            ))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Cloud Monitoring exporter unavailable: %s", exc)
+    elif endpoint:
         from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
 
         readers.append(PeriodicExportingMetricReader(OTLPMetricExporter()))
@@ -196,10 +245,19 @@ def continue_trace(name: str, headers: dict[str, str], **attributes):
 
 
 def record(metric: str, value: float | int, **attributes) -> None:
+    """Emit one measurement, with the cardinality rule enforced here.
+
+    Dropping the label rather than refusing the metric is the right failure:
+    losing a dimension degrades a dashboard, while losing the measurement
+    hides the outage it was there to show.
+    """
     instrument = _metrics.get(metric)
     if instrument is None:
         return
-    labels = {k: v for k, v in attributes.items() if v is not None}
+    labels = {
+        k: v for k, v in attributes.items()
+        if v is not None and k not in UNBOUNDED_LABELS
+    }
     if hasattr(instrument, "record"):
         instrument.record(value, labels)       # histogram
     else:

@@ -62,6 +62,29 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   instances is safe rather than merely unlikely to overlap.
 - A **Crawlers** panel in the sandbox with three presets, the dry-run gate
   enforced in the UI, and what the run found before anything is enabled.
+- **Metrics and traces on the inbound and crawl paths**, which previously had
+  none — the inbound path had no spans at all. New counters: `ingest.dropped`,
+  `inbound.deliveries`, `inbound.rejected`, `crawl.discovered`, `crawl.emitted`,
+  `crawl.dedupe_hits`, `crawl.runs`, `crawl.robots_denied`; histograms
+  `crawl.duration` and `crawl.duration_vs_interval`. They cost nothing until an
+  OTLP endpoint is configured.
+- `crawl.discovered` is the one to alert on: a crawler that finds nothing fails
+  at nothing, so an error rate stays flat while the data goes stale. Trending to
+  zero against its own baseline is the crawler equivalent of a dead connection.
+- `ingest.dropped` is a separate counter rather than a label on a failure
+  metric, because a disabled webhook answers `200` and drops the payload — the
+  error rate is correctly zero while data goes nowhere.
+- Signature failures are counted even though they are raised before a delivery
+  row exists, so they reach no other metric. A spike in them is the clearest
+  sign of a rotated secret or someone probing an endpoint.
+- Crawler run duration is recorded **against its schedule interval**, not alone.
+  Above 1.0 the next tick always lands on a live run and the crawler overlaps
+  forever — invisible in the duration by itself, since whether a run is too slow
+  depends on the schedule.
+- Crawler freshness (`seconds_since_last_success`) is on the list endpoint and
+  shown in the console as a fresh/stale chip. It measures the last **success**,
+  not the last attempt: a crawler failing every tick has a recent run and stale
+  data, and nothing else tells those apart.
 - `.claude/skills/changelog` and this file.
 
 ### Changed
