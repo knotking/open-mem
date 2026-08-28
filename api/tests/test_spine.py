@@ -12,6 +12,7 @@ from __future__ import annotations
 import pytest
 
 from memdog.contracts import (
+    WriteOptions,
     Inline,
     ItemAccess,
     Pending,
@@ -21,7 +22,19 @@ from memdog.contracts import (
     WriteRequest,
 )
 from memdog.retrieval import NotFound, get_item, retrieve
+from memdog.events import dispatch_pending, emit_audited
 from memdog.write import EMBED_TOPIC, AdmissionError, write_items
+
+
+async def _request_enrichment(pool, actor, tenant, data_id):
+    """Ask for enrichment after the fact -- the normal path now that it is
+    off by default."""
+    async with pool.acquire() as conn, conn.transaction():
+        return await emit_audited(
+            conn, actor, event_type="enrichment.requested",
+            org_id=tenant.org_id, project_id=tenant.project_id, data_id=data_id,
+            payload={"embed": True, "summarize": True},
+        )
 
 pytestmark = pytest.mark.asyncio
 
@@ -33,7 +46,8 @@ TEXT = (
 
 async def _write(pool, queue, blobs, settings, actor, producer_id, items, **kw):
     return await write_items(
-        pool, queue, blobs, settings, actor, WriteRequest(producer_id=producer_id, items=items), **kw
+        pool, queue, blobs, settings, actor, WriteRequest(producer_id=producer_id, items=items,
+                        options=WriteOptions(enrich=True)), **kw
     )
 
 
@@ -86,38 +100,45 @@ async def test_write_then_retrieve_cites_the_item(
 async def test_state_is_a_staircase(
     pool, blobs, settings, embedder, extractor, tenant, principal_for
 ):
-    """Three rungs, and each is reached by its own worker.
+    """Three rungs, each reached by consuming an event.
 
     'I just uploaded it and search cannot find it' is a support ticket, not a
     bug -- but only if the state is visible while it is true. The middle rung is
-    observable here precisely because enrichment is a separate consumer: an item
-    is searchable whether or not enrichment ever succeeds.
+    observable because embedding and summarising are separate steps of one
+    enrichment event: an item is searchable whether or not the summary lands.
     """
     from memdog.queue import InProcessQueue
-    from memdog.workers import EmbedWorker, EnrichWorker
+    from memdog.workers import EmbedWorker, EnrichWorker, EventWorker
 
     actor = await principal_for(tenant.api_key)
     queue = InProcessQueue()
     embed = EmbedWorker(pool, embedder, settings, queue=queue)
     await embed.ensure_generator()
     embed.register(queue, EMBED_TOPIC)
+    # Only embedding is wired, so the enrichment event does the part it can.
+    EventWorker(pool, queue, embed_worker=embed).register(queue)
 
     response = await _write(
         pool, queue, blobs, settings, actor, tenant.producer_id,
         [WriteItem(external_id="s-1", content=Inline(text=TEXT))],
     )
     data_id = response.results[0].data_id
+    # Durable and readable before any enrichment has run.
     assert (await get_item(pool, actor, data_id))["state"] == "stored"
 
     await queue.drain()
-    # Enrichment was published but nothing consumes it yet.
     assert (await get_item(pool, actor, data_id))["state"] == "searchable"
+    await queue.close()
 
+    # Summarisation becomes available; asking again completes the climb.
+    queue2 = InProcessQueue()
     enrich = EnrichWorker(pool, extractor, settings)
     await enrich.ensure_generator()
-    enrich.register(queue)
-    await queue.drain()
-    await queue.close()
+    EventWorker(pool, queue2, embed_worker=embed, enrich_worker=enrich).register(queue2)
+    await _request_enrichment(pool, actor, tenant, data_id)
+    await dispatch_pending(pool, queue2)
+    await queue2.drain()
+    await queue2.close()
     assert (await get_item(pool, actor, data_id))["state"] == "enriched"
 
 

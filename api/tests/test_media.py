@@ -11,11 +11,11 @@ import base64
 
 import pytest
 
-from memdog.contracts import Inline, WriteItem, WriteRequest
+from memdog.contracts import Inline, WriteItem, WriteRequest, WriteOptions
 from memdog.multimodal import Interpreted, MediaTooLarge
 from memdog.queue import InProcessQueue
 from memdog.retrieval import get_item, get_versions
-from memdog.workers import EmbedWorker, EnrichWorker, ParseWorker
+from memdog.workers import EmbedWorker, EnrichWorker, EventWorker, ParseWorker
 from memdog.write import EMBED_TOPIC, PARSE_TOPIC, write_items
 
 pytestmark = pytest.mark.asyncio
@@ -49,13 +49,17 @@ class RefusingMultimodal(FakeMultimodal):
 
 async def _pipeline(pool, blobs, settings, embedder, extractor, multimodal):
     queue = InProcessQueue()
-    ParseWorker(pool, blobs, queue=queue, multimodal=multimodal).register(queue)
+    parse = ParseWorker(pool, blobs, queue=queue, multimodal=multimodal)
+    parse.register(queue)
     embed = EmbedWorker(pool, embedder, settings, queue=queue)
     await embed.ensure_generator()
     embed.register(queue, EMBED_TOPIC)
     enrich = EnrichWorker(pool, extractor, settings)
     await enrich.ensure_generator()
     enrich.register(queue)
+    EventWorker(
+        pool, queue, parse_worker=parse, embed_worker=embed, enrich_worker=enrich
+    ).register(queue)
     return queue
 
 
@@ -64,7 +68,8 @@ async def _write_bytes(pool, queue, blobs, settings, actor, producer_id, name, p
         pool, queue, blobs, settings, actor,
         WriteRequest(producer_id=producer_id, items=[
             WriteItem(external_id=name, content=Inline(bytes_b64=base64.b64encode(payload).decode())),
-        ]),
+        ],
+                        options=WriteOptions(enrich=True)),
     )
 
 
@@ -185,7 +190,7 @@ async def test_a_document_climbs_the_whole_staircase_from_bytes(
     pool, blobs, settings, embedder, extractor, tenant, principal_for
 ):
     """The case the spine could not do before: bytes in, retrievable out."""
-    from memdog.contracts import RetrieveFilter, RetrieveRequest
+    from memdog.contracts import RetrieveFilter, RetrieveRequest, WriteOptions
     from memdog.retrieval import retrieve
 
     actor = await principal_for(tenant.api_key)

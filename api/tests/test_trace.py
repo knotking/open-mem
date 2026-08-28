@@ -12,6 +12,7 @@ from __future__ import annotations
 import pytest
 
 from memdog.contracts import (
+    WriteOptions,
     Inline,
     RetrieveFilter,
     RetrieveRequest,
@@ -20,7 +21,8 @@ from memdog.contracts import (
 )
 from memdog.queue import InProcessQueue
 from memdog.retrieval import retrieve, staircase
-from memdog.workers import EmbedWorker
+from memdog.events import dispatch_pending, emit_audited
+from memdog.workers import EmbedWorker, EnrichWorker, EventWorker, EventWorker
 from memdog.write import EMBED_TOPIC, write_items
 
 pytestmark = pytest.mark.asyncio
@@ -29,15 +31,14 @@ pytestmark = pytest.mark.asyncio
 async def _write(pool, queue, blobs, settings, actor, producer_id, items):
     return await write_items(
         pool, queue, blobs, settings, actor,
-        WriteRequest(producer_id=producer_id, items=items),
+        WriteRequest(producer_id=producer_id, items=items,
+                        options=WriteOptions(enrich=True)),
     )
 
 
 async def test_the_staircase_counts_each_rung(
     pool, blobs, settings, embedder, extractor, tenant, principal_for
 ):
-    from memdog.workers import EnrichWorker
-
     actor = await principal_for(tenant.api_key)
     queue = InProcessQueue()
     await _write(
@@ -51,14 +52,28 @@ async def test_the_staircase_counts_each_rung(
     embed = EmbedWorker(pool, embedder, settings, queue=queue)
     await embed.ensure_generator()
     embed.register(queue, EMBED_TOPIC)
+    EventWorker(pool, queue, embed_worker=embed).register(queue)
     await queue.drain()
     counts = await staircase(pool, actor, tenant.project_id)
     assert (counts["searchable"], counts["enriched"]) == (3, 0)
 
+    # Summarisation arrives; re-requesting enrichment finishes the climb.
     enrich = EnrichWorker(pool, extractor, settings)
     await enrich.ensure_generator()
-    enrich.register(queue)
-    await queue.drain()
+    second = InProcessQueue()
+    EventWorker(pool, second, embed_worker=embed, enrich_worker=enrich).register(second)
+    for row in await pool.fetch(
+        "SELECT data_id, project_id FROM data_items WHERE project_id = $1", tenant.project_id
+    ):
+        async with pool.acquire() as conn, conn.transaction():
+            await emit_audited(
+                conn, actor, event_type="enrichment.requested",
+                org_id=tenant.org_id, project_id=row["project_id"], data_id=row["data_id"],
+                payload={"embed": False, "summarize": True},
+            )
+    await dispatch_pending(pool, second)
+    await second.drain()
+    await second.close()
     await queue.close()
     counts = await staircase(pool, actor, tenant.project_id)
     assert counts["enriched"] == 3

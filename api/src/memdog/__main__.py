@@ -155,6 +155,8 @@ async def _reconcile(grace: int) -> None:
         pool, build_blob_store(settings), queue=queue,
         multimodal=build_multimodal(settings),
     ).register(queue)
+    from .workers import EventWorker
+
     embed = EmbedWorker(pool, build_embedder(settings), settings, queue=queue)
     await embed.ensure_generator()
     embed.register(queue, "embed")
@@ -165,7 +167,8 @@ async def _reconcile(grace: int) -> None:
     swept = await reconcile(
         pool, queue, embed_generator=embed.generator_version, grace_seconds=grace
     )
-    print(f"re-enqueued: parse={swept.parse} embed={swept.embed} enrich={swept.enrich}")
+    print(f"re-enqueued: parse={swept.parse} embed={swept.embed} "
+          f"enrich={swept.enrich} events={swept.events}")
     if swept.total:
         await queue.drain(timeout=600)
     await queue.close()

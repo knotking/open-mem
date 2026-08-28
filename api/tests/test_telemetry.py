@@ -14,7 +14,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from memdog.contracts import Inline, WriteItem, WriteRequest
+from memdog.contracts import Inline, WriteItem, WriteRequest, WriteOptions
 from memdog.telemetry import continue_trace, inject_context, setup, span
 from memdog.write import write_items
 
@@ -76,14 +76,16 @@ async def test_the_write_path_is_traced_end_to_end(
         pool, queue, blobs, settings, actor,
         WriteRequest(producer_id=tenant.producer_id, items=[
             WriteItem(external_id="traced-1", content=Inline(text="Something to index.")),
-        ]),
+        ], options=WriteOptions(enrich=True)),
     )
     await queue.drain()
 
     names = {s.name for s in spans.get_finished_spans()}
-    assert {"write", "embed", "enrich"} <= names
+    # `enrichment` is the event consumer; embed and enrich are its steps.
+    assert {"write", "enrichment", "embed", "enrich"} <= names
 
-    # And they are all the same trace -- which is the whole point.
+    # All one trace across the queue hop, which is the whole point: the write
+    # and the work it caused are not two unrelated traces.
     by_name = {s.name: s for s in spans.get_finished_spans()}
-    assert by_name["embed"].context.trace_id == by_name["write"].context.trace_id
-    assert by_name["enrich"].context.trace_id == by_name["write"].context.trace_id
+    for step in ("enrichment", "embed", "enrich"):
+        assert by_name[step].context.trace_id == by_name["write"].context.trace_id

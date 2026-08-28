@@ -16,7 +16,12 @@ from memdog.db import create_pool, migrate  # noqa: E402
 from memdog.inference import build_embedder  # noqa: E402
 from memdog.queue import InProcessQueue  # noqa: E402
 from memdog.extraction import build_extractor  # noqa: E402
-from memdog.workers import EmbedWorker, EnrichWorker, ParseWorker  # noqa: E402
+from memdog.workers import (  # noqa: E402
+    EmbedWorker,
+    EnrichWorker,
+    EventWorker,
+    ParseWorker,
+)
 from memdog.write import EMBED_TOPIC  # noqa: E402
 
 
@@ -57,13 +62,19 @@ def extractor():
 @pytest.fixture
 async def queue(pool, embedder, extractor, settings, blobs):
     queue = InProcessQueue()
-    ParseWorker(pool, blobs, queue=queue).register(queue)
+    parse = ParseWorker(pool, blobs, queue=queue)
+    parse.register(queue)
     embed = EmbedWorker(pool, embedder, settings, queue=queue)
     await embed.ensure_generator()
     embed.register(queue, EMBED_TOPIC)
     enrich = EnrichWorker(pool, extractor, settings)
     await enrich.ensure_generator()
     enrich.register(queue)
+    # The log is the record of work; the event worker turns it into pipeline
+    # calls, exactly as the deployed service does.
+    EventWorker(
+        pool, queue, parse_worker=parse, embed_worker=embed, enrich_worker=enrich
+    ).register(queue)
     queue.generators = {
         "embedding": embed.generator_version,
         "extraction": enrich.generator_version,

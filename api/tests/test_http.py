@@ -43,6 +43,8 @@ async def test_endpoints(client, tenant, pool):
                 "external_id": "http-item-1",
                 "content": {"kind": "inline", "text": "Kubernetes pods were evicted under memory pressure."},
             }],
+            # Enrichment is opt-in: recording is cheap, spending is not.
+            "options": {"enrich": True},
         },
     )
     # Always 207 -- batch is not a separate verb, so it is not a separate status.

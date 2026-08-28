@@ -18,6 +18,7 @@ import pytest
 from memdog.auth import DATA_READ, DATA_WRITE, issue_key
 from memdog.bootstrap import create_user
 from memdog.contracts import (
+    WriteOptions,
     Inline,
     ItemAccess,
     RetrieveFilter,
@@ -29,7 +30,7 @@ from memdog.ids import new_id
 from memdog.inference import LocalHashEmbedder
 from memdog.queue import InProcessQueue
 from memdog.retrieval import NotFound, get_item, retrieve
-from memdog.workers import EmbedWorker
+from memdog.workers import EmbedWorker, EventWorker
 from memdog.write import EMBED_TOPIC, write_items
 
 pytestmark = pytest.mark.asyncio
@@ -41,7 +42,8 @@ ALL_MATCH_MODES = (["vector"], ["lexical"], ["vector", "lexical"])
 async def _write(pool, queue, blobs, settings, actor, producer_id, items):
     return await write_items(
         pool, queue, blobs, settings, actor,
-        WriteRequest(producer_id=producer_id, items=items),
+        WriteRequest(producer_id=producer_id, items=items,
+                        options=WriteOptions(enrich=True)),
     )
 
 
@@ -203,7 +205,8 @@ async def test_durable_after_2xx_even_if_enrichment_never_runs(
     response = await write_items(
         pool, orphan_queue, blobs, settings, owner,
         WriteRequest(producer_id=tenant.producer_id,
-                     items=[WriteItem(external_id="durable-1", content=Inline(text=SECRET))]),
+                     items=[WriteItem(external_id="durable-1", content=Inline(text=SECRET))],
+                        options=WriteOptions(enrich=True)),
     )
     data_id = response.results[0].data_id
     assert await orphan_queue.depth() == 1
@@ -212,10 +215,16 @@ async def test_durable_after_2xx_even_if_enrichment_never_runs(
     assert item["content_text"] == SECRET and item["state"] == "stored"
     assert await pool.fetchval("SELECT count(*) FROM chunks WHERE data_id = $1", data_id) == 0
 
-    # A worker started later picks it up from the same durable row.
-    worker = EmbedWorker(pool, embedder, settings)
+    # A worker started later picks it up from the durable *event*, not from a
+    # message that died with the process.
+    from memdog.events import dispatch_pending
+    from memdog.workers import EventWorker
+
+    worker = EmbedWorker(pool, embedder, settings, queue=orphan_queue)
     await worker.ensure_generator()
     worker.register(orphan_queue, EMBED_TOPIC)
+    EventWorker(pool, orphan_queue, embed_worker=worker).register(orphan_queue)
+    await dispatch_pending(pool, orphan_queue, redeliver_after_seconds=0)
     await orphan_queue.drain()
     await orphan_queue.close()
     assert (await get_item(pool, owner, data_id))["state"] == "searchable"
@@ -313,11 +322,13 @@ async def test_a_failing_handler_is_not_silent(pool, blobs, settings, tenant, pr
     async def always_fails(message):
         raise RuntimeError("engine is down")
 
-    queue.subscribe(EMBED_TOPIC, always_fails)
+    # Subscribed to the event topic, because that is what a write publishes now.
+    queue.subscribe("record", always_fails)
     await write_items(
         pool, queue, blobs, settings, owner,
         WriteRequest(producer_id=tenant.producer_id,
-                     items=[WriteItem(external_id="dlq-1", content=Inline(text=SECRET))]),
+                     items=[WriteItem(external_id="dlq-1", content=Inline(text=SECRET))],
+                        options=WriteOptions(enrich=True)),
     )
     await queue.drain()
     await queue.close()

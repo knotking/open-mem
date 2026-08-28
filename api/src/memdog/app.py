@@ -51,7 +51,14 @@ from .retrieval import (
 )
 from .extraction import build_extractor
 from .multimodal import build_multimodal
-from .workers import EmbedWorker, EnrichWorker, ParseWorker, verify_index_dimension
+from .events import dispatch_pending, emit_audited, list_events
+from .workers import (
+    EmbedWorker,
+    EnrichWorker,
+    EventWorker,
+    ParseWorker,
+    verify_index_dimension,
+)
 from .write import EMBED_TOPIC, AdmissionError, write_items
 
 
@@ -84,6 +91,14 @@ async def lifespan(app: FastAPI):
     enrich_worker = EnrichWorker(pool, extractor, settings)
     await enrich_worker.ensure_generator()
     enrich_worker.register(queue)
+
+    # The event worker is what turns the log into work. The individual workers
+    # stay subscribed to their own topics too, because the reconciler still
+    # publishes to them directly when repairing a corpus.
+    EventWorker(
+        pool, queue,
+        parse_worker=parse_worker, embed_worker=embed_worker, enrich_worker=enrich_worker,
+    ).register(queue)
 
     app.state.settings = settings
     app.state.pool = pool
@@ -233,6 +248,69 @@ async def read_artifacts(
         return {"artifacts": await get_artifacts(request.app.state.pool, actor, data_id)}
     except AuthError as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/data/{data_id}/enrich")
+async def request_enrichment(
+    request: Request, data_id: str, body: dict, actor: Principal = Depends(principal)
+) -> dict:
+    """Ask for AI enrichment on data that already exists.
+
+    This is the normal path, because enrichment is off by default: record now,
+    decide later whether it is worth spending on. The request is an event, so it
+    is ordered behind the data it refers to and audited like any other.
+    """
+    from .auth import DATA_WRITE
+
+    state = request.app.state
+    try:
+        actor.require(DATA_WRITE)
+        item = await get_item(state.pool, actor, data_id)
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    except NotFound as exc:
+        raise HTTPException(status_code=404, detail="not found") from exc
+
+    async with state.pool.acquire() as conn, conn.transaction():
+        event_id = await emit_audited(
+            conn, actor,
+            event_type="enrichment.requested",
+            org_id=actor.org_id, project_id=item["project_id"], data_id=data_id,
+            payload={
+                "embed": bool(body.get("embed", True)),
+                "summarize": bool(body.get("summarize", True)),
+                "prompt_override": body.get("prompt"),
+                "model_override": body.get("model_id"),
+                "needs_parse": item["content_text"] is None and item["extracted_text"] is None,
+                "requested_after_the_fact": True,
+            },
+        )
+    await dispatch_pending(state.pool, state.queue)
+    return {"event_id": event_id, "data_id": data_id, "status": "requested"}
+
+
+@app.get("/api/v1/events")
+async def get_events(
+    request: Request,
+    actor: Principal = Depends(principal),
+    project_id: str | None = None,
+    data_id: str | None = None,
+    limit: int = 100,
+) -> dict:
+    """The log itself.
+
+    Includes events nothing consumes yet — `graph.build.requested` sits at
+    `no_consumer`, which is a state rather than a failure.
+    """
+    from .auth import DATA_READ
+
+    actor.require(DATA_READ)
+    return {
+        "events": await list_events(
+            request.app.state.pool, actor.org_id,
+            project_id=project_id, data_id=data_id, limit=limit,
+        )
+    }
 
 
 @app.get("/api/v1/data/{data_id}/content")

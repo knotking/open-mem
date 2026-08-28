@@ -109,8 +109,29 @@ class WriteItem(BaseModel):
     metadata: dict = Field(default_factory=dict)
 
 
+class EnrichmentOptions(BaseModel):
+    """What AI enrichment should do, when it is asked for at all.
+
+    Separated from the write because these are the expensive parts: embedding
+    costs a model call per chunk, summarisation costs one per item, and both
+    are useless on data nobody will query.
+    """
+
+    embed: bool = True          # vectors, so retrieval can find it
+    summarize: bool = True      # the envelope: title, summary, keywords
+    # Overrides for this request only. Neither is persisted as configuration --
+    # a per-request override that silently became the default would be a way to
+    # change a project's behaviour without an audit trail on the setting.
+    prompt: str | None = None
+    model_id: str | None = None
+
+
 class WriteOptions(BaseModel):
-    enrich: bool = True
+    # OFF by default. Recording data is cheap and synchronous; anything that
+    # spends money is opt-in, and a default that quietly bills people is the
+    # wrong default however convenient it looks in a demo.
+    enrich: bool = False
+    enrichment: EnrichmentOptions = Field(default_factory=EnrichmentOptions)
     priority: Literal["live", "batch"] = "live"
 
 
@@ -133,6 +154,9 @@ class WriteResult(BaseModel):
     # default added without being asked.
     memories: list[str] = Field(default_factory=list)
     cases: list[str] = Field(default_factory=list)
+    # The events this write raised, so the caller can follow the work rather
+    # than poll for a state change and guess.
+    events: list[str] = Field(default_factory=list)
     error: str | None = None
 
 

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from memdog.contracts import Inline, MemoryRef, WriteItem, WriteRequest
+from memdog.contracts import Inline, MemoryRef, WriteItem, WriteRequest, WriteOptions
 from memdog.memories import effective_expiry, ensure_shipped_types
 from memdog.retrieval import item_memories, list_memories, memory_members
 from memdog.write import write_items
@@ -19,7 +19,8 @@ pytestmark = pytest.mark.asyncio
 async def _write(pool, queue, blobs, settings, actor, producer_id, items):
     return await write_items(
         pool, queue, blobs, settings, actor,
-        WriteRequest(producer_id=producer_id, items=items),
+        WriteRequest(producer_id=producer_id, items=items,
+                        options=WriteOptions(enrich=True)),
     )
 
 

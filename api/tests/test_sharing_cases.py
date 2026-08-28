@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 
 from memdog import agents, cases, normalize, sharing
-from memdog.contracts import CaseRef, Inline, WriteItem, WriteRequest
+from memdog.contracts import CaseRef, Inline, WriteItem, WriteRequest, WriteOptions
 from memdog.settings_store import put
 from memdog.sharing import ShareError
 from memdog.write import write_items
@@ -22,7 +22,8 @@ async def _write(pool, queue, blobs, settings, actor, producer_id, external_id, 
         pool, queue, blobs, settings, actor,
         WriteRequest(producer_id=producer_id, items=[
             WriteItem(external_id=external_id, content=Inline(text=text), **kw),
-        ]),
+        ],
+                        options=WriteOptions(enrich=True)),
     )
 
 
@@ -167,7 +168,8 @@ async def test_a_timeline_orders_by_event_time_not_ingestion(
                 WriteItem(external_id=external_id, content=Inline(text=f"Note from {year}"),
                           event_time=datetime(year, 3, 14, tzinfo=timezone.utc),
                           case=CaseRef(external_id="MRN-A12345", case_type="patient")),
-            ]),
+            ],
+                        options=WriteOptions(enrich=True)),
         )
     timeline = await cases.timeline(pool, actor, case["case_id"])
     years = [e["event_time"].year for e in timeline["entries"]]
@@ -190,7 +192,8 @@ async def test_membership_records_asserted_versus_inferred(
         WriteRequest(producer_id=tenant.producer_id, items=[
             WriteItem(external_id="lab-1", content=Inline(text="Lab result."),
                       identifiers=["MRN-B999"]),
-        ]),
+        ],
+                        options=WriteOptions(enrich=True)),
     )
     timeline = await cases.timeline(pool, actor, case["case_id"])
     assert timeline["inferred"] == 1

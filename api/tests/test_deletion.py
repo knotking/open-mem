@@ -12,11 +12,11 @@ import base64
 
 import pytest
 
-from memdog.contracts import Inline, RetrieveFilter, RetrieveRequest, WriteItem, WriteRequest
+from memdog.contracts import Inline, RetrieveFilter, RetrieveRequest, WriteItem, WriteRequest, WriteOptions
 from memdog.deletion import DELETE_TOPIC, DeleteWorker, request_deletion, unpurged_tombstones
 from memdog.queue import InProcessQueue
 from memdog.retrieval import NotFound, get_item, retrieve
-from memdog.workers import ParseWorker
+from memdog.workers import EventWorker, ParseWorker
 from memdog.write import write_items
 
 pytestmark = pytest.mark.asyncio
@@ -29,7 +29,8 @@ async def _write(pool, queue, blobs, settings, actor, producer_id, external_id, 
         pool, queue, blobs, settings, actor,
         WriteRequest(producer_id=producer_id, items=[
             WriteItem(external_id=external_id, content=Inline(text=text)),
-        ]),
+        ],
+                        options=WriteOptions(enrich=True)),
     )
 
 
@@ -75,7 +76,7 @@ async def test_the_cascade_reclaims_and_the_root_row_goes_last(
     queue = InProcessQueue()
     ParseWorker(pool, blobs, queue=queue).register(queue)
     DeleteWorker(pool, blobs).register(queue)
-    from memdog.workers import EmbedWorker
+    from memdog.workers import EmbedWorker, EventWorker
     from memdog.write import EMBED_TOPIC
 
     embed = EmbedWorker(pool, embedder, settings, queue=queue)
@@ -87,7 +88,8 @@ async def test_the_cascade_reclaims_and_the_root_row_goes_last(
         WriteRequest(producer_id=tenant.producer_id, items=[
             WriteItem(external_id="bytes-gone.csv",
                       content=Inline(bytes_b64=base64.b64encode(b"a,b\n1,2\n").decode())),
-        ]),
+        ],
+                        options=WriteOptions(enrich=True)),
     )
     await queue.drain()
     data_id = written.results[0].data_id

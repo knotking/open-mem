@@ -1,5 +1,11 @@
 """The reconciler -- what makes the staircase self-healing.
 
+One rule governs everything here: **it repairs requested work, it never invents
+it.** Now that enrichment is opt-in, an item sitting at `stored` with no
+enrichment request is not behind -- it is exactly where its owner left it, and
+sweeping it would perform a model call nobody asked for and bill someone for it.
+So every row-level tier is qualified by the existence of an enrichment event.
+
 The write commits and the enrichment is queued. If the process dies in between,
 the row is durable and the job is not: an in-process queue loses it outright,
 and every broker has a redelivery limit after which it stops trying. Either way
@@ -36,10 +42,11 @@ class Swept:
     parse: int
     embed: int
     enrich: int
+    events: int = 0
 
     @property
     def total(self) -> int:
-        return self.parse + self.embed + self.enrich
+        return self.parse + self.embed + self.enrich + self.events
 
 
 async def reconcile(
@@ -68,13 +75,18 @@ async def reconcile(
     # identical to one that had been examined and declined.
     unparsed = await pool.fetch(
         """
-        SELECT data_id FROM data_items
-        WHERE state = 'stored'
-          AND storage_ref IS NOT NULL
-          AND indexable_text IS NULL
-          AND parse_status IS NULL
-          AND deleted_at IS NULL
-          AND updated_at < now() - make_interval(secs => $1)
+        SELECT d.data_id FROM data_items d
+        WHERE d.state = 'stored'
+          AND d.storage_ref IS NOT NULL
+          AND d.indexable_text IS NULL
+          AND d.parse_status IS NULL
+          AND d.deleted_at IS NULL
+          AND d.updated_at < now() - make_interval(secs => $1)
+          AND EXISTS (
+                SELECT 1 FROM domain_events e
+                WHERE e.data_id = d.data_id AND e.event_type = 'enrichment.requested'
+              )
+
         ORDER BY data_id
         LIMIT $2
         """,
@@ -84,11 +96,16 @@ async def reconcile(
 
     stored = await pool.fetch(
         """
-        SELECT data_id FROM data_items
-        WHERE state = 'stored'
-          AND indexable_text IS NOT NULL
-          AND deleted_at IS NULL
-          AND updated_at < now() - make_interval(secs => $1)
+        SELECT d.data_id FROM data_items d
+        WHERE d.state = 'stored'
+          AND d.indexable_text IS NOT NULL
+          AND d.deleted_at IS NULL
+          AND d.updated_at < now() - make_interval(secs => $1)
+          AND EXISTS (
+                SELECT 1 FROM domain_events e
+                WHERE e.data_id = d.data_id AND e.event_type = 'enrichment.requested'
+              )
+
         ORDER BY data_id
         LIMIT $2
         """,
@@ -102,6 +119,11 @@ async def reconcile(
           AND d.indexable_text IS NOT NULL
           AND d.deleted_at IS NULL
           AND d.updated_at < now() - make_interval(secs => $1)
+          AND EXISTS (
+                SELECT 1 FROM domain_events e
+                WHERE e.data_id = d.data_id AND e.event_type = 'enrichment.requested'
+              )
+
         ORDER BY d.data_id
         LIMIT $2
         """,
@@ -134,10 +156,20 @@ async def reconcile(
     for data_id in sorted(to_enrich):
         await queue.publish(ENRICH_TOPIC, {"data_id": data_id})
 
-    swept = Swept(parse=len(to_parse), embed=len(to_embed), enrich=len(to_enrich))
+    # Undelivered events are the other way work goes missing now that the log
+    # is the record. A dispatch that never happened looks exactly like an
+    # enrichment nobody asked for.
+    from .events import dispatch_pending
+
+    redispatched = await dispatch_pending(
+        pool, queue, limit=limit, redeliver_after_seconds=grace_seconds
+    )
+
+    swept = Swept(parse=len(to_parse), embed=len(to_embed), enrich=len(to_enrich),
+                  events=redispatched)
     if swept.total:
         log.info(
-            "reconciler re-enqueued %d parse, %d embed, %d enrich",
-            swept.parse, swept.embed, swept.enrich,
+            "reconciler re-enqueued %d parse, %d embed, %d enrich, %d events",
+            swept.parse, swept.embed, swept.enrich, swept.events,
         )
     return swept

@@ -10,10 +10,10 @@ from __future__ import annotations
 
 import pytest
 
-from memdog.contracts import Inline, WriteItem, WriteRequest
+from memdog.contracts import Inline, WriteItem, WriteRequest, WriteOptions
 from memdog.queue import InProcessQueue
 from memdog.retrieval import NotFound, get_versions
-from memdog.workers import ParseWorker
+from memdog.workers import EventWorker, ParseWorker
 from memdog.write import write_items
 
 pytestmark = pytest.mark.asyncio
@@ -24,7 +24,8 @@ async def _write(pool, queue, blobs, settings, actor, producer_id, external_id, 
         pool, queue, blobs, settings, actor,
         WriteRequest(producer_id=producer_id, items=[
             WriteItem(external_id=external_id, content=Inline(text=text)),
-        ]),
+        ],
+                        options=WriteOptions(enrich=True)),
     )
 
 
@@ -79,14 +80,17 @@ async def test_parsing_bytes_adds_a_revision_above_the_write(
 
     actor = await principal_for(tenant.api_key)
     queue = InProcessQueue()
-    ParseWorker(pool, blobs, queue=queue).register(queue)
+    parse = ParseWorker(pool, blobs, queue=queue)
+    parse.register(queue)
+    EventWorker(pool, queue, parse_worker=parse).register(queue)
     csv_bytes = b"account,amount\nreconciliation,4200\n"
     written = await write_items(
         pool, queue, blobs, settings, actor,
         WriteRequest(producer_id=tenant.producer_id, items=[
             WriteItem(external_id="ledger.csv",
                       content=Inline(bytes_b64=base64.b64encode(csv_bytes).decode())),
-        ]),
+        ],
+                        options=WriteOptions(enrich=True)),
     )
     await queue.drain()
     await queue.close()

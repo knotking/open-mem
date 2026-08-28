@@ -125,7 +125,7 @@ async def test_a_new_project_can_route_its_first_write(pool, tenant, principal_f
 async def test_producer_freshness_is_reported(pool, tenant, queue, blobs, settings, principal_for):
     """The highest-value detector: it catches a stopped webhook, a broken
     crawler selector and a dead client with one query."""
-    from memdog.contracts import Inline, WriteItem, WriteRequest
+    from memdog.contracts import Inline, WriteItem, WriteRequest, WriteOptions
     from memdog.write import write_items
 
     owner = await principal_for(tenant.api_key)
@@ -136,7 +136,8 @@ async def test_producer_freshness_is_reported(pool, tenant, queue, blobs, settin
         pool, queue, blobs, settings, owner,
         WriteRequest(producer_id=tenant.producer_id, items=[
             WriteItem(external_id="fresh-1", content=Inline(text="something")),
-        ]),
+        ],
+                        options=WriteOptions(enrich=True)),
     )
     after = {p["producer_id"]: p for p in await control.list_producers(pool, owner)}
     assert after[tenant.producer_id]["seconds_since_last_item"] is not None
@@ -147,7 +148,7 @@ async def test_changing_a_connection_scope_does_not_rewrite_history(
 ):
     """Those items were assigned an ACL at write time; silently re-filing them
     would change who can see existing data."""
-    from memdog.contracts import Inline, WriteItem, WriteRequest
+    from memdog.contracts import Inline, WriteItem, WriteRequest, WriteOptions
     from memdog.write import write_items
 
     owner = await principal_for(tenant.api_key)
@@ -155,7 +156,8 @@ async def test_changing_a_connection_scope_does_not_rewrite_history(
         pool, queue, blobs, settings, owner,
         WriteRequest(producer_id=tenant.producer_id, items=[
             WriteItem(external_id="scoped-1", content=Inline(text="written while personal")),
-        ]),
+        ],
+                        options=WriteOptions(enrich=True)),
     )
     before = await pool.fetchval(
         "SELECT access_level FROM data_items WHERE data_id = $1", written.results[0].data_id

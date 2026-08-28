@@ -26,7 +26,7 @@ from .ids import new_id
 from .acl import Acl, strictest
 from .extraction import EXTRACT_PURPOSE, Extractor
 from .inference import EmbeddingEngine, generator_version
-from .telemetry import continue_trace, record
+from .telemetry import continue_trace, record, span
 from .queue import Message, Queue
 
 EMBED_PURPOSE = "embedding"
@@ -111,11 +111,17 @@ class EmbedWorker:
 
     async def handle(self, message: Message) -> None:
         data_id = message.body["data_id"]
-        with continue_trace("embed", message.headers, data_id=data_id,
-                            model_id=self._embedder.model_id):
+        with continue_trace("embed.message", message.headers, data_id=data_id):
             await self._embed(data_id)
 
     async def _embed(self, data_id: str) -> None:
+        # The span lives here rather than in handle(), because the event worker
+        # calls this directly -- and a step that is only traced on one of its
+        # two call paths is worse than not tracing it at all.
+        with span("embed", data_id=data_id, model_id=self._embedder.model_id):
+            await self._embed_inner(data_id)
+
+    async def _embed_inner(self, data_id: str) -> None:
         row = await self._pool.fetchrow(
             "SELECT indexable_text, deleted_at, ingested_at FROM data_items WHERE data_id = $1",
             data_id,
@@ -177,8 +183,9 @@ class EmbedWorker:
             (datetime.now(timezone.utc) - row["ingested_at"]).total_seconds(),
             model_id=self._embedder.model_id,
         )
-        if self._queue is not None:
-            await self._queue.publish(ENRICH_TOPIC, {"data_id": data_id})
+        # Deliberately no chain to enrichment. The enrichment *event* decides
+        # whether to summarise, and chaining here would run it a second time --
+        # and would also summarise for callers who asked only to embed.
 
 
 class EnrichWorker:
@@ -221,11 +228,28 @@ class EnrichWorker:
 
     async def handle(self, message: Message) -> None:
         data_id = message.body["data_id"]
-        with continue_trace("enrich", message.headers, data_id=data_id,
-                            model_id=self._extractor.model_id):
+        with continue_trace("enrich.message", message.headers, data_id=data_id):
             await self._enrich(data_id)
 
-    async def _enrich(self, data_id: str) -> None:
+    async def _enrich(
+        self,
+        data_id: str,
+        *,
+        prompt_override: str | None = None,
+        model_override: str | None = None,
+    ) -> None:
+        with span("enrich", data_id=data_id, model_id=self._extractor.model_id):
+            await self._enrich_inner(
+                data_id, prompt_override=prompt_override, model_override=model_override
+            )
+
+    async def _enrich_inner(
+        self,
+        data_id: str,
+        *,
+        prompt_override: str | None = None,
+        model_override: str | None = None,
+    ) -> None:
         row = await self._pool.fetchrow(
             """
             SELECT org_id, project_id, owner_id, indexable_text, data_type,
@@ -237,9 +261,32 @@ class EnrichWorker:
         if row is None or row["deleted_at"] is not None or row["indexable_text"] is None:
             return
 
-        envelope = await self._extractor.extract(
-            row["indexable_text"], data_type=row["data_type"] or "unknown"
-        )
+        # A per-request override applies to this call only and is never
+        # persisted as configuration: an override that quietly became the
+        # default would change a project's behaviour with no audit trail on the
+        # setting that appears to control it.
+        extractor = self._extractor
+        if model_override and hasattr(extractor, "model_id"):
+            import copy
+
+            extractor = copy.copy(extractor)
+            extractor.model_id = model_override
+
+        data_type = row["data_type"] or "unknown"
+        if prompt_override:
+            import memdog.prompts as prompt_module
+
+            original = prompt_module.BY_DATA_TYPE.get(data_type)
+            prompt_module.BY_DATA_TYPE[data_type] = prompt_override
+            try:
+                envelope = await extractor.extract(row["indexable_text"], data_type=data_type)
+            finally:
+                if original is None:
+                    prompt_module.BY_DATA_TYPE.pop(data_type, None)
+                else:
+                    prompt_module.BY_DATA_TYPE[data_type] = original
+        else:
+            envelope = await extractor.extract(row["indexable_text"], data_type=data_type)
 
         # One source here, but the rule is written for the general case: an
         # artifact spanning mixed-ACL sources takes the intersection.
@@ -276,12 +323,12 @@ class EnrichWorker:
                 envelope.keywords,
                 envelope.language,
                 envelope.fields,
-                self._extractor.model_id,
+                extractor.model_id,
                 self.generator_version,
                 # No router in front of the extractor yet, so the model that was
                 # assigned is the model that served it. The column exists so the
                 # day that stops being true, the artifact says so.
-                self._extractor.model_id,
+                extractor.model_id,
                 acl.access_level,
                 acl.shared_with,
                 envelope.model_version,
@@ -303,7 +350,7 @@ class EnrichWorker:
         record(
             "ingest_to_enriched",
             (datetime.now(timezone.utc) - row["ingested_at"]).total_seconds(),
-            model_id=self._extractor.model_id,
+            model_id=extractor.model_id,
         )
 
 
@@ -565,3 +612,101 @@ class ParseWorker:
             status,
             detail,
         )
+
+
+class EventWorker:
+    """Consumes domain events and turns them into pipeline work.
+
+    Two handlers, matching the two commitments a write makes:
+
+    **`data.recorded`** does nothing but acknowledge. That is deliberate -- it
+    exists so that `enrichment.requested`, which names it as its cause, has
+    something definite to wait for. Recording is already complete when the event
+    is written; the consumption marks it *observed*, which is what unblocks the
+    dependent event.
+
+    **`enrichment.requested`** runs the expensive part: parse bytes if needed,
+    embed if asked, summarise if asked -- with whatever prompt and model the
+    request named, for that request only.
+    """
+
+    def __init__(
+        self,
+        pool: asyncpg.Pool,
+        queue: Queue,
+        *,
+        parse_worker=None,
+        embed_worker=None,
+        enrich_worker=None,
+    ) -> None:
+        self._pool = pool
+        self._queue = queue
+        self._parse = parse_worker
+        self._embed = embed_worker
+        self._enrich = enrich_worker
+
+    def register(self, queue: Queue) -> None:
+        queue.subscribe("record", self.handle_recorded)
+        queue.subscribe("enrich_request", self.handle_enrichment)
+
+    async def handle_recorded(self, message: Message) -> None:
+        from .events import dispatch_pending, mark_consumed
+
+        # Nothing to do: the data is already durable. Marking it consumed is
+        # what releases the enrichment event that names it.
+        #
+        # The dispatch happens *inside* the resumed trace, or the follow-on
+        # event starts a new one -- and then the interesting question, how long
+        # from write to searchable, has no single trace that answers it.
+        with continue_trace("event.recorded", message.headers,
+                            data_id=message.body.get("data_id")):
+            await mark_consumed(self._pool, message.body["event_id"])
+            await dispatch_pending(self._pool, self._queue)
+
+    async def handle_enrichment(self, message: Message) -> None:
+        from .events import mark_consumed, mark_failed
+
+        event_id = message.body["event_id"]
+        data_id = message.body["data_id"]
+        payload = message.body.get("payload") or {}
+
+        try:
+            with continue_trace("enrichment", message.headers, data_id=data_id):
+                # Bytes first: nothing can be embedded or summarised until
+                # there is text, and for media that means a model call.
+                if payload.get("needs_parse") and self._parse is not None:
+                    await self._parse._parse(data_id)
+
+                has_text = await self._pool.fetchval(
+                    "SELECT indexable_text IS NOT NULL FROM data_items WHERE data_id = $1",
+                    data_id,
+                )
+                if not has_text:
+                    # Not a failure: an image with interpretation switched off,
+                    # or a file awaiting quota. The reason is already on the row.
+                    await mark_consumed(self._pool, event_id)
+                    return
+
+                if payload.get("embed", True) and self._embed is not None:
+                    await self._embed._embed(data_id)
+                if payload.get("summarize", True) and self._enrich is not None:
+                    await self._enrich._enrich(
+                        data_id,
+                        prompt_override=payload.get("prompt_override"),
+                        model_override=payload.get("model_override"),
+                    )
+            await mark_consumed(self._pool, event_id)
+        except Exception as exc:  # noqa: BLE001 -- the event survives the failure
+            from .events import mark_deferred
+            from .multimodal import QuotaExhausted
+
+            # A provider quota is a "come back later", not a defect. Treating
+            # it as a failure walks a good request to `failed` within seconds.
+            if isinstance(exc, QuotaExhausted) or "429" in str(exc):
+                log.warning("deferring enrichment for %s: provider quota", data_id)
+                await mark_deferred(self._pool, event_id, repr(exc))
+                return
+
+            log.error("enrichment failed for %s: %r", data_id, exc)
+            await mark_failed(self._pool, event_id, repr(exc))
+            raise

@@ -11,7 +11,7 @@ import base64
 
 import pytest
 
-from memdog.contracts import Inline, MemoryRef, WriteItem, WriteRequest
+from memdog.contracts import Inline, MemoryRef, WriteItem, WriteRequest, WriteOptions
 from memdog.retrieval import project_overview
 from memdog.write import write_items
 
@@ -31,7 +31,8 @@ async def test_it_reports_the_corpus_and_what_is_not_being_read(
             # rather than vanishing from the totals.
             WriteItem(external_id="mystery.dcm",
                       content=Inline(bytes_b64=base64.b64encode(b"\x00\x01\x02\x03").decode())),
-        ]),
+        ],
+                        options=WriteOptions(enrich=True)),
     )
     await queue.drain()
 
@@ -61,7 +62,8 @@ async def test_the_totals_are_what_the_caller_can_see(
         pool, queue, blobs, settings, owner,
         WriteRequest(producer_id=tenant.producer_id, items=[
             WriteItem(external_id="private-doc", content=Inline(text="Private.")),
-        ]),
+        ],
+                        options=WriteOptions(enrich=True)),
     )
     await queue.drain()
 

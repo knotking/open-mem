@@ -10,11 +10,11 @@ from __future__ import annotations
 import pytest
 
 from memdog.acl import Acl, strictest
-from memdog.contracts import Inline, ItemAccess, WriteItem, WriteRequest
+from memdog.contracts import Inline, ItemAccess, WriteItem, WriteRequest, WriteOptions
 from memdog.extraction import ExtractionFailed, LocalHeuristicExtractor, build_prompt
 from memdog.queue import InProcessQueue, Message
 from memdog.retrieval import get_artifacts, stale_artifacts
-from memdog.workers import ENRICH_TOPIC, EnrichWorker
+from memdog.workers import ENRICH_TOPIC, EnrichWorker, EventWorker
 from memdog.write import write_items
 
 pytestmark = pytest.mark.asyncio
@@ -28,7 +28,8 @@ TEXT = (
 async def _write(pool, queue, blobs, settings, actor, producer_id, items):
     return await write_items(
         pool, queue, blobs, settings, actor,
-        WriteRequest(producer_id=producer_id, items=items),
+        WriteRequest(producer_id=producer_id, items=items,
+                        options=WriteOptions(enrich=True)),
     )
 
 
@@ -201,6 +202,9 @@ async def test_a_failed_extraction_leaves_the_item_searchable(
     enrich = EnrichWorker(pool, Broken(), settings)
     await enrich.ensure_generator()
     enrich.register(queue)
+    EventWorker(
+        pool, queue, embed_worker=embed, enrich_worker=enrich
+    ).register(queue)
 
     written = await _write(
         pool, queue, blobs, settings, actor, tenant.producer_id,

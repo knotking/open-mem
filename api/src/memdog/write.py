@@ -27,14 +27,17 @@ from .blobs import BlobStore
 from .classify import classify, sniff_mime
 from .config import Settings
 from .contracts import (
+    EnrichmentOptions,
     Inline,
     Pending,
     Stored,
     WriteItem,
     WriteRequest,
+    WriteOptions,
     WriteResponse,
     WriteResult,
 )
+from .events import emit, emit_audited
 from .ids import new_id
 from .cases import route_case
 from .memories import route_write
@@ -202,16 +205,16 @@ async def _write(pool, queue, blobs, settings, principal, request, idempotency_k
             return response
 
         results: list[WriteResult] = []
-        embed_jobs: list[str] = []
-        parse_jobs: list[str] = []
         for index, item in enumerate(request.items):
             try:
                 # Each item is its own transaction: one bad item in a batch of
                 # five hundred must not roll back the other four hundred and
                 # ninety-nine. That is what 207 is for.
                 async with conn.transaction():
-                    data_id, created, downloaded, has_text, memories, case_ids = await _write_one(
-                        conn, blobs, principal, producer, item
+                    (
+                        data_id, created, downloaded, has_text, memories, case_ids, events
+                    ) = await _write_one(
+                        conn, blobs, principal, producer, item, request.options
                     )
                 results.append(
                     WriteResult(
@@ -222,11 +225,9 @@ async def _write(pool, queue, blobs, settings, principal, request, idempotency_k
                         is_downloaded=downloaded,
                         memories=memories,
                         cases=case_ids,
+                        events=events,
                     )
                 )
-                if request.options.enrich and downloaded:
-                    # Text is ready to index. Bytes need reading first.
-                    (embed_jobs if has_text else parse_jobs).append(data_id)
             except Exception as exc:  # noqa: BLE001 -- reported per item, not raised
                 results.append(WriteResult(index=index, status="failed", error=str(exc)))
 
@@ -256,10 +257,13 @@ async def _write(pool, queue, blobs, settings, principal, request, idempotency_k
     # Published after commit: a job that arrives before its row is a race the
     # worker would have to defend against forever.
     record("items_written", response.accepted, producer_type=producer.type)
-    for data_id in parse_jobs:
-        await queue.publish(PARSE_TOPIC, {"data_id": data_id})
-    for data_id in embed_jobs:
-        await queue.publish(EMBED_TOPIC, {"data_id": data_id})
+
+    # Dispatch happens after the transaction commits, and reads the log rather
+    # than a list held in memory -- so a process that dies here loses nothing.
+    # The events are already durable; only their delivery is pending.
+    from .events import dispatch_pending
+
+    await dispatch_pending(pool, queue)
     return response
 
 
@@ -269,7 +273,8 @@ async def _write_one(
     principal: Principal,
     producer: ProducerRow,
     item: WriteItem,
-) -> tuple[str, bool, bool, bool, list[str]]:
+    options: "WriteOptions",
+) -> tuple[str, bool, bool, bool, list[str], list[str], list[str]]:
     content = item.content
     data_id = new_id("data")
     content_text = storage_ref = checksum = None
@@ -431,6 +436,54 @@ async def _write_one(
         detail={"external_id": item.external_id, "producer_id": producer.producer_id},
     )
 
+    # Event one: the data exists. Always, in this transaction, regardless of
+    # what anyone wants done with it afterwards.
+    recorded = await emit_audited(
+        conn, principal,
+        event_type="data.recorded",
+        org_id=producer.org_id, project_id=producer.project_id, data_id=data_id,
+        payload={
+            "external_id": item.external_id,
+            "created": created,
+            "has_text": content_text is not None,
+            "has_bytes": storage_ref is not None,
+            "pending_fetch": pending_ref is not None,
+            "mime_type": mime_type,
+            "data_type": data_type,
+        },
+    )
+    events = [recorded]
+
+    # Event two: only if asked. `caused_by` is what stops it being processed
+    # before the data it refers to.
+    enrichment: EnrichmentOptions = options.enrichment
+    if options.enrich and pending_ref is None:
+        events.append(await emit_audited(
+            conn, principal,
+            event_type="enrichment.requested",
+            org_id=producer.org_id, project_id=producer.project_id, data_id=data_id,
+            caused_by=recorded,
+            payload={
+                "embed": enrichment.embed,
+                "summarize": enrichment.summarize,
+                "prompt_override": enrichment.prompt,
+                "model_override": enrichment.model_id,
+                "needs_parse": content_text is None,
+            },
+        ))
+
+    # Emitted with no consumer. The graph is not built yet, and a graph that
+    # begins on the day someone writes the consumer has lost everything before
+    # it -- so the intent is recorded now and drained later.
+    events.append(await emit(
+        conn,
+        event_type="graph.build.requested",
+        org_id=producer.org_id, project_id=producer.project_id, data_id=data_id,
+        caused_by=recorded,
+        payload={"data_type": data_type, "identifiers": item.identifiers},
+        actor_user_id=principal.user_id, actor_key_id=principal.key_id,
+    ))
+
     await record_audit(
         conn,
         principal,
@@ -446,4 +499,5 @@ async def _write_one(
             "classified_by_layer": layer,
         },
     )
-    return data_id, created, pending_ref is None, content_text is not None, memories, case_ids
+    return (data_id, created, pending_ref is None, content_text is not None,
+            memories, case_ids, events)
