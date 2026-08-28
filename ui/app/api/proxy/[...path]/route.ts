@@ -17,6 +17,7 @@ const ALLOWED = [
   /^api\/v1\/crawlers\/[\w-]+$/,
   /^api\/v1\/crawlers\/[\w-]+\/(dry-run|run|runs)$/,
   /^api\/v1\/crawl-runs\/[\w-]+$/,
+  /^api\/v1\/crawl-tick$/,
   /^api\/v1\/projects\/[\w-]+\/crawlers$/,
   /^api\/v1\/health$/,
   /^api\/v1\/data\/[A-Za-z0-9_]+(\?.*)?$/,

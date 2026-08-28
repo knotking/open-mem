@@ -85,6 +85,24 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   shown in the console as a fresh/stale chip. It measures the last **success**,
   not the last attempt: a crawler failing every tick has a recent run and stale
   data, and nothing else tells those apart.
+- **Telemetry now exports.** Traces go to Cloud Trace and metrics to Cloud
+  Monitoring, via the Google exporters directly — those services do not speak
+  OTLP, and this avoids running a collector purely to translate. Verified live:
+  spans for `webhook.receive`, `crawl.run`, `crawl.discover`, `write`,
+  `retrieve` and `enrich`, and per-crawler metric series.
+- **A cardinality guard in `record()`.** A metrics store keeps one time series
+  per distinct label combination, so an unbounded label multiplies the series
+  count rather than adding a dimension — and that is how a metrics store falls
+  over, taking the ability to see anything with it. `user_id`, `data_id`,
+  `run_id`, `host`, `url` and friends are dropped from metrics and kept on
+  spans. The measurement still goes out with its remaining labels: losing a
+  dimension degrades a dashboard, losing the measurement hides the outage.
+- **New env var**: `OTEL_GCP_PROJECT` selects the GCP exporters (already wired
+  into `deploy/cloudrun.sh`). Unset, the service exports nothing, which stays
+  the local default. The service account needs `roles/cloudtrace.agent` and
+  `roles/monitoring.metricWriter`.
+- **New dependencies**: `opentelemetry-exporter-gcp-trace`,
+  `opentelemetry-exporter-gcp-monitoring`.
 - `.claude/skills/changelog` and this file.
 
 ### Changed

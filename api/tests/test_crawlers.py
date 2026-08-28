@@ -573,6 +573,33 @@ async def test_the_scheduler_skips_rather_than_queues_an_overlapping_tick(
     assert result["started"] == []
 
 
+async def test_a_manual_tick_cannot_start_another_orgs_crawls(
+    pool, queue, blobs, settings, tenant, other_tenant, principal_for, server
+):
+    """The advisory lock stops two ticks running at once; it does nothing about
+    *whose* crawlers a tick picks up. A person triggering a pass from the
+    console must not be able to start, or spend budget on, somebody else's."""
+    from memdog.crawling import tick_for
+
+    owner = await principal_for(tenant.api_key)
+    created = await create_crawler(
+        pool, owner, project_id=tenant.project_id, config=http_config(server),
+        schedule={"type": "interval", "every_seconds": 3600},
+    )
+    worker = await _worker(pool, queue, blobs, settings)
+    await worker.execute((await start_run(pool, owner, created["crawler_id"],
+                                          mode="dry"))["run_id"])
+    await set_enabled(pool, owner, created["crawler_id"], True)
+
+    intruder = await principal_for(other_tenant.api_key)
+    result = await tick_for(pool, intruder, worker)
+    assert result["started"] == [], "another org's due crawler must not be picked up"
+
+    # The owner's own tick still finds it.
+    mine = await tick_for(pool, owner, worker)
+    assert len(mine["started"]) == 1
+
+
 async def test_the_scheduler_runs_a_due_crawler(
     pool, queue, blobs, settings, tenant, principal_for, server
 ):

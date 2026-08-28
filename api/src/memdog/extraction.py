@@ -280,7 +280,59 @@ class ExtractionFailed(RuntimeError):
     """Parse or schema failure. Carries the raw output for the DLQ entry."""
 
 
+class ChainedExtractor:
+    """An `Extractor` that is really several, tried in order.
+
+    Implements the same protocol so nothing upstream knows or cares. The depth
+    it served at rides on the envelope, because an artifact that does not say
+    which engine produced it cannot be re-derived or trusted later.
+    """
+
+    def __init__(self, chain) -> None:
+        self._chain = chain
+        self.model_id = chain.model_id
+
+    async def extract(self, text: str, *, data_type: str) -> Envelope:
+        served = await self._chain.run(text, data_type=data_type)
+        envelope = served.result
+        envelope.fields["fallback_depth"] = served.depth
+        envelope.fields["served_by_engine"] = served.step.name
+        if served.errors:
+            # The reason it fell through, kept with the artifact rather than
+            # only in a log that has rotated by the time anyone asks.
+            envelope.fields["fallback_reason"] = served.errors
+        return envelope
+
+
 def build_extractor(settings) -> Extractor:
+    """The configured engine, then whatever else is available, then local.
+
+    The floor is the local heuristic: it needs no network and cannot be rate
+    limited, so the chain always terminates in something that answers. A worse
+    envelope is recoverable; a missing one stalls the item at `stored`.
+    """
+    from .routing import Chain, Step
+
+    steps = []
+    primary = _single_extractor(settings)
+    steps.append(Step(name=settings.extract_engine or "local",
+                      model_id=primary.model_id, call=primary.extract))
+
+    if settings.extract_engine == "gemini" and settings.extract_model and settings.ollama_url:
+        secondary = OllamaExtractor(settings.extract_model, settings.ollama_url)
+        steps.append(Step(name="ollama", model_id=secondary.model_id,
+                          call=secondary.extract))
+
+    if not isinstance(primary, LocalHeuristicExtractor):
+        floor = LocalHeuristicExtractor()
+        steps.append(Step(name="local", model_id=floor.model_id, call=floor.extract))
+
+    if len(steps) == 1:
+        return primary
+    return ChainedExtractor(Chain("extract", steps))
+
+
+def _single_extractor(settings) -> Extractor:
     if settings.extract_engine == "gemini":
         if not settings.gemini_api_key:
             raise ValueError("GEMINI_API_KEY is required when EXTRACT_ENGINE=gemini")

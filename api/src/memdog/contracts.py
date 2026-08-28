@@ -259,6 +259,11 @@ class AskResponse(BaseModel):
     model_id: str
     served_by_model: str | None = None
     generator_version: str | None = None
+    # Which engine answered, and how far down the chain it was. Zero is the
+    # primary. Running permanently on a fallback is invisible without this --
+    # the answers keep arriving, they are just worse than the ones paid for.
+    fallback_depth: int = 0
+    served_by_engine: str | None = None
     answer_stored: bool = False
     latency_ms: int = 0
 

@@ -52,7 +52,7 @@ const GROUPS: { title: string; items: { key: Section; label: string; hint: strin
       { key: "add", label: "Add data", hint: "paste, upload or record" },
       { key: "update", label: "Update data", hint: "re-write a key, see revisions" },
       { key: "search", label: "Search", hint: "retrieve, with the trace" },
-      { key: "ask", label: "Ask", hint: "answer, with its evidence" },
+      { key: "ask", label: "Chat", hint: "ask your data, with citations" },
       { key: "inbound", label: "Inbound", hint: "webhooks providers post to" },
       { key: "crawlers", label: "Crawlers", hint: "pull what won't push" },
     ],
@@ -710,6 +710,14 @@ type RunResult = {
   reason: string | null;
 };
 
+type TickResult = {
+  started: string[];
+  skipped: string[];
+  reaped: number;
+  runs: RunResult[];
+  skipped_lock?: boolean;
+};
+
 type RunDetail = RunResult & {
   mode: string;
   sample: { external_id: string; url: string | null;
@@ -863,7 +871,39 @@ function CrawlersSection({ projectId }: { projectId: string }) {
       </section>
 
       <section className="panel">
-        <h2>Configured</h2>
+        <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
+          <h2 style={{ margin: 0 }}>Configured</h2>
+          <button
+            className="secondary"
+            disabled={busy}
+            onClick={() =>
+              act("Scheduler pass finished.", async () => {
+                const tick = await call<TickResult>("api/v1/crawl-tick", {});
+                setNote(
+                  tick.skipped_lock
+                    ? "Another scheduler pass is already running."
+                    : `Started ${tick.started.length}, skipped ${tick.skipped.length} still` +
+                      ` in flight, recovered ${tick.reaped} abandoned.`,
+                );
+                if (tick.runs.length > 0) {
+                  setDetail(
+                    await call<RunDetail>(
+                      `api/v1/crawl-runs/${tick.runs[0].run_id}`, undefined, "GET",
+                    ),
+                  );
+                }
+                await load();
+              })
+            }
+          >
+            Run due crawlers
+          </button>
+        </div>
+        <p className="empty">
+          The same pass the scheduler makes, for crawlers of yours that are due — so what it would
+          do is answerable now rather than at the next tick. A crawler already running is skipped,
+          not queued.
+        </p>
         {crawlers.length === 0 ? (
           <p className="empty">Nothing yet.</p>
         ) : (
@@ -1017,6 +1057,8 @@ type Answer = {
   excluded: { data_id: string; reason: string; score: number | null; state: string | null }[];
   model_id: string;
   served_by_model: string | null;
+  fallback_depth: number;
+  served_by_engine: string | null;
   answer_stored: boolean;
   latency_ms: number;
 };
@@ -1028,8 +1070,8 @@ function AskSection({ projectId }: { projectId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
 
-  async function send() {
-    const asked = question.trim();
+  async function send(preset?: string) {
+    const asked = (preset ?? question).trim();
     if (!asked) return;
     setBusy(true);
     setError(null);
@@ -1050,19 +1092,37 @@ function AskSection({ projectId }: { projectId: string }) {
 
   return (
     <>
-      <h1>Read / ask</h1>
+      <h1>Chat with your data</h1>
       <p className="lede">
-        The same retrieval as search, with a model reading the passages. Every claim carries the
-        number of the passage it came from, and the passages are here — so a wrong answer is a
-        thing you can check rather than a thing you have to believe.
+        Ask a question and a model answers from your records — the same retrieval as search, with
+        the passages read back to you. Every claim carries the number of the passage it came from,
+        and those passages are shown, so a wrong answer is something you can check rather than
+        something you have to believe.
       </p>
 
       {turns.length === 0 && (
         <section className="panel">
-          <p className="empty">
-            Ask about data in this project. Answers come only from records you can already read;
-            when the corpus does not support an answer, it says so instead of composing one.
+          <p className="empty" style={{ marginTop: 0 }}>
+            Answers come only from records you can already read. When your data does not support an
+            answer, it says so instead of composing one.
           </p>
+          <h3>Try one</h3>
+          <div className="row">
+            {[
+              "What did we write about most recently?",
+              "Summarise what is in this project.",
+              "What caused the last incident?",
+            ].map((example) => (
+              <button
+                key={example}
+                className="secondary"
+                disabled={busy}
+                onClick={() => void send(example)}
+              >
+                {example}
+              </button>
+            ))}
+          </div>
         </section>
       )}
 
@@ -1084,6 +1144,11 @@ function AskSection({ projectId }: { projectId: string }) {
               </span>
             )}
             <span className="chip">{turn.served_by_model || turn.model_id}</span>
+            {turn.fallback_depth > 0 && (
+              <span className="chip warnchip">
+                fallback: {turn.served_by_engine} answered
+              </span>
+            )}
             <span className="chip">{turn.latency_ms} ms</span>
             {!turn.answer_stored && <span className="chip">text not stored</span>}
           </div>
@@ -1131,7 +1196,7 @@ function AskSection({ projectId }: { projectId: string }) {
             onKeyDown={(e) => e.key === "Enter" && void send()}
             style={{ flex: 1 }}
           />
-          <button onClick={send} disabled={busy || !question.trim()}>
+          <button onClick={() => void send()} disabled={busy || !question.trim()}>
             {busy ? "Reading…" : "Ask"}
           </button>
         </div>

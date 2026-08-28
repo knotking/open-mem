@@ -1597,6 +1597,26 @@ async def run_crawler_endpoint(
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
 
 
+@app.post("/api/v1/crawl-tick", status_code=202)
+async def crawl_tick_endpoint(
+    request: Request, body: dict | None = None, actor: Principal = Depends(principal)
+) -> dict:
+    """Run one scheduler pass now, for this organization's due crawlers.
+
+    The same code Cloud Scheduler drives, scoped to the caller's org -- so
+    "what would the scheduler do" is answerable without waiting for the next
+    tick, and without being able to start somebody else's crawls.
+    """
+    state = request.app.state
+    try:
+        return await crawling.tick_for(
+            state.pool, actor, state.crawl_worker,
+            limit=int((body or {}).get("limit", 5)),
+        )
+    except (CrawlerError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
 @app.get("/api/v1/crawlers/{crawler_id}/runs")
 async def list_runs_endpoint(
     request: Request, crawler_id: str, actor: Principal = Depends(principal)

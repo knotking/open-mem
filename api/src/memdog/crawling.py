@@ -597,31 +597,46 @@ def _hash_for(found: list[Discovered], external_id: str) -> str:
 
 # --------------------------------------------------------------- scheduler
 
-async def tick(pool: asyncpg.Pool, worker: CrawlWorker, *, limit: int = 5) -> dict:
+async def tick(pool: asyncpg.Pool, worker: CrawlWorker, *, limit: int = 5,
+               org_id: str | None = None) -> dict:
     """One scheduler pass, behind a single-holder advisory lock.
 
     Two schedulers electing themselves is how a nightly crawl becomes two
     nightly crawls, so the lock is taken before anything is selected.
+
+    `org_id` scopes the pass to one organization. The platform scheduler runs
+    unscoped; a person triggering a tick from the console must not be able to
+    start crawls belonging to somebody else, and the lock alone does not
+    prevent that -- it only prevents two of them at once.
     """
     async with pool.acquire() as conn:
         if not await conn.fetchval("SELECT pg_try_advisory_lock(hashtext('memdog.crawl'))"):
             return {"skipped_lock": True, "started": [], "skipped": [], "runs": []}
         try:
-            return await _tick(pool, conn, worker, limit)
+            return await _tick(pool, conn, worker, limit, org_id)
         finally:
             await conn.execute("SELECT pg_advisory_unlock(hashtext('memdog.crawl'))")
 
 
-async def _tick(pool: asyncpg.Pool, conn, worker: CrawlWorker, limit: int) -> dict:
+async def tick_for(pool: asyncpg.Pool, principal: Principal, worker: CrawlWorker,
+                   *, limit: int = 5) -> dict:
+    """A manual tick from the API, scoped to the caller's own organization."""
+    principal.require(CONFIG_WRITE)
+    return await tick(pool, worker, limit=limit, org_id=principal.org_id)
+
+
+async def _tick(pool: asyncpg.Pool, conn, worker: CrawlWorker, limit: int,
+                org_id: str | None = None) -> dict:
     reaped = await reap(pool)
 
     due = await conn.fetch(
         """
         SELECT * FROM crawlers
          WHERE enabled AND next_due_at IS NOT NULL AND next_due_at <= now()
+           AND ($2::text IS NULL OR org_id = $2)
          ORDER BY next_due_at LIMIT $1
         """,
-        limit,
+        limit, org_id,
     )
     started, skipped = [], []
     for row in due:
