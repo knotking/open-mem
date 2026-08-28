@@ -63,7 +63,7 @@ async def reconcile(
         """
         SELECT data_id FROM data_items
         WHERE state = 'stored'
-          AND content_text IS NOT NULL
+          AND indexable_text IS NOT NULL
           AND deleted_at IS NULL
           AND updated_at < now() - make_interval(secs => $1)
         ORDER BY data_id
@@ -76,7 +76,7 @@ async def reconcile(
         """
         SELECT d.data_id FROM data_items d
         WHERE d.state = 'searchable'
-          AND d.content_text IS NOT NULL
+          AND d.indexable_text IS NOT NULL
           AND d.deleted_at IS NULL
           AND d.updated_at < now() - make_interval(secs => $1)
         ORDER BY d.data_id

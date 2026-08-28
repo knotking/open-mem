@@ -128,6 +128,11 @@ class WriteResult(BaseModel):
     # Derived, never assignable. An item awaiting a fetch is `stored` with
     # is_downloaded false -- that is not a fourth rung on the staircase.
     is_downloaded: bool | None = None
+    # Reported because the caller should not have to query to discover where
+    # their own write went -- including memberships a routing rule or the
+    # default added without being asked.
+    memories: list[str] = Field(default_factory=list)
+    cases: list[str] = Field(default_factory=list)
     error: str | None = None
 
 

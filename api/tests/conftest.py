@@ -16,7 +16,7 @@ from memdog.db import create_pool, migrate  # noqa: E402
 from memdog.inference import build_embedder  # noqa: E402
 from memdog.queue import InProcessQueue  # noqa: E402
 from memdog.extraction import build_extractor  # noqa: E402
-from memdog.workers import EmbedWorker, EnrichWorker  # noqa: E402
+from memdog.workers import EmbedWorker, EnrichWorker, ParseWorker  # noqa: E402
 from memdog.write import EMBED_TOPIC  # noqa: E402
 
 
@@ -55,8 +55,9 @@ def extractor():
 
 
 @pytest.fixture
-async def queue(pool, embedder, extractor, settings):
+async def queue(pool, embedder, extractor, settings, blobs):
     queue = InProcessQueue()
+    ParseWorker(pool, blobs, queue=queue).register(queue)
     embed = EmbedWorker(pool, embedder, settings, queue=queue)
     await embed.ensure_generator()
     embed.register(queue, EMBED_TOPIC)

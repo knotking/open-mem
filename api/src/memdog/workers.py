@@ -15,6 +15,7 @@ repairable without knowing which rows came from where.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
 import asyncpg
 
@@ -25,10 +26,12 @@ from .ids import new_id
 from .acl import Acl, strictest
 from .extraction import EXTRACT_PURPOSE, Extractor
 from .inference import EmbeddingEngine, generator_version
+from .telemetry import continue_trace, record
 from .queue import Message, Queue
 
 EMBED_PURPOSE = "embedding"
 ENRICH_TOPIC = "enrich"
+PARSE_TOPIC = "parse"
 
 log = logging.getLogger(__name__)
 
@@ -108,14 +111,20 @@ class EmbedWorker:
 
     async def handle(self, message: Message) -> None:
         data_id = message.body["data_id"]
+        with continue_trace("embed", message.headers, data_id=data_id,
+                            model_id=self._embedder.model_id):
+            await self._embed(data_id)
+
+    async def _embed(self, data_id: str) -> None:
         row = await self._pool.fetchrow(
-            "SELECT content_text, deleted_at FROM data_items WHERE data_id = $1", data_id
+            "SELECT indexable_text, deleted_at, ingested_at FROM data_items WHERE data_id = $1",
+            data_id,
         )
-        if row is None or row["deleted_at"] is not None or row["content_text"] is None:
+        if row is None or row["deleted_at"] is not None or row["indexable_text"] is None:
             return  # deleted, or not yet downloaded -- W2's job, not this one
 
         chunks = chunk_text(
-            row["content_text"],
+            row["indexable_text"],
             max_chars=self._settings.chunk_chars,
             overlap=self._settings.chunk_overlap,
         )
@@ -163,6 +172,11 @@ class EmbedWorker:
                 """,
                 data_id,
             )
+        record(
+            "ingest_to_searchable",
+            (datetime.now(timezone.utc) - row["ingested_at"]).total_seconds(),
+            model_id=self._embedder.model_id,
+        )
         if self._queue is not None:
             await self._queue.publish(ENRICH_TOPIC, {"data_id": data_id})
 
@@ -207,19 +221,24 @@ class EnrichWorker:
 
     async def handle(self, message: Message) -> None:
         data_id = message.body["data_id"]
+        with continue_trace("enrich", message.headers, data_id=data_id,
+                            model_id=self._extractor.model_id):
+            await self._enrich(data_id)
+
+    async def _enrich(self, data_id: str) -> None:
         row = await self._pool.fetchrow(
             """
-            SELECT org_id, project_id, owner_id, content_text, data_type,
-                   access_level, shared_with, deleted_at
+            SELECT org_id, project_id, owner_id, indexable_text, data_type,
+                   access_level, shared_with, deleted_at, ingested_at
             FROM data_items WHERE data_id = $1
             """,
             data_id,
         )
-        if row is None or row["deleted_at"] is not None or row["content_text"] is None:
+        if row is None or row["deleted_at"] is not None or row["indexable_text"] is None:
             return
 
         envelope = await self._extractor.extract(
-            row["content_text"], data_type=row["data_type"] or "unknown"
+            row["indexable_text"], data_type=row["data_type"] or "unknown"
         )
 
         # One source here, but the rule is written for the general case: an
@@ -273,9 +292,226 @@ class EnrichWorker:
                 """,
                 artifact_id,
                 data_id,
-                len(row["content_text"]),
+                len(row["indexable_text"]),
             )
             await conn.execute(
                 "UPDATE data_items SET state = 'enriched', updated_at = now() WHERE data_id = $1",
                 data_id,
             )
+        record(
+            "ingest_to_enriched",
+            (datetime.now(timezone.utc) - row["ingested_at"]).total_seconds(),
+            model_id=self._extractor.model_id,
+        )
+
+
+async def record_version(
+    conn,
+    data_id: str,
+    *,
+    source: str,
+    content_text: str | None,
+    mime_type: str | None = None,
+    model_id: str | None = None,
+    generator_version: str | None = None,
+    tokens: int = 0,
+    detail: dict | None = None,
+    attempts: int = 5,
+) -> int:
+    """Append a revision. Never overwrite one, and never silently drop one.
+
+    Revision numbers come from the table rather than a counter on the row. Two
+    writers can still compute the same next number, and the unique constraint
+    catches it -- so the conflict is **retried**, not swallowed. `ON CONFLICT DO
+    NOTHING` here would turn a race into a missing revision, which is the one
+    failure a version history cannot have: it looks exactly like the change
+    never happened.
+    """
+    import hashlib
+
+    checksum = "sha256:" + hashlib.sha256((content_text or "").encode()).hexdigest()
+    for attempt in range(attempts):
+        try:
+            # A savepoint, because a unique violation aborts the surrounding
+            # transaction: without this the retry would run inside a failed
+            # transaction and fail differently.
+            async with conn.transaction():
+                return await conn.fetchval(
+                """
+                    INSERT INTO data_versions (version_id, data_id, revision, source,
+                        content_text, content_chars, checksum, mime_type, model_id,
+                        generator_version, tokens, detail)
+                    SELECT $1, $2,
+                           coalesce(max(revision), 0) + 1,
+                           $3, $4, $5, $6, $7, $8, $9, $10, $11
+                    FROM data_versions WHERE data_id = $2
+                    RETURNING revision
+                    """,
+                    new_id("ver"), data_id, source, content_text,
+                    len(content_text) if content_text else 0, checksum, mime_type,
+                    model_id, generator_version, tokens, detail or {},
+                )
+        except asyncpg.UniqueViolationError:
+            if attempt == attempts - 1:
+                raise
+            # Someone else took that number. Recompute and try again.
+            continue
+    raise RuntimeError("unreachable")
+
+
+class ParseWorker:
+    """Bytes to text, so the rest of the spine can do its job.
+
+    This sits *below* embedding on the staircase: an item with a storage_ref and
+    no text cannot be chunked, so it cannot be searchable. Parsing is what
+    promotes it.
+
+    Failures here are terminal by design. A password-protected PDF will not
+    become readable on the fourth attempt, so the reason is recorded on the row
+    and the message is acknowledged rather than retried -- retrying a file that
+    can never parse is a busy loop wearing a failure's clothes.
+    """
+
+    def __init__(
+        self,
+        pool: asyncpg.Pool,
+        blobs,
+        queue: Queue | None = None,
+        multimodal=None,
+    ) -> None:
+        self._pool = pool
+        self._blobs = blobs
+        self._queue = queue
+        # Media and scanned pages route here. Absent, they store with a reason.
+        self._multimodal = multimodal
+
+    def register(self, queue: Queue, topic: str = PARSE_TOPIC) -> None:
+        queue.subscribe(topic, self.handle)
+
+    async def handle(self, message: Message) -> None:
+        data_id = message.body["data_id"]
+        with continue_trace("parse", message.headers, data_id=data_id):
+            await self._parse(data_id)
+
+    async def _parse(self, data_id: str) -> None:
+        from .parsers import NeedsModel, ParseFailed, parse
+
+        row = await self._pool.fetchrow(
+            """
+            SELECT storage_ref, mime_type, external_id, content_text,
+                   extracted_text, deleted_at
+            FROM data_items WHERE data_id = $1
+            """,
+            data_id,
+        )
+        if row is None or row["deleted_at"] is not None or row["storage_ref"] is None:
+            return
+        if row["content_text"] is not None or row["extracted_text"] is not None:
+            return  # already text, or already parsed; redelivery
+
+        payload = await self._blobs.get(row["storage_ref"])
+        mime = row["mime_type"] or ""
+        model_id = generator = None
+        tokens = 0
+        try:
+            parsed = parse(payload, mime=mime, name=row["external_id"] or "")
+        except NeedsModel as exc:
+            # An image, a recording, or a scanned page. Whether this is a dead
+            # end or a transcript depends entirely on whether the deployment
+            # has been given a model and permission to spend on it.
+            interpreted = await self._interpret(data_id, payload, mime, exc.capability)
+            if interpreted is None:
+                return
+            parsed, model_id, generator, tokens = interpreted
+        except ParseFailed as exc:
+            await self._record(data_id, exc.code, {"reason": str(exc)})
+            return
+
+        status = "truncated" if parsed.truncated else "parsed"
+        async with self._pool.acquire() as conn, conn.transaction():
+            await conn.execute(
+                """
+                UPDATE data_items
+                SET extracted_text = $2, parse_status = $3, parse_detail = $4,
+                    updated_at = now()
+                WHERE data_id = $1
+                """,
+                data_id,
+                parsed.text,
+                status,
+                {"tier": parsed.tier, "structure": parsed.structure,
+                 "warnings": parsed.warnings},
+            )
+            await record_version(
+                conn,
+                data_id,
+                source="interpret" if model_id else "parse",
+                content_text=parsed.text,
+                mime_type=mime,
+                model_id=model_id,
+                generator_version=generator,
+                tokens=tokens,
+                detail={"tier": parsed.tier, "structure": parsed.structure,
+                        "warnings": parsed.warnings},
+            )
+        if self._queue is not None and parsed.text.strip():
+            await self._queue.publish("embed", {"data_id": data_id})
+
+    async def _interpret(self, data_id: str, payload: bytes, mime: str, capability: str):
+        """Hand the bytes to a model, or record precisely why we did not."""
+        from .multimodal import MediaDisabled, MediaTooLarge, modality_for
+
+        engine = self._multimodal
+        if engine is None or not getattr(engine, "enabled", False):
+            await self._record(
+                data_id, "needs_model",
+                {"capability": capability,
+                 "reason": "media interpretation is not enabled for this deployment"},
+            )
+            return None
+
+        modality = "ocr" if capability == "ocr" else (modality_for(mime) or "image")
+        try:
+            result = await engine.interpret(payload, mime=mime, modality=modality)
+        except MediaTooLarge as exc:
+            await self._record(data_id, "needs_model",
+                               {"capability": capability, "reason": str(exc)})
+            return None
+        except MediaDisabled as exc:
+            await self._record(data_id, "needs_model",
+                               {"capability": capability, "reason": str(exc)})
+            return None
+
+        if not result.text.strip():
+            # An empty transcript is a *correct* answer for a recording with no
+            # speech, and it must not be dressed up as one. A general model
+            # asked to transcribe a tone will invent a plausible conversation;
+            # a purpose-built transcriber returns nothing. Recording the
+            # emptiness is what keeps the corpus free of invented content.
+            await self._record(
+                data_id, "needs_model",
+                {"capability": capability, "model_id": result.model_id,
+                 "reason": "no interpretable content found in the media"},
+            )
+            return None
+
+        from .parsers import Parsed
+
+        parsed = Parsed(
+            text=result.text,
+            tier="A",
+            structure={"modality": result.modality, **result.structure},
+        ).capped()
+        return parsed, result.model_id, f"multimodal:{result.model_id}", result.tokens
+
+    async def _record(self, data_id: str, status: str, detail: dict) -> None:
+        record("parse_failures", 1, status=status)
+        await self._pool.execute(
+            """
+            UPDATE data_items SET parse_status = $2, parse_detail = $3, updated_at = now()
+            WHERE data_id = $1
+            """,
+            data_id,
+            status,
+            detail,
+        )

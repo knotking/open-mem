@@ -12,6 +12,22 @@ dependencies = [
     "cryptography>=43",
     "filetype>=1.2",
     "google-cloud-storage>=2.18",
+    # Format handlers. All pure-Python or wheel-shipped: nothing here needs a
+    # system library in the runtime image, which is the constraint that decides
+    # what can be supported at all.
+    "pypdf>=5.1",
+    "python-docx>=1.1",
+    "python-pptx>=1.0",
+    "openpyxl>=3.1",
+    "selectolax>=0.3.21",
+    "PyYAML>=6.0",
+    "charset-normalizer>=3.4",
+    # Telemetry. The API and SDK are always present; the OTLP exporter is only
+    # used when an endpoint is configured, so local runs stay dependency-light
+    # at runtime even though the package is installed.
+    "opentelemetry-api>=1.29",
+    "opentelemetry-sdk>=1.29",
+    "opentelemetry-exporter-otlp-proto-http>=1.29",
 ]
 
 [project.optional-dependencies]

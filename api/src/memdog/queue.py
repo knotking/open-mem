@@ -58,7 +58,11 @@ class InProcessQueue:
         return self._queues.setdefault(topic, asyncio.Queue())
 
     async def publish(self, topic: str, body: dict, headers: dict[str, str] | None = None) -> None:
-        await self._queue(topic).put(Message(topic, body, headers or {}))
+        from .telemetry import inject_context
+
+        # The trace crosses the hop here. Without it the write and the work it
+        # queued are two unrelated traces.
+        await self._queue(topic).put(Message(topic, body, inject_context(dict(headers or {}))))
 
     def subscribe(self, topic: str, handler: Handler) -> None:
         self._handlers[topic] = handler

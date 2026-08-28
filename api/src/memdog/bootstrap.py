@@ -13,7 +13,8 @@ from dataclasses import dataclass
 
 import asyncpg
 
-from .auth import DATA_READ, DATA_WRITE, issue_key
+from .auth import CONFIG_WRITE, DATA_READ, DATA_WRITE, issue_key
+from .memories import ensure_shipped_types
 from .ids import new_id
 
 
@@ -70,6 +71,7 @@ async def bootstrap_tenant(
         org_id,
         project_name,
     )
+    await ensure_shipped_types(pool, project_id, org_id)
     user_id = await create_user(pool, email)
     await pool.execute(
         "INSERT INTO memberships (user_id, org_id, role) VALUES ($1, $2, 'owner')",
@@ -113,7 +115,9 @@ async def bootstrap_tenant(
         user_id=user_id,
         org_id=org_id,
         project_id=project_id,
-        capabilities=capabilities or [DATA_READ, DATA_WRITE],
+        # The org owner's own key. Config:write but deliberately not admin:* --
+        # so the admin-only paths are still exercised rather than waved through.
+        capabilities=capabilities or [DATA_READ, DATA_WRITE, CONFIG_WRITE],
         name="bootstrap",
     )
     return Tenant(org_id, project_id, user_id, producer_id, connection_id, token)

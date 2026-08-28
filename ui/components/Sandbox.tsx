@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import Capture, { humanBytes } from "./Capture";
+
 type Stair = {
   total: number;
   stored: number;
@@ -19,6 +21,33 @@ type Citation = {
   score: number;
   matched_by: string[];
   state: string;
+};
+
+type Version = {
+  version_id: string;
+  revision: number;
+  source: string;
+  content_chars: number;
+  mime_type: string | null;
+  model_id: string | null;
+  tokens: number | null;
+  preview: string | null;
+  created_at: string;
+  detail: Record<string, unknown>;
+};
+
+type Item = {
+  data_id: string;
+  state: string;
+  mime_type: string | null;
+  data_type: string | null;
+  storage_ref: string | null;
+  checksum: string | null;
+  size_bytes: number | null;
+  parse_status: string | null;
+  parse_detail: Record<string, unknown> | null;
+  content_text: string | null;
+  extracted_text: string | null;
 };
 
 type Excluded = {
@@ -66,7 +95,9 @@ export default function Sandbox({
   const [query, setQuery] = useState("rollback recovered error rates");
   const [stair, setStair] = useState<Stair | null>(null);
   const [trace, setTrace] = useState<Trace | null>(null);
-  const [busy, setBusy] = useState<"write" | "search" | null>(null);
+  const [busy, setBusy] = useState<"write" | "search" | "upload" | null>(null);
+  const [item, setItem] = useState<Item | null>(null);
+  const [versions, setVersions] = useState<Version[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const poll = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -101,6 +132,52 @@ export default function Sandbox({
     };
   }, [stair, refresh]);
 
+  // Watch one item up the staircase. Media takes a model call, so this is the
+  // difference between "it is working" and "it is broken".
+  const track = useCallback(
+    async (dataId: string) => {
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        const current = await call<Item>(`api/v1/data/${dataId}`);
+        setItem(current);
+        setVersions((await call<{ versions: Version[] }>(`api/v1/data/${dataId}/versions`)).versions);
+        await refresh();
+        const settled =
+          current.state === "enriched" ||
+          (current.parse_status !== null && current.parse_status !== "parsed");
+        if (settled) return;
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+    },
+    [refresh],
+  );
+
+  async function ingestBytes(name: string, mime: string, base64: string, size: number) {
+    setBusy("upload");
+    setError(null);
+    setNote(null);
+    try {
+      const response = await call<{ results: { data_id: string; state: string }[] }>(
+        "api/v1/write",
+        {
+          producer_id: producerId,
+          items: [
+            { external_id: name, content: { kind: "inline", bytes_b64: base64 } },
+          ],
+        },
+      );
+      const first = response.results[0];
+      setNote(
+        `${name} (${humanBytes(size)}) committed as ${first.data_id}. ` +
+          "The bytes are in object storage; interpretation is queued.",
+      );
+      await track(first.data_id);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function write() {
     setBusy("write");
     setError(null);
@@ -120,7 +197,7 @@ export default function Sandbox({
       );
       const first = response.results[0];
       setNote(`Committed as ${first.data_id} at state “${first.state}”. Enrichment is queued.`);
-      await refresh();
+      await track(first.data_id);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -165,6 +242,18 @@ export default function Sandbox({
       </section>
 
       <section className="panel">
+        <h2>Upload or record</h2>
+        <div className="notice">
+          <strong>Media is interpreted by a model.</strong> Audio and video are transcribed,
+          images are described and their text transcribed. That costs tokens per file and the
+          cost is recorded per revision below — it is the expensive tier by a wide margin.
+        </div>
+        <Capture onSubmit={ingestBytes} busy={busy !== null} />
+      </section>
+
+      {item && <ItemPanel item={item} versions={versions} />}
+
+      <section className="panel">
         <h2>Readiness staircase</h2>
         {stair === null ? (
           <p className="empty">Loading…</p>
@@ -192,6 +281,61 @@ export default function Sandbox({
 
       {trace && <TracePanels trace={trace} />}
     </>
+  );
+}
+
+function ItemPanel({ item, versions }: { item: Item; versions: Version[] }) {
+  const text = item.extracted_text ?? item.content_text ?? "";
+  const stuck = item.parse_status !== null && item.parse_status !== "parsed";
+  return (
+    <section className="panel">
+      <h2>The item, and every revision of it</h2>
+      <table className="kv">
+        <tbody>
+          <tr><td>id</td><td><code>{item.data_id}</code></td></tr>
+          <tr><td>state</td><td><span className={`chip ${item.state}`}>{item.state}</span></td></tr>
+          <tr><td>sniffed type</td><td><code>{item.mime_type ?? "—"}</code> → {item.data_type ?? "—"}</td></tr>
+          {item.storage_ref && (
+            <tr><td>bytes</td><td className="provenance">{item.storage_ref}</td></tr>
+          )}
+          {item.checksum && <tr><td>checksum</td><td className="provenance">{item.checksum}</td></tr>}
+        </tbody>
+      </table>
+
+      {stuck && (
+        <div className="notice" style={{ marginTop: 12 }}>
+          <strong>Stored but not interpreted — {item.parse_status}.</strong>{" "}
+          {String((item.parse_detail?.reason as string) ?? "")} The bytes and their checksum are
+          untouched, so turning interpretation on later fixes this without re-uploading.
+        </div>
+      )}
+
+      {text && (
+        <>
+          <h2 style={{ marginTop: 18 }}>What the model read out of it</h2>
+          <div className="hit"><div className="text">{text.slice(0, 4000)}</div></div>
+        </>
+      )}
+
+      <h2 style={{ marginTop: 18 }}>Versions</h2>
+      <div className="excluded">
+        {versions.map((v) => (
+          <div className="item" key={v.version_id}>
+            <span className="chip on">r{v.revision}</span>
+            <span className="chip">{v.source}</span>
+            <span className="empty">{v.content_chars} chars</span>
+            {v.model_id && <span className="chip">{v.model_id}</span>}
+            {v.tokens ? <span className="empty">{v.tokens} tokens</span> : null}
+            <span className="empty">{new Date(v.created_at).toLocaleTimeString()}</span>
+          </div>
+        ))}
+      </div>
+      <p className="empty" style={{ marginTop: 10, marginBottom: 0 }}>
+        Nothing is mutated in place. The upload is revision 1 and the transcript or description is
+        a later one, each recording which model produced it — so “why does this say something
+        different than last week” has an answer.
+      </p>
+    </section>
   );
 }
 

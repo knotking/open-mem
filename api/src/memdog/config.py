@@ -56,6 +56,24 @@ class Settings:
     # Bytes go to GCS when a bucket is configured, and to the filesystem
     # otherwise. Cloud Run's filesystem is memory, so the bucket is not optional
     # there -- it is the difference between durable and gone on the next scale-in.
+    # Media is the expensive tier by a wide margin, so interpretation is opt-in
+    # per deployment and bounded per item. Off means media still stores, with
+    # the reason recorded -- nothing is rejected either way.
+    media_interpretation: bool = field(
+        default_factory=lambda: _env("MEDIA_INTERPRETATION", "false").lower() == "true"
+    )
+    gemini_api_key: str = field(default_factory=lambda: _env("GEMINI_API_KEY", ""))
+    multimodal_model: str = field(
+        default_factory=lambda: _env("MULTIMODAL_MODEL", "gemini-3.7-flash")
+    )
+    # Empty means "use multimodal_model". Named separately because
+    # transcription and vision are different purposes with different
+    # cost-per-quality curves, and the day that matters this is a config change.
+    transcribe_model: str = field(default_factory=lambda: _env("TRANSCRIBE_MODEL", ""))
+    max_media_bytes: int = field(
+        default_factory=lambda: int(_env("MAX_MEDIA_BYTES", str(18 * 1024 * 1024)))
+    )
+
     raw_bucket: str = field(default_factory=lambda: _env("RAW_BUCKET", ""))
     blob_root: str = field(default_factory=lambda: _env("BLOB_ROOT", "./.blobs"))
 
@@ -64,6 +82,11 @@ class Settings:
     )
     max_payload_bytes: int = field(
         default_factory=lambda: int(_env("MAX_PAYLOAD_BYTES", str(32 * 1024 * 1024)))
+    )
+    # Uploads bypass the base64 inflation of an inline write, so their ceiling
+    # is higher -- and separate, because they are a different admission path.
+    max_upload_bytes: int = field(
+        default_factory=lambda: int(_env("MAX_UPLOAD_BYTES", str(512 * 1024 * 1024)))
     )
     max_queue_depth: int = field(default_factory=lambda: int(_env("MAX_QUEUE_DEPTH", "10000")))
 

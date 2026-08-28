@@ -20,6 +20,7 @@ class BlobStore(Protocol):
     async def put(self, *, org_id: str, project_id: str, data_id: str, kind: str,
                   payload: bytes, mime_type: str | None) -> tuple[str, str]: ...
     async def get(self, ref: str) -> bytes: ...
+    async def delete(self, ref: str) -> None: ...
 
 
 class FilesystemBlobStore:
@@ -46,6 +47,11 @@ class FilesystemBlobStore:
 
     async def get(self, ref: str) -> bytes:
         return self._path(ref).read_bytes()
+
+    async def delete(self, ref: str) -> None:
+        path = self._path(ref)
+        # The goal is absence, so an already-absent object is success.
+        path.unlink(missing_ok=True)
 
 
 class GCSBlobStore:
@@ -85,12 +91,25 @@ class GCSBlobStore:
         await asyncio.to_thread(_upload)
         return f"gs://{self._bucket_name}/{key}", f"sha256:{digest}"
 
-    async def get(self, ref: str) -> bytes:
+    def _key(self, ref: str) -> str:
         prefix = f"gs://{self._bucket_name}/"
         if not ref.startswith(prefix):
             raise ValueError(f"ref does not belong to this bucket: {ref}")
-        key = ref.removeprefix(prefix)
-        return await asyncio.to_thread(self._bucket.blob(key).download_as_bytes)
+        return ref.removeprefix(prefix)
+
+    async def get(self, ref: str) -> bytes:
+        return await asyncio.to_thread(self._bucket.blob(self._key(ref)).download_as_bytes)
+
+    async def delete(self, ref: str) -> None:
+        def _remove() -> None:
+            from google.cloud.exceptions import NotFound
+
+            try:
+                self._bucket.blob(self._key(ref)).delete()
+            except NotFound:
+                pass
+
+        await asyncio.to_thread(_remove)
 
 
 def build_blob_store(settings) -> BlobStore:

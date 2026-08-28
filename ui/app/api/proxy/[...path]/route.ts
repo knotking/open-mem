@@ -16,6 +16,11 @@ const ALLOWED = [
   /^api\/v1\/data\/[A-Za-z0-9_]+$/,
   /^api\/v1\/data\/[A-Za-z0-9_]+\/artifacts$/,
   /^api\/v1\/projects\/[A-Za-z0-9_]+\/staircase$/,
+  /^api\/v1\/projects\/[A-Za-z0-9_]+\/memories$/,
+  /^api\/v1\/memories\/[A-Za-z0-9_]+\/members$/,
+  /^api\/v1\/data\/[A-Za-z0-9_]+\/versions$/,
+  /^api\/v1\/data\/[A-Za-z0-9_]+\/memories$/,
+  /^api\/v1\/audit(\?.*)?$/,
 ];
 
 function allowed(path: string): boolean {
@@ -23,7 +28,7 @@ function allowed(path: string): boolean {
 }
 
 async function forward(request: Request, path: string[], method: string) {
-  const joined = path.join("/");
+  const joined = path.join("/") + (new URL(request.url).search || "");
   if (!allowed(joined)) {
     // An open proxy in front of an authenticated API hands the browser every
     // endpoint the server can reach, including ones this UI never uses.

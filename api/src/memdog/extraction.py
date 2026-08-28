@@ -65,16 +65,21 @@ class Extractor(Protocol):
     async def extract(self, text: str, *, data_type: str) -> Envelope: ...
 
 
-def build_prompt(text: str, *, data_type: str, schema: dict) -> tuple[str, str]:
+def build_prompt(
+    text: str, *, data_type: str, schema: dict, block: str | None = None
+) -> tuple[str, str]:
     """Returns (system, user). The nonce is per-request and unguessable, so a
     document cannot terminate its own fence and start issuing instructions."""
     nonce = secrets.token_hex(8)
+    # The type-specific block goes in the system half, with the defence -- not
+    # beside the content, where a document could imitate its formatting.
+    system = SYSTEM_PROMPT if block is None else f"{SYSTEM_PROMPT}\n\n{block}"
     user = (
         f"SCHEMA\n{json.dumps(schema, sort_keys=True)}\n\n"
         f"DATA TYPE: {data_type}\n\n"
         f"<<<CONTENT-{nonce}\n{text}\nCONTENT-{nonce}"
     )
-    return SYSTEM_PROMPT, user
+    return system, user
 
 
 ENVELOPE_SCHEMA = {
@@ -181,11 +186,99 @@ class OllamaExtractor:
         return Envelope(**{k: v for k, v in parsed.items() if k in Envelope.model_fields})
 
 
+class GeminiExtractor:
+    """Extraction with the shipped per-type prompts.
+
+    The prompt is chosen by `data_type`, which is what the classification
+    cascade exists to produce -- an email and a transcript want genuinely
+    different instructions, and the cascade is what tells them apart without a
+    model call.
+
+    The prompt text is part of `generator_version`, so editing a default makes
+    every artifact it produced detectably stale. That is the point of hashing
+    the prompt rather than versioning it by hand.
+    """
+
+    def __init__(self, api_key: str, model_id: str) -> None:
+        self.model_id = model_id
+        self._api_key = api_key
+        self._base = "https://generativelanguage.googleapis.com/v1beta"
+
+    async def extract(self, text: str, *, data_type: str) -> Envelope:
+        from .prompts import for_data_type
+
+        prompt_name, block = for_data_type(data_type)
+        system, user = build_prompt(
+            text[:200_000], data_type=data_type, schema=ENVELOPE_SCHEMA, block=block
+        )
+        try:
+            async with httpx.AsyncClient(timeout=300.0) as client:
+                response = await client.post(
+                    f"{self._base}/models/{self.model_id}:generateContent",
+                    headers={"x-goog-api-key": self._api_key},
+                    json={
+                        "systemInstruction": {"parts": [{"text": system}]},
+                        "contents": [{"role": "user", "parts": [{"text": user}]}],
+                        "generationConfig": {
+                            "temperature": 0,
+                            "maxOutputTokens": 4096,
+                            # Schema-constrained: the parsed artifact *is* the
+                            # response, so there is no raw text to store on
+                            # success and nothing to salvage by parsing prose.
+                            "responseMimeType": "application/json",
+                            "responseSchema": _gemini_schema(),
+                        },
+                    },
+                )
+                response.raise_for_status()
+                data = response.json()
+        except httpx.HTTPError as exc:
+            raise EmbeddingUnavailable(str(exc)) from exc
+
+        candidates = data.get("candidates") or []
+        if not candidates:
+            raise ExtractionFailed("model returned no candidates")
+        content = "".join(
+            part.get("text", "") for part in candidates[0].get("content", {}).get("parts", [])
+        )
+        try:
+            parsed = json.loads(content)
+        except ValueError as exc:
+            raise ExtractionFailed(content[:2000]) from exc
+        if not parsed.get("title"):
+            raise ExtractionFailed("model returned no title")
+        envelope = Envelope(**{k: v for k, v in parsed.items() if k in Envelope.model_fields})
+        envelope.fields["prompt"] = prompt_name
+        envelope.fields["tokens"] = (data.get("usageMetadata") or {}).get("totalTokenCount", 0)
+        return envelope
+
+
+def _gemini_schema() -> dict:
+    """Gemini wants its own dialect: no nullable unions, so optional fields are
+    simply not required."""
+    return {
+        "type": "object",
+        "required": ["title"],
+        "properties": {
+            "title": {"type": "string"},
+            "description": {"type": "string"},
+            "summary": {"type": "string"},
+            "keywords": {"type": "array", "items": {"type": "string"}},
+            "language": {"type": "string"},
+        },
+    }
+
+
 class ExtractionFailed(RuntimeError):
     """Parse or schema failure. Carries the raw output for the DLQ entry."""
 
 
 def build_extractor(settings) -> Extractor:
+    if settings.extract_engine == "gemini":
+        if not settings.gemini_api_key:
+            raise ValueError("GEMINI_API_KEY is required when EXTRACT_ENGINE=gemini")
+        return GeminiExtractor(settings.gemini_api_key, settings.extract_model
+                                or settings.multimodal_model)
     if settings.extract_engine == "ollama":
         if not settings.extract_model:
             raise ValueError("EXTRACT_MODEL is required when EXTRACT_ENGINE=ollama")

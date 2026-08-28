@@ -36,9 +36,14 @@ from .contracts import (
     WriteResult,
 )
 from .ids import new_id
+from .cases import route_case
+from .memories import route_write
+from .workers import record_version
 from .queue import Queue
+from .telemetry import record, span
 
 EMBED_TOPIC = "embed"
+PARSE_TOPIC = "parse"
 
 
 class AdmissionError(Exception):
@@ -144,6 +149,11 @@ async def write_items(
     request: WriteRequest,
     idempotency_key: str | None = None,
 ) -> WriteResponse:
+    with span("write", producer_id=request.producer_id, items=len(request.items)):
+        return await _write(pool, queue, blobs, settings, principal, request, idempotency_key)
+
+
+async def _write(pool, queue, blobs, settings, principal, request, idempotency_key):
     async with pool.acquire() as conn:
         producer = await _admit(conn, queue, settings, principal, request)
 
@@ -184,13 +194,14 @@ async def write_items(
 
         results: list[WriteResult] = []
         embed_jobs: list[str] = []
+        parse_jobs: list[str] = []
         for index, item in enumerate(request.items):
             try:
                 # Each item is its own transaction: one bad item in a batch of
                 # five hundred must not roll back the other four hundred and
                 # ninety-nine. That is what 207 is for.
                 async with conn.transaction():
-                    data_id, created, downloaded = await _write_one(
+                    data_id, created, downloaded, has_text, memories, case_ids = await _write_one(
                         conn, blobs, principal, producer, item
                     )
                 results.append(
@@ -200,10 +211,13 @@ async def write_items(
                         data_id=data_id,
                         state="stored",
                         is_downloaded=downloaded,
+                        memories=memories,
+                        cases=case_ids,
                     )
                 )
-                if downloaded and request.options.enrich:
-                    embed_jobs.append(data_id)
+                if request.options.enrich and downloaded:
+                    # Text is ready to index. Bytes need reading first.
+                    (embed_jobs if has_text else parse_jobs).append(data_id)
             except Exception as exc:  # noqa: BLE001 -- reported per item, not raised
                 results.append(WriteResult(index=index, status="failed", error=str(exc)))
 
@@ -232,6 +246,9 @@ async def write_items(
 
     # Published after commit: a job that arrives before its row is a race the
     # worker would have to defend against forever.
+    record("items_written", response.accepted, producer_type=producer.type)
+    for data_id in parse_jobs:
+        await queue.publish(PARSE_TOPIC, {"data_id": data_id})
     for data_id in embed_jobs:
         await queue.publish(EMBED_TOPIC, {"data_id": data_id})
     return response
@@ -243,7 +260,7 @@ async def _write_one(
     principal: Principal,
     producer: ProducerRow,
     item: WriteItem,
-) -> tuple[str, bool, bool]:
+) -> tuple[str, bool, bool, bool, list[str]]:
     content = item.content
     data_id = new_id("data")
     content_text = storage_ref = checksum = None
@@ -285,11 +302,9 @@ async def _write_one(
             payload=payload,
             mime_type=mime_type,
         )
-        # Text bytes are also kept inline so the spine can index them without a
-        # fetch. Anything else waits for the parser in a later slice.
-        if mime_type == "text/plain":
-            content_text = payload.decode("utf-8", errors="replace")
-            storage_ref = None
+        # The bytes stay in the blob store whatever they are -- the parser
+        # reads them from there, so the raw original always survives its own
+        # extraction and can be re-parsed by a better handler later.
 
     data_type, layer = classify(
         explicit_data_type=item.data_type,
@@ -366,6 +381,41 @@ async def _write_one(
         # derived rows is what stops a stale vector outliving its source.
         await conn.execute("DELETE FROM chunks WHERE data_id = $1", data_id)
 
+    # Subject correlation, alongside lifecycle routing. An explicit `case` is
+    # asserted; identifier matches are inferred and record what they matched on.
+    case_ids = await route_case(
+        conn,
+        org_id=producer.org_id,
+        project_id=producer.project_id,
+        data_id=data_id,
+        case_type=item.case.case_type if item.case else None,
+        external_id=item.case.external_id if item.case else None,
+        identifiers=item.identifiers,
+    )
+
+    memories = await route_write(
+        conn,
+        org_id=producer.org_id,
+        project_id=producer.project_id,
+        data_id=data_id,
+        owner_id=producer.user_id,
+        connection_scope=producer.connection_scope,
+        requested_type=item.memory.type if item.memory else None,
+        requested_key=item.memory.key if item.memory else None,
+    )
+
+    # The write is revision 1. A later parse or interpretation appends; nothing
+    # is mutated in place, so "why does this say something different than last
+    # week" always has an answer.
+    await record_version(
+        conn,
+        data_id,
+        source="write",
+        content_text=content_text,
+        mime_type=mime_type,
+        detail={"external_id": item.external_id, "producer_id": producer.producer_id},
+    )
+
     await record_audit(
         conn,
         principal,
@@ -381,4 +431,4 @@ async def _write_one(
             "classified_by_layer": layer,
         },
     )
-    return data_id, created, pending_ref is None
+    return data_id, created, pending_ref is None, content_text is not None, memories, case_ids

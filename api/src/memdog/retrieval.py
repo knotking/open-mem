@@ -20,6 +20,7 @@ from .auth import DATA_READ, Principal
 from .contracts import Citation, Corpus, Excluded, RetrieveRequest, RetrieveResponse
 from .db import vector_literal
 from .ids import new_id
+from .telemetry import span
 from .inference import EmbeddingEngine
 
 RRF_K = 60  # the usual constant; large enough that rank 1 does not dominate
@@ -39,7 +40,8 @@ async def get_item(
         f"""
         SELECT d.data_id, d.project_id, d.external_id, d.access_level, d.state,
                d.mime_type, d.source_type, d.data_type, d.classified_by_layer,
-               d.content_text, d.storage_ref, d.pending_ref, d.is_downloaded,
+               d.content_text, d.extracted_text, d.storage_ref, d.pending_ref,
+               d.is_downloaded, d.parse_status, d.parse_detail,
                d.size_bytes, d.checksum, d.event_time, d.ingested_at, d.tags,
                d.identifiers, d.producer_id, d.connection_id
         FROM data_items d
@@ -65,6 +67,20 @@ async def get_item(
 
 
 async def retrieve(
+    pool: asyncpg.Pool,
+    embedder: EmbeddingEngine,
+    principal: Principal,
+    request: RetrieveRequest,
+    embed_generator: str | None = None,
+) -> RetrieveResponse:
+    """Traced as one span so the arms, the fusion and the audit write are all
+    attributable to the query that caused them."""
+    with span("retrieve", project_id=request.filter.project_id,
+              match=",".join(request.match), model_id=embedder.model_id):
+        return await _retrieve(pool, embedder, principal, request, embed_generator)
+
+
+async def _retrieve(
     pool: asyncpg.Pool,
     embedder: EmbeddingEngine,
     principal: Principal,
@@ -383,3 +399,148 @@ async def staircase(
         project_id, org_id, user_id, principals,
     )
     return dict(row)
+
+
+async def get_versions(
+    pool: asyncpg.Pool, principal: Principal, data_id: str
+) -> list[dict]:
+    """Every revision of an item, newest first.
+
+    The ACL is checked against the *item*, once, rather than per row: a version
+    is not independently shareable, and treating it as such would be a second
+    access path to content whose permissions live on the parent.
+    """
+    principal.require(DATA_READ)
+    org_id, user_id, principals = visibility_params(principal)
+    predicate = visibility_sql("d", 2, 3, 4)
+    visible = await pool.fetchval(
+        f"SELECT 1 FROM data_items d WHERE d.data_id = $1 AND {predicate}",
+        data_id, org_id, user_id, principals,
+    )
+    if not visible:
+        raise NotFound(data_id)
+
+    rows = await pool.fetch(
+        """
+        SELECT version_id, revision, source, content_chars, checksum, mime_type,
+               model_id, generator_version, tokens, detail, created_at,
+               left(content_text, 400) AS preview
+        FROM data_versions WHERE data_id = $1 ORDER BY revision DESC
+        """,
+        data_id,
+    )
+    await record_access(pool, principal, action="versions.read", data_id=data_id)
+    return [dict(r) for r in rows]
+
+
+async def list_memories(pool: asyncpg.Pool, principal: Principal, project_id: str) -> list[dict]:
+    """Memories in a project, with live member counts.
+
+    Counts are computed rather than maintained: a denormalised counter is a
+    number that drifts the first time a member is removed by a path that forgot
+    to decrement it.
+
+    **A memory with no members you can see is not listed at all.** Showing it
+    with a count of zero would disclose that the container exists, and a
+    memory_key is frequently meaningful on its own -- a thread id, a user id, a
+    case reference. That is the same rule the retrieval trace follows for ACL
+    exclusions. A memory you own is always yours to see, empty or not.
+    """
+    principal.require(DATA_READ)
+    org_id, user_id, principals = visibility_params(principal)
+    predicate = visibility_sql("d", 4, 5, 6)
+    rows = await pool.fetch(
+        f"""
+        SELECT m.memory_id, m.type, m.memory_key, m.title, m.owner_id, m.created_at,
+               t.ttl_seconds, t.on_expiry,
+               (SELECT count(*) FROM memory_members mm
+                  JOIN data_items d ON d.data_id = mm.data_id
+                 WHERE mm.memory_id = m.memory_id AND {predicate}) AS members
+        FROM memories m
+        LEFT JOIN memory_types t ON t.project_id = m.project_id AND t.name = m.type
+        WHERE m.project_id = $1 AND m.org_id = $2 AND m.deleted_at IS NULL
+          AND (
+            m.owner_id = $5
+            OR EXISTS (SELECT 1 FROM memory_members mm
+                         JOIN data_items d ON d.data_id = mm.data_id
+                        WHERE mm.memory_id = m.memory_id AND {predicate})
+          )
+        ORDER BY m.created_at DESC
+        LIMIT $3
+        """,
+        project_id, org_id, 200, org_id, user_id, principals,
+    )
+    return [dict(r) for r in rows]
+
+
+async def memory_members(pool: asyncpg.Pool, principal: Principal, memory_id: str) -> list[dict]:
+    principal.require(DATA_READ)
+    org_id, user_id, principals = visibility_params(principal)
+    predicate = visibility_sql("d", 2, 3, 4)
+    rows = await pool.fetch(
+        f"""
+        SELECT d.data_id, d.state, d.mime_type, d.data_type, d.event_time,
+               mm.added_by, mm.added_at,
+               left(coalesce(d.content_text, d.extracted_text), 200) AS preview
+        FROM memory_members mm
+        JOIN data_items d ON d.data_id = mm.data_id
+        WHERE mm.memory_id = $1 AND {predicate}
+        ORDER BY mm.added_at DESC LIMIT 200
+        """,
+        memory_id, org_id, user_id, principals,
+    )
+    return [dict(r) for r in rows]
+
+
+async def item_memories(pool: asyncpg.Pool, principal: Principal, data_id: str) -> dict:
+    """The item's side of the mapping, with its computed effective expiry."""
+    from .memories import effective_expiry, memories_for_item
+
+    principal.require(DATA_READ)
+    org_id, user_id, principals = visibility_params(principal)
+    predicate = visibility_sql("d", 2, 3, 4)
+    visible = await pool.fetchval(
+        f"SELECT 1 FROM data_items d WHERE d.data_id = $1 AND {predicate}",
+        data_id, org_id, user_id, principals,
+    )
+    if not visible:
+        raise NotFound(data_id)
+    memberships = await memories_for_item(pool, data_id)
+    return {
+        "memberships": memberships,
+        # Derived on read, never stored. Any stored answer is wrong the moment
+        # someone adds or removes a member.
+        "effective_expiry": effective_expiry(memberships),
+    }
+
+
+async def audit_trail(
+    pool: asyncpg.Pool, principal: Principal, *, project_id: str | None = None, limit: int = 100
+) -> dict:
+    """Reads and writes, from the two stores that hold them.
+
+    They are separate for good reasons -- different volume, retention and access
+    pattern, and the read log must survive the deletion of what it describes --
+    so this presents them together rather than merging them.
+    """
+    principal.require(DATA_READ)
+    writes = await pool.fetch(
+        """
+        SELECT event_id AS id, action, target_type, target_id, actor_user_id,
+               actor_key_id, detail, at
+        FROM audit_events
+        WHERE org_id = $1 AND ($2::text IS NULL OR project_id = $2)
+        ORDER BY at DESC LIMIT $3
+        """,
+        principal.org_id, project_id, limit,
+    )
+    reads = await pool.fetch(
+        """
+        SELECT access_id AS id, action, data_id, query_id, user_id, key_id, at
+        FROM access_log
+        WHERE org_id = $1 AND ($2::text IS NULL OR project_id = $2)
+        ORDER BY at DESC LIMIT $3
+        """,
+        principal.org_id, project_id, limit,
+    )
+    return {"writes": [dict(r) for r in writes], "reads": [dict(r) for r in reads]}

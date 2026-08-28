@@ -96,7 +96,8 @@ Named because "not present" and "overlooked" should not look the same:
 | Not here | Where it belongs |
 |----------|------------------|
 | Fetch worker for `Pending` content | slice 3 — the item lands with `is_downloaded = false`, which is the correct state, not a gap |
-| Memories, cases, `memory_members` | slice 7. The write API's `memory` and `case` fields parse and are ignored |
+| Cases — subject correlation, timelines | slice 7. A case answers "what is this about?"; a memory answers "how long does this matter?" |
+| Memory: mutable membership after write, selector ops, the `orphan_delete` sweeper, type editor | the rest of the P0 memory row |
 | Entities, claims, questions, the standard envelope fields | slice 2, continued. The core envelope ships; `entities` and the rest are the next extraction |
 | W7 reprocess — rebuilding what a stale generator produced | slice 2, continued. `GET /artifacts/stale` identifies the work; nothing performs it yet |
 | Content-hash dedupe of the derived layer | slice 4, where the second copy first arrives |
