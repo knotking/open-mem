@@ -85,6 +85,13 @@ class Parsed:
     truncated: bool = False
 
     def capped(self) -> "Parsed":
+        # Postgres text columns cannot hold a NUL, and a handler that produces
+        # one would fail at the very end of a long pipeline. Strip rather than
+        # raise: the surrounding text is still worth indexing.
+        if "\x00" in self.text:
+            self.text = self.text.replace("\x00", "")
+            self.warnings.append("null bytes removed before indexing")
+
         if len(self.text) > MAX_TEXT_CHARS:
             self.text = self.text[:MAX_TEXT_CHARS]
             self.truncated = True

@@ -8,14 +8,18 @@
   --accent-soft: #e8f0ec;
   --warn: #8a5a2b;
   --warn-soft: #f7efe4;
-  --stored: #b9b4a9;
-  --searchable: #6d97b5;
-  --enriched: #2f5d50;
+  /* Sequential, one hue, light -> dark. Monotonic in OKLab L
+     (0.861 -> 0.681 -> 0.441); the low-contrast steps carry visible
+     numeric labels, which is the required relief. */
+  --step1: #bcd9cd;
+  --step2: #6aa793;
+  --step3: #2f5d50;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
 }
 
+/* Dark applies when the OS asks for it AND the user has not chosen light. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #171815;
     --panel: #1f211d;
     --ink: #ece9e2;
@@ -25,9 +29,11 @@
     --accent-soft: #23302b;
     --warn: #d0a267;
     --warn-soft: #2e2820;
-    --stored: #55574f;
-    --searchable: #5c88a6;
-    --enriched: #7fb8a4;
+    /* Dark mode is stepped from the same hue against the dark surface,
+       not an automatic flip. L: 0.382 -> 0.590 -> 0.808. */
+    --step1: #2c4a41;
+    --step2: #4f8b78;
+    --step3: #8fd0ba;
   }
 }
 
@@ -170,9 +176,9 @@ button.secondary { background: transparent; color: var(--accent); border: 1px so
 .stair-row .count { font-family: var(--mono); font-size: 13px; text-align: right; }
 .bar { height: 9px; border-radius: 5px; background: color-mix(in srgb, var(--line) 60%, transparent); overflow: hidden; }
 .bar > span { display: block; height: 100%; border-radius: 5px; transition: width 0.4s ease; }
-.bar > span.stored { background: var(--stored); }
-.bar > span.searchable { background: var(--searchable); }
-.bar > span.enriched { background: var(--enriched); }
+.bar > span.stored, .bar .fill.step1 { background: var(--step1); }
+.bar > span.searchable, .bar .fill.step2 { background: var(--step2); }
+.bar > span.enriched, .bar .fill.step3 { background: var(--step3); }
 
 /* results */
 .hit { border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-bottom: 10px; }
@@ -216,6 +222,159 @@ code { font-family: var(--mono); font-size: 12.5px; }
 .preview-wrap { margin-top: 12px; }
 audio.preview { width: 100%; height: auto; }
 .rec { color: #a4462f; font-family: var(--mono); font-size: 13px; }
-.chip.stored { background: color-mix(in srgb, var(--stored) 22%, transparent); }
-.chip.searchable { background: color-mix(in srgb, var(--searchable) 22%, transparent); }
+.chip.stored { background: color-mix(in srgb, var(--step1) 35%, transparent); }
+.chip.searchable { background: color-mix(in srgb, var(--step2) 30%, transparent); }
 .chip.enriched { background: var(--accent-soft); color: var(--accent); }
+
+
+/* An explicit choice wins over the system preference, in both directions. */
+:root[data-theme="dark"] {
+  --bg: #171815;
+  --panel: #1f211d;
+  --ink: #ece9e2;
+  --muted: #9b978d;
+  --line: #33352f;
+  --accent: #7fb8a4;
+  --accent-soft: #23302b;
+  --warn: #d0a267;
+  --warn-soft: #2e2820;
+  --step1: #2c4a41;
+  --step2: #4f8b78;
+  --step3: #8fd0ba;
+}
+
+/* ---------------------------------------------------------- landing */
+
+.landing { max-width: 940px; margin: 0 auto; padding: 22px 24px 80px; }
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 26px;
+}
+.wordmark, .brand .dot, .wordmark .dot { font-weight: 650; letter-spacing: -0.01em; }
+.wordmark { display: flex; align-items: center; gap: 8px; font-size: 16px; }
+.dot {
+  width: 9px; height: 9px; border-radius: 50%;
+  background: var(--accent); display: inline-block;
+}
+.brand { display: flex; align-items: center; gap: 8px; }
+
+.hero { padding: 26px 0 34px; border-top: 1px solid var(--line); }
+.hero h1 {
+  font-size: clamp(28px, 4vw, 40px);
+  line-height: 1.15;
+  margin: 0 0 14px;
+  letter-spacing: -0.02em;
+  max-width: 20ch;
+}
+.hero h1 em { font-style: normal; color: var(--accent); }
+.hero p { color: var(--muted); font-size: 16px; max-width: 62ch; margin: 0; }
+
+.pillars {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.pillars article {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 16px 18px;
+}
+.pillars h3 { margin: 0 0 8px; font-size: 14.5px; letter-spacing: -0.01em; }
+.pillars p { margin: 0; color: var(--muted); font-size: 13.5px; }
+
+.signin {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 20px;
+  max-width: 380px;
+  margin: 0 0 26px auto;
+  display: grid;
+  gap: 12px;
+}
+.signin h2 { margin: 0; font-size: 15px; }
+.signin label { display: grid; gap: 5px; font-size: 12.5px; color: var(--muted); }
+.signin input {
+  background: var(--bg); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 7px;
+  padding: 9px 11px; font: inherit;
+}
+.landfoot { border-top: 1px solid var(--line); padding-top: 18px; }
+
+.navscroll { overflow-y: auto; flex: 1; margin: 0 -4px; padding: 0 4px; }
+.navgroup { margin-bottom: 12px; }
+.navtitle {
+  display: flex; align-items: center; gap: 6px; width: 100%;
+  background: transparent; border: 0; cursor: pointer;
+  font: inherit; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--muted); padding: 7px 10px; font-weight: 600; border-radius: 7px;
+  text-align: left;
+}
+.navtitle:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.navtitle.current { color: var(--accent); }
+.caret {
+  display: inline-block; transition: transform 0.15s ease; font-size: 13px;
+  line-height: 1;
+}
+.caret.open { transform: rotate(90deg); }
+/* A collapsed group still says the current page is inside it. */
+.here {
+  width: 5px; height: 5px; border-radius: 50%;
+  background: var(--accent); margin-left: auto;
+}
+.navgroup { margin-bottom: 2px; }
+.navitem { padding-left: 26px; }
+
+.memrow.chosen { background: var(--accent-soft); }
+.preview { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 0.75; }
+.excluded .item { flex-wrap: wrap; }
+
+
+/* ---------------------------------------------------------- overview */
+
+/* The headline question is one number, so it gets a hero figure rather than a
+   chart. A pie of three states would encode the same thing worse. */
+.hero-stat { display: grid; grid-template-columns: minmax(180px, 260px) 1fr; gap: 26px; align-items: center; }
+.hero-figure { display: grid; gap: 2px; }
+.hero-value {
+  font-size: clamp(40px, 6vw, 58px); font-weight: 620; letter-spacing: -0.03em;
+  line-height: 1; color: var(--accent); font-variant-numeric: tabular-nums;
+}
+.hero-label { color: var(--muted); font-size: 13px; }
+.hero-stair { display: grid; gap: 8px; }
+
+.tiles {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+  gap: 10px; margin-bottom: 18px;
+}
+.tile {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  padding: 13px 15px; display: grid; gap: 2px; align-content: start;
+}
+.tile-value {
+  font-size: 22px; font-weight: 600; letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+.tile-label { font-size: 12px; color: var(--muted); }
+.tile-note { font-size: 11px; color: var(--muted); }
+/* Status is never colour alone: the alarm tile also changes its label text. */
+.tile.alarm { border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+.tile.alarm .tile-note { color: var(--warn); font-weight: 550; }
+
+.two-up { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+
+.barlist { display: grid; gap: 7px; }
+.barrow { display: grid; grid-template-columns: 128px 1fr 42px; gap: 10px; align-items: center; }
+.barlabel { font-size: 12.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+/* One hue for a single-series magnitude comparison; rank never changes colour. */
+.barrow .fill { background: var(--step2); display: block; height: 100%; border-radius: 5px; }
+.chip.warnchip { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
+
+@media (max-width: 720px) {
+  .hero-stat { grid-template-columns: 1fr; }
+}

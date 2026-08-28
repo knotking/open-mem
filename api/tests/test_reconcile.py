@@ -132,3 +132,85 @@ async def test_a_pending_item_is_never_swept(
     )
     assert swept.total == 0
     await queue.close()
+
+
+async def test_it_recovers_bytes_that_were_never_parsed(
+    pool, blobs, settings, embedder, extractor, tenant, principal_for
+):
+    """The tier that was missing, and whose absence was invisible.
+
+    The "stuck at stored" sweep requires text, which by definition excludes the
+    items that still need parsing. A media file whose parse job was lost sat at
+    `stored` forever, looking identical to one that had been examined and
+    declined.
+    """
+    import base64
+
+    from memdog.contracts import Inline
+    from memdog.workers import EnrichWorker, ParseWorker
+
+    actor = await principal_for(tenant.api_key)
+    lost = InProcessQueue()          # nothing consumes: the parse job is dropped
+    written = await write_items(
+        pool, lost, blobs, settings, actor,
+        WriteRequest(producer_id=tenant.producer_id, items=[
+            WriteItem(external_id="orphan.csv",
+                      content=Inline(bytes_b64=base64.b64encode(b"a,b\n1,2\n").decode())),
+        ]),
+    )
+    data_id = written.results[0].data_id
+    row = await pool.fetchrow(
+        "SELECT state, parse_status, indexable_text FROM data_items WHERE data_id = $1", data_id
+    )
+    assert (row["state"], row["parse_status"], row["indexable_text"]) == ("stored", None, None)
+    await lost.close()
+
+    queue = InProcessQueue()
+    ParseWorker(pool, blobs, queue=queue).register(queue)
+    embed = EmbedWorker(pool, embedder, settings, queue=queue)
+    await embed.ensure_generator()
+    embed.register(queue, EMBED_TOPIC)
+    enrich = EnrichWorker(pool, extractor, settings)
+    await enrich.ensure_generator()
+    enrich.register(queue)
+
+    swept = await reconcile(
+        pool, queue, embed_generator=embed.generator_version, grace_seconds=0
+    )
+    assert swept.parse == 1
+    await queue.drain()
+    await queue.close()
+
+    healed = await get_item(pool, actor, data_id)
+    assert healed["state"] == "enriched"
+    assert "a: 1" in healed["extracted_text"]
+
+
+async def test_an_item_already_examined_is_not_swept_again(
+    pool, blobs, settings, embedder, tenant, principal_for
+):
+    """`parse_status` is what distinguishes 'never read' from 'read and
+    declined'. Without it the sweep would retry an unsupported file forever."""
+    import base64
+
+    from memdog.contracts import Inline
+    from memdog.workers import ParseWorker
+
+    actor = await principal_for(tenant.api_key)
+    queue = InProcessQueue()
+    ParseWorker(pool, blobs, queue=queue).register(queue)
+    await write_items(
+        pool, queue, blobs, settings, actor,
+        WriteRequest(producer_id=tenant.producer_id, items=[
+            WriteItem(external_id="mystery.dcm",
+                      content=Inline(bytes_b64=base64.b64encode(b"\x00\x01\x02\x03").decode())),
+        ]),
+    )
+    await queue.drain()
+
+    embed = EmbedWorker(pool, embedder, settings, queue=queue)
+    swept = await reconcile(
+        pool, queue, embed_generator=embed.generator_version, grace_seconds=0
+    )
+    await queue.close()
+    assert swept.parse == 0

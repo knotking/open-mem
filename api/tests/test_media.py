@@ -204,3 +204,42 @@ async def test_a_document_climbs_the_whole_staircase_from_bytes(
     )
     assert found.results
     assert "reconciliation" in found.results[0].text
+
+
+async def test_provider_quota_defers_rather_than_failing(
+    pool, blobs, settings, embedder, extractor, tenant, principal_for
+):
+    """A daily quota does not reset inside a backoff window.
+
+    Burning retries against it wastes what little remains and buries the reason
+    in a dead letter. The row is left untouched so the reconciler can pick it
+    up when quota returns -- the item is not lost, it is waiting.
+    """
+    from memdog.multimodal import QuotaExhausted
+    from memdog.reconcile import reconcile
+    from memdog.workers import EmbedWorker
+
+    class OutOfQuota(FakeMultimodal):
+        async def interpret(self, payload, *, mime, modality):
+            raise QuotaExhausted("429 Too Many Requests")
+
+    actor = await principal_for(tenant.api_key)
+    queue = await _pipeline(pool, blobs, settings, embedder, extractor, OutOfQuota())
+    written = await _write_bytes(
+        pool, queue, blobs, settings, actor, tenant.producer_id, "quota.png", PNG
+    )
+    await queue.drain()
+    data_id = written.results[0].data_id
+
+    item = await get_item(pool, actor, data_id)
+    # Untouched: not marked examined, not dead-lettered.
+    assert item["state"] == "stored"
+    assert item["parse_status"] is None
+    assert queue.dead_letters == []
+
+    # And still eligible, so it recovers on its own once quota returns.
+    embed = EmbedWorker(pool, embedder, settings, queue=queue)
+    swept = await reconcile(pool, queue, embed_generator=embed.generator_version,
+                            grace_seconds=0)
+    assert swept.parse == 1
+    await queue.close()

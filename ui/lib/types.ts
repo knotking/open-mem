@@ -116,9 +116,13 @@ export type AuditTrail = {
   }[];
 };
 
-export async function call<T>(path: string, body?: unknown): Promise<T> {
+export async function call<T>(
+  path: string,
+  body?: unknown,
+  method?: "GET" | "POST" | "DELETE",
+): Promise<T> {
   const response = await fetch(`/api/proxy/${path}`, {
-    method: body ? "POST" : "GET",
+    method: method ?? (body ? "POST" : "GET"),
     headers: body ? { "content-type": "application/json" } : undefined,
     body: body ? JSON.stringify(body) : undefined,
   });

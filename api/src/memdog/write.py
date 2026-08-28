@@ -22,7 +22,7 @@ import asyncpg
 
 from . import acl as acl_mod
 from .audit import record_audit
-from .auth import DATA_WRITE, Principal
+from .auth import ADMIN, DATA_WRITE, Principal
 from .blobs import BlobStore
 from .classify import classify, sniff_mime
 from .config import Settings
@@ -118,8 +118,17 @@ async def _admit(
         # Same response for missing and cross-tenant: a producer id is not an
         # oracle for what exists in another organization.
         raise AdmissionError("unknown producer", status=404)
-    if producer.user_id != principal.user_id and not principal.can("admin:*"):
-        raise AdmissionError("credential is not authorised for this producer", status=403)
+    # Who may write through a producer is decided by the connection it carries,
+    # not by who registered it. A producer bound to a *personal* connection is
+    # that person's -- writing through it would attribute data to their
+    # mailbox or drive. A producer with a shared connection, or none at all, is
+    # a project-level entry point any member may use, and tying it to its
+    # registrant makes a shared producer unusable by everyone else.
+    personal = producer.connection_scope == "personal"
+    if personal and producer.user_id != principal.user_id and not principal.can(ADMIN):
+        raise AdmissionError(
+            "this producer is bound to another user's personal connection", status=403
+        )
     if producer.inbound_auth == "api_key" and producer.api_key_id:
         if principal.key_id != producer.api_key_id:
             raise AdmissionError("credential is not the producer\'s configured key", status=403)
@@ -357,7 +366,13 @@ async def _write_one(
         producer.project_id,
         producer.producer_id,
         producer.connection_id,
-        producer.user_id,
+        # The owner is whoever authenticated, not whoever registered the
+        # producer. They are the same person for a webhook or a crawler -- but
+        # for a shared client producer they are not, and using the producer's
+        # owner means a second person writing through it cannot see their own
+        # private items. Nothing writes anonymously, so there is always a
+        # principal to attribute to.
+        principal.user_id,
         item.external_id,
         assigned.access_level,
         assigned.shared_with,
@@ -398,7 +413,7 @@ async def _write_one(
         org_id=producer.org_id,
         project_id=producer.project_id,
         data_id=data_id,
-        owner_id=producer.user_id,
+        owner_id=principal.user_id,
         connection_scope=producer.connection_scope,
         requested_type=item.memory.type if item.memory else None,
         requested_key=item.memory.key if item.memory else None,

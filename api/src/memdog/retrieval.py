@@ -423,8 +423,8 @@ async def get_versions(
     rows = await pool.fetch(
         """
         SELECT version_id, revision, source, content_chars, checksum, mime_type,
-               model_id, generator_version, tokens, detail, created_at,
-               left(content_text, 400) AS preview
+               model_id, model_version, response_id, generator_version, tokens,
+               detail, created_at, left(content_text, 400) AS preview
         FROM data_versions WHERE data_id = $1 ORDER BY revision DESC
         """,
         data_id,
@@ -544,3 +544,156 @@ async def audit_trail(
         principal.org_id, project_id, limit,
     )
     return {"writes": [dict(r) for r in writes], "reads": [dict(r) for r in reads]}
+
+
+async def list_items(
+    pool: asyncpg.Pool,
+    principal: Principal,
+    project_id: str,
+    *,
+    limit: int = 50,
+    before: str | None = None,
+    state: str | None = None,
+) -> dict:
+    """Browse a project's items, newest first.
+
+    Paginated on `data_id` rather than an offset. Ids are ULIDs, so ordering by
+    id *is* ordering by time -- and a keyset cursor does not skip or repeat rows
+    when something is written while someone is paging, which OFFSET does.
+    """
+    principal.require(DATA_READ)
+    org_id, user_id, principals = visibility_params(principal)
+    predicate = visibility_sql("d", 2, 3, 4)
+    rows = await pool.fetch(
+        f"""
+        SELECT d.data_id, d.external_id, d.state, d.mime_type, d.data_type,
+               d.size_bytes, d.event_time, d.ingested_at, d.access_level,
+               d.parse_status, d.is_downloaded, d.storage_ref IS NOT NULL AS has_bytes,
+               left(coalesce(d.content_text, d.extracted_text), 180) AS preview,
+               (SELECT count(*) FROM data_versions v WHERE v.data_id = d.data_id) AS revisions
+        FROM data_items d
+        WHERE d.project_id = $1 AND {predicate}
+          AND ($5::text IS NULL OR d.data_id < $5)
+          AND ($6::text IS NULL OR d.state = $6)
+        ORDER BY d.data_id DESC
+        LIMIT $7
+        """,
+        project_id, org_id, user_id, principals, before, state, min(limit, 200),
+    )
+    items = [dict(r) for r in rows]
+    return {
+        "items": items,
+        # The cursor is the last id, so the caller never constructs one.
+        "next_before": items[-1]["data_id"] if len(items) == min(limit, 200) else None,
+    }
+
+
+async def project_overview(
+    pool: asyncpg.Pool, principal: Principal, project_id: str
+) -> dict:
+    """One call that answers "is this working, and what is in it?".
+
+    Every number is ACL-scoped, so two people looking at the same project can
+    legitimately see different totals -- which is correct, and the reason this
+    is not a cached counter somewhere.
+    """
+    principal.require(DATA_READ)
+    org_id, user_id, principals = visibility_params(principal)
+    predicate = visibility_sql("d", 2, 3, 4)
+
+    counts = await pool.fetchrow(
+        f"""
+        SELECT count(*) AS total,
+               count(*) FILTER (WHERE d.state = 'stored') AS stored,
+               count(*) FILTER (WHERE d.state = 'searchable') AS searchable,
+               count(*) FILTER (WHERE d.state = 'enriched') AS enriched,
+               count(*) FILTER (WHERE d.storage_ref IS NOT NULL) AS with_bytes,
+               count(*) FILTER (WHERE d.pending_ref IS NOT NULL) AS awaiting_fetch,
+               coalesce(sum(d.size_bytes), 0) AS bytes_stored,
+               min(d.ingested_at) AS first_write,
+               max(d.ingested_at) AS last_write
+        FROM data_items d WHERE d.project_id = $1 AND {predicate}
+        """,
+        project_id, org_id, user_id, principals,
+    )
+
+    by_type = await pool.fetch(
+        f"""
+        SELECT coalesce(d.data_type, 'unknown') AS data_type, count(*) AS n
+        FROM data_items d WHERE d.project_id = $1 AND {predicate}
+        GROUP BY 1 ORDER BY n DESC LIMIT 8
+        """,
+        project_id, org_id, user_id, principals,
+    )
+
+    # What is in the corpus that we are *not* reading, and why. The most
+    # useful number on the page when something looks wrong.
+    problems = await pool.fetch(
+        f"""
+        SELECT d.parse_status, count(*) AS n
+        FROM data_items d WHERE d.project_id = $1 AND {predicate}
+          AND d.parse_status IS NOT NULL AND d.parse_status <> 'parsed'
+        GROUP BY 1 ORDER BY n DESC
+        """,
+        project_id, org_id, user_id, principals,
+    )
+
+    models = await pool.fetch(
+        f"""
+        SELECT v.model_id, count(*) AS calls, coalesce(sum(v.tokens), 0) AS tokens
+        FROM data_versions v JOIN data_items d ON d.data_id = v.data_id
+        WHERE d.project_id = $1 AND {predicate} AND v.model_id IS NOT NULL
+        GROUP BY 1 ORDER BY tokens DESC LIMIT 6
+        """,
+        project_id, org_id, user_id, principals,
+    )
+
+    derived = await pool.fetchrow(
+        f"""
+        SELECT (SELECT count(*) FROM chunks c JOIN data_items d ON d.data_id = c.data_id
+                 WHERE d.project_id = $1 AND {predicate}) AS chunks,
+               (SELECT count(*) FROM embeddings e JOIN data_items d ON d.data_id = e.data_id
+                 WHERE d.project_id = $1 AND {predicate}) AS embeddings,
+               (SELECT count(DISTINCT e.model_id) FROM embeddings e
+                  JOIN data_items d ON d.data_id = e.data_id
+                 WHERE d.project_id = $1 AND {predicate}) AS vector_spaces,
+               (SELECT count(*) FROM data_versions v JOIN data_items d ON d.data_id = v.data_id
+                 WHERE d.project_id = $1 AND {predicate}) AS revisions
+        """,
+        project_id, org_id, user_id, principals,
+    )
+
+    containers = await pool.fetchrow(
+        """
+        SELECT (SELECT count(*) FROM memories m
+                 WHERE m.project_id = $1 AND m.deleted_at IS NULL) AS memories,
+               (SELECT count(*) FROM cases c
+                 WHERE c.project_id = $1 AND c.deleted_at IS NULL) AS cases,
+               (SELECT count(*) FROM share_links s
+                 WHERE s.project_id = $1 AND s.revoked_at IS NULL
+                   AND s.expires_at > now()) AS live_shares
+        """,
+        project_id,
+    )
+
+    activity = await pool.fetchrow(
+        """
+        SELECT (SELECT count(*) FROM audit_events a
+                 WHERE a.project_id = $1 AND a.at > now() - interval '24 hours') AS writes_24h,
+               (SELECT count(*) FROM access_log l
+                 WHERE l.project_id = $1 AND l.at > now() - interval '24 hours') AS reads_24h,
+               (SELECT count(*) FROM queries q
+                 WHERE q.project_id = $1 AND q.asked_at > now() - interval '24 hours') AS queries_24h
+        """,
+        project_id,
+    )
+
+    return {
+        "counts": dict(counts),
+        "by_data_type": [dict(r) for r in by_type],
+        "not_read": [dict(r) for r in problems],
+        "models": [dict(r) for r in models],
+        "derived": dict(derived),
+        "containers": dict(containers),
+        "activity": dict(activity),
+    }

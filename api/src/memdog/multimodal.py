@@ -39,12 +39,25 @@ class MediaTooLarge(Exception):
     """Beyond the inline ceiling. Terminal until resumable upload exists."""
 
 
+class QuotaExhausted(Exception):
+    """The provider is rate limited or out of quota.
+
+    Neither a failure nor a retry-in-a-moment: a daily quota does not reset
+    within a backoff window, so burning five attempts in two seconds wastes the
+    little quota that remains and buries the real reason in a dead letter.
+    """
+
+
 @dataclass
 class Interpreted:
     text: str
     modality: str
     model_id: str
     tokens: int = 0
+    # What the provider says it actually ran, and the id of this specific call.
+    # The model_id is what we asked for; this is what answered.
+    model_version: str | None = None
+    response_id: str | None = None
     structure: dict = field(default_factory=dict)
 
 
@@ -156,7 +169,9 @@ class GeminiMultimodal:
                 response.raise_for_status()
                 data = response.json()
         except httpx.HTTPStatusError as exc:
-            if exc.response.status_code in (429, 500, 503):
+            if exc.response.status_code == 429:
+                raise QuotaExhausted(str(exc)) from exc
+            if exc.response.status_code in (500, 503):
                 # Rate limits and capacity spikes are transient; the queue's
                 # backoff is the right place to handle them.
                 raise RuntimeError(f"multimodal temporarily unavailable: {exc}") from exc
@@ -178,6 +193,8 @@ class GeminiMultimodal:
             modality=modality,
             model_id=model,
             tokens=usage.get("totalTokenCount", 0),
+            model_version=data.get("modelVersion"),
+            response_id=data.get("responseId"),
             structure={
                 "prompt_tokens": usage.get("promptTokenCount", 0),
                 "output_tokens": usage.get("candidatesTokenCount", 0),

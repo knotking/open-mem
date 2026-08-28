@@ -28,16 +28,18 @@ log = logging.getLogger(__name__)
 
 EMBED_TOPIC = "embed"
 ENRICH_TOPIC = "enrich"
+PARSE_TOPIC = "parse"
 
 
 @dataclass(frozen=True)
 class Swept:
+    parse: int
     embed: int
     enrich: int
 
     @property
     def total(self) -> int:
-        return self.embed + self.enrich
+        return self.parse + self.embed + self.enrich
 
 
 async def reconcile(
@@ -59,6 +61,27 @@ async def reconcile(
       is currently assigned -- the same staleness join `GET /artifacts/stale`
       uses, applied to the tier below artifacts.
     """
+    # Bytes that were never read. This tier was missing, and its absence was
+    # invisible: the "stuck at stored" query below requires text, which by
+    # definition excludes exactly the items that still need parsing. A media
+    # file whose parse job was lost would sit at `stored` forever, looking
+    # identical to one that had been examined and declined.
+    unparsed = await pool.fetch(
+        """
+        SELECT data_id FROM data_items
+        WHERE state = 'stored'
+          AND storage_ref IS NOT NULL
+          AND indexable_text IS NULL
+          AND parse_status IS NULL
+          AND deleted_at IS NULL
+          AND updated_at < now() - make_interval(secs => $1)
+        ORDER BY data_id
+        LIMIT $2
+        """,
+        grace_seconds,
+        limit,
+    )
+
     stored = await pool.fetch(
         """
         SELECT data_id FROM data_items
@@ -100,15 +123,21 @@ async def reconcile(
         limit,
     )
 
-    to_embed = {r["data_id"] for r in stored} | {r["data_id"] for r in stale_vectors}
-    to_enrich = {r["data_id"] for r in searchable} - to_embed
+    to_parse = {r["data_id"] for r in unparsed}
+    to_embed = ({r["data_id"] for r in stored} | {r["data_id"] for r in stale_vectors}) - to_parse
+    to_enrich = {r["data_id"] for r in searchable} - to_embed - to_parse
 
+    for data_id in sorted(to_parse):
+        await queue.publish(PARSE_TOPIC, {"data_id": data_id})
     for data_id in sorted(to_embed):
         await queue.publish(EMBED_TOPIC, {"data_id": data_id})
     for data_id in sorted(to_enrich):
         await queue.publish(ENRICH_TOPIC, {"data_id": data_id})
 
-    swept = Swept(embed=len(to_embed), enrich=len(to_enrich))
+    swept = Swept(parse=len(to_parse), embed=len(to_embed), enrich=len(to_enrich))
     if swept.total:
-        log.info("reconciler re-enqueued %d embed, %d enrich", swept.embed, swept.enrich)
+        log.info(
+            "reconciler re-enqueued %d parse, %d embed, %d enrich",
+            swept.parse, swept.embed, swept.enrich,
+        )
     return swept

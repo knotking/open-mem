@@ -74,6 +74,12 @@ class Settings:
         default_factory=lambda: int(_env("MAX_MEDIA_BYTES", str(18 * 1024 * 1024)))
     )
 
+    # Set to enable identity-token sign-in alongside API keys. Absent, the API
+    # is key-only -- which is the correct default for a headless deployment.
+    firebase_project_id: str = field(
+        default_factory=lambda: _env("FIREBASE_PROJECT_ID", "")
+    )
+
     raw_bucket: str = field(default_factory=lambda: _env("RAW_BUCKET", ""))
     blob_root: str = field(default_factory=lambda: _env("BLOB_ROOT", "./.blobs"))
 

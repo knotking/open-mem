@@ -46,8 +46,15 @@ def sniff_mime(payload: bytes | None, text: str | None, declared: str | None) ->
         if guess is not None:
             return guess.mime
         try:
-            payload.decode("utf-8")
+            decoded = payload.decode("utf-8")
         except UnicodeDecodeError:
+            return "application/octet-stream"
+        # Decoding cleanly is not the same as being text. Control bytes are
+        # valid UTF-8, so a DICOM header or a thumbnail can "decode" perfectly
+        # and still be binary -- and a NUL cannot even be stored in a text
+        # column, so this is the difference between a wrong answer and a
+        # crashing worker.
+        if _looks_binary(decoded):
             return "application/octet-stream"
         return "text/plain"
     if text is not None:
@@ -58,6 +65,22 @@ def sniff_mime(payload: bytes | None, text: str | None, declared: str | None) ->
             return "text/html"
         return "text/plain"
     return declared
+
+
+# Tab, newline and carriage return are the only control characters that appear
+# in real text.
+_TEXTUAL_CONTROLS = {0x09, 0x0A, 0x0D}
+
+
+def _looks_binary(text: str, sample: int = 4096) -> bool:
+    head = text[:sample]
+    if not head:
+        return False
+    if "\x00" in head:
+        return True
+    controls = sum(1 for ch in head if ord(ch) < 0x20 and ord(ch) not in _TEXTUAL_CONTROLS)
+    # A third is generous: real text with any control characters at all is rare.
+    return controls / len(head) > 0.3
 
 
 def classify(

@@ -64,6 +64,50 @@ async def _store_secret(project: str, name: str, value: str) -> None:
     print(f"credential written to Secret Manager as {name} (not printed here)")
 
 
+async def _grant_key(prefix: str, capabilities: str) -> None:
+    """Adjust an existing key's capabilities.
+
+    Deliberately a CLI rather than an endpoint: the API refuses to issue a key
+    with capabilities the calling credential does not hold, which is correct
+    and leaves exactly one bootstrap problem -- the first key. This solves that
+    from inside the deployment rather than by weakening the rule.
+    """
+    settings = load_settings()
+    pool = await create_pool(settings)
+    caps = [c.strip() for c in capabilities.split(",") if c.strip()]
+    updated = await pool.execute(
+        "UPDATE api_keys SET capabilities = $2 WHERE prefix = $1", prefix, caps
+    )
+    await pool.close()
+    print(f"grant {prefix} -> {caps}: {updated}")
+
+
+async def _add_member(email: str, role: str) -> None:
+    """Attach a person to the first organization. For the initial admin only."""
+    from .ids import new_id
+
+    settings = load_settings()
+    pool = await create_pool(settings)
+    org_id = await pool.fetchval("SELECT org_id FROM organizations ORDER BY created_at LIMIT 1")
+    async with pool.acquire() as conn, conn.transaction():
+        user_id = await conn.fetchval("SELECT user_id FROM users WHERE email = $1", email)
+        if user_id is None:
+            user_id = new_id("usr")
+            await conn.execute(
+                "INSERT INTO users (user_id, email, display_name) VALUES ($1, $2, $2)",
+                user_id, email,
+            )
+        await conn.execute(
+            """
+            INSERT INTO memberships (user_id, org_id, role) VALUES ($1, $2, $3)
+            ON CONFLICT (user_id, org_id) DO UPDATE SET role = EXCLUDED.role
+            """,
+            user_id, org_id, role,
+        )
+    await pool.close()
+    print(f"member {email} ({role}) in {org_id} as {user_id}")
+
+
 async def _revoke_key(prefix: str) -> None:
     settings = load_settings()
     pool = await create_pool(settings)
@@ -95,14 +139,22 @@ async def _reconcile(grace: int) -> None:
     the point is that the *rows* are the record of outstanding work, so a
     process that has never seen the original request can pick it all up.
     """
+    from .blobs import build_blob_store
     from .extraction import build_extractor
+    from .multimodal import build_multimodal
     from .queue import InProcessQueue
     from .reconcile import reconcile
-    from .workers import EmbedWorker, EnrichWorker
+    from .workers import EmbedWorker, EnrichWorker, ParseWorker
 
     settings = load_settings()
     pool = await create_pool(settings)
     queue = InProcessQueue()
+    # The parse tier must be subscribed here too, or the sweep publishes work
+    # that nothing consumes -- which looks exactly like the sweep doing nothing.
+    ParseWorker(
+        pool, build_blob_store(settings), queue=queue,
+        multimodal=build_multimodal(settings),
+    ).register(queue)
     embed = EmbedWorker(pool, build_embedder(settings), settings, queue=queue)
     await embed.ensure_generator()
     embed.register(queue, "embed")
@@ -113,7 +165,7 @@ async def _reconcile(grace: int) -> None:
     swept = await reconcile(
         pool, queue, embed_generator=embed.generator_version, grace_seconds=grace
     )
-    print(f"re-enqueued: embed={swept.embed} enrich={swept.enrich}")
+    print(f"re-enqueued: parse={swept.parse} embed={swept.embed} enrich={swept.enrich}")
     if swept.total:
         await queue.drain(timeout=600)
     await queue.close()
@@ -213,7 +265,8 @@ async def _smoke(url: str, key: str, producer_id: str, project_id: str) -> int:
 
 def main() -> int:
     if len(sys.argv) < 2 or sys.argv[1] not in (
-        "bootstrap", "smoke", "revoke-key", "bootstrap-to-secret", "reconcile"
+        "bootstrap", "smoke", "revoke-key", "bootstrap-to-secret", "reconcile",
+        "grant-key", "add-member",
     ):
         print("usage: python -m memdog bootstrap [email] [personal|shared]",
               file=sys.stderr)
@@ -229,6 +282,12 @@ def main() -> int:
         return asyncio.run(_smoke(*sys.argv[2:6]))
     if sys.argv[1] == "reconcile":
         asyncio.run(_reconcile(int(sys.argv[2]) if len(sys.argv) > 2 else 300))
+        return 0
+    if sys.argv[1] == "grant-key":
+        asyncio.run(_grant_key(sys.argv[2], sys.argv[3]))
+        return 0
+    if sys.argv[1] == "add-member":
+        asyncio.run(_add_member(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else "admin"))
         return 0
     if sys.argv[1] == "revoke-key":
         asyncio.run(_revoke_key(sys.argv[2]))

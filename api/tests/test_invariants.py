@@ -327,3 +327,76 @@ async def test_a_failing_handler_is_not_silent(pool, blobs, settings, tenant, pr
     # The item is untouched and still retryable -- deferred, not lost.
     assert (await get_item(pool, owner, (await pool.fetchval(
         "SELECT data_id FROM data_items"))))["state"] == "stored"
+
+
+async def test_an_item_is_owned_by_who_wrote_it_not_who_made_the_producer(
+    pool, queue, blobs, settings, embedder, tenant, principal_for
+):
+    """A shared client producer is written through by several people.
+
+    Attributing ownership to the producer's registrant means the second person
+    cannot see their own private writes -- which looks exactly like the data
+    never arriving.
+    """
+    from memdog.auth import ADMIN
+    from memdog.retrieval import get_item
+
+    colleague_id, colleague_key = await _second_member(
+        pool, tenant, capabilities=[DATA_READ, DATA_WRITE, ADMIN]
+    )
+    colleague = await principal_for(colleague_key)
+
+    written = await _write(
+        pool, queue, blobs, settings, colleague, tenant.producer_id,
+        [WriteItem(external_id="theirs-own", content=Inline(text=SECRET))],
+    )
+    data_id = written.results[0].data_id
+
+    item = await get_item(pool, colleague, data_id)
+    assert item["access_level"] == "private"
+
+    # And the producer's registrant does not silently own it.
+    owner = await principal_for(tenant.api_key)
+    with pytest.raises(NotFound):
+        await get_item(pool, owner, data_id)
+
+
+async def test_a_personal_connections_producer_is_not_a_shared_entry_point(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """Writing through it would attribute data to someone else's mailbox."""
+    from memdog.write import AdmissionError
+
+    _, colleague_key = await _second_member(pool, tenant)
+    colleague = await principal_for(colleague_key)
+
+    # The bootstrap tenant's producer carries a personal-scope connection.
+    with pytest.raises(AdmissionError) as exc:
+        await _write(
+            pool, queue, blobs, settings, colleague, tenant.producer_id,
+            [WriteItem(external_id="not-mine", content=Inline(text=SECRET))],
+        )
+    assert exc.value.status == 403
+
+
+async def test_a_project_producer_is_usable_by_any_member(
+    pool, queue, blobs, settings, principal_for
+):
+    """Otherwise a shared entry point is unusable by everyone except whoever
+    happened to register it."""
+    from memdog.bootstrap import bootstrap_tenant
+    from memdog.retrieval import get_item
+
+    # A producer with no connection: a project-level entry point.
+    shared = await bootstrap_tenant(pool, org_name="shared-producer-co",
+                                    email="reg@example.com", connection_scope=None)
+    _, colleague_key = await _second_member(pool, shared)
+    colleague = await principal_for(colleague_key)
+
+    written = await _write(
+        pool, queue, blobs, settings, colleague, shared.producer_id,
+        [WriteItem(external_id="mine", content=Inline(text=SECRET))],
+    )
+    assert written.accepted == 1
+    # And they can see what they wrote, because they own it.
+    assert await get_item(pool, colleague, written.results[0].data_id)

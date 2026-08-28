@@ -262,9 +262,9 @@ class EnrichWorker:
                 INSERT INTO artifacts (artifact_id, org_id, project_id, owner_id,
                     kind, title, description, summary, keywords, language, fields,
                     model_id, generator_version, served_by_model, fallback_depth,
-                    access_level, shared_with)
+                    access_level, shared_with, model_version, response_id)
                 VALUES ($1, $2, $3, $4, 'envelope', $5, $6, $7, $8, $9, $10, $11,
-                        $12, $13, 0, $14, $15)
+                        $12, $13, 0, $14, $15, $16, $17)
                 """,
                 artifact_id,
                 row["org_id"],
@@ -284,6 +284,8 @@ class EnrichWorker:
                 self._extractor.model_id,
                 acl.access_level,
                 acl.shared_with,
+                envelope.model_version,
+                envelope.response_id,
             )
             await conn.execute(
                 """
@@ -315,6 +317,8 @@ async def record_version(
     model_id: str | None = None,
     generator_version: str | None = None,
     tokens: int = 0,
+    model_version: str | None = None,
+    response_id: str | None = None,
     detail: dict | None = None,
     attempts: int = 5,
 ) -> int:
@@ -340,16 +344,17 @@ async def record_version(
                 """
                     INSERT INTO data_versions (version_id, data_id, revision, source,
                         content_text, content_chars, checksum, mime_type, model_id,
-                        generator_version, tokens, detail)
+                        generator_version, tokens, detail, model_version, response_id)
                     SELECT $1, $2,
                            coalesce(max(revision), 0) + 1,
-                           $3, $4, $5, $6, $7, $8, $9, $10, $11
+                           $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
                     FROM data_versions WHERE data_id = $2
                     RETURNING revision
                     """,
                     new_id("ver"), data_id, source, content_text,
                     len(content_text) if content_text else 0, checksum, mime_type,
                     model_id, generator_version, tokens, detail or {},
+                    model_version, response_id,
                 )
         except asyncpg.UniqueViolationError:
             if attempt == attempts - 1:
@@ -411,7 +416,7 @@ class ParseWorker:
 
         payload = await self._blobs.get(row["storage_ref"])
         mime = row["mime_type"] or ""
-        model_id = generator = None
+        model_id = generator = model_version = response_id = None
         tokens = 0
         try:
             parsed = parse(payload, mime=mime, name=row["external_id"] or "")
@@ -422,7 +427,7 @@ class ParseWorker:
             interpreted = await self._interpret(data_id, payload, mime, exc.capability)
             if interpreted is None:
                 return
-            parsed, model_id, generator, tokens = interpreted
+            parsed, model_id, generator, tokens, model_version, response_id = interpreted
         except ParseFailed as exc:
             await self._record(data_id, exc.code, {"reason": str(exc)})
             return
@@ -451,6 +456,8 @@ class ParseWorker:
                 model_id=model_id,
                 generator_version=generator,
                 tokens=tokens,
+                model_version=model_version,
+                response_id=response_id,
                 detail={"tier": parsed.tier, "structure": parsed.structure,
                         "warnings": parsed.warnings},
             )
@@ -459,9 +466,29 @@ class ParseWorker:
 
     async def _interpret(self, data_id: str, payload: bytes, mime: str, capability: str):
         """Hand the bytes to a model, or record precisely why we did not."""
-        from .multimodal import MediaDisabled, MediaTooLarge, modality_for
+        from .multimodal import MediaDisabled, MediaTooLarge, QuotaExhausted, modality_for
 
         engine = self._multimodal
+
+        # The org's setting governs, with the deployment's configuration as the
+        # platform default. Previously the env var decided outright, which made
+        # the setting decorative -- it reported a value that had no effect, and
+        # an org could not decline the expensive tier.
+        org_id = await self._pool.fetchval(
+            "SELECT org_id FROM data_items WHERE data_id = $1", data_id
+        )
+        if org_id is not None:
+            from .settings_store import resolve
+
+            policy = await resolve(self._pool, "media_interpretation", org_id=org_id)
+            if policy.source != "default" and not policy.value:
+                await self._record(
+                    data_id, "needs_model",
+                    {"capability": capability,
+                     "reason": f"media interpretation is disabled at {policy.source} scope"},
+                )
+                return None
+
         if engine is None or not getattr(engine, "enabled", False):
             await self._record(
                 data_id, "needs_model",
@@ -471,8 +498,30 @@ class ParseWorker:
             return None
 
         modality = "ocr" if capability == "ocr" else (modality_for(mime) or "image")
+
+        # The assignment decides which model runs, resolved per request rather
+        # than baked in at deploy time. Absent an assignment the deployment
+        # default applies, which is why most installations never configure this.
+        purpose = "transcription" if modality in ("audio", "video") else "vision"
+        if org_id and hasattr(engine, "model_for"):
+            from .models import resolve_model
+
+            assignment = await resolve_model(
+                self._pool, purpose=purpose, data_type=modality,
+                org_id=org_id, default_model=engine.model_for(modality),
+            )
+            if assignment.source == "assignment":
+                engine._per_modality[modality] = assignment.model_id
+
         try:
             result = await engine.interpret(payload, mime=mime, modality=modality)
+        except QuotaExhausted as exc:
+            # Leave the row untouched -- no parse_status -- so the reconciler
+            # picks it up on a later sweep. Recording a status here would mark
+            # it examined, and it has not been. The item is not lost; it is
+            # waiting for quota.
+            log.warning("deferring %s: provider quota exhausted (%s)", data_id, exc)
+            return None
         except MediaTooLarge as exc:
             await self._record(data_id, "needs_model",
                                {"capability": capability, "reason": str(exc)})
@@ -502,7 +551,8 @@ class ParseWorker:
             tier="A",
             structure={"modality": result.modality, **result.structure},
         ).capped()
-        return parsed, result.model_id, f"multimodal:{result.model_id}", result.tokens
+        return (parsed, result.model_id, f"multimodal:{result.model_id}", result.tokens,
+                result.model_version, result.response_id)
 
     async def _record(self, data_id: str, status: str, detail: dict) -> None:
         record("parse_failures", 1, status=status)

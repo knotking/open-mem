@@ -17,13 +17,16 @@ from .auth import ApiKeyVerifier, AuthError, Principal, TokenVerifier
 from .blobs import build_blob_store
 from .config import load_settings
 from .contracts import RetrieveRequest, RetrieveResponse, WriteRequest, WriteResponse
-from . import agents, cases, control, normalize, sharing
+from . import agents, cases, control, memories as memories_mod, models, normalize, sharing
 from .agents import AgentConfigError
+from .memories import MemoryError
+from .models import ModelError
 from .cases import CaseError
 from .control import ControlError
 from .sharing import ShareError
 from .crypto import Envelope
 from .db import create_pool, migrate
+from .firebase import CompositeVerifier, FirebaseVerifier
 from .deletion import DELETE_TOPIC, DeleteWorker, request_deletion, unpurged_tombstones
 from .inference import build_embedder
 from .queue import InProcessQueue
@@ -38,8 +41,10 @@ from .retrieval import (
     get_item,
     get_versions,
     item_memories,
+    list_items,
     list_memories,
     memory_members,
+    project_overview,
     retrieve,
     staircase,
     stale_artifacts,
@@ -86,6 +91,19 @@ async def lifespan(app: FastAPI):
     app.state.embedder = embedder
     app.state.extractor = extractor
     app.state.multimodal = multimodal
+    await models.ensure_catalog(pool)
+    # Seed the platform-scope value from the deployment's configuration, so
+    # `GET /settings/effective` reports what is actually happening rather than
+    # a default the runtime is ignoring.
+    await pool.execute(
+        """
+        INSERT INTO settings (setting_id, scope, scope_id, key, value, set_by)
+        VALUES ('set_platform_media', 'platform', NULL, 'media_interpretation', $1, 'deployment')
+        ON CONFLICT (scope, scope_id, key) DO UPDATE
+            SET value = EXCLUDED.value, updated_at = now()
+        """,
+        settings.media_interpretation,
+    )
     # What "current" means for staleness: the generator each purpose is
     # assigned right now.
     app.state.current_generators = {
@@ -93,7 +111,21 @@ async def lifespan(app: FastAPI):
         "extraction": enrich_worker.generator_version,
     }
     app.state.envelope = Envelope.from_settings(settings)
-    app.state.verifier: TokenVerifier = ApiKeyVerifier(pool)
+    # One seam, two credential shapes. A browser signs in and presents an
+    # identity token; a script presents an API key. Both land on the same
+    # Principal, so there is one authorization path rather than two.
+    api_keys = ApiKeyVerifier(pool)
+    firebase = (
+        FirebaseVerifier(pool, settings.firebase_project_id)
+        if settings.firebase_project_id
+        else None
+    )
+    app.state.verifier: TokenVerifier = CompositeVerifier(api_keys, firebase)
+    app.state.auth_modes = {
+        "api_key": True,
+        "identity_platform": firebase is not None,
+        "project_id": settings.firebase_project_id or None,
+    }
     try:
         yield
     finally:
@@ -145,6 +177,7 @@ async def healthz(request: Request) -> dict:
         "embed_model": request.app.state.embedder.model_id,
         "embed_dim": request.app.state.embedder.dim,
         "queue_depth": await request.app.state.queue.depth(),
+        "auth": request.app.state.auth_modes,
         "media_interpretation": request.app.state.multimodal.enabled,
         # A cascade that quietly stopped looks like nothing at all without this.
         "unpurged_tombstones": await unpurged_tombstones(request.app.state.pool),
@@ -202,6 +235,50 @@ async def read_artifacts(
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
 
 
+@app.get("/api/v1/data/{data_id}/content")
+async def read_content(
+    request: Request, data_id: str, actor: Principal = Depends(principal)
+) -> Response:
+    """The original bytes, back out again.
+
+    Confidence in a memory layer is mostly the ability to check it: an item
+    whose stored bytes you cannot see is one you have to take on trust. The ACL
+    is applied first and the read is audited, exactly as for the text.
+
+    Served inline with `Content-Disposition: inline` so a browser can render an
+    image, play audio or scrub video — but with `X-Content-Type-Options:
+    nosniff`, because serving user-supplied bytes under a type the browser
+    guesses is how a stored file becomes stored script.
+    """
+    from .audit import record_access
+
+    state = request.app.state
+    try:
+        item = await get_item(state.pool, actor, data_id)
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    except NotFound as exc:
+        raise HTTPException(status_code=404, detail="not found") from exc
+
+    if not item["storage_ref"]:
+        raise HTTPException(status_code=404, detail="this item has no stored bytes")
+
+    payload = await state.blobs.get(item["storage_ref"])
+    await record_access(
+        state.pool, actor, action="content.read",
+        project_id=item["project_id"], data_id=data_id,
+    )
+    return Response(
+        content=payload,
+        media_type=item["mime_type"] or "application/octet-stream",
+        headers={
+            "Content-Disposition": "inline",
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, no-store",
+        },
+    )
+
+
 @app.get("/api/v1/data/{data_id}/versions")
 async def read_versions(
     request: Request, data_id: str, actor: Principal = Depends(principal)
@@ -212,6 +289,40 @@ async def read_versions(
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
     except NotFound as exc:
         raise HTTPException(status_code=404, detail="not found") from exc
+
+
+@app.get("/api/v1/projects/{project_id}/data")
+async def get_project_data(
+    request: Request,
+    project_id: str,
+    actor: Principal = Depends(principal),
+    limit: int = 50,
+    before: str | None = None,
+    state: str | None = None,
+) -> dict:
+    """Browse what is actually in a project.
+
+    Without this the only ways to find an item are knowing its id or matching a
+    search -- neither of which answers "what did I put in here?".
+    """
+    try:
+        return await list_items(
+            request.app.state.pool, actor, project_id,
+            limit=limit, before=before, state=state,
+        )
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/projects/{project_id}/overview")
+async def get_overview(
+    request: Request, project_id: str, actor: Principal = Depends(principal)
+) -> dict:
+    """The numbers that answer "is this working?" in one call."""
+    try:
+        return await project_overview(request.app.state.pool, actor, project_id)
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
 
 
 @app.get("/api/v1/projects/{project_id}/staircase")
@@ -232,6 +343,87 @@ async def read_memories(
         return {"memories": await list_memories(request.app.state.pool, actor, project_id)}
     except AuthError as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/memories")
+async def post_memory(request: Request, body: dict, actor: Principal = Depends(principal)) -> dict:
+    """Create the container first, fill it deliberately.
+
+    Writing an item with a `memory` key also creates one -- that is the
+    producer's path. This is the person's.
+    """
+    return await _control(memories_mod.create_memory)(
+        request.app.state.pool, actor,
+        project_id=body.get("project_id", ""),
+        type_name=body.get("type", "default"),
+        memory_key=body.get("key"),
+        title=body.get("title"),
+    )
+
+
+@app.post("/api/v1/memories/{memory_id}/members")
+async def post_memory_members(
+    request: Request, memory_id: str, body: dict, actor: Principal = Depends(principal)
+) -> dict:
+    return await _control(memories_mod.add_members)(
+        request.app.state.pool, actor, memory_id, body.get("data_ids", [])
+    )
+
+
+@app.delete("/api/v1/memories/{memory_id}/members/{data_id}")
+async def delete_memory_member(
+    request: Request, memory_id: str, data_id: str, actor: Principal = Depends(principal)
+) -> dict:
+    """Unmapping is not deletion, and losing the last membership files the item
+    in the applicable default rather than leaving it invisible."""
+    return await _control(memories_mod.remove_member)(
+        request.app.state.pool, actor, memory_id, data_id
+    )
+
+
+@app.patch("/api/v1/memories/{memory_id}")
+async def patch_memory(
+    request: Request, memory_id: str, body: dict, actor: Principal = Depends(principal)
+) -> dict:
+    return await _control(memories_mod.retype_memory)(
+        request.app.state.pool, actor, memory_id, body.get("type", "default"),
+        preview=bool(body.get("preview")),
+    )
+
+
+@app.delete("/api/v1/memories/{memory_id}")
+async def delete_memory_endpoint(
+    request: Request,
+    memory_id: str,
+    actor: Principal = Depends(principal),
+    preview: bool = False,
+) -> dict:
+    """Delete a container, applying its type's expiry policy to the contents.
+
+    Pass `?preview=true` first: the interesting number is how many members
+    survive because another memory still holds them.
+    """
+    return await _control(memories_mod.delete_memory)(
+        request.app.state.pool, actor, request.app.state.queue, memory_id, preview=preview
+    )
+
+
+@app.get("/api/v1/projects/{project_id}/memory-types")
+async def get_memory_types(
+    request: Request, project_id: str, actor: Principal = Depends(principal)
+) -> dict:
+    return {"types": await memories_mod.list_types(request.app.state.pool, project_id)}
+
+
+@app.post("/api/v1/projects/{project_id}/memory-types")
+async def post_memory_type(
+    request: Request, project_id: str, body: dict, actor: Principal = Depends(principal)
+) -> dict:
+    return await _control(memories_mod.create_type)(
+        request.app.state.pool, actor, project_id=project_id,
+        name=body.get("name", ""), ttl_seconds=body.get("ttl_seconds"),
+        on_expiry=body.get("on_expiry", "orphan_delete"),
+    )
 
 
 @app.get("/api/v1/memories/{memory_id}/members")
@@ -334,7 +526,8 @@ def _control(handler):
     async def wrapped(*args, **kwargs):
         try:
             return await handler(*args, **kwargs)
-        except (ControlError, ShareError, CaseError, AgentConfigError) as exc:
+        except (ControlError, ShareError, CaseError, AgentConfigError, ModelError,
+                MemoryError) as exc:
             raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
         except AuthError as exc:
             raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
@@ -670,6 +863,48 @@ async def platform_health(request: Request, actor: Principal = Depends(principal
             "SELECT count(*) FROM share_links WHERE revoked_at IS NULL AND expires_at > now()"
         ),
     }
+
+
+# ---------------------------------------------------------- model catalog
+
+
+@app.get("/api/v1/models")
+async def get_models(request: Request, actor: Principal = Depends(principal)) -> dict:
+    """Cards, assignments and engines. Never a credential -- only whether one
+    is held."""
+    return await _control(models.list_catalog)(request.app.state.pool, actor)
+
+
+@app.post("/api/v1/models/assignments")
+async def post_assignment(
+    request: Request, body: dict, actor: Principal = Depends(principal)
+) -> dict:
+    """Assign a model per (purpose, data type).
+
+    Checked against the model's card, so assigning a text-only model to
+    transcribe audio fails now rather than when a file arrives.
+    """
+    assignment = await _control(models.assign)(
+        request.app.state.pool, actor,
+        purpose=body.get("purpose", ""), model_id=body.get("model_id", ""),
+        data_type=body.get("data_type", "*"), scope=body.get("scope", "org"),
+        engine_id=body.get("engine_id"),
+    )
+    return assignment.__dict__
+
+
+@app.post("/api/v1/models/cards")
+async def post_card(request: Request, body: dict, actor: Principal = Depends(principal)) -> dict:
+    return await _control(models.upsert_card)(request.app.state.pool, actor, body)
+
+
+@app.post("/api/v1/engines")
+async def post_engine(request: Request, body: dict, actor: Principal = Depends(principal)) -> dict:
+    return await _control(models.register_engine)(
+        request.app.state.pool, actor, request.app.state.envelope,
+        provider=body.get("provider", ""), base_url=body.get("base_url"),
+        credential=body.get("credential"),
+    )
 
 
 @app.post("/api/v1/uploads")

@@ -1,27 +1,35 @@
 /**
  * Server-side API access.
  *
- * Two credentials, two headers, and neither ever reaches the browser:
+ * Two headers, and the browser sees neither:
  *
- * - `Authorization` carries a Google identity token, because Cloud Run IAM
- *   guards the API and public access is refused by org policy.
- * - `X-API-Key` carries the mem-dog credential, which cannot share the
- *   Authorization header with the platform's own token.
+ * - `Authorization` carries a Google identity token for Cloud Run IAM, because
+ *   the API sits behind it.
+ * - `X-API-Key` carries the mem-dog credential. When a person is signed in this
+ *   is *their* identity token, so the API attributes the action to them; only
+ *   an unauthenticated deployment falls back to the service key.
  *
- * The API key living only on the server is not incidental. An API key in a
- * browser is a key you have published.
+ * The fallback is deliberately narrow. A shared key that acts for whoever
+ * happens to load the page is the thing sign-in exists to remove.
  */
 
+import { idToken, isSignedIn } from "./session";
+
+export class SessionExpired extends Error {
+  constructor() {
+    super("session expired");
+  }
+}
+
 const API_URL = process.env.MEMDOG_API_URL ?? "";
-const API_KEY = process.env.MEMDOG_API_KEY ?? "";
+const SERVICE_KEY = process.env.MEMDOG_API_KEY ?? "";
 
-let cachedToken: { value: string; expires: number } | null = null;
+let cachedRunToken: { value: string; expires: number } | null = null;
 
-async function identityToken(): Promise<string | null> {
+async function cloudRunToken(): Promise<string | null> {
   if (!API_URL) return null;
   const now = Date.now();
-  if (cachedToken && cachedToken.expires > now + 60_000) return cachedToken.value;
-
+  if (cachedRunToken && cachedRunToken.expires > now + 60_000) return cachedRunToken.value;
   try {
     const response = await fetch(
       "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity" +
@@ -30,26 +38,34 @@ async function identityToken(): Promise<string | null> {
     );
     if (!response.ok) return null;
     const value = await response.text();
-    // Cloud Run identity tokens last an hour; re-mint well before that.
-    cachedToken = { value, expires: now + 45 * 60_000 };
+    cachedRunToken = { value, expires: now + 45 * 60_000 };
     return value;
   } catch {
-    // Not on GCP -- local development against an unauthenticated API.
-    return null;
+    return null;   // not on GCP: local development
   }
 }
 
-export async function apiFetch(
-  path: string,
-  init: RequestInit = {},
-): Promise<Response> {
+export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers);
-  if (API_KEY) headers.set("X-API-Key", API_KEY);
-  const token = await identityToken();
-  if (token) headers.set("Authorization", `Bearer ${token}`);
-  if (init.body && !headers.has("content-type")) {
-    headers.set("content-type", "application/json");
+
+  // Fail closed. If someone is signed in, their identity is the only
+  // credential this request may carry: falling back to the service key when
+  // their token cannot be minted would silently promote every signed-in user
+  // to whatever the shared key can do -- which is precisely what sign-in
+  // exists to prevent. A transient refresh failure must look like a failure.
+  if (await isSignedIn()) {
+    const user = await idToken();
+    if (!user) throw new SessionExpired();
+    headers.set("X-API-Key", user);
+  } else if (SERVICE_KEY) {
+    // Only reachable when sign-in is not configured at all.
+    headers.set("X-API-Key", SERVICE_KEY);
   }
+
+  const platform = await cloudRunToken();
+  if (platform) headers.set("Authorization", `Bearer ${platform}`);
+  if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json");
+
   return fetch(`${API_URL}${path}`, { ...init, headers, cache: "no-store" });
 }
 

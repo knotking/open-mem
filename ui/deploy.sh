@@ -21,7 +21,7 @@ gcloud run deploy "$SERVICE" \
   --image "$IMAGE" \
   --service-account "$SA" \
   --set-env-vars "MEMDOG_API_URL=${API_URL},MEMDOG_PROJECT_ID=${MEMDOG_PROJECT_ID},MEMDOG_PRODUCER_ID=${MEMDOG_PRODUCER_ID}" \
-  --set-secrets "MEMDOG_API_KEY=memdog-demo-key:latest" \
+  --set-secrets "MEMDOG_API_KEY=memdog-demo-key:latest,FIREBASE_WEB_API_KEY=memdog-web-api-key:latest" \
   --min-instances 0 --max-instances 3 --cpu 1 --memory 512Mi \
   --quiet
 

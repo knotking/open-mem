@@ -57,6 +57,10 @@ class Envelope(BaseModel):
     keywords: list[str] = Field(default_factory=list)
     language: str | None = None
     fields: dict = Field(default_factory=dict)
+    # Provider-reported provenance, absent for deterministic extractors --
+    # which is itself informative: a null here means no model was involved.
+    model_version: str | None = None
+    response_id: str | None = None
 
 
 class Extractor(Protocol):
@@ -250,6 +254,9 @@ class GeminiExtractor:
         envelope = Envelope(**{k: v for k, v in parsed.items() if k in Envelope.model_fields})
         envelope.fields["prompt"] = prompt_name
         envelope.fields["tokens"] = (data.get("usageMetadata") or {}).get("totalTokenCount", 0)
+        # The build that answered, not the alias we asked for.
+        envelope.model_version = data.get("modelVersion")
+        envelope.response_id = data.get("responseId")
         return envelope
 
 
