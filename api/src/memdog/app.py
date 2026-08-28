@@ -16,8 +16,17 @@ from fastapi.responses import JSONResponse
 from .auth import ApiKeyVerifier, AuthError, Principal, TokenVerifier
 from .blobs import build_blob_store
 from .config import load_settings
-from .contracts import RetrieveRequest, RetrieveResponse, WriteRequest, WriteResponse
-from . import agents, cases, control, memories as memories_mod, models, normalize, sharing
+from .contracts import (
+    AskRequest,
+    AskResponse,
+    RetrieveRequest,
+    RetrieveResponse,
+    WriteRequest,
+    WriteResponse,
+)
+from .chat import ask, build_answerer
+from . import account, agents, cases, control, memories as memories_mod, models, normalize, sharing
+from .account import AccountError
 from .agents import AgentConfigError
 from .memories import MemoryError
 from .models import ModelError
@@ -90,6 +99,7 @@ async def lifespan(app: FastAPI):
     parse_worker.register(queue)
 
     extractor = build_extractor(settings)
+    answerer = build_answerer(settings)
     enrich_worker = EnrichWorker(pool, extractor, settings)
     await enrich_worker.ensure_generator()
     enrich_worker.register(queue)
@@ -109,6 +119,7 @@ async def lifespan(app: FastAPI):
     app.state.queue = queue
     app.state.embedder = embedder
     app.state.extractor = extractor
+    app.state.answerer = answerer
     app.state.multimodal = multimodal
     await models.ensure_catalog(pool)
     # Seed the platform-scope value from the deployment's configuration, so
@@ -581,6 +592,41 @@ async def create_deletion(
     }
 
 
+@app.post("/api/v1/users/{user_id}/deletion")
+async def delete_account_data(
+    request: Request, user_id: str, body: dict, actor: Principal = Depends(principal)
+) -> dict:
+    """Delete an account's data — the widest scope, and the one with a line in it.
+
+    Personal data goes; data that arrived through a *shared* connection, or that
+    the person published to the organisation, stays and is reported as retained
+    with the reason. Deleting a colleague's work as a side effect of someone
+    leaving is the failure this exists to avoid.
+
+    Pass `dry_run` first: it reports both counts separately.
+    """
+    state = request.app.state
+    target = actor.user_id if user_id == "me" else user_id
+    return await _control(account.delete_account)(
+        state.pool, state.queue, actor,
+        user_id=target, dry_run=bool(body.get("dry_run")), reason=body.get("reason"),
+    )
+
+
+@app.get("/api/v1/data/{data_id}/erasure")
+async def erasure_certificate(
+    request: Request, data_id: str, actor: Principal = Depends(principal)
+) -> dict:
+    """Evidence, not a claim: re-checks every table that holds item-scoped data.
+
+    Deliberately readable after the item is gone — the whole point is to be able
+    to answer for a deletion later.
+    """
+    from .deletion import verify_erasure
+
+    return await verify_erasure(request.app.state.pool, data_id)
+
+
 @app.get("/api/v1/runs/{run_id}")
 async def read_run(
     request: Request, run_id: str, actor: Principal = Depends(principal)
@@ -609,7 +655,7 @@ def _control(handler):
         try:
             return await handler(*args, **kwargs)
         except (ControlError, ShareError, CaseError, AgentConfigError, ModelError,
-                MemoryError) as exc:
+                MemoryError, AccountError) as exc:
             raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
         except AuthError as exc:
             raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
@@ -1008,15 +1054,92 @@ async def inbound_webhook(request: Request, producer_id: str) -> JSONResponse:
         result = await receive_webhook(
             state.pool, state.queue, state.blobs, state.settings, state.envelope,
             producer_id=producer_id, raw_body=raw, headers=headers,
+            # Twilio signs the URL, and Graph validates via a query parameter,
+            # so the adapter needs more than the bytes.
+            url=str(request.url), query=dict(request.query_params),
         )
     except WebhookError as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+    if result.handshake is not None:
+        # A registration challenge. Graph demands plain text and rejects a
+        # JSON-wrapped echo, so the shape is the provider's to decide.
+        if getattr(result.handshake, "plain_text", False):
+            return Response(content=str(result.handshake.body), media_type="text/plain")
+        return JSONResponse(status_code=200, content=result.handshake.body)
 
     return JSONResponse(
         status_code=200,
         content={"status": result.status, "items": result.items,
                  "data_ids": result.data_ids, "reason": result.reason},
     )
+
+
+@app.post("/api/v1/producers/{producer_id}/test-delivery")
+async def send_test_delivery(
+    request: Request, producer_id: str, body: dict, actor: Principal = Depends(principal)
+) -> dict:
+    """Send a delivery to this producer as its provider would.
+
+    It signs with the stored secret and goes through the **real** receive path,
+    signature verification included — a test that skipped verification would
+    pass for a producer whose signing is broken, which is exactly the case worth
+    catching before a provider is pointed at it.
+    """
+    import hashlib
+    import hmac
+    import json as jsonlib
+    import time as timelib
+
+    from .auth import CONFIG_WRITE
+    from .webhooks import WebhookError, receive as receive_webhook
+
+    state = request.app.state
+    try:
+        actor.require(CONFIG_WRITE)
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+    producer = await state.pool.fetchrow(
+        """
+        SELECT producer_id, org_id, inbound_auth, signing_secret_ct
+        FROM producers WHERE producer_id = $1 AND org_id = $2 AND type = 'webhook'
+        """,
+        producer_id, actor.org_id,
+    )
+    if producer is None:
+        raise HTTPException(status_code=404, detail="not found")
+
+    payload = body.get("payload")
+    raw = jsonlib.dumps(payload if payload is not None else {"test": True}).encode()
+    headers = {"content-type": "application/json",
+               "x-delivery-id": body.get("delivery_id") or f"test-{int(timelib.time()*1000)}"}
+
+    if producer["inbound_auth"] == "signature":
+        if not producer["signing_secret_ct"]:
+            raise HTTPException(
+                status_code=409,
+                detail="this producer signs its deliveries but has no secret yet — rotate one first",
+            )
+        secret = state.envelope.decrypt(
+            bytes(producer["signing_secret_ct"]), aad=actor.org_id.encode()
+        )
+        ts = str(int(timelib.time()))
+        headers["x-signature-timestamp"] = ts
+        headers["x-signature"] = hmac.new(
+            secret, f"{ts}.".encode() + raw, hashlib.sha256
+        ).hexdigest()
+
+    try:
+        result = await receive_webhook(
+            state.pool, state.queue, state.blobs, state.settings, state.envelope,
+            producer_id=producer_id, raw_body=raw, headers=headers,
+        )
+    except WebhookError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+    return {"status": result.status, "items": result.items, "data_ids": result.data_ids,
+            "reason": result.reason, "signed": producer["inbound_auth"] == "signature"}
 
 
 @app.get("/api/v1/producers/{producer_id}/deliveries")
@@ -1367,6 +1490,38 @@ async def read_stale(
     except AuthError as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
     return {"stale": rows, "current": request.app.state.current_generators}
+
+
+@app.post("/api/v1/ask", response_model=AskResponse)
+async def ask_endpoint(
+    request: Request, body: AskRequest, actor: Principal = Depends(principal)
+) -> AskResponse:
+    """Read the corpus by asking it. Retrieval, then generation over exactly
+    what retrieval returned -- never a second context-assembly path."""
+    from .chat import AnswerFailed, AnswerRateLimited
+
+    try:
+        return await ask(
+            request.app.state.pool,
+            request.app.state.embedder,
+            request.app.state.answerer,
+            actor,
+            body,
+            embed_generator=request.app.state.current_generators["embedding"],
+        )
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    except AnswerRateLimited as exc:
+        # The same shape admission control uses for a deep queue, so a client
+        # has one back-off rule rather than one per subsystem.
+        raise HTTPException(
+            status_code=429, detail=str(exc),
+            headers={"Retry-After": str(exc.retry_after)},
+        ) from exc
+    except AnswerFailed as exc:
+        # The retrieval happened and is recorded; only the generation failed.
+        # 502 rather than 500: the fault is the upstream model's.
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @app.post("/api/v1/retrieve", response_model=RetrieveResponse)

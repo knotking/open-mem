@@ -12,6 +12,7 @@ import { SessionExpired, apiFetch } from "@/lib/api";
 const ALLOWED = [
   /^api\/v1\/write$/,
   /^api\/v1\/retrieve$/,
+  /^api\/v1\/ask$/,
   /^api\/v1\/health$/,
   /^api\/v1\/data\/[A-Za-z0-9_]+(\?.*)?$/,
   /^api\/v1\/data\/[A-Za-z0-9_]+\/artifacts$/,
@@ -40,6 +41,8 @@ const ALLOWED = [
   /^api\/v1\/shares$/,
   /^api\/v1\/shares\/[A-Za-z0-9_]+$/,
   /^api\/v1\/deletions$/,
+  /^api\/v1\/users\/me\/deletion$/,
+  /^api\/v1\/data\/[A-Za-z0-9_]+\/erasure$/,
   /^api\/v1\/settings\/effective(\?.*)?$/,
   /^api\/v1\/models$/,
   /^api\/v1\/agents\/[A-Za-z0-9_]+\/config(\?.*)?$/,
@@ -47,6 +50,10 @@ const ALLOWED = [
   /^api\/v1\/users\/me$/,
   /^api\/v1\/users\/me\/api-keys$/,
   /^api\/v1\/producers$/,
+  /^api\/v1\/producers\/[A-Za-z0-9_]+\/inbound$/,
+  /^api\/v1\/producers\/[A-Za-z0-9_]+\/signing-secret$/,
+  /^api\/v1\/producers\/[A-Za-z0-9_]+\/test-delivery$/,
+  /^api\/v1\/producers\/[A-Za-z0-9_]+\/deliveries(\?.*)?$/,
   /^api\/v1\/platform\/health$/,
 ];
 

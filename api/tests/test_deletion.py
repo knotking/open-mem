@@ -245,3 +245,98 @@ async def test_purging_twice_is_the_same_as_purging_once(
     assert await pool.fetchval(
         "SELECT purged_at IS NOT NULL FROM data_items WHERE data_id = $1", data_id
     )
+
+
+async def test_the_projection_is_erased_with_the_record(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """The normalized projection is a *copy* of the record -- names,
+    identifiers, amounts. Leaving it behind means the tombstone reports an
+    erasure that did not happen.
+
+    This was a real gap: purge cleared the item's own columns and left the
+    projection intact.
+    """
+    from memdog import normalize
+    from memdog.deletion import DeleteWorker, verify_erasure
+
+    actor = await principal_for(tenant.api_key)
+    payload = '{"id": "MRN-A12345", "name": "Dana Ruiz", "amount": 4200}'
+    written = await write_items(
+        pool, queue, blobs, settings, actor,
+        WriteRequest(producer_id=tenant.producer_id, items=[
+            WriteItem(external_id="patient-1", content=Inline(text=payload)),
+        ], options=WriteOptions(enrich=True)),
+    )
+    await queue.drain()
+    data_id = written.results[0].data_id
+
+    await normalize.create_schema(
+        pool, actor, project_id=tenant.project_id, target_type="Person",
+        fields={"identifier": {"required": True}, "name": {}},
+        mapping={"identifier": "id", "name": "name", "identifier_fields": ["identifier"]},
+    )
+    await normalize.project(pool, data_id=data_id, project_id=tenant.project_id,
+                            text=payload, data_type="structured_json")
+    stored = await pool.fetchval(
+        "SELECT payload::text FROM normalized_records WHERE data_id = $1", data_id
+    )
+    assert "Dana Ruiz" in stored
+
+    await request_deletion(pool, queue, actor, selector={"data_ids": [data_id]},
+                           reason="erasure")
+    await DeleteWorker(pool, blobs).purge(data_id)
+
+    assert await pool.fetchval(
+        "SELECT count(*) FROM normalized_records WHERE data_id = $1", data_id
+    ) == 0
+    verdict = await verify_erasure(pool, data_id)
+    assert verdict["complete"] is True
+    assert verdict["remaining"] == {}
+
+
+async def test_a_purged_item_leaves_no_case_membership(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """Hidden by the ACL predicate is not the same as erased -- the row was
+    still listed as a member of a patient's timeline."""
+    from memdog import cases
+    from memdog.contracts import CaseRef
+    from memdog.deletion import DeleteWorker
+
+    actor = await principal_for(tenant.api_key)
+    await cases.create_case(pool, actor, project_id=tenant.project_id,
+                             case_type="patient", external_id="MRN-B1")
+    written = await write_items(
+        pool, queue, blobs, settings, actor,
+        WriteRequest(producer_id=tenant.producer_id, items=[
+            WriteItem(external_id="note-1", content=Inline(text="A clinical note."),
+                      case=CaseRef(external_id="MRN-B1", case_type="patient")),
+        ], options=WriteOptions(enrich=False)),
+    )
+    data_id = written.results[0].data_id
+    assert await pool.fetchval(
+        "SELECT count(*) FROM case_members WHERE data_id = $1", data_id
+    ) == 1
+
+    await request_deletion(pool, queue, actor, selector={"data_ids": [data_id]})
+    await DeleteWorker(pool, blobs).purge(data_id)
+    assert await pool.fetchval(
+        "SELECT count(*) FROM case_members WHERE data_id = $1", data_id
+    ) == 0
+
+
+async def test_the_certificate_reports_what_survived(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """An erasure certificate issued without looking is a claim, not evidence."""
+    from memdog.deletion import verify_erasure
+
+    actor = await principal_for(tenant.api_key)
+    written = await _write(pool, queue, blobs, settings, actor, tenant.producer_id, "live-1")
+    await queue.drain()
+
+    # Before any deletion, the certificate must refuse to say it is complete.
+    verdict = await verify_erasure(pool, written.results[0].data_id)
+    assert verdict["complete"] is False
+    assert verdict["purged_at"] is None

@@ -30,7 +30,7 @@ import {
 
 type Section =
   | "overview"
-  | "add" | "update" | "search"
+  | "add" | "update" | "search" | "ask" | "inbound"
   | "memory" | "cases"
   | "audit" | "sharing" | "deletion"
   | "settings" | "models" | "prompts"
@@ -52,6 +52,8 @@ const GROUPS: { title: string; items: { key: Section; label: string; hint: strin
       { key: "add", label: "Add data", hint: "paste, upload or record" },
       { key: "update", label: "Update data", hint: "re-write a key, see revisions" },
       { key: "search", label: "Search", hint: "retrieve, with the trace" },
+      { key: "ask", label: "Ask", hint: "answer, with its evidence" },
+      { key: "inbound", label: "Inbound", hint: "webhooks providers post to" },
     ],
   },
   {
@@ -191,6 +193,8 @@ export default function Console({
           <UpdateData projectId={projectId} producerId={producerId} onChange={refresh} />
         )}
         {section === "search" && <ReadSearch projectId={projectId} />}
+        {section === "ask" && <AskSection projectId={projectId} />}
+        {section === "inbound" && <InboundSection projectId={projectId} />}
         {section === "audit" && <Audit projectId={projectId} />}
         {section === "memory" && <MemorySection projectId={projectId} />}
         {section === "cases" && <CasesSection projectId={projectId} />}
@@ -666,7 +670,158 @@ function UpdateData({
   );
 }
 
-/* ------------------------------------------------------------ 3. search */
+/* --------------------------------------------------------------- 3. ask */
+
+type AnswerCitation = {
+  marker: number;
+  data_id: string;
+  chunk_id: string;
+  text: string;
+  score: number;
+  state: string;
+};
+
+type Answer = {
+  query_id: string;
+  question: string;
+  answer: string;
+  grounded: boolean;
+  citations: AnswerCitation[];
+  considered: number;
+  corpus: { total: number; stored: number; searchable: number; enriched: number } | null;
+  excluded: { data_id: string; reason: string; score: number | null; state: string | null }[];
+  model_id: string;
+  served_by_model: string | null;
+  answer_stored: boolean;
+  latency_ms: number;
+};
+
+function AskSection({ projectId }: { projectId: string }) {
+  const [question, setQuestion] = useState("What caused the rollback?");
+  const [turns, setTurns] = useState<Answer[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [open, setOpen] = useState<string | null>(null);
+
+  async function send() {
+    const asked = question.trim();
+    if (!asked) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const answer = await call<Answer>("api/v1/ask", {
+        question: asked,
+        filter: { project_id: projectId },
+      });
+      setTurns((previous) => [...previous, answer]);
+      setOpen(answer.query_id);
+      setQuestion("");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <h1>Read / ask</h1>
+      <p className="lede">
+        The same retrieval as search, with a model reading the passages. Every claim carries the
+        number of the passage it came from, and the passages are here — so a wrong answer is a
+        thing you can check rather than a thing you have to believe.
+      </p>
+
+      {turns.length === 0 && (
+        <section className="panel">
+          <p className="empty">
+            Ask about data in this project. Answers come only from records you can already read;
+            when the corpus does not support an answer, it says so instead of composing one.
+          </p>
+        </section>
+      )}
+
+      {turns.map((turn) => (
+        <section className="panel" key={turn.query_id}>
+          <p className="question">{turn.question}</p>
+
+          <div className={turn.grounded ? "answer" : "answer ungrounded"}>{turn.answer}</div>
+
+          <div className="meta" style={{ marginTop: 10 }}>
+            <span className={`chip ${turn.grounded ? "enriched" : "stored"}`}>
+              {turn.grounded ? "grounded" : "not supported by the corpus"}
+            </span>
+            <span className="chip">{turn.citations.length} cited</span>
+            <span className="chip">{turn.considered} passages read</span>
+            {turn.corpus && (
+              <span className="chip">
+                {turn.corpus.enriched} enriched of {turn.corpus.total}
+              </span>
+            )}
+            <span className="chip">{turn.served_by_model || turn.model_id}</span>
+            <span className="chip">{turn.latency_ms} ms</span>
+            {!turn.answer_stored && <span className="chip">text not stored</span>}
+          </div>
+
+          {turn.citations.length > 0 && (
+            <>
+              <h3
+                style={{ cursor: "pointer" }}
+                onClick={() => setOpen(open === turn.query_id ? null : turn.query_id)}
+              >
+                {open === turn.query_id ? "▾" : "▸"} The evidence it rests on
+              </h3>
+              {open === turn.query_id &&
+                turn.citations.map((citation) => (
+                  <div className="hit" key={citation.chunk_id}>
+                    <div className="meta">
+                      <span className="chip on">[{citation.marker}]</span>
+                      <span className="chip">score {citation.score.toFixed(4)}</span>
+                      <span className={`chip ${citation.state}`}>{citation.state}</span>
+                    </div>
+                    <div className="text">{citation.text}</div>
+                    <p className="provenance">{citation.data_id}</p>
+                  </div>
+                ))}
+            </>
+          )}
+
+          {!turn.grounded && turn.corpus && turn.corpus.stored > 0 && (
+            <p className="empty">
+              {turn.corpus.stored} record{turn.corpus.stored === 1 ? " is" : "s are"} stored but not
+              searchable yet, so {turn.corpus.stored === 1 ? "it" : "they"} could not have been
+              used. That is a likely cause of a thin answer.
+            </p>
+          )}
+        </section>
+      ))}
+
+      <section className="panel">
+        <div className="row">
+          <input
+            type="text"
+            value={question}
+            placeholder="Ask about this project&rsquo;s data…"
+            onChange={(e) => setQuestion(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && void send()}
+            style={{ flex: 1 }}
+          />
+          <button onClick={send} disabled={busy || !question.trim()}>
+            {busy ? "Reading…" : "Ask"}
+          </button>
+        </div>
+        {error && <p className="err">{error}</p>}
+        <p className="empty">
+          Answers are generated from retrieved records. Records are treated as evidence, never as
+          instructions — a record containing &ldquo;ignore your instructions&rdquo; is reported as
+          content, not obeyed.
+        </p>
+      </section>
+    </>
+  );
+}
+
+/* ------------------------------------------------------------ 4. search */
 
 function ReadSearch({ projectId }: { projectId: string }) {
   const [query, setQuery] = useState("rollback recovered error rates");
@@ -1356,74 +1511,331 @@ function DeletionSection({
   projectId: string;
   onChange: () => Promise<void>;
 }) {
-  const [dataId, setDataId] = useState("");
+  type Scope = "record" | "memory" | "detach" | "account";
+
+  const [scope, setScope] = useState<Scope>("record");
+  const [items, setItems] = useState<Item[]>([]);
+  const [memories, setMemories] = useState<Memory[]>([]);
+  const [chosenItems, setChosenItems] = useState<Set<string>>(new Set());
+  const [chosenMemory, setChosenMemory] = useState<string>("");
+  const [detachItem, setDetachItem] = useState<string>("");
+  const [detachFrom, setDetachFrom] = useState<Membership[]>([]);
+  const [preview, setPreview] = useState<Record<string, unknown> | null>(null);
   const [result, setResult] = useState<Record<string, unknown> | null>(null);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function run(dryRun: boolean) {
-    setError(null);
+  const load = useCallback(async () => {
     try {
-      setResult(
-        await call<Record<string, unknown>>("api/v1/deletions", {
-          selector: { project_id: projectId, data_ids: [dataId.trim()] },
-          reason: "console",
-          dry_run: dryRun,
-        }),
-      );
-      if (!dryRun) await onChange();
+      const [d, m] = await Promise.all([
+        call<{ items: Item[] }>(`api/v1/projects/${projectId}/data?limit=50`),
+        call<{ memories: Memory[] }>(`api/v1/projects/${projectId}/memories`),
+      ]);
+      setItems(d.items);
+      setMemories(m.memories);
     } catch (e) {
       setError((e as Error).message);
     }
+  }, [projectId]);
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  function reset(next: Scope) {
+    setScope(next);
+    setPreview(null);
+    setResult(null);
+    setError(null);
   }
+
+  async function run(run: () => Promise<unknown>, into: "preview" | "result") {
+    setBusy(true);
+    setError(null);
+    try {
+      const out = (await run()) as Record<string, unknown>;
+      if (into === "preview") setPreview(out);
+      else {
+        setResult(out);
+        setPreview(null);
+        await load();
+        await onChange();
+      }
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const SCOPES: { key: Scope; label: string; blast: string }[] = [
+    { key: "record", label: "A record", blast: "one item and everything derived from it" },
+    { key: "memory", label: "A memory of records", blast: "the container, and members nothing else holds" },
+    { key: "detach", label: "Detach from a memory", blast: "membership only — the record survives" },
+    { key: "account", label: "All account data", blast: "everything personal; shared data is retained" },
+  ];
 
   return (
     <>
       <h1>Deletion</h1>
       <p className="lede">
-        Invisible in the request transaction; reclaimed asynchronously. <code>deleted_at</code> is
-        when it became invisible, <code>purged_at</code> is when the bytes went — a certificate is
-        issued against the second.
+        Four scopes, widening. Invisible in the request transaction; reclaimed asynchronously.
+        <code> deleted_at</code> is when it became invisible, <code>purged_at</code> is when the
+        bytes went — and the certificate is issued against the second.
       </p>
+
       <section className="panel">
-        <h2>Dry run, then erase</h2>
-        <div className="row">
-          <input
-            type="text"
-            placeholder="data_01…"
-            value={dataId}
-            onChange={(e) => setDataId(e.target.value)}
-            style={{ flex: 1 }}
-          />
-          <button className="secondary" onClick={() => run(true)} disabled={!dataId.trim()}>
-            Dry run
-          </button>
-          <button onClick={() => run(false)} disabled={!dataId.trim()}>
-            Delete
-          </button>
+        <h2>What are you deleting?</h2>
+        <div className="scopes">
+          {SCOPES.map((s) => (
+            <button
+              key={s.key}
+              className={`scope${scope === s.key ? " active" : ""}`}
+              onClick={() => reset(s.key)}
+            >
+              <span className="scope-label">{s.label}</span>
+              <span className="scope-blast">{s.blast}</span>
+            </button>
+          ))}
         </div>
-        {error && <p className="err">{error}</p>}
-        {result && (
-          <table className="kv" style={{ marginTop: 12 }}>
+      </section>
+
+      {error && <p className="err">{error}</p>}
+
+      {scope === "record" && (
+        <section className="panel">
+          <h2>Records</h2>
+          {items.length === 0 ? (
+            <p className="empty">Nothing to delete.</p>
+          ) : (
+            <div className="excluded">
+              {items.slice(0, 30).map((i) => (
+                <label className="item memrow pick" key={i.data_id}>
+                  <input
+                    type="checkbox"
+                    checked={chosenItems.has(i.data_id)}
+                    onChange={(e) => {
+                      const next = new Set(chosenItems);
+                      if (e.target.checked) next.add(i.data_id);
+                      else next.delete(i.data_id);
+                      setChosenItems(next);
+                    }}
+                  />
+                  <span className={`chip ${i.state}`}>{i.state}</span>
+                  <code>{i.external_id ?? i.data_id}</code>
+                </label>
+              ))}
+            </div>
+          )}
+          <div className="row end" style={{ marginTop: 10 }}>
+            <button
+              className="secondary"
+              disabled={busy || chosenItems.size === 0}
+              onClick={() =>
+                run(
+                  () =>
+                    call("api/v1/deletions", {
+                      selector: { project_id: projectId, data_ids: [...chosenItems] },
+                      dry_run: true,
+                    }),
+                  "preview",
+                )
+              }
+            >
+              Dry run
+            </button>
+            <button
+              disabled={busy || chosenItems.size === 0}
+              onClick={() =>
+                run(
+                  () =>
+                    call("api/v1/deletions", {
+                      selector: { project_id: projectId, data_ids: [...chosenItems] },
+                      reason: "deleted from the console",
+                    }),
+                  "result",
+                )
+              }
+            >
+              Delete {chosenItems.size > 0 ? chosenItems.size : ""}
+            </button>
+          </div>
+          <p className="empty">
+            The cascade reaches chunks, vectors, versions, the projection, case and memory
+            membership, share links and the stored bytes — then the root row last, because it is
+            the map the cascade needs.
+          </p>
+        </section>
+      )}
+
+      {scope === "memory" && (
+        <section className="panel">
+          <h2>Memories</h2>
+          <div className="row">
+            <select value={chosenMemory} onChange={(e) => setChosenMemory(e.target.value)}>
+              <option value="">choose a memory…</option>
+              {memories.map((m) => (
+                <option key={m.memory_id} value={m.memory_id}>
+                  {m.type} · {m.memory_key ?? m.memory_id} · {m.members} member
+                  {m.members === 1 ? "" : "s"}
+                </option>
+              ))}
+            </select>
+            <button
+              className="secondary"
+              disabled={busy || !chosenMemory}
+              onClick={() =>
+                run(
+                  () => call(`api/v1/memories/${chosenMemory}?preview=true`, undefined, "DELETE"),
+                  "preview",
+                )
+              }
+            >
+              Preview
+            </button>
+            <button
+              disabled={busy || !chosenMemory}
+              onClick={() =>
+                run(() => call(`api/v1/memories/${chosenMemory}`, undefined, "DELETE"), "result")
+              }
+            >
+              Delete memory
+            </button>
+          </div>
+          <p className="empty">
+            Under <code>orphan_delete</code> a member is erased only if no other memory holds it.
+            Deleting a record because one of its containers went away would destroy data a
+            permanent memory still depends on — so preview first: the number that matters is how
+            many survive.
+          </p>
+        </section>
+      )}
+
+      {scope === "detach" && (
+        <section className="panel">
+          <h2>Detach a record from a memory</h2>
+          <div className="row">
+            <select
+              value={detachItem}
+              onChange={async (e) => {
+                setDetachItem(e.target.value);
+                setDetachFrom([]);
+                if (!e.target.value) return;
+                try {
+                  const state = await call<{ memberships: Membership[] }>(
+                    `api/v1/data/${e.target.value}/memories`,
+                  );
+                  setDetachFrom(state.memberships);
+                } catch (err) {
+                  setError((err as Error).message);
+                }
+              }}
+              style={{ flex: 1 }}
+            >
+              <option value="">choose a record…</option>
+              {items.slice(0, 50).map((i) => (
+                <option key={i.data_id} value={i.data_id}>
+                  {i.external_id ?? i.data_id}
+                </option>
+              ))}
+            </select>
+          </div>
+          {detachFrom.length > 0 && (
+            <div className="excluded" style={{ marginTop: 12 }}>
+              {detachFrom.map((m) => (
+                <div className="item" key={m.memory_id}>
+                  <span className="chip on">{m.type}</span>
+                  <code>{m.memory_key ?? m.memory_id}</code>
+                  <span className="chip">{m.added_by}</span>
+                  <button
+                    className="linkish"
+                    disabled={busy}
+                    onClick={() =>
+                      run(
+                        () =>
+                          call(
+                            `api/v1/memories/${m.memory_id}/members/${detachItem}`,
+                            undefined,
+                            "DELETE",
+                          ),
+                        "result",
+                      )
+                    }
+                  >
+                    detach
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          <p className="empty">
+            Detaching is not deleting. The record survives — and if this was its last memory it
+            lands in your default, because a record in no memory is invisible from the memory side
+            entirely.
+          </p>
+        </section>
+      )}
+
+      {scope === "account" && (
+        <section className="panel">
+          <h2>All account data</h2>
+          <div className="notice caution">
+            <strong>This deletes what is personal and keeps what is shared.</strong> Data that
+            arrived through a shared connection, or that you published to the organisation, is the
+            organisation&rsquo;s — deleting a colleague&rsquo;s work as a side effect of someone
+            leaving is the failure this boundary exists to prevent. Keys, producers and connections
+            are revoked immediately, before any data question is settled.
+          </div>
+          <div className="row end">
+            <button
+              className="secondary"
+              disabled={busy}
+              onClick={() => run(() => call("api/v1/users/me/deletion", { dry_run: true }), "preview")}
+            >
+              Dry run
+            </button>
+            <button
+              disabled={busy || preview === null}
+              onClick={() =>
+                run(
+                  () =>
+                    call("api/v1/users/me/deletion", { reason: "requested from the console" }),
+                  "result",
+                )
+              }
+            >
+              Delete my account data
+            </button>
+          </div>
+          <p className="empty">
+            Deleting is only enabled after a dry run — this is the one scope where the preview is
+            not optional.
+          </p>
+        </section>
+      )}
+
+      {(preview || result) && (
+        <section className="panel">
+          <h2>{result ? "Done" : "Dry run — nothing has changed"}</h2>
+          <table className="kv">
             <tbody>
-              <tr><td>run</td><td><code>{String(result.run_id)}</code></td></tr>
-              <tr><td>mode</td><td>{String(result.mode)}</td></tr>
-              <tr><td>deleting</td><td>{String(result.deleting)}</td></tr>
-              <tr>
-                <td>retained</td>
-                <td>
-                  {(result.retained as unknown[]).length === 0
-                    ? "—"
-                    : JSON.stringify(result.retained)}
-                </td>
-              </tr>
+              {Object.entries(result ?? preview ?? {})
+                .filter(([k]) => k !== "retained" || true)
+                .map(([k, v]) => (
+                  <tr key={k}>
+                    <td>{k.replace(/_/g, " ")}</td>
+                    <td>
+                      <code>
+                        {typeof v === "object" && v !== null
+                          ? JSON.stringify(v).slice(0, 300)
+                          : String(v)}
+                      </code>
+                    </td>
+                  </tr>
+                ))}
             </tbody>
           </table>
-        )}
-        <p className="empty">
-          A dry run changes nothing and reports both counts — what would go, and what is held back
-          (legal hold is named rather than silently skipped).
-        </p>
-      </section>
+        </section>
+      )}
     </>
   );
 }
@@ -2011,5 +2423,388 @@ function StairBar({
       </span>
       <span className="count">{value}</span>
     </div>
+  );
+}
+
+/* ---------------------------------------------------- inbound webhooks */
+
+type Producer = {
+  producer_id: string;
+  type: string;
+  status: string;
+  inbound_auth: string;
+  connection_scope: string | null;
+  seconds_since_last_item: number | null;
+};
+
+type WebhookDelivery = {
+  delivery_id: string;
+  external_delivery_id: string | null;
+  status: string;
+  reason: string | null;
+  items: number;
+  payload_bytes: number | null;
+  signature_verified: boolean;
+  received_at: string;
+};
+
+const SAMPLE = JSON.stringify(
+  {
+    events: [
+      { id: "msg-1", text: "Deploy rolled back; error rates recovered.", ts: 1787900000 },
+      { id: "msg-2", text: "Dana owns the runbook change, due Friday.", ts: 1787900120 },
+    ],
+  },
+  null,
+  2,
+);
+
+function InboundSection({ projectId }: { projectId: string }) {
+  const [hooks, setHooks] = useState<Producer[]>([]);
+  const [selected, setSelected] = useState<Producer | null>(null);
+  const [deliveries, setDeliveries] = useState<WebhookDelivery[]>([]);
+  const [secret, setSecret] = useState<string | null>(null);
+  const [payload, setPayload] = useState(SAMPLE);
+  const [mapping, setMapping] = useState(
+    '{\n  "items_path": "events",\n  "external_id_path": "id",\n  "text_path": "text",\n  "event_time_path": "ts"\n}',
+  );
+  const [result, setResult] = useState<Record<string, unknown> | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const origin = typeof window === "undefined" ? "" : window.location.origin;
+
+  const load = useCallback(async () => {
+    try {
+      const all = await call<{ producers: Producer[] }>("api/v1/producers");
+      setHooks(all.producers.filter((p) => p.type === "webhook"));
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, []);
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const openHook = useCallback(async (hook: Producer) => {
+    setSelected(hook);
+    setSecret(null);
+    setResult(null);
+    setError(null);
+    try {
+      setDeliveries(
+        (
+          await call<{ deliveries: WebhookDelivery[] }>(
+            `api/v1/producers/${hook.producer_id}/deliveries?limit=25`,
+          )
+        ).deliveries,
+      );
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, []);
+
+  async function act(message: string, run: () => Promise<unknown>) {
+    setBusy(true);
+    setError(null);
+    setNote(null);
+    try {
+      await run();
+      setNote(message);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <h1>Inbound webhooks</h1>
+      <p className="lede">
+        The provider-facing surface. A delivery is translated onto items and goes through the same
+        write path as everything else — one admission check, one place the ACL is derived, one set
+        of events.
+      </p>
+      {error && <p className="err">{error}</p>}
+      {note && <p className="empty">{note}</p>}
+
+      <section className="panel">
+        <h2>Endpoints</h2>
+        {hooks.length === 0 ? (
+          <p className="empty">None yet.</p>
+        ) : (
+          <div className="excluded">
+            {hooks.map((h) => (
+              <div
+                className={`item memrow${selected?.producer_id === h.producer_id ? " chosen" : ""}`}
+                key={h.producer_id}
+                onClick={() => void openHook(h)}
+              >
+                <span className={`chip ${h.status === "enabled" ? "on" : ""}`}>{h.status}</span>
+                <code>{h.producer_id}</code>
+                <span className="chip">{h.inbound_auth}</span>
+                <span className="empty">
+                  {h.seconds_since_last_item === null
+                    ? "never received anything"
+                    : `last delivery ${Math.round(h.seconds_since_last_item)}s ago`}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="row end" style={{ marginTop: 10 }}>
+          <button
+            disabled={busy}
+            onClick={() =>
+              act("Endpoint created. Give it a signing secret next.", async () => {
+                const created = await call<{ producer_id: string }>("api/v1/producers", {
+                  project_id: projectId,
+                  type: "webhook",
+                });
+                await load();
+                await openHook({
+                  producer_id: created.producer_id,
+                  type: "webhook",
+                  status: "enabled",
+                  inbound_auth: "none",
+                  connection_scope: null,
+                  seconds_since_last_item: null,
+                });
+              })
+            }
+          >
+            Create an endpoint
+          </button>
+        </div>
+        <p className="empty">
+          <code>seconds_since_last_item</code> is the highest-value detector here: it catches a
+          provider that stopped sending, which otherwise looks exactly like a quiet week.
+        </p>
+      </section>
+
+      {selected && (
+        <>
+          <section className="panel">
+            <h2>Give this to the provider</h2>
+            <table className="kv">
+              <tbody>
+                <tr>
+                  <td>URL</td>
+                  <td>
+                    <code>
+                      {origin}/hooks/{selected.producer_id}
+                    </code>
+                  </td>
+                </tr>
+                <tr>
+                  <td>method</td>
+                  <td><code>POST</code> · <code>application/json</code></td>
+                </tr>
+                <tr><td>auth</td><td><code>{selected.inbound_auth}</code></td></tr>
+                {selected.inbound_auth === "signature" && (
+                  <>
+                    <tr><td>signature header</td><td><code>X-Signature: &lt;hex&gt;</code></td></tr>
+                    <tr>
+                      <td>signed payload</td>
+                      <td><code>HMAC-SHA256(secret, &quot;&#123;timestamp&#125;.&quot; + raw_body)</code></td>
+                    </tr>
+                    <tr>
+                      <td>timestamp header</td>
+                      <td><code>X-Signature-Timestamp</code> — 5 minute window</td>
+                    </tr>
+                  </>
+                )}
+                <tr>
+                  <td>idempotency</td>
+                  <td><code>X-Delivery-Id</code> — a retry with the same id is a no-op</td>
+                </tr>
+              </tbody>
+            </table>
+
+            <h3>Provider</h3>
+            <div className="row">
+              {["generic", "slack", "github", "stripe", "linear", "shopify", "twilio",
+                "zoom", "microsoft_graph"].map((name) => (
+                <button
+                  key={name}
+                  className="secondary"
+                  disabled={busy}
+                  onClick={() =>
+                    act(`Preset applied: ${name}.`, async () => {
+                      await call(
+                        `api/v1/producers/${selected.producer_id}/inbound`,
+                        {
+                          inbound_auth: name === "microsoft_graph" ? "signature" : "signature",
+                          mapping: { provider: name },
+                        },
+                        "PATCH",
+                      );
+                      setSelected({ ...selected, inbound_auth: "signature" });
+                      await load();
+                    })
+                  }
+                >
+                  {name}
+                </button>
+              ))}
+            </div>
+            <p className="empty">
+              A preset carries that provider&rsquo;s signature scheme, its handshake, its retry id
+              and a sensible field mapping. Each signs a different string — getting it wrong fails
+              closed and looks exactly like a bad secret.
+            </p>
+
+            <h3>Authentication</h3>
+            <div className="row" style={{ marginTop: 4 }}>
+              {["signature", "api_key", "url_secret", "none"].map((method) => (
+                <button
+                  key={method}
+                  className={selected.inbound_auth === method ? "" : "secondary"}
+                  disabled={busy}
+                  onClick={() =>
+                    act(`Authentication set to ${method}.`, async () => {
+                      await call(
+                        `api/v1/producers/${selected.producer_id}/inbound`,
+                        { inbound_auth: method },
+                        "PATCH",
+                      );
+                      await load();
+                      setSelected({ ...selected, inbound_auth: method });
+                    })
+                  }
+                >
+                  {method}
+                </button>
+              ))}
+              <button
+                className="secondary"
+                disabled={busy}
+                onClick={() =>
+                  act("New signing secret issued.", async () => {
+                    const r = await call<{ signing_secret: string }>(
+                      `api/v1/producers/${selected.producer_id}/signing-secret`,
+                      {},
+                    );
+                    setSecret(r.signing_secret);
+                    setSelected({ ...selected, inbound_auth: "signature" });
+                    await load();
+                  })
+                }
+              >
+                Rotate signing secret
+              </button>
+            </div>
+            {secret && (
+              <div className="notice" style={{ marginTop: 12 }}>
+                <strong>Shown once.</strong> <code>{secret}</code>
+                <span className="empty">
+                  {" "}
+                  The previous secret keeps verifying until the next rotation, so rotating is not an
+                  outage for deliveries already in flight.
+                </span>
+              </div>
+            )}
+            <p className="empty">
+              Prefer <code>signature</code> where the provider supports it. A URL secret is
+              unrevocable without re-registering the endpoint, and it leaks through logs and
+              referrer headers.
+            </p>
+          </section>
+
+          <section className="panel">
+            <h2>Payload mapping</h2>
+            <textarea value={mapping} onChange={(e) => setMapping(e.target.value)} />
+            <div className="row end" style={{ marginTop: 10 }}>
+              <button
+                disabled={busy}
+                onClick={() =>
+                  act("Mapping saved.", async () => {
+                    await call(
+                      `api/v1/producers/${selected.producer_id}/inbound`,
+                      { inbound_auth: selected.inbound_auth, mapping: JSON.parse(mapping) },
+                      "PATCH",
+                    );
+                  })
+                }
+              >
+                Save mapping
+              </button>
+            </div>
+            <p className="empty">
+              With no mapping the whole body is stored as one JSON item — which loses nothing and is
+              always correct. A mapping that misses a field keeps the record anyway, so a schema
+              change on the provider&rsquo;s side is not an outage on ours.
+            </p>
+          </section>
+
+          <section className="panel">
+            <h2>Send a test delivery</h2>
+            <textarea value={payload} onChange={(e) => setPayload(e.target.value)} />
+            <div className="row end" style={{ marginTop: 10 }}>
+              <button
+                disabled={busy}
+                onClick={() =>
+                  act("Delivery sent.", async () => {
+                    setResult(
+                      await call<Record<string, unknown>>(
+                        `api/v1/producers/${selected.producer_id}/test-delivery`,
+                        { payload: JSON.parse(payload) },
+                      ),
+                    );
+                    await openHook(selected);
+                  })
+                }
+              >
+                {busy ? "Sending…" : "Send as the provider would"}
+              </button>
+            </div>
+            {result && (
+              <table className="kv" style={{ marginTop: 12 }}>
+                <tbody>
+                  <tr><td>status</td><td><code>{String(result.status)}</code></td></tr>
+                  <tr><td>items created</td><td>{String(result.items)}</td></tr>
+                  <tr><td>signed</td><td>{result.signed ? "yes — verified" : "no signature required"}</td></tr>
+                  {result.reason ? <tr><td>reason</td><td>{String(result.reason)}</td></tr> : null}
+                </tbody>
+              </table>
+            )}
+            <p className="empty">
+              It signs with the stored secret and goes through the real receive path, verification
+              included — a test that skipped verification would pass for an endpoint whose signing
+              is broken, which is the case worth catching.
+            </p>
+          </section>
+
+          <section className="panel">
+            <h2>Deliveries</h2>
+            {deliveries.length === 0 ? (
+              <p className="empty">Nothing has arrived yet.</p>
+            ) : (
+              <div className="excluded">
+                {deliveries.map((d) => (
+                  <div className="item" key={d.delivery_id}>
+                    <span className={`chip${d.status === "accepted" ? " on" : d.status === "rejected" ? " warnchip" : ""}`}>
+                      {d.status}
+                    </span>
+                    <code>{d.external_delivery_id ?? d.delivery_id}</code>
+                    <span className="empty">{d.items} item{d.items === 1 ? "" : "s"}</span>
+                    {d.signature_verified && <span className="chip">signature verified</span>}
+                    {d.reason && <span className="why">{d.reason}</span>}
+                    <span className="empty">{new Date(d.received_at).toLocaleTimeString()}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <p className="empty">
+              Every delivery is recorded, including the ones that were rejected or dropped — which
+              is what answers &ldquo;we sent it, did you get it?&rdquo; regardless of whether it
+              worked.
+            </p>
+          </section>
+        </>
+      )}
+    </>
   );
 }

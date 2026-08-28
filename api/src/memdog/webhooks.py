@@ -37,7 +37,8 @@ from typing import Any
 import asyncpg
 
 from .audit import record_audit
-from .contracts import Inline, WriteItem, WriteOptions, WriteRequest
+from . import providers as provider_registry
+from .contracts import Inline, MemoryRef, WriteItem, WriteOptions, WriteRequest
 from .ids import new_id
 
 log = logging.getLogger(__name__)
@@ -59,6 +60,8 @@ class Delivery:
     items: int
     data_ids: list[str]
     reason: str | None = None
+    # A reply the provider requires before it will accept the endpoint.
+    handshake: object | None = None
 
 
 def _dig(payload: Any, path: str) -> Any:
@@ -129,8 +132,16 @@ def map_payload(payload: Any, mapping: dict) -> list[WriteItem]:
     be re-parsed later once someone knows what the shape means.
     """
     collection_path = mapping.get("items_path")
-    records = _dig(payload, collection_path) if collection_path else None
-    if not isinstance(records, list):
+    selected = _dig(payload, collection_path) if collection_path else None
+    if isinstance(selected, list):
+        records = selected
+    elif isinstance(selected, dict):
+        # A path can select one record as easily as many -- Slack's `event` is a
+        # single object. Falling back to the whole envelope here silently made
+        # every other field path miss, which looked like a mapping that did
+        # nothing rather than one pointed at the wrong level.
+        records = [selected]
+    else:
         records = [payload]
 
     external_id_path = mapping.get("external_id_path")
@@ -154,12 +165,26 @@ def map_payload(payload: Any, mapping: dict) -> list[WriteItem]:
             raw = _dig(record, event_time_path)
             event_time = _parse_time(raw)
 
+        # A conversation container, derived rather than configured: a Slack
+        # thread id is already a stable natural key, and the write path upserts
+        # on it -- so a thread collects itself into one memory with nothing set
+        # up by anyone.
+        memory = None
+        key_path = mapping.get("memory_key_path")
+        if key_path:
+            key = _dig(record, key_path) or _dig(
+                record, mapping.get("memory_fallback_key_path", "")
+            )
+            if key:
+                memory = MemoryRef(key=str(key), type=mapping.get("memory_type", "conversation"))
+
         items.append(WriteItem(
             external_id=external_id[:400],
             content=Inline(text=text),
             source_type=mapping.get("source_type"),
             event_time=event_time,
             tags=mapping.get("tags", []),
+            memory=memory,
         ))
     return items
 
@@ -194,6 +219,8 @@ async def authenticate(
     *,
     raw_body: bytes,
     headers: dict[str, str],
+    url: str = "",
+    query: dict | None = None,
 ) -> tuple[bool, str | None]:
     """Apply the producer's declared inbound method.
 
@@ -232,18 +259,14 @@ async def authenticate(
             blob = producer[column]
             if blob:
                 secrets.append(envelope.decrypt(bytes(blob), aad=producer["org_id"].encode()))
-        provided = (
-            headers.get("x-signature")
-            or headers.get("x-hub-signature-256")
-            or headers.get("x-slack-signature")
-            or headers.get("stripe-signature")
+        # Each provider signs a different string. Dispatching here rather than
+        # trying every scheme means a wrong secret and a wrong provider fail
+        # distinguishably instead of both looking like "bad signature".
+        provider = provider_registry.get(dict(producer["inbound_mapping"]).get("provider"))
+        request = provider_registry.Request(
+            raw_body=raw_body, headers=headers, url=url, query=query or {}
         )
-        timestamp = headers.get("x-signature-timestamp") or headers.get(
-            "x-slack-request-timestamp"
-        )
-        if not verify_signature(
-            raw_body=raw_body, provided=provided, secrets=secrets, timestamp=timestamp
-        ):
+        if not provider_registry.verify(provider, request=request, secrets=secrets):
             raise WebhookError("signature verification failed", status=401)
         return True, None
 
@@ -260,6 +283,8 @@ async def receive(
     producer_id: str,
     raw_body: bytes,
     headers: dict[str, str],
+    url: str = "",
+    query: dict | None = None,
 ) -> Delivery:
     """The whole inbound path: authenticate, dedupe, map, write."""
     from .auth import Principal
@@ -278,11 +303,66 @@ async def receive(
         # not be an oracle for what exists.
         raise WebhookError("not found", status=404)
 
+    mapping_early = dict(producer["inbound_mapping"])
+    provider_early = provider_registry.get(mapping_early.get("provider"))
+
+    # A subscription handshake that carries nothing to verify has to be
+    # answered before authentication, or the subscription can never be set up.
+    # Which providers those are is their decision, declared on the adapter.
+    if provider_early.handshake is not None and provider_early.handshake_unauthenticated:
+        answer = provider_early.handshake(
+            None,
+            provider_registry.Request(raw_body=raw_body, headers=headers,
+                                      url=url, query=query or {}),
+            [],
+        )
+        if answer is not None:
+            await _record_delivery(pool, producer, None, "accepted", False, 0,
+                                   len(raw_body), "subscription validation")
+            return Delivery("accepted", 0, [], "subscription validation", handshake=answer)
+
     signature_verified, key_id = await authenticate(
-        pool, envelope, producer, raw_body=raw_body, headers=headers
+        pool, envelope, producer, raw_body=raw_body, headers=headers,
+        url=url, query=query,
     )
 
-    delivery_key = (
+    mapping = dict(producer["inbound_mapping"])
+    provider = provider_registry.get(mapping.get("provider"))
+
+    if provider.decode is not None:
+        # Not every provider sends JSON. Twilio posts a form.
+        payload = provider.decode(raw_body)
+    else:
+        try:
+            payload = json.loads(raw_body or b"{}")
+        except ValueError:
+            # Keep it as text -- discarding a payload because it surprised us
+            # is how integrations lose data silently.
+            payload = {"raw": raw_body.decode("utf-8", errors="replace")}
+
+    # The handshake runs *after* verification: answering an unverified
+    # challenge would let anyone claim the endpoint.
+    if provider.handshake is not None:
+        secrets = []
+        for column in ("signing_secret_ct", "previous_signing_secret_ct"):
+            blob = producer[column]
+            if blob:
+                secrets.append(envelope.decrypt(bytes(blob), aad=producer["org_id"].encode()))
+        answer = provider.handshake(
+            payload,
+            provider_registry.Request(raw_body=raw_body, headers=headers,
+                                      url=url, query=query or {}),
+            secrets,
+        )
+        if answer is not None:
+            await _record_delivery(pool, producer, None, "accepted", signature_verified,
+                                   0, len(raw_body), "handshake")
+            return Delivery("accepted", 0, [], "handshake", handshake=answer)
+
+    delivery_key = None
+    if provider.delivery_id is not None:
+        delivery_key = provider.delivery_id(payload, headers)
+    delivery_key = delivery_key or (
         headers.get("x-delivery-id")
         or headers.get("x-github-delivery")
         or headers.get("x-request-id")
@@ -315,14 +395,18 @@ async def receive(
                                f"producer is {producer['status']}")
         return Delivery("dropped", 0, [], f"producer is {producer['status']}")
 
-    try:
-        payload = json.loads(raw_body or b"{}")
-    except ValueError:
-        # Not JSON. Keep it anyway as text -- discarding a payload because it
-        # surprised us is how integrations lose data silently.
-        payload = {"raw": raw_body.decode("utf-8", errors="replace")}
+    if provider.ignore is not None and provider.ignore(payload):
+        # Bot echoes and edit envelopes. Without this, anything the platform
+        # posts back into a channel is ingested as new content -- a loop that
+        # grows a corpus on its own.
+        await _record_delivery(pool, producer, delivery_key, "accepted", signature_verified,
+                               0, len(raw_body), "ignored by provider rules")
+        return Delivery("accepted", 0, [], "ignored by provider rules")
 
-    items = map_payload(payload, dict(producer["inbound_mapping"]))
+    # The provider's preset supplies the shape; anything configured on the
+    # producer wins, because two workspaces of the same provider can
+    # legitimately differ.
+    items = map_payload(payload, {**provider.mapping, **mapping})
     if not items:
         await _record_delivery(pool, producer, delivery_key, "accepted",
                                signature_verified, 0, len(raw_body), "no items in payload")

@@ -217,6 +217,52 @@ class Corpus(BaseModel):
     enriched: int
 
 
+class AskRequest(BaseModel):
+    """A question, not a query string. The filter is retrieval's filter, so
+    asking is scoped exactly the way searching is."""
+
+    question: str
+    filter: RetrieveFilter
+    match: list[Literal["vector", "lexical"]] = Field(default_factory=lambda: ["vector", "lexical"])
+    # How many passages the model is shown. Small on purpose: the point of
+    # citations is that a person can check them.
+    passages: int = Field(default=8, ge=1, le=20)
+
+
+class AnswerCitation(BaseModel):
+    """A passage the answer actually rests on, carrying the text so the reader
+    can check the claim without a second request."""
+
+    marker: int
+    data_id: str
+    chunk_id: str
+    text: str
+    score: float
+    state: str
+
+
+class AskResponse(BaseModel):
+    query_id: str
+    question: str
+    answer: str
+    # False when the passages did not support an answer. The distinction the
+    # user needs is between "your corpus does not say" and "your corpus says
+    # this" -- collapsing them is what makes a RAG system feel untrustworthy.
+    grounded: bool
+    citations: list[AnswerCitation] = Field(default_factory=list)
+    # How many passages were put in front of the model, against the corpus
+    # counts below: "answered over 8 of 340 records, 210 of them enriched"
+    # (FR-SBX-7).
+    considered: int = 0
+    corpus: Corpus | None = None
+    excluded: list[Excluded] = Field(default_factory=list)
+    model_id: str
+    served_by_model: str | None = None
+    generator_version: str | None = None
+    answer_stored: bool = False
+    latency_ms: int = 0
+
+
 class RetrieveResponse(BaseModel):
     query_id: str
     results: list[Citation]

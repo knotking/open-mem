@@ -223,14 +223,14 @@ class DeleteWorker:
             run_id,
         )
 
-    async def purge(self, data_id: str, run_id: str | None = None) -> None:
+    async def purge(self, data_id: str, run_id: str | None = None) -> dict | None:
         """Steps 4-9. The root row goes last, and only after the blob."""
         item = await self._pool.fetchrow(
             "SELECT storage_ref, org_id, project_id FROM data_items WHERE data_id = $1",
             data_id,
         )
         if item is None:
-            return  # already purged; idempotent by construction
+            return None  # already purged; idempotent by construction
 
         async with self._pool.acquire() as conn, conn.transaction():
             # 5. Contributions, not the entities. An entity mentioned by fifty
@@ -256,6 +256,18 @@ class DeleteWorker:
             # Membership goes; an item held by another memory is unaffected
             # because membership is per (memory, item).
             await conn.execute("DELETE FROM memory_members WHERE data_id = $1", data_id)
+            # Case membership too. Missing this left a purged item still listed
+            # as a member of a patient's timeline -- hidden by the ACL predicate,
+            # but present, which is not the same thing as erased.
+            await conn.execute("DELETE FROM case_members WHERE data_id = $1", data_id)
+            # The normalized projection is the part that actually bites: its
+            # payload is a *copy* of the record -- names, identifiers, amounts --
+            # so leaving it behind means the tombstone reports an erasure that
+            # did not happen.
+            await conn.execute("DELETE FROM normalized_records WHERE data_id = $1", data_id)
+            # A share link to a purged item can only 404; removing it stops the
+            # public inventory listing something that no longer exists.
+            await conn.execute("DELETE FROM share_links WHERE data_id = $1", data_id)
             # 4 and 6. Chunks cascade to embeddings by foreign key.
             await conn.execute("DELETE FROM chunks WHERE data_id = $1", data_id)
             await conn.execute("DELETE FROM data_versions WHERE data_id = $1", data_id)
@@ -281,6 +293,55 @@ class DeleteWorker:
             """,
             data_id,
         )
+        # FR-DEL-10: erasure runs a verification pass and the result is
+        # recorded, because "we deleted it" is a claim until something checked.
+        verdict = await verify_erasure(self._pool, data_id)
+        if not verdict["complete"]:
+            log.error("erasure incomplete for %s: %s", data_id, verdict["remaining"])
+        return verdict
+
+
+async def verify_erasure(pool: asyncpg.Pool, data_id: str) -> dict:
+    """Check that nothing item-scoped survived, and say what did.
+
+    An erasure certificate that is issued without looking is a claim, not
+    evidence. This re-queries every table that holds item-scoped data rather
+    than trusting that the cascade ran -- the cascade is exactly the thing under
+    test.
+    """
+    checks = {
+        "chunks": "SELECT count(*) FROM chunks WHERE data_id = $1",
+        "embeddings": "SELECT count(*) FROM embeddings WHERE data_id = $1",
+        "versions": "SELECT count(*) FROM data_versions WHERE data_id = $1",
+        "artifact_sources": "SELECT count(*) FROM artifact_sources WHERE data_id = $1",
+        "query_sources": "SELECT count(*) FROM query_sources WHERE data_id = $1",
+        "memory_members": "SELECT count(*) FROM memory_members WHERE data_id = $1",
+        "case_members": "SELECT count(*) FROM case_members WHERE data_id = $1",
+        "normalized_records": "SELECT count(*) FROM normalized_records WHERE data_id = $1",
+        "share_links": "SELECT count(*) FROM share_links WHERE data_id = $1",
+    }
+    remaining = {}
+    for name, sql in checks.items():
+        count = await pool.fetchval(sql, data_id)
+        if count:
+            remaining[name] = count
+
+    row = await pool.fetchrow(
+        """
+        SELECT purged_at, content_text IS NULL AND extracted_text IS NULL
+               AND storage_ref IS NULL AS content_cleared
+        FROM data_items WHERE data_id = $1
+        """,
+        data_id,
+    )
+    return {
+        "data_id": data_id,
+        "purged_at": row["purged_at"] if row else None,
+        "content_cleared": bool(row and row["content_cleared"]),
+        "remaining": remaining,
+        # The certificate is issued against this, not against deleted_at.
+        "complete": bool(row and row["purged_at"] and row["content_cleared"] and not remaining),
+    }
 
 
 async def unpurged_tombstones(pool: asyncpg.Pool, older_than_seconds: int = 3600) -> int:

@@ -392,3 +392,40 @@ select {
 }
 .item.pick { cursor: pointer; }
 .item.pick input { accent-color: var(--accent); }
+
+/* Deletion scopes: blast radius is the information, so it is on the control. */
+.scopes { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
+.scope {
+  background: var(--bg); border: 1px solid var(--line); border-radius: 9px;
+  padding: 12px 14px; text-align: left; cursor: pointer; font: inherit;
+  color: var(--ink); display: grid; gap: 3px;
+}
+.scope:hover { border-color: var(--accent); }
+.scope.active { background: var(--accent-soft); border-color: var(--accent); }
+.scope-label { font-weight: 600; font-size: 14px; }
+.scope-blast { font-size: 11.5px; color: var(--muted); }
+.scope.active .scope-label { color: var(--accent); }
+
+/* ------------------------------------------------------------------ ask */
+/* The question is set quietly and the answer loudly, because the answer is
+   what gets read and the question is only there to say what was asked. */
+.question {
+  font-size: 13px;
+  color: var(--muted);
+  margin: 0 0 10px;
+  padding-left: 11px;
+  border-left: 2px solid var(--line);
+}
+.answer {
+  font-size: 15px;
+  line-height: 1.62;
+  white-space: pre-wrap;
+  max-width: 68ch;
+}
+/* An answer the corpus did not support must not look like one it did. */
+.answer.ungrounded {
+  color: var(--muted);
+  font-style: italic;
+  border-left: 2px solid var(--warn);
+  padding-left: 12px;
+}

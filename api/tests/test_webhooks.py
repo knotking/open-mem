@@ -307,3 +307,350 @@ async def test_webhook_writes_go_through_the_ordinary_write_path(
     # Enrichment is opt-in here too: a chatty webhook that summarises every
     # message is an unbounded bill.
     assert "enrichment.requested" not in {e["event_type"] for e in events}
+
+
+async def test_a_test_delivery_goes_through_real_verification(
+    pool, queue, blobs, settings, tenant, envelope
+):
+    """A test that skipped signature verification would pass for a producer
+    whose signing is broken -- exactly the case worth catching before a
+    provider is pointed at it."""
+    import hashlib
+    import hmac
+    import json as jsonlib
+    import time as timelib
+
+    producer_id = await _webhook_producer(pool, tenant, envelope, secret="test-secret")
+    raw = jsonlib.dumps({"hello": "world"}).encode()
+    ts = str(int(timelib.time()))
+    signature = hmac.new(b"test-secret", f"{ts}.".encode() + raw, hashlib.sha256).hexdigest()
+
+    result = await receive(
+        pool, queue, blobs, settings, envelope, producer_id=producer_id, raw_body=raw,
+        headers={"x-signature": signature, "x-signature-timestamp": ts,
+                 "x-delivery-id": "test-1"},
+    )
+    assert result.status == "accepted" and result.items == 1
+
+    # The same helper with a wrong secret must fail, or the test proves nothing.
+    bad = hmac.new(b"wrong", f"{ts}.".encode() + raw, hashlib.sha256).hexdigest()
+    with pytest.raises(WebhookError):
+        await receive(
+            pool, queue, blobs, settings, envelope, producer_id=producer_id, raw_body=raw,
+            headers={"x-signature": bad, "x-signature-timestamp": ts,
+                     "x-delivery-id": "test-2"},
+        )
+
+
+# ------------------------------------------------------------- providers
+
+
+def _slack_sign(secret: str, body: bytes, ts: str) -> str:
+    import hashlib as h
+    import hmac as m
+
+    return "v0=" + m.new(secret.encode(), b"v0:" + ts.encode() + b":" + body, h.sha256).hexdigest()
+
+
+async def test_slack_signs_a_different_string_than_the_generic_scheme(
+    pool, queue, blobs, settings, tenant, envelope
+):
+    """Slack signs `v0:{ts}:{body}`. Getting this wrong fails closed and looks
+    exactly like a misconfigured secret."""
+    import json as jsonlib
+    import time as timelib
+
+    producer_id = await _webhook_producer(
+        pool, tenant, envelope, secret="slack-secret", mapping={"provider": "slack"}
+    )
+    body = jsonlib.dumps({
+        "type": "event_callback", "event_id": "Ev123",
+        "event": {"type": "message", "text": "Deploy rolled back at 14:02.",
+                  "client_msg_id": "cm-1", "ts": "1787900000.000100",
+                  "thread_ts": "1787899000.000100", "channel": "C1"},
+    }).encode()
+    ts = str(int(timelib.time()))
+
+    result = await receive(
+        pool, queue, blobs, settings, envelope, producer_id=producer_id, raw_body=body,
+        headers={"x-slack-signature": _slack_sign("slack-secret", body, ts),
+                 "x-slack-request-timestamp": ts},
+    )
+    assert result.status == "accepted" and result.items == 1
+
+    # The generic scheme's signature over the same bytes must not verify.
+    generic = _sign("slack-secret", body, ts)
+    with pytest.raises(WebhookError):
+        await receive(
+            pool, queue, blobs, settings, envelope, producer_id=producer_id, raw_body=body,
+            headers={"x-slack-signature": f"v0={generic}", "x-slack-request-timestamp": ts},
+        )
+
+
+async def test_slack_url_verification_is_answered_but_only_when_signed(
+    pool, queue, blobs, settings, tenant, envelope
+):
+    """Slack will not save an endpoint until it echoes this back -- and
+    answering an unverified challenge would let anyone claim the endpoint."""
+    import json as jsonlib
+    import time as timelib
+
+    producer_id = await _webhook_producer(
+        pool, tenant, envelope, secret="slack-secret", mapping={"provider": "slack"}
+    )
+    body = jsonlib.dumps({"type": "url_verification", "challenge": "abc123"}).encode()
+    ts = str(int(timelib.time()))
+
+    result = await receive(
+        pool, queue, blobs, settings, envelope, producer_id=producer_id, raw_body=body,
+        headers={"x-slack-signature": _slack_sign("slack-secret", body, ts),
+                 "x-slack-request-timestamp": ts},
+    )
+    # The reply's shape is the provider's to decide -- Graph needs plain text,
+    # Slack needs JSON -- so the handshake carries both the body and the form.
+    assert result.handshake.body == {"challenge": "abc123"}
+    assert result.handshake.plain_text is False
+    assert result.items == 0
+
+    with pytest.raises(WebhookError):
+        await receive(
+            pool, queue, blobs, settings, envelope, producer_id=producer_id, raw_body=body,
+            headers={"x-slack-signature": "v0=forged", "x-slack-request-timestamp": ts},
+        )
+
+
+async def test_a_slack_thread_becomes_a_conversation_memory(
+    pool, queue, blobs, settings, tenant, principal_for, envelope
+):
+    """The thread id is already a stable natural key, and the write path upserts
+    on it -- so a thread collects itself with nothing configured."""
+    import json as jsonlib
+    import time as timelib
+
+    from memdog.retrieval import item_memories
+
+    producer_id = await _webhook_producer(
+        pool, tenant, envelope, secret="s", mapping={"provider": "slack"}
+    )
+    actor = await principal_for(tenant.api_key)
+    ids = []
+    for n in (1, 2):
+        body = jsonlib.dumps({
+            "type": "event_callback", "event_id": f"Ev{n}",
+            "event": {"type": "message", "text": f"message {n}",
+                      "client_msg_id": f"cm-{n}", "ts": f"178790000{n}.0001",
+                      "thread_ts": "1787899000.0001"},
+        }).encode()
+        ts = str(int(timelib.time()))
+        r = await receive(pool, queue, blobs, settings, envelope, producer_id=producer_id,
+                          raw_body=body,
+                          headers={"x-slack-signature": _slack_sign("s", body, ts),
+                                   "x-slack-request-timestamp": ts})
+        ids.extend(r.data_ids)
+
+    assert len(ids) == 2
+    first = await item_memories(pool, actor, ids[0])
+    second = await item_memories(pool, actor, ids[1])
+    # Both landed in the same container, keyed on the thread.
+    assert first["memberships"][0]["memory_key"] == "1787899000.0001"
+    assert first["memberships"][0]["memory_id"] == second["memberships"][0]["memory_id"]
+    assert first["memberships"][0]["type"] == "conversation"
+
+
+async def test_slack_bot_echoes_are_ignored(pool, queue, blobs, settings, tenant, envelope):
+    """Otherwise anything the platform posts back into a channel is ingested as
+    new content -- a loop that grows a corpus on its own."""
+    import json as jsonlib
+    import time as timelib
+
+    producer_id = await _webhook_producer(
+        pool, tenant, envelope, secret="s", mapping={"provider": "slack"}
+    )
+    body = jsonlib.dumps({
+        "type": "event_callback", "event_id": "EvBot",
+        "event": {"type": "message", "text": "posted by us", "bot_id": "B123",
+                  "ts": "1787900000.1"},
+    }).encode()
+    ts = str(int(timelib.time()))
+    result = await receive(
+        pool, queue, blobs, settings, envelope, producer_id=producer_id, raw_body=body,
+        headers={"x-slack-signature": _slack_sign("s", body, ts),
+                 "x-slack-request-timestamp": ts},
+    )
+    assert result.status == "accepted" and result.items == 0
+    assert result.reason == "ignored by provider rules"
+
+
+async def test_slack_retries_are_deduped_on_event_id(
+    pool, queue, blobs, settings, tenant, envelope
+):
+    """Slack retries on any non-2xx and repeats event_id."""
+    import json as jsonlib
+    import time as timelib
+
+    producer_id = await _webhook_producer(
+        pool, tenant, envelope, secret="s", mapping={"provider": "slack"}
+    )
+    body = jsonlib.dumps({
+        "type": "event_callback", "event_id": "EvDup",
+        "event": {"type": "message", "text": "only once", "ts": "1787900000.2"},
+    }).encode()
+    ts = str(int(timelib.time()))
+    headers = {"x-slack-signature": _slack_sign("s", body, ts),
+               "x-slack-request-timestamp": ts}
+
+    first = await receive(pool, queue, blobs, settings, envelope,
+                          producer_id=producer_id, raw_body=body, headers=headers)
+    second = await receive(pool, queue, blobs, settings, envelope,
+                           producer_id=producer_id, raw_body=body, headers=headers)
+    assert first.status == "accepted" and second.status == "duplicate"
+
+
+async def test_github_signs_the_bare_body(pool, queue, blobs, settings, tenant, envelope):
+    import hashlib as h
+    import hmac as m
+
+    producer_id = await _webhook_producer(
+        pool, tenant, envelope, secret="gh", mapping={"provider": "github"}
+    )
+    body = b'{"action": "opened", "number": 42}'
+    signature = "sha256=" + m.new(b"gh", body, h.sha256).hexdigest()
+    result = await receive(
+        pool, queue, blobs, settings, envelope, producer_id=producer_id, raw_body=body,
+        headers={"x-hub-signature-256": signature, "x-github-delivery": "gh-1"},
+    )
+    assert result.status == "accepted" and result.items == 1
+
+
+async def test_shopify_sends_base64_not_hex(pool, queue, blobs, settings, tenant, envelope):
+    """A hex comparison against a base64 digest fails in a way that looks
+    exactly like a wrong secret."""
+    import base64 as b64
+    import hashlib as h
+    import hmac as m
+
+    producer_id = await _webhook_producer(
+        pool, tenant, envelope, secret="shop", mapping={"provider": "shopify"}
+    )
+    body = b'{"id": 4471, "total_price": "12.00"}'
+    digest = b64.b64encode(m.new(b"shop", body, h.sha256).digest()).decode()
+
+    result = await receive(
+        pool, queue, blobs, settings, envelope, producer_id=producer_id, raw_body=body,
+        headers={"x-shopify-hmac-sha256": digest, "x-shopify-webhook-id": "shop-1"},
+    )
+    assert result.status == "accepted"
+
+    # The same digest in hex must not verify.
+    with pytest.raises(WebhookError):
+        await receive(
+            pool, queue, blobs, settings, envelope, producer_id=producer_id, raw_body=body,
+            headers={"x-shopify-hmac-sha256": m.new(b"shop", body, h.sha256).hexdigest(),
+                     "x-shopify-webhook-id": "shop-2"},
+        )
+
+
+async def test_twilio_signs_the_url_and_posts_a_form(
+    pool, queue, blobs, settings, tenant, envelope
+):
+    """Twilio signs the URL plus sorted parameters — not the body — and posts
+    form-encoded. A registry built only around raw bytes cannot express it."""
+    import base64 as b64
+    import hashlib as h
+    import hmac as m
+
+    producer_id = await _webhook_producer(
+        pool, tenant, envelope, secret="tw", mapping={"provider": "twilio"}
+    )
+    url = "https://example.com/hooks/whk_1"
+    params = {"Body": "the deploy is rolled back", "From": "+15551234",
+              "MessageSid": "SM123"}
+    body = "&".join(f"{k}={v.replace('+', '%2B').replace(' ', '+')}"
+                    for k, v in params.items()).encode()
+    signed = url + "".join(f"{k}{params[k]}" for k in sorted(params))
+    signature = b64.b64encode(m.new(b"tw", signed.encode(), h.sha1).digest()).decode()
+
+    result = await receive(
+        pool, queue, blobs, settings, envelope, producer_id=producer_id,
+        raw_body=body, headers={"x-twilio-signature": signature}, url=url,
+    )
+    assert result.status == "accepted" and result.items == 1
+
+    from memdog.auth import Principal
+    from memdog.retrieval import get_item
+
+    principal = Principal(user_id=tenant.user_id, org_id=tenant.org_id,
+                          capabilities=frozenset({"data:read"}))
+    item = await get_item(pool, principal, result.data_ids[0])
+    assert "deploy is rolled back" in item["content_text"]
+
+
+async def test_graph_validates_with_a_query_parameter_and_plain_text(
+    pool, queue, blobs, settings, tenant, envelope
+):
+    """Graph rejects a JSON-wrapped echo, and the subscription then silently
+    never activates."""
+    producer_id = await _webhook_producer(
+        pool, tenant, envelope, secret="shared-123", mapping={"provider": "microsoft_graph"}
+    )
+    result = await receive(
+        pool, queue, blobs, settings, envelope, producer_id=producer_id, raw_body=b"",
+        headers={}, query={"validationToken": "token-abc"},
+    )
+    assert result.handshake.body == "token-abc"
+    assert result.handshake.plain_text is True
+
+
+async def test_graph_authenticates_with_the_client_state_it_was_given(
+    pool, queue, blobs, settings, tenant, envelope
+):
+    """Graph does not sign notifications. Weaker than a signature, and the only
+    thing on offer -- so it is supported and named for what it is."""
+    import json as jsonlib
+
+    producer_id = await _webhook_producer(
+        pool, tenant, envelope, secret="shared-123", mapping={"provider": "microsoft_graph"}
+    )
+    body = jsonlib.dumps({"value": [
+        {"clientState": "shared-123", "subscriptionId": "sub-1",
+         "resource": "me/messages/AAA"},
+    ]}).encode()
+    result = await receive(
+        pool, queue, blobs, settings, envelope, producer_id=producer_id,
+        raw_body=body, headers={},
+    )
+    assert result.status == "accepted" and result.items == 1
+
+    wrong = jsonlib.dumps({"value": [{"clientState": "not-it", "subscriptionId": "s"}]}).encode()
+    with pytest.raises(WebhookError):
+        await receive(pool, queue, blobs, settings, envelope, producer_id=producer_id,
+                      raw_body=wrong, headers={})
+
+
+async def test_zoom_computes_its_challenge_rather_than_echoing_it(
+    pool, queue, blobs, settings, tenant, envelope
+):
+    """Zoom wants an HMAC of the token it sent, which proves we hold the secret
+    rather than merely received the request."""
+    import hashlib as h
+    import hmac as m
+    import json as jsonlib
+    import time as timelib
+
+    producer_id = await _webhook_producer(
+        pool, tenant, envelope, secret="zoom-secret", mapping={"provider": "zoom"}
+    )
+    body = jsonlib.dumps({"event": "endpoint.url_validation",
+                          "payload": {"plainToken": "abc"}}).encode()
+    ts = str(int(timelib.time()))
+    signature = "v0=" + m.new(b"zoom-secret", b"v0:" + ts.encode() + b":" + body,
+                              h.sha256).hexdigest()
+
+    result = await receive(
+        pool, queue, blobs, settings, envelope, producer_id=producer_id, raw_body=body,
+        headers={"x-zm-signature": signature, "x-zm-request-timestamp": ts},
+    )
+    assert result.handshake.body["plainToken"] == "abc"
+    assert result.handshake.body["encryptedToken"] == m.new(
+        b"zoom-secret", b"abc", h.sha256
+    ).hexdigest()
