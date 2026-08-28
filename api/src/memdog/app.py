@@ -31,6 +31,7 @@ from .deletion import DELETE_TOPIC, DeleteWorker, request_deletion, unpurged_tom
 from .inference import build_embedder
 from .queue import InProcessQueue
 from .reprocess import REPROCESS_TOPIC, ReprocessWorker, request_reprocess
+from .webhooks import WebhookError, receive as receive_webhook
 from .uploads import UploadError, authorise, complete as complete_upload, create_session
 from .telemetry import setup as setup_telemetry
 from .settings_store import SettingError, effective as effective_settings, put as put_setting, resolve as resolve_setting
@@ -50,6 +51,7 @@ from .retrieval import (
     stale_artifacts,
 )
 from .extraction import build_extractor
+from .fetching import FetchWorker
 from .multimodal import build_multimodal
 from .events import dispatch_pending, emit_audited, list_events
 from .workers import (
@@ -95,9 +97,11 @@ async def lifespan(app: FastAPI):
     # The event worker is what turns the log into work. The individual workers
     # stay subscribed to their own topics too, because the reconciler still
     # publishes to them directly when repairing a corpus.
+    fetch_worker = FetchWorker(pool, app.state.blobs, settings, queue=queue)
     EventWorker(
         pool, queue,
-        parse_worker=parse_worker, embed_worker=embed_worker, enrich_worker=enrich_worker,
+        parse_worker=parse_worker, embed_worker=embed_worker,
+        enrich_worker=enrich_worker, fetch_worker=fetch_worker,
     ).register(queue)
 
     app.state.settings = settings
@@ -983,6 +987,143 @@ async def post_engine(request: Request, body: dict, actor: Principal = Depends(p
         provider=body.get("provider", ""), base_url=body.get("base_url"),
         credential=body.get("credential"),
     )
+
+
+@app.post("/webhooks/{producer_id}")
+async def inbound_webhook(request: Request, producer_id: str) -> JSONResponse:
+    """The provider-facing surface.
+
+    Deliberately outside `/api/v1` and deliberately unauthenticated by the
+    platform's own scheme: the *producer* declares how its provider proves
+    itself, because not every provider can present a bearer token.
+
+    Always answers quickly and, where it can, with 2xx — a provider that sees a
+    non-2xx retries, and retrying a payload that will never be accepted turns
+    one bad delivery into a permanent storm.
+    """
+    raw = await request.body()
+    headers = {k.lower(): v for k, v in request.headers.items()}
+    state = request.app.state
+    try:
+        result = await receive_webhook(
+            state.pool, state.queue, state.blobs, state.settings, state.envelope,
+            producer_id=producer_id, raw_body=raw, headers=headers,
+        )
+    except WebhookError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+    return JSONResponse(
+        status_code=200,
+        content={"status": result.status, "items": result.items,
+                 "data_ids": result.data_ids, "reason": result.reason},
+    )
+
+
+@app.get("/api/v1/producers/{producer_id}/deliveries")
+async def webhook_deliveries(
+    request: Request, producer_id: str, actor: Principal = Depends(principal), limit: int = 50
+) -> dict:
+    """What actually arrived — the answer to "we sent it, did you get it?"."""
+    rows = await request.app.state.pool.fetch(
+        """
+        SELECT delivery_id, external_delivery_id, status, reason, items,
+               payload_bytes, signature_verified, received_at
+        FROM webhook_deliveries WHERE producer_id = $1 AND org_id = $2
+        ORDER BY received_at DESC LIMIT $3
+        """,
+        producer_id, actor.org_id, min(limit, 200),
+    )
+    return {"deliveries": [dict(r) for r in rows]}
+
+
+@app.post("/api/v1/producers/{producer_id}/signing-secret")
+async def rotate_signing_secret(
+    request: Request, producer_id: str, actor: Principal = Depends(principal)
+) -> dict:
+    """Rotate with an overlap: the previous secret keeps verifying until the
+    next rotation, or a rotation is an outage for everything in flight."""
+    import secrets as secrets_module
+
+    from .auth import CONFIG_WRITE
+    from .crypto import CryptoUnavailable
+
+    state = request.app.state
+    try:
+        actor.require(CONFIG_WRITE)
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+    producer = await state.pool.fetchrow(
+        "SELECT producer_id, org_id, signing_secret_ct FROM producers "
+        "WHERE producer_id = $1 AND org_id = $2",
+        producer_id, actor.org_id,
+    )
+    if producer is None:
+        raise HTTPException(status_code=404, detail="not found")
+
+    secret = secrets_module.token_urlsafe(32)
+    try:
+        ciphertext = state.envelope.encrypt(secret.encode(), aad=actor.org_id.encode())
+    except CryptoUnavailable as exc:
+        raise HTTPException(
+            status_code=503, detail="cannot store a signing secret: encryption is not configured"
+        ) from exc
+
+    await state.pool.execute(
+        """
+        UPDATE producers
+        SET previous_signing_secret_ct = signing_secret_ct,
+            signing_secret_ct = $2,
+            signing_secret_rotated_at = now(),
+            inbound_auth = 'signature'
+        WHERE producer_id = $1
+        """,
+        producer_id, ciphertext,
+    )
+    return {
+        "producer_id": producer_id,
+        # Shown once, like any other credential.
+        "signing_secret": secret,
+        "algorithm": "hmac-sha256",
+        "header": "X-Signature",
+        "timestamp_header": "X-Signature-Timestamp",
+        "signed_payload": "{timestamp}.{raw_body}",
+        "previous_secret_valid_until_next_rotation": producer["signing_secret_ct"] is not None,
+    }
+
+
+@app.patch("/api/v1/producers/{producer_id}/inbound")
+async def set_inbound(
+    request: Request, producer_id: str, body: dict, actor: Principal = Depends(principal)
+) -> dict:
+    """How this provider proves itself, and how its payload maps onto items."""
+    from .auth import CONFIG_WRITE
+
+    try:
+        actor.require(CONFIG_WRITE)
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+    method = body.get("inbound_auth", "signature")
+    if method not in ("api_key", "signature", "url_secret", "none"):
+        raise HTTPException(status_code=400, detail="unknown inbound_auth")
+
+    updated = await request.app.state.pool.execute(
+        """
+        UPDATE producers
+        SET inbound_auth = $3,
+            inbound_mapping = COALESCE($4::jsonb, inbound_mapping),
+            api_key_id = COALESCE($5, api_key_id),
+            defaults = COALESCE($6::jsonb, defaults)
+        WHERE producer_id = $1 AND org_id = $2
+        """,
+        producer_id, actor.org_id, method, body.get("mapping"),
+        body.get("api_key_id"), body.get("defaults"),
+    )
+    if updated.endswith("0"):
+        raise HTTPException(status_code=404, detail="not found")
+    return {"producer_id": producer_id, "inbound_auth": method,
+            "mapping": body.get("mapping"), "url": f"/webhooks/{producer_id}"}
 
 
 @app.post("/api/v1/uploads")

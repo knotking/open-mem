@@ -45,8 +45,19 @@ async function cloudRunToken(): Promise<string | null> {
   }
 }
 
-export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
-  const headers = new Headers(init.headers);
+type ApiInit = RequestInit & { skipAppCredential?: boolean };
+
+export async function apiFetch(path: string, init: ApiInit = {}): Promise<Response> {
+  const { skipAppCredential, ...rest } = init;
+  const headers = new Headers(rest.headers);
+
+  // The webhook route opts out entirely: a provider's delivery must stand on
+  // the producer's own inbound auth, never on the console's credential.
+  if (skipAppCredential) {
+    const platform = await cloudRunToken();
+    if (platform) headers.set("Authorization", `Bearer ${platform}`);
+    return fetch(`${API_URL}${path}`, { ...rest, headers, cache: "no-store" });
+  }
 
   // Fail closed. If someone is signed in, their identity is the only
   // credential this request may carry: falling back to the service key when
@@ -64,9 +75,9 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
 
   const platform = await cloudRunToken();
   if (platform) headers.set("Authorization", `Bearer ${platform}`);
-  if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json");
+  if (rest.body && !headers.has("content-type")) headers.set("content-type", "application/json");
 
-  return fetch(`${API_URL}${path}`, { ...init, headers, cache: "no-store" });
+  return fetch(`${API_URL}${path}`, { ...rest, headers, cache: "no-store" });
 }
 
 export const config = {

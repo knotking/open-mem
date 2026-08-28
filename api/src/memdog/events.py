@@ -34,6 +34,7 @@ log = logging.getLogger(__name__)
 # state rather than an error.
 TOPIC_FOR_EVENT: dict[str, str] = {
     "data.recorded": "record",
+    "fetch.requested": "fetch",
     "enrichment.requested": "enrich_request",
     "reprocess.requested": "reprocess",
 }

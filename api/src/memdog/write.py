@@ -457,12 +457,29 @@ async def _write_one(
     # Event two: only if asked. `caused_by` is what stops it being processed
     # before the data it refers to.
     enrichment: EnrichmentOptions = options.enrichment
-    if options.enrich and pending_ref is None:
+
+    # A Pending ref has no bytes yet, so a fetch has to happen first. Making the
+    # fetch the *cause* of the enrichment reuses the ordering gate rather than
+    # inventing a second mechanism: enrichment cannot start until the bytes are
+    # actually here.
+    fetch_event = None
+    if pending_ref is not None:
+        fetch_event = await emit_audited(
+            conn, principal,
+            event_type="fetch.requested",
+            org_id=producer.org_id, project_id=producer.project_id, data_id=data_id,
+            caused_by=recorded,
+            payload={"provider": pending_ref.get("provider"),
+                     "resource_id": pending_ref.get("resource_id")},
+        )
+        events.append(fetch_event)
+
+    if options.enrich:
         events.append(await emit_audited(
             conn, principal,
             event_type="enrichment.requested",
             org_id=producer.org_id, project_id=producer.project_id, data_id=data_id,
-            caused_by=recorded,
+            caused_by=fetch_event or recorded,
             payload={
                 "embed": enrichment.embed,
                 "summarize": enrichment.summarize,

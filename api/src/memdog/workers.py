@@ -638,16 +638,22 @@ class EventWorker:
         parse_worker=None,
         embed_worker=None,
         enrich_worker=None,
+        fetch_worker=None,
     ) -> None:
         self._pool = pool
         self._queue = queue
         self._parse = parse_worker
         self._embed = embed_worker
         self._enrich = enrich_worker
+        # W2. Absent, a Pending item simply waits -- which is the correct state,
+        # not a failure.
+        self._fetch = fetch_worker
 
     def register(self, queue: Queue) -> None:
         queue.subscribe("record", self.handle_recorded)
         queue.subscribe("enrich_request", self.handle_enrichment)
+        if self._fetch is not None:
+            self._fetch.register(queue)
 
     async def handle_recorded(self, message: Message) -> None:
         from .events import dispatch_pending, mark_consumed

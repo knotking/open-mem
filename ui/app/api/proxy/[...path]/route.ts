@@ -13,7 +13,7 @@ const ALLOWED = [
   /^api\/v1\/write$/,
   /^api\/v1\/retrieve$/,
   /^api\/v1\/health$/,
-  /^api\/v1\/data\/[A-Za-z0-9_]+$/,
+  /^api\/v1\/data\/[A-Za-z0-9_]+(\?.*)?$/,
   /^api\/v1\/data\/[A-Za-z0-9_]+\/artifacts$/,
   /^api\/v1\/data\/[A-Za-z0-9_]+\/content$/,
   /^api\/v1\/settings\/(platform|org|project|user)\/[a-z_]+$/,
@@ -25,7 +25,7 @@ const ALLOWED = [
   /^api\/v1\/projects\/[A-Za-z0-9_]+\/data(\?.*)?$/,
   /^api\/v1\/projects\/[A-Za-z0-9_]+\/memory-types$/,
   /^api\/v1\/memories$/,
-  /^api\/v1\/memories\/[A-Za-z0-9_]+$/,
+  /^api\/v1\/memories\/[A-Za-z0-9_]+(\?.*)?$/,
   /^api\/v1\/memories\/[A-Za-z0-9_]+\/members\/[A-Za-z0-9_]+$/,
   /^api\/v1\/projects\/[A-Za-z0-9_]+\/memories$/,
   /^api\/v1\/memories\/[A-Za-z0-9_]+\/members$/,
@@ -53,6 +53,11 @@ const ALLOWED = [
 function allowed(path: string): boolean {
   return ALLOWED.some((pattern) => pattern.test(path));
 }
+
+// The allow-list is matched against path *plus* query string, so any endpoint
+// whose behaviour is selected by a query parameter -- ?preview=true being the
+// one that bit us -- needs `(\?.*)?` in its pattern or the request is refused
+// with no clue as to why.
 
 async function forward(request: Request, path: string[], method: string) {
   const joined = path.join("/") + (new URL(request.url).search || "");
