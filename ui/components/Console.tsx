@@ -20,10 +20,12 @@ import {
   Memory,
   MemoryMember,
   Membership,
+  MemoryType,
   Stair,
   Trace,
   Version,
   call,
+  describeTtl,
 } from "@/lib/types";
 
 type Section =
@@ -865,15 +867,29 @@ function Audit({ projectId }: { projectId: string }) {
 
 function MemorySection({ projectId }: { projectId: string }) {
   const [memories, setMemories] = useState<Memory[]>([]);
+  const [types, setTypes] = useState<MemoryType[]>([]);
   const [selected, setSelected] = useState<Memory | null>(null);
   const [members, setMembers] = useState<MemoryMember[]>([]);
+  const [available, setAvailable] = useState<Item[]>([]);
+  const [chosen, setChosen] = useState<Set<string>>(new Set());
   const [memberships, setMemberships] = useState<Membership[] | null>(null);
   const [expiry, setExpiry] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const [newType, setNewType] = useState("session");
+  const [newKey, setNewKey] = useState("");
+  const [newTitle, setNewTitle] = useState("");
 
   const load = useCallback(async () => {
     try {
-      setMemories((await call<{ memories: Memory[] }>(`api/v1/projects/${projectId}/memories`)).memories);
+      const [m, t] = await Promise.all([
+        call<{ memories: Memory[] }>(`api/v1/projects/${projectId}/memories`),
+        call<{ types: MemoryType[] }>(`api/v1/projects/${projectId}/memory-types`),
+      ]);
+      setMemories(m.memories);
+      setTypes(t.types);
     } catch (e) {
       setError((e as Error).message);
     }
@@ -883,15 +899,39 @@ function MemorySection({ projectId }: { projectId: string }) {
     void load();
   }, [load]);
 
-  async function open(memory: Memory) {
-    setSelected(memory);
-    setMemberships(null);
+  const openMemory = useCallback(
+    async (memory: Memory) => {
+      setSelected(memory);
+      setMemberships(null);
+      setChosen(new Set());
+      setError(null);
+      try {
+        const [mem, data] = await Promise.all([
+          call<{ members: MemoryMember[] }>(`api/v1/memories/${memory.memory_id}/members`),
+          call<{ items: Item[] }>(`api/v1/projects/${projectId}/data?limit=50`),
+        ]);
+        setMembers(mem.members);
+        const inside = new Set(mem.members.map((x) => x.data_id));
+        setAvailable(data.items.filter((i) => !inside.has(i.data_id)));
+      } catch (e) {
+        setError((e as Error).message);
+      }
+    },
+    [projectId],
+  );
+
+  async function act(message: string, run: () => Promise<unknown>) {
+    setBusy(true);
+    setError(null);
+    setNote(null);
     try {
-      setMembers(
-        (await call<{ members: MemoryMember[] }>(`api/v1/memories/${memory.memory_id}/members`)).members,
-      );
+      await run();
+      setNote(message);
+      await load();
     } catch (e) {
       setError((e as Error).message);
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -903,10 +943,7 @@ function MemorySection({ projectId }: { projectId: string }) {
     setExpiry(state.effective_expiry);
   }
 
-  const ttl = (seconds: number | null) =>
-    seconds === null ? "never expires" : seconds >= 86400
-      ? `${Math.round(seconds / 86400)}d TTL`
-      : `${Math.round(seconds / 3600)}h TTL`;
+  const currentType = types.find((t) => t.name === selected?.type);
 
   return (
     <>
@@ -916,6 +953,56 @@ function MemorySection({ projectId }: { projectId: string }) {
         subject — what is this about? A conversation expires; a patient does not.
       </p>
       {error && <p className="err">{error}</p>}
+      {note && <p className="empty">{note}</p>}
+
+      <section className="panel">
+        <h2>Create a memory</h2>
+        <div className="row">
+          <select value={newType} onChange={(e) => setNewType(e.target.value)}>
+            {types.map((t) => (
+              <option key={t.type_id} value={t.name}>
+                {t.name} · {describeTtl(t.ttl_seconds)} · {t.on_expiry}
+              </option>
+            ))}
+          </select>
+          <input
+            type="text"
+            placeholder="key — e.g. incident-4471"
+            value={newKey}
+            onChange={(e) => setNewKey(e.target.value)}
+            style={{ flex: 1, minWidth: 150 }}
+          />
+          <input
+            type="text"
+            placeholder="title (optional)"
+            value={newTitle}
+            onChange={(e) => setNewTitle(e.target.value)}
+            style={{ flex: 1, minWidth: 130 }}
+          />
+          <button
+            disabled={busy || !newKey.trim() || types.length === 0}
+            onClick={() =>
+              act("Memory created.", async () => {
+                await call("api/v1/memories", {
+                  project_id: projectId,
+                  type: newType,
+                  key: newKey.trim(),
+                  title: newTitle.trim() || null,
+                });
+                setNewKey("");
+                setNewTitle("");
+              })
+            }
+          >
+            Create
+          </button>
+        </div>
+        <p className="empty">
+          The type decides the lifecycle: a TTL and what happens at the end. Writing an item with a
+          memory key also creates one — this is the path for organising deliberately rather than as
+          a side effect of a write.
+        </p>
+      </section>
 
       <section className="panel">
         <h2>Memories in this project</h2>
@@ -924,47 +1011,179 @@ function MemorySection({ projectId }: { projectId: string }) {
         ) : (
           <div className="excluded">
             {memories.map((m) => (
-              <div className="item memrow" key={m.memory_id} onClick={() => void open(m)}>
+              <div
+                className={`item memrow${selected?.memory_id === m.memory_id ? " chosen" : ""}`}
+                key={m.memory_id}
+                onClick={() => void openMemory(m)}
+              >
                 <span className="chip on">{m.type}</span>
                 <code>{m.memory_key ?? m.memory_id}</code>
-                <span className="empty">{m.members} member{m.members === 1 ? "" : "s"}</span>
-                <span className="chip">{ttl(m.ttl_seconds)}</span>
-                {m.on_expiry && <span className="chip">{m.on_expiry}</span>}
+                {m.title && <span className="empty">{m.title}</span>}
+                <span className="empty">
+                  {m.members} member{m.members === 1 ? "" : "s"}
+                </span>
+                <span className="chip">{describeTtl(m.ttl_seconds)}</span>
               </div>
             ))}
           </div>
         )}
         <p className="empty">
-          A memory with no members you can see is not listed at all — a count of zero would still
-          disclose that the container exists, and a key is often meaningful on its own.
+          A memory with no members you can see is not listed — a count of zero would still disclose
+          that the container exists, and a key is often meaningful on its own.
         </p>
       </section>
 
       {selected && (
-        <section className="panel">
-          <h2>{selected.type} · {selected.memory_key ?? selected.memory_id}</h2>
-          {members.length === 0 ? (
-            <p className="empty">No members you can see.</p>
-          ) : (
-            members.map((m) => (
-              <div className="hit" key={m.data_id}>
-                <div className="meta">
-                  <code>{m.data_id}</code>
-                  <span className={`chip ${m.state}`}>{m.state}</span>
-                  <span className="chip">added {m.added_by}</span>
-                  <button className="linkish" onClick={() => void showItemMemories(m.data_id)}>
-                    where else does this live?
+        <>
+          <section className="panel">
+            <h2>
+              {selected.type} · {selected.memory_key ?? selected.memory_id}
+            </h2>
+
+            <h3>Members</h3>
+            {members.length === 0 ? (
+              <p className="empty">Nothing in here yet.</p>
+            ) : (
+              members.map((m) => (
+                <div className="hit" key={m.data_id}>
+                  <div className="meta">
+                    <code>{m.data_id}</code>
+                    <span className={`chip ${m.state}`}>{m.state}</span>
+                    <span className="chip">added {m.added_by}</span>
+                    <button
+                      className="linkish"
+                      onClick={() =>
+                        act("Removed. The item itself is untouched.", async () => {
+                          await call(
+                            `api/v1/memories/${selected.memory_id}/members/${m.data_id}`,
+                            undefined,
+                            "DELETE",
+                          );
+                          await openMemory(selected);
+                        })
+                      }
+                    >
+                      remove
+                    </button>
+                    <button className="linkish" onClick={() => void showItemMemories(m.data_id)}>
+                      where else does this live?
+                    </button>
+                  </div>
+                  {m.preview && <div className="text">{m.preview}</div>}
+                </div>
+              ))
+            )}
+            <p className="empty">
+              <code>added_by</code> distinguishes a rule putting an item here from a person doing
+              it. Removing a member never deletes the item — and if it was its last memory, the item
+              lands in your default rather than becoming invisible.
+            </p>
+
+            <h3>Add existing data</h3>
+            {available.length === 0 ? (
+              <p className="empty">Everything you can see is already in this memory.</p>
+            ) : (
+              <>
+                <div className="excluded">
+                  {available.slice(0, 25).map((i) => (
+                    <label className="item memrow pick" key={i.data_id}>
+                      <input
+                        type="checkbox"
+                        checked={chosen.has(i.data_id)}
+                        onChange={(e) => {
+                          const next = new Set(chosen);
+                          if (e.target.checked) next.add(i.data_id);
+                          else next.delete(i.data_id);
+                          setChosen(next);
+                        }}
+                      />
+                      <span className={`chip ${i.state}`}>{i.state}</span>
+                      <code>{i.external_id ?? i.data_id}</code>
+                    </label>
+                  ))}
+                </div>
+                <div className="row end" style={{ marginTop: 10 }}>
+                  <button
+                    disabled={busy || chosen.size === 0}
+                    onClick={() =>
+                      act(`Added ${chosen.size} item(s) to this memory.`, async () => {
+                        await call(`api/v1/memories/${selected.memory_id}/members`, {
+                          data_ids: [...chosen],
+                        });
+                        await openMemory(selected);
+                      })
+                    }
+                  >
+                    Add {chosen.size > 0 ? `${chosen.size} ` : ""}to this memory
                   </button>
                 </div>
-                {m.preview && <div className="text">{m.preview}</div>}
-              </div>
-            ))
-          )}
-          <p className="empty">
-            <code>added_by</code> distinguishes a rule putting an item here from a person doing it —
-            different facts with different trust.
-          </p>
-        </section>
+              </>
+            )}
+          </section>
+
+          <section className="panel">
+            <h2>Change or remove this memory</h2>
+            <div className="row">
+              <select
+                value={selected.type}
+                onChange={(e) =>
+                  act("Re-typed. The TTL is recomputed from the new type.", async () => {
+                    const type = e.target.value;
+                    await call(`api/v1/memories/${selected.memory_id}`, { type }, "PATCH");
+                    await openMemory({ ...selected, type });
+                  })
+                }
+              >
+                {types.map((t) => (
+                  <option key={t.type_id} value={t.name}>
+                    type: {t.name} · {describeTtl(t.ttl_seconds)}
+                  </option>
+                ))}
+              </select>
+              <button
+                className="secondary"
+                disabled={busy}
+                onClick={async () => {
+                  setError(null);
+                  try {
+                    const preview = await call<Record<string, unknown>>(
+                      `api/v1/memories/${selected.memory_id}?preview=true`,
+                      undefined,
+                      "DELETE",
+                    );
+                    setNote(
+                      `Deleting this would erase ${preview.would_delete} item(s) under ` +
+                        `${preview.on_expiry}, and keep ` +
+                        `${preview.retained_because_held_elsewhere} held by another memory.`,
+                    );
+                  } catch (e) {
+                    setError((e as Error).message);
+                  }
+                }}
+              >
+                Preview deletion
+              </button>
+              <button
+                disabled={busy}
+                onClick={() =>
+                  act("Memory deleted.", async () => {
+                    await call(`api/v1/memories/${selected.memory_id}`, undefined, "DELETE");
+                    setSelected(null);
+                  })
+                }
+              >
+                Delete memory
+              </button>
+            </div>
+            <p className="empty">
+              Deleting applies the type&rsquo;s expiry policy
+              {currentType ? ` — this one is ${currentType.on_expiry}` : ""}. Under{" "}
+              <code>orphan_delete</code> an item is erased only if no other memory holds it: deleting
+              a member because one of its containers went away would destroy data a permanent memory
+              still depends on. Preview first — the number that matters is how many survive.
+            </p>
+          </section>
+        </>
       )}
 
       {memberships && (
@@ -977,23 +1196,24 @@ function MemorySection({ projectId }: { projectId: string }) {
                 <code>{m.memory_key ?? m.memory_id}</code>
                 <span className="chip">{m.added_by}</span>
                 <span className="empty">
-                  {m.expires_at ? `expires ${new Date(m.expires_at).toLocaleString()}` : "never expires"}
+                  {m.expires_at
+                    ? `expires ${new Date(m.expires_at).toLocaleString()}`
+                    : "never expires"}
                 </span>
               </div>
             ))}
           </div>
           <p className="empty">
-            Effective expiry: <strong>{expiry ? new Date(expiry).toLocaleString() : "never"}</strong>.
-            It is the <em>maximum</em> TTL across memberships and it is computed on read, never
-            stored — any stored answer is wrong the moment someone adds or removes a member. Taking
-            the earliest instead would delete data a permanent memory still depends on.
+            Effective expiry:{" "}
+            <strong>{expiry ? new Date(expiry).toLocaleString() : "never"}</strong>. It is the{" "}
+            <em>maximum</em> TTL across memberships, computed on read and never stored — any stored
+            answer is wrong the moment someone adds or removes a member.
           </p>
         </section>
       )}
     </>
   );
 }
-
 
 /* ------------------------------------------------------- 4. cases */
 

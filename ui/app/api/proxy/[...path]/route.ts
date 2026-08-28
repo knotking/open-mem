@@ -32,6 +32,8 @@ const ALLOWED = [
   /^api\/v1\/data\/[A-Za-z0-9_]+\/versions$/,
   /^api\/v1\/data\/[A-Za-z0-9_]+\/memories$/,
   /^api\/v1\/audit(\?.*)?$/,
+  /^api\/v1\/events(\?.*)?$/,
+  /^api\/v1\/data\/[A-Za-z0-9_]+\/enrich$/,
   /^api\/v1\/projects(\?.*)?$/,
   /^api\/v1\/projects\/[A-Za-z0-9_]+\/cases$/,
   /^api\/v1\/cases\/[A-Za-z0-9_]+\/timeline$/,
@@ -59,7 +61,10 @@ async function forward(request: Request, path: string[], method: string) {
     // endpoint the server can reach, including ones this UI never uses.
     return Response.json({ detail: "path not permitted" }, { status: 403 });
   }
-  const body = method === "POST" || method === "PUT" ? await request.text() : undefined;
+  const body =
+    method === "POST" || method === "PUT" || method === "PATCH"
+      ? await request.text()
+      : undefined;
   let upstream: Response;
   try {
     upstream = await apiFetch(`/${joined}`, { method, body });
@@ -106,6 +111,13 @@ export async function PUT(
   { params }: { params: Promise<{ path: string[] }> },
 ) {
   return forward(request, (await params).path, "PUT");
+}
+
+export async function PATCH(
+  request: Request,
+  { params }: { params: Promise<{ path: string[] }> },
+) {
+  return forward(request, (await params).path, "PATCH");
 }
 
 export async function DELETE(

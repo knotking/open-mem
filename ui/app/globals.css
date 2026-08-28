@@ -378,3 +378,17 @@ audio.preview { width: 100%; height: auto; }
 @media (max-width: 720px) {
   .hero-stat { grid-template-columns: 1fr; }
 }
+
+.toggle { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; padding: 6px 0; }
+.toggle input { margin-top: 3px; width: 15px; height: 15px; accent-color: var(--accent); }
+.toggle span { display: grid; gap: 2px; font-size: 13.5px; }
+.nested { margin: 6px 0 0 24px; padding-left: 14px; border-left: 2px solid var(--line); }
+.seq { font-family: var(--mono); font-size: 11px; min-width: 34px; }
+
+select {
+  background: var(--bg); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 7px;
+  padding: 9px 10px; font: inherit;
+}
+.item.pick { cursor: pointer; }
+.item.pick input { accent-color: var(--accent); }

@@ -116,10 +116,25 @@ export type AuditTrail = {
   }[];
 };
 
+export type MemoryType = {
+  type_id: string;
+  name: string;
+  ttl_seconds: number | null;
+  on_expiry: string;
+  locked: boolean;
+};
+
+export function describeTtl(seconds: number | null): string {
+  if (seconds === null) return "never expires";
+  if (seconds >= 86400) return `${Math.round(seconds / 86400)} day TTL`;
+  if (seconds >= 3600) return `${Math.round(seconds / 3600)} hour TTL`;
+  return `${seconds}s TTL`;
+}
+
 export async function call<T>(
   path: string,
   body?: unknown,
-  method?: "GET" | "POST" | "DELETE",
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
 ): Promise<T> {
   const response = await fetch(`/api/proxy/${path}`, {
     method: method ?? (body ? "POST" : "GET"),
