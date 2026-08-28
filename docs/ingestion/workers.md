@@ -127,14 +127,26 @@ traffic.
 
 | Order | Layer | Example |
 |-------|-------|---------|
-| 1 | Channel message detection | WhatsApp → `chat_message` |
-| 2 | `source_type` field | `"pdf"` → `document_pdf` |
-| 3 | Explicit `data_type` | supplied by caller — short-circuits everything |
+| 1 | Explicit `data_type` | supplied by caller — short-circuits everything |
+| 2 | Channel message detection | WhatsApp → `chat_message` |
+| 3 | `source_type` field — **dropped when it contradicts sniffed MIME** | `"pdf"` → `document_pdf` |
 | 4 | Payload heuristic | `latitude`/`longitude` → `sensor_gps` |
 | 5 | MIME registry | `application/json` → `structured_json` |
 | 6 | URL extension | `.csv` → `structured_csv` |
 | 7 | LLM classifier (fallback) | **purpose-sized** model on ambiguous content — see below |
 | — | Catch-all | binary-blob agent |
+
+> **Two corrections, both found by building this rather than reading it.**
+>
+> **Explicit `data_type` is layer 1, not layer 3.** A layer that short-circuits everything cannot
+> sit below two layers it is meant to short-circuit. It was described correctly and ordered wrongly.
+>
+> **Position in this table is cost order, not authority.** `source_type` sits above the MIME
+> registry because it is free to check, not because it wins — MIME is sniffed before the cascade
+> runs and a `source_type` that disagrees with the bytes is **discarded**, dropping the item to the
+> layers below. Without that clause the table quietly reverses rule 2 above: a caller declaring
+> `"source_type": "pdf"` over JSON bytes would route to the PDF agent, which is the precise defect
+> the rule exists to prevent.
 
 ### Layer 7 wants a classifier, not a reasoner
 

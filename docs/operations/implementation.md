@@ -165,11 +165,17 @@ Order is dependency-driven; each step is unblocked by the one before it.
 
 | # | Step | Why here |
 |---|------|----------|
-| **1** | **Schema** — orgs, projects, members, groups, **`identities`**, **`api_keys`**, producers (with `inbound_auth`), data items with `org_id`/`project_id`/`access_level`/principal `shared_with`, `derived_artifacts` with source **list** + `served_by_model` + `fallback_depth`, `generator_versions` registry, `audit_events`, embeddings with `model_id`/`dim` | Everything in Phase 1b is columns. Design them **once, together**. Highest-leverage single artifact in the plan — get it wrong and every later slice inherits a migration |
+| **1** | **Schema** — orgs, projects, members, groups, **`identities`**, **`api_keys`**, producers (with `inbound_auth`), data items with `org_id`/`project_id`/`access_level`/principal `shared_with`, `derived_artifacts` with source **list** + `served_by_model` + `fallback_depth`, `generator_versions` registry, `audit_events`, embeddings with `model_id`/`dim`, **`memory_types` · `memories` · `memory_members` · `memory_links`** | Everything in Phase 1b is columns. Design them **once, together**. Highest-leverage single artifact in the plan — get it wrong and every later slice inherits a migration |
 | **2** | **Crypto foundation** — KMS envelope encryption, encrypt/decrypt helpers, **failing closed** | Nothing can safely store a credential before this, and step 3 needs to |
 | **3** | **Auth seam + producer registry** — `TokenVerifier` with the API-key verifier; `identities` and `api_keys` tables; capability scopes; producer `inbound_auth` | Every write needs a producer and a credential. Firebase and the gateway arrive later **behind this seam**, so building it now costs an implementation and skipping it costs a fork |
 | **4** | **Model config, minimal** — one engine, one embedding assignment, `generator_versions` populated | Step 6 embeds. This is the difference between provenance from row one and a corpus-wide staleness event later |
-| **5** | **Write endpoint** — `POST /write`, `Inline` only, `items[]`, `207`, commit, ACL from producer, **audit record written** | The spine's first half |
+| **5** | **Write endpoint** — `POST /write`, `Inline` only, `items[]`, `207`, commit, ACL from producer, **memory routing with the `default` fallback**, **audit record written** | The spine's first half |
+
+> **The memory tables belong in step 1, and this list used to omit them.** They are
+> [P0 in the feature matrix](../feature-matrix.md) and Phase 1 in [the roadmap](../roadmap.md), and
+> the per-user `default` memory is a *write-path* behaviour — an item written before it exists is
+> an item nobody routed. Retrofitting it means backfilling membership for every row already
+> written, which is precisely the kind of migration step 1 exists to avoid.
 | **6** | **Embed path** — queue abstraction with the in-process implementation, `model_id` recorded, defer-never-fallback | Makes what was written findable |
 | **7** | **Read** — `GET /data/{id}` and `POST /retrieve`, vector + lexical + hybrid, **ACL applied inside the query** | Closes the spine |
 | **8** | **Invariant gate** — adversarial cross-tenant across every retrieval path, kill-after-`2xx` durability, `distinct(model_id) == 1` property | The exit criterion |

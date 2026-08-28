@@ -115,11 +115,11 @@ Idempotency-Key: 9f2c...
 {
   "accepted": 3, "failed": 0,
   "results": [
-    { "index": 0, "status": "created", "data_id": "data_01J...", "state": "queued",
+    { "index": 0, "status": "created", "data_id": "data_01J...", "state": "stored",
       "memories": ["mem_01JQRS…"], "case_id": "cas_01JQRS…" },
-    { "index": 1, "status": "created", "data_id": "data_01J...", "state": "fetch_pending",
-      "memories": ["mem_01JQRS…"] },
-    { "index": 2, "status": "updated", "data_id": "data_01J...", "state": "queued",
+    { "index": 1, "status": "created", "data_id": "data_01J...", "state": "stored",
+      "is_downloaded": false, "memories": ["mem_01JQRS…"] },
+    { "index": 2, "status": "updated", "data_id": "data_01J...", "state": "stored",
       "memories": ["mem_01JQRS…", "mem_01JQXY…"] }
   ]
 }
@@ -219,6 +219,13 @@ Three states, not one:
 The per-item `state` in the write response, and a `state` field on reads, exist so clients do not
 each invent their own polling heuristic. "I just uploaded it and search cannot find it" is a
 support ticket that is not a bug — but only if the state is visible.
+
+> **There are three states, and the write response uses the same three.** An earlier draft of the
+> example above answered with `queued` and `fetch_pending`, which are not values the column holds —
+> a client polling on them would wait for a state that never arrives. They were describing
+> something real, but it is not a state: whether the bytes are here yet is `is_downloaded`, which
+> is **derived** from the content columns and already on every read. So an item awaiting a fetch is
+> `stored` with `is_downloaded: false`, and the staircase stays three rungs long.
 
 These are the two SLIs that component metrics cannot show: **ingest → searchable** and
 **ingest → enriched**.

@@ -41,7 +41,7 @@ data_items
   connection_id      nullable — null for uploads and direct writes
   external_id        caller's natural key; unique per (project, producer)
 
-  access_level       private | org | shared | public
+  access_level       private | org | shared | restricted | public
   shared_with        principals — jsonb
 
   content_text       ─┐  the three ContentRef cases,
@@ -127,7 +127,7 @@ separate columns with a stated precedence.
 
 > **`mime_type` outranks `source_type`, and that ordering is the fix.** MIME is detected
 > server-side from the bytes; a client-declared type is an injection vector that chooses which
-> agent runs. `source_type` survives only as layer 2 of the
+> agent runs. `source_type` survives only as layer 3 of the
 > [classification cascade](../ingestion/workers.md), below explicit caller intent and above
 > payload heuristics.
 

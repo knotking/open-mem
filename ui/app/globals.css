@@ -1,0 +1,435 @@
+:root {
+  --bg: #fbfaf8;
+  --panel: #ffffff;
+  --ink: #1b1a17;
+  --muted: #6d6a63;
+  --line: #e4e1da;
+  --accent: #2f5d50;
+  --accent-soft: #e8f0ec;
+  --warn: #8a5a2b;
+  --warn-soft: #f7efe4;
+  /* Sequential, one hue, light -> dark. Monotonic in OKLab L
+     (0.861 -> 0.681 -> 0.441); the low-contrast steps carry visible
+     numeric labels, which is the required relief. */
+  --step1: #bcd9cd;
+  --step2: #6aa793;
+  --step3: #2f5d50;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+}
+
+/* Dark applies when the OS asks for it AND the user has not chosen light. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #171815;
+    --panel: #1f211d;
+    --ink: #ece9e2;
+    --muted: #9b978d;
+    --line: #33352f;
+    --accent: #7fb8a4;
+    --accent-soft: #23302b;
+    --warn: #d0a267;
+    --warn-soft: #2e2820;
+    /* Dark mode is stepped from the same hue against the dark surface,
+       not an automatic flip. L: 0.382 -> 0.590 -> 0.808. */
+    --step1: #2c4a41;
+    --step2: #4f8b78;
+    --step3: #8fd0ba;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+/* two-column shell */
+.shell { display: grid; grid-template-columns: 232px 1fr; min-height: 100vh; }
+
+.side {
+  border-right: 1px solid var(--line);
+  background: var(--panel);
+  padding: 20px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+}
+.brand {
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  padding: 0 10px 16px;
+  font-size: 15px;
+}
+.navitem {
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  text-align: left;
+  padding: 9px 10px;
+  cursor: pointer;
+  color: var(--ink);
+  display: grid;
+  gap: 1px;
+  font: inherit;
+}
+.navitem:hover { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.navitem.active { background: var(--accent-soft); }
+.navitem.active .navlabel { color: var(--accent); }
+.navlabel { font-weight: 550; font-size: 14px; }
+.navhint { font-size: 11.5px; color: var(--muted); }
+.sidefoot { margin-top: auto; padding-top: 16px; border-top: 1px solid var(--line); }
+
+.content { padding: 30px 34px 96px; max-width: 940px; }
+.content h1 { font-size: 21px; margin: 0 0 6px; letter-spacing: -0.01em; }
+.content h3 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em;
+              color: var(--muted); margin: 18px 0 8px; }
+.lede { color: var(--muted); margin: 0 0 20px; font-size: 14px; max-width: 68ch; }
+
+.stair.compact .stair-row { grid-template-columns: 74px 1fr 34px; gap: 8px; }
+.stair.compact .label, .stair.compact .count { font-size: 11.5px; }
+
+.memrow { cursor: pointer; padding: 5px 6px; border-radius: 6px; }
+.memrow:hover { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+button.linkish {
+  background: none; border: 0; padding: 0; color: var(--accent);
+  font: inherit; font-size: 12px; cursor: pointer; text-decoration: underline;
+}
+
+@media (max-width: 780px) {
+  .shell { grid-template-columns: 1fr; }
+  .side { position: static; height: auto; flex-direction: row; flex-wrap: wrap; }
+  .sidefoot { display: none; }
+}
+
+header.page { margin-bottom: 28px; }
+header.page h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: -0.01em; }
+header.page p { margin: 0; color: var(--muted); font-size: 14px; }
+
+section.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 18px 20px;
+  margin-bottom: 18px;
+}
+
+section.panel > h2 {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+  margin: 0 0 14px;
+  font-weight: 600;
+}
+
+textarea, input[type="text"] {
+  width: 100%;
+  background: var(--bg);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 10px 12px;
+  font: inherit;
+  resize: vertical;
+}
+textarea { min-height: 96px; font-family: var(--mono); font-size: 13px; }
+textarea:focus, input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.row.end { justify-content: flex-end; }
+
+button {
+  background: var(--accent);
+  color: var(--bg);
+  border: 0;
+  border-radius: 7px;
+  padding: 9px 16px;
+  font: inherit;
+  font-weight: 550;
+  cursor: pointer;
+}
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+button.secondary { background: transparent; color: var(--accent); border: 1px solid var(--line); }
+
+.notice {
+  background: var(--warn-soft);
+  border: 1px solid color-mix(in srgb, var(--warn) 30%, transparent);
+  border-left: 3px solid var(--warn);
+  border-radius: 7px;
+  padding: 11px 14px;
+  font-size: 13.5px;
+  margin-bottom: 14px;
+  color: var(--ink);
+}
+.notice strong { color: var(--warn); }
+
+/* staircase */
+.stair { display: grid; gap: 7px; }
+.stair-row { display: grid; grid-template-columns: 92px 1fr 52px; gap: 12px; align-items: center; }
+.stair-row .label { font-size: 13px; color: var(--muted); }
+.stair-row .count { font-family: var(--mono); font-size: 13px; text-align: right; }
+.bar { height: 9px; border-radius: 5px; background: color-mix(in srgb, var(--line) 60%, transparent); overflow: hidden; }
+.bar > span { display: block; height: 100%; border-radius: 5px; transition: width 0.4s ease; }
+.bar > span.stored, .bar .fill.step1 { background: var(--step1); }
+.bar > span.searchable, .bar .fill.step2 { background: var(--step2); }
+.bar > span.enriched, .bar .fill.step3 { background: var(--step3); }
+
+/* results */
+.hit { border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-bottom: 10px; }
+.hit .meta { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; font-size: 12px; color: var(--muted); margin-bottom: 7px; }
+.hit .text { font-size: 14px; white-space: pre-wrap; }
+.chip {
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 20px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+}
+.chip.on { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 35%, transparent); color: var(--accent); }
+
+.excluded { display: grid; gap: 6px; }
+.excluded .item { display: flex; gap: 10px; align-items: baseline; font-size: 13px; }
+.excluded .why { font-family: var(--mono); font-size: 11.5px; color: var(--warn); }
+
+.provenance { font-family: var(--mono); font-size: 11.5px; color: var(--muted); word-break: break-all; }
+.empty { color: var(--muted); font-size: 13.5px; }
+.err { color: #a4462f; font-size: 13.5px; }
+table.kv { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.kv td { padding: 4px 0; vertical-align: top; }
+table.kv td:first-child { color: var(--muted); width: 150px; }
+code { font-family: var(--mono); font-size: 12.5px; }
+
+/* capture */
+.filebtn {
+  display: inline-block;
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 9px 16px;
+  font-weight: 550;
+  cursor: pointer;
+}
+.filebtn:hover { border-color: var(--accent); }
+.preview { max-width: 100%; max-height: 260px; border-radius: 8px; border: 1px solid var(--line); display: block; }
+.preview-wrap { margin-top: 12px; }
+audio.preview { width: 100%; height: auto; }
+.rec { color: #a4462f; font-family: var(--mono); font-size: 13px; }
+.chip.stored { background: color-mix(in srgb, var(--step1) 35%, transparent); }
+.chip.searchable { background: color-mix(in srgb, var(--step2) 30%, transparent); }
+.chip.enriched { background: var(--accent-soft); color: var(--accent); }
+
+
+/* An explicit choice wins over the system preference, in both directions. */
+:root[data-theme="dark"] {
+  --bg: #171815;
+  --panel: #1f211d;
+  --ink: #ece9e2;
+  --muted: #9b978d;
+  --line: #33352f;
+  --accent: #7fb8a4;
+  --accent-soft: #23302b;
+  --warn: #d0a267;
+  --warn-soft: #2e2820;
+  --step1: #2c4a41;
+  --step2: #4f8b78;
+  --step3: #8fd0ba;
+}
+
+/* ---------------------------------------------------------- landing */
+
+.landing { max-width: 940px; margin: 0 auto; padding: 22px 24px 80px; }
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 26px;
+}
+.wordmark, .brand .dot, .wordmark .dot { font-weight: 650; letter-spacing: -0.01em; }
+.wordmark { display: flex; align-items: center; gap: 8px; font-size: 16px; }
+.dot {
+  width: 9px; height: 9px; border-radius: 50%;
+  background: var(--accent); display: inline-block;
+}
+.brand { display: flex; align-items: center; gap: 8px; }
+
+.hero { padding: 26px 0 34px; border-top: 1px solid var(--line); }
+.hero h1 {
+  font-size: clamp(28px, 4vw, 40px);
+  line-height: 1.15;
+  margin: 0 0 14px;
+  letter-spacing: -0.02em;
+  max-width: 20ch;
+}
+.hero h1 em { font-style: normal; color: var(--accent); }
+.hero p { color: var(--muted); font-size: 16px; max-width: 62ch; margin: 0; }
+
+.pillars {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.pillars article {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 16px 18px;
+}
+.pillars h3 { margin: 0 0 8px; font-size: 14.5px; letter-spacing: -0.01em; }
+.pillars p { margin: 0; color: var(--muted); font-size: 13.5px; }
+
+.signin {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 20px;
+  max-width: 380px;
+  margin: 0 0 26px auto;
+  display: grid;
+  gap: 12px;
+}
+.signin h2 { margin: 0; font-size: 15px; }
+.signin label { display: grid; gap: 5px; font-size: 12.5px; color: var(--muted); }
+.signin input {
+  background: var(--bg); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 7px;
+  padding: 9px 11px; font: inherit;
+}
+.landfoot { border-top: 1px solid var(--line); padding-top: 18px; }
+
+.navscroll { overflow-y: auto; flex: 1; margin: 0 -4px; padding: 0 4px; }
+.navgroup { margin-bottom: 12px; }
+.navtitle {
+  display: flex; align-items: center; gap: 6px; width: 100%;
+  background: transparent; border: 0; cursor: pointer;
+  font: inherit; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--muted); padding: 7px 10px; font-weight: 600; border-radius: 7px;
+  text-align: left;
+}
+.navtitle:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.navtitle.current { color: var(--accent); }
+.caret {
+  display: inline-block; transition: transform 0.15s ease; font-size: 13px;
+  line-height: 1;
+}
+.caret.open { transform: rotate(90deg); }
+/* A collapsed group still says the current page is inside it. */
+.here {
+  width: 5px; height: 5px; border-radius: 50%;
+  background: var(--accent); margin-left: auto;
+}
+.navgroup { margin-bottom: 2px; }
+.navitem { padding-left: 26px; }
+
+.memrow.chosen { background: var(--accent-soft); }
+.preview { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 0.75; }
+.excluded .item { flex-wrap: wrap; }
+
+
+/* ---------------------------------------------------------- overview */
+
+/* The headline question is one number, so it gets a hero figure rather than a
+   chart. A pie of three states would encode the same thing worse. */
+.hero-stat { display: grid; grid-template-columns: minmax(180px, 260px) 1fr; gap: 26px; align-items: center; }
+.hero-figure { display: grid; gap: 2px; }
+.hero-value {
+  font-size: clamp(40px, 6vw, 58px); font-weight: 620; letter-spacing: -0.03em;
+  line-height: 1; color: var(--accent); font-variant-numeric: tabular-nums;
+}
+.hero-label { color: var(--muted); font-size: 13px; }
+.hero-stair { display: grid; gap: 8px; }
+
+.tiles {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+  gap: 10px; margin-bottom: 18px;
+}
+.tile {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  padding: 13px 15px; display: grid; gap: 2px; align-content: start;
+}
+.tile-value {
+  font-size: 22px; font-weight: 600; letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+.tile-label { font-size: 12px; color: var(--muted); }
+.tile-note { font-size: 11px; color: var(--muted); }
+/* Status is never colour alone: the alarm tile also changes its label text. */
+.tile.alarm { border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+.tile.alarm .tile-note { color: var(--warn); font-weight: 550; }
+
+.two-up { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+
+.barlist { display: grid; gap: 7px; }
+.barrow { display: grid; grid-template-columns: 128px 1fr 42px; gap: 10px; align-items: center; }
+.barlabel { font-size: 12.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+/* One hue for a single-series magnitude comparison; rank never changes colour. */
+.barrow .fill { background: var(--step2); display: block; height: 100%; border-radius: 5px; }
+.chip.warnchip { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
+
+@media (max-width: 720px) {
+  .hero-stat { grid-template-columns: 1fr; }
+}
+
+.toggle { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; padding: 6px 0; }
+.toggle input { margin-top: 3px; width: 15px; height: 15px; accent-color: var(--accent); }
+.toggle span { display: grid; gap: 2px; font-size: 13.5px; }
+.nested { margin: 6px 0 0 24px; padding-left: 14px; border-left: 2px solid var(--line); }
+.seq { font-family: var(--mono); font-size: 11px; min-width: 34px; }
+
+select {
+  background: var(--bg); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 7px;
+  padding: 9px 10px; font: inherit;
+}
+.item.pick { cursor: pointer; }
+.item.pick input { accent-color: var(--accent); }
+
+/* Deletion scopes: blast radius is the information, so it is on the control. */
+.scopes { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
+.scope {
+  background: var(--bg); border: 1px solid var(--line); border-radius: 9px;
+  padding: 12px 14px; text-align: left; cursor: pointer; font: inherit;
+  color: var(--ink); display: grid; gap: 3px;
+}
+.scope:hover { border-color: var(--accent); }
+.scope.active { background: var(--accent-soft); border-color: var(--accent); }
+.scope-label { font-weight: 600; font-size: 14px; }
+.scope-blast { font-size: 11.5px; color: var(--muted); }
+.scope.active .scope-label { color: var(--accent); }
+
+/* ------------------------------------------------------------------ ask */
+/* The question is set quietly and the answer loudly, because the answer is
+   what gets read and the question is only there to say what was asked. */
+.question {
+  font-size: 13px;
+  color: var(--muted);
+  margin: 0 0 10px;
+  padding-left: 11px;
+  border-left: 2px solid var(--line);
+}
+.answer {
+  font-size: 15px;
+  line-height: 1.62;
+  white-space: pre-wrap;
+  max-width: 68ch;
+}
+/* An answer the corpus did not support must not look like one it did. */
+.answer.ungrounded {
+  color: var(--muted);
+  font-style: italic;
+  border-left: 2px solid var(--warn);
+  padding-left: 12px;
+}
+
+/* Confirmation of a completed action. Distinct from .err in hue, and from
+   .empty in weight — a result, not an absence. */
+.ok { color: var(--accent); font-size: 13.5px; }

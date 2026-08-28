@@ -2070,9 +2070,10 @@ Idempotency-Key: 9f2c...
 {
   "accepted": 3, "failed": 0,
   "results": [
-    { "index": 0, "status": "created", "data_id": "data_01J...", "state": "queued" },
-    { "index": 1, "status": "created", "data_id": "data_01J...", "state": "fetch_pending" },
-    { "index": 2, "status": "updated", "data_id": "data_01J...", "state": "queued" }
+    { "index": 0, "status": "created", "data_id": "data_01J...", "state": "stored" },
+    { "index": 1, "status": "created", "data_id": "data_01J...", "state": "stored",
+      "is_downloaded": false },
+    { "index": 2, "status": "updated", "data_id": "data_01J...", "state": "stored" }
   ]
 }
 ```
@@ -2152,6 +2153,13 @@ Three states, not one:
 The per-item `state` in the write response, and a `state` field on reads, exist so clients do not
 each invent their own polling heuristic. "I just uploaded it and search cannot find it" is a
 support ticket that is not a bug — but only if the state is visible.
+
+> **There are three states, and the write response uses the same three.** An earlier draft of the
+> example above answered with `queued` and `fetch_pending`, which are not values the column holds —
+> a client polling on them would wait for a state that never arrives. They were describing
+> something real, but it is not a state: whether the bytes are here yet is `is_downloaded`, which
+> is **derived** from the content columns and already on every read. So an item awaiting a fetch is
+> `stored` with `is_downloaded: false`, and the staircase stays three rungs long.
 
 These are the two SLIs that component metrics cannot show: **ingest → searchable** and
 **ingest → enriched**.
@@ -3043,14 +3051,26 @@ traffic.
 
 | Order | Layer | Example |
 |-------|-------|---------|
-| 1 | Channel message detection | WhatsApp → `chat_message` |
-| 2 | `source_type` field | `"pdf"` → `document_pdf` |
-| 3 | Explicit `data_type` | supplied by caller — short-circuits everything |
+| 1 | Explicit `data_type` | supplied by caller — short-circuits everything |
+| 2 | Channel message detection | WhatsApp → `chat_message` |
+| 3 | `source_type` field — **dropped when it contradicts sniffed MIME** | `"pdf"` → `document_pdf` |
 | 4 | Payload heuristic | `latitude`/`longitude` → `sensor_gps` |
 | 5 | MIME registry | `application/json` → `structured_json` |
 | 6 | URL extension | `.csv` → `structured_csv` |
 | 7 | LLM classifier (fallback) | small-tier model on ambiguous content |
 | — | Catch-all | binary-blob agent |
+
+> **Two corrections, both found by building this rather than reading it.**
+>
+> **Explicit `data_type` is layer 1, not layer 3.** A layer that short-circuits everything cannot
+> sit below two layers it is meant to short-circuit. It was described correctly and ordered wrongly.
+>
+> **Position in this table is cost order, not authority.** `source_type` sits above the MIME
+> registry because it is free to check, not because it wins — MIME is sniffed before the cascade
+> runs and a `source_type` that disagrees with the bytes is **discarded**, dropping the item to the
+> layers below. Without that clause the table quietly reverses rule 2 above: a caller declaring
+> `"source_type": "pdf"` over JSON bytes would route to the PDF agent, which is the precise defect
+> the rule exists to prevent.
 
 ### Extraction prompts — standard, or overridden
 
@@ -7608,7 +7628,7 @@ data_items
   connection_id      nullable — null for uploads and direct writes
   external_id        caller's natural key; unique per (project, producer)
 
-  access_level       private | org | shared | public
+  access_level       private | org | shared | restricted | public
   shared_with        principals — jsonb
 
   content_text       ─┐  the three ContentRef cases,
@@ -7694,7 +7714,7 @@ separate columns with a stated precedence.
 
 > **`mime_type` outranks `source_type`, and that ordering is the fix.** MIME is detected
 > server-side from the bytes; a client-declared type is an injection vector that chooses which
-> agent runs. `source_type` survives only as layer 2 of the
+> agent runs. `source_type` survives only as layer 3 of the
 > classification cascade, below explicit caller intent and above
 > payload heuristics.
 
@@ -9937,7 +9957,7 @@ Order is dependency-driven; each step is unblocked by the one before it.
 
 | # | Step | Why here |
 |---|------|----------|
-| **1** | **Schema** — orgs, projects, members, groups, **`identities`**, **`api_keys`**, producers (with `inbound_auth`), data items with `org_id`/`project_id`/`access_level`/principal `shared_with`, `derived_artifacts` with source **list** + `served_by_model` + `fallback_depth`, `generator_versions` registry, `audit_events`, embeddings with `model_id`/`dim` | Everything in Phase 1b is columns. Design them **once, together**. Highest-leverage single artifact in the plan — get it wrong and every later slice inherits a migration |
+| **1** | **Schema** — orgs, projects, members, groups, **`identities`**, **`api_keys`**, producers (with `inbound_auth`), data items with `org_id`/`project_id`/`access_level`/principal `shared_with`, `derived_artifacts` with source **list** + `served_by_model` + `fallback_depth`, `generator_versions` registry, `audit_events`, embeddings with `model_id`/`dim`, **`memory_types` · `memories` · `memory_members` · `memory_links`** | Everything in Phase 1b is columns. Design them **once, together**. Highest-leverage single artifact in the plan — get it wrong and every later slice inherits a migration |
 | **2** | **Crypto foundation** — KMS envelope encryption, encrypt/decrypt helpers, **failing closed** | Nothing can safely store a credential before this, and step 3 needs to |
 | **3** | **Auth seam + producer registry** — `TokenVerifier` with the API-key verifier; `identities` and `api_keys` tables; capability scopes; producer `inbound_auth` | Every write needs a producer and a credential. Firebase and the gateway arrive later **behind this seam**, so building it now costs an implementation and skipping it costs a fork |
 | **4** | **Model config, minimal** — one engine, one embedding assignment, `generator_versions` populated | Step 6 embeds. This is the difference between provenance from row one and a corpus-wide staleness event later |
