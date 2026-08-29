@@ -23,6 +23,8 @@ from typing import Protocol
 
 import httpx
 
+from . import usage
+
 log = logging.getLogger(__name__)
 
 # Inline payloads have a hard ceiling at the provider. Beyond it a resumable
@@ -141,6 +143,15 @@ class GeminiMultimodal:
             )
         prompt = PROMPTS.get(modality, PROMPTS["image"])
         model = self.model_for(modality)
+        # Metered here rather than at the call site: this engine is not in a
+        # routing chain, so nothing above it opens a metered block, and media is
+        # the most expensive per-item call the platform makes.
+        async with usage.meter("interpret", "gemini", model_id=model):
+            return await self._interpret(payload, prompt, model, mime, modality)
+
+    async def _interpret(
+        self, payload: bytes, prompt: str, model: str, mime: str, modality: str
+    ) -> Interpreted:
         body = {
             "contents": [
                 {
@@ -187,17 +198,23 @@ class GeminiMultimodal:
             raise MediaDisabled(f"model returned nothing ({reason})")
         parts = candidates[0].get("content", {}).get("parts", [])
         text = "\n".join(p.get("text", "") for p in parts).strip()
-        usage = data.get("usageMetadata") or {}
+        meta = data.get("usageMetadata") or {}
+        usage.observe(
+            tokens_in=meta.get("promptTokenCount", 0),
+            tokens_out=meta.get("candidatesTokenCount", 0),
+            tokens_cached=meta.get("cachedContentTokenCount", 0),
+            modality=modality,
+        )
         return Interpreted(
             text=text,
             modality=modality,
             model_id=model,
-            tokens=usage.get("totalTokenCount", 0),
+            tokens=meta.get("totalTokenCount", 0),
             model_version=data.get("modelVersion"),
             response_id=data.get("responseId"),
             structure={
-                "prompt_tokens": usage.get("promptTokenCount", 0),
-                "output_tokens": usage.get("candidatesTokenCount", 0),
+                "prompt_tokens": meta.get("promptTokenCount", 0),
+                "output_tokens": meta.get("candidatesTokenCount", 0),
             },
         )
 

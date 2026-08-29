@@ -14,7 +14,7 @@ from fastapi.responses import Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from .auth import ApiKeyVerifier, AuthError, Principal, TokenVerifier
+from .auth import DATA_READ, ApiKeyVerifier, AuthError, Principal, TokenVerifier
 from .blobs import build_blob_store
 from .config import load_settings
 from .contracts import (
@@ -77,6 +77,8 @@ from .workers import (
     ParseWorker,
     verify_index_dimension,
 )
+from . import quota, usage
+from .quota import BudgetExhausted, QuotaExceeded
 from .write import EMBED_TOPIC, AdmissionError, write_items
 
 
@@ -120,6 +122,11 @@ async def lifespan(app: FastAPI):
         parse_worker=parse_worker, embed_worker=embed_worker,
         enrich_worker=enrich_worker, fetch_worker=fetch_worker,
     ).register(queue)
+
+    # The meter needs somewhere to write before the first model call, which
+    # the workers above can make as soon as they are registered.
+    usage.configure(pool)
+    app.state.limiter = quota.Limiter(pool)
 
     app.state.settings = settings
     app.state.pool = pool
@@ -204,6 +211,34 @@ async def principal(
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
 
 
+@asynccontextmanager
+async def admitted(request: Request, actor: Principal, cost: int, *, project_id: str | None = None):
+    """Charge a request's estimated cost, hold a concurrency slot, and name who
+    pays for whatever it goes on to spend.
+
+    The estimate is charged to the burst bucket, never to the budget: the budget
+    is decremented by what the meter actually recorded, and charging both would
+    bill every request twice. What the two share is the weighting -- a request is
+    priced on the work it authorises, because a limiter that counts requests
+    cannot tell a vector search from a generation.
+    """
+    state = request.app.state
+    try:
+        await state.limiter.charge(actor, cost)
+        slot = await state.limiter.hold(actor)
+    except QuotaExceeded as exc:
+        raise HTTPException(
+            status_code=exc.status, detail=str(exc),
+            headers={"Retry-After": str(exc.retry_after)},
+        ) from exc
+    with slot, usage.attributed(
+        org_id=actor.org_id,
+        project_id=project_id or actor.project_id,
+        user_id=actor.user_id,
+    ):
+        yield
+
+
 # `/healthz` is served for local and Kubernetes use, but it is NOT the health
 # path behind Google Front End: GFE intercepts exactly `/healthz` and answers
 # 404 before the request reaches the container. Verified against Google's own
@@ -234,16 +269,20 @@ async def write(
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> JSONResponse:
     state = request.app.state
+    cost = quota.estimate_write(
+        items=len(body.items), enrich=bool(body.options.enrich)
+    )
     try:
-        response = await write_items(
-            state.pool,
-            state.queue,
-            state.blobs,
-            state.settings,
-            actor,
-            body,
-            idempotency_key,
-        )
+        async with admitted(request, actor, cost):
+            response = await write_items(
+                state.pool,
+                state.queue,
+                state.blobs,
+                state.settings,
+                actor,
+                body,
+                idempotency_key,
+            )
     except AuthError as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
     except AdmissionError as exc:
@@ -1061,6 +1100,19 @@ async def inbound_webhook(request: Request, producer_id: str) -> JSONResponse:
     raw = await request.body()
     headers = {k.lower(): v for k, v in request.headers.items()}
     state = request.app.state
+    # The one endpoint with no credential in front of it, which makes it the
+    # place an unbounded caller is expected rather than anomalous. Keyed on the
+    # producer because that is the only identity the request carries before its
+    # signature is checked -- and answered with 429 rather than a soothing 2xx,
+    # because a provider reading `Retry-After` backs off, where one told
+    # "accepted" keeps sending at the rate that caused the problem.
+    try:
+        await state.limiter.charge_key(f"whk:{producer_id}", 1)
+    except QuotaExceeded as exc:
+        raise HTTPException(
+            status_code=exc.status, detail=str(exc),
+            headers={"Retry-After": str(exc.retry_after)},
+        ) from exc
     try:
         result = await receive_webhook(
             state.pool, state.queue, state.blobs, state.settings, state.envelope,
@@ -1808,17 +1860,27 @@ async def ask_endpoint(
     what retrieval returned -- never a second context-assembly path."""
     from .chat import AnswerFailed, AnswerRateLimited
 
+    cost = quota.estimate_ask(match=list(body.match), passages=body.passages)
     try:
-        return await ask(
-            request.app.state.pool,
-            request.app.state.embedder,
-            request.app.state.answerer,
-            actor,
-            body,
-            embed_generator=request.app.state.current_generators["embedding"],
-        )
+        async with admitted(request, actor, cost, project_id=body.filter.project_id):
+            return await ask(
+                request.app.state.pool,
+                request.app.state.embedder,
+                request.app.state.answerer,
+                actor,
+                body,
+                embed_generator=request.app.state.current_generators["embedding"],
+            )
     except AuthError as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    except BudgetExhausted as exc:
+        # Distinguished from a burst refusal by its retry window: a minute for a
+        # rate limit, the rest of the day for a budget. A client that cannot
+        # tell them apart retries the second one every minute until midnight.
+        raise HTTPException(
+            status_code=exc.status, detail=str(exc),
+            headers={"Retry-After": str(exc.retry_after)},
+        ) from exc
     except AnswerRateLimited as exc:
         # The same shape admission control uses for a deep queue, so a client
         # has one back-off rule rather than one per subsystem.
@@ -1832,17 +1894,78 @@ async def ask_endpoint(
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
+
+@app.get("/api/v1/usage")
+async def get_usage(
+    request: Request,
+    project_id: str | None = None,
+    actor: Principal = Depends(principal),
+) -> dict:
+    """What has been spent today, against what ceiling.
+
+    A spending control nobody can see is a spending control nobody trusts, and
+    the first question after a refusal is always "spent on what". So this
+    reports the rollup enforcement actually reads, the ceilings that bind, and
+    the calls that crossed from a free engine to a paid one -- which is the
+    line item that surprises people, because nothing about a successful
+    fallback looks like a decision to start paying.
+    """
+    state = request.app.state
+    actor.require(DATA_READ)
+    spend = await quota.spend_today(
+        state.pool, org_id=actor.org_id,
+        project_id=project_id or actor.project_id,
+        user_id=actor.user_id,
+    )
+    rows = await state.pool.fetch(
+        """
+        -- Cast every sum: `sum()` over bigint returns numeric, which arrives as
+        -- a Decimal and serialises to a JSON *string*. A cost that is sometimes
+        -- a number and sometimes a string is a client-side bug waiting to be
+        -- written, and it would be written against the billing figures.
+        SELECT purpose, serving_engine, status,
+               count(*)::bigint AS calls,
+               sum(credits)::bigint AS credits,
+               sum(tokens_in)::bigint AS tokens_in,
+               sum(tokens_out)::bigint AS tokens_out,
+               sum(tokens_cached)::bigint AS tokens_cached,
+               count(*) FILTER (WHERE crossed_to_paid)::bigint AS crossed_to_paid
+        FROM usage_events
+        WHERE org_id = $1 AND occurred_at >= CURRENT_DATE
+        GROUP BY purpose, serving_engine, status
+        ORDER BY sum(credits) DESC
+        """,
+        actor.org_id,
+    )
+    return {
+        "day": "today",
+        "budgets": [
+            {
+                "scope": s.scope,
+                "scope_id": s.scope_id,
+                "credits": s.credits,
+                "limit": s.limit,
+                "exhausted": s.exhausted,
+            }
+            for s in spend
+        ],
+        "by_engine": [dict(r) for r in rows],
+    }
+
+
 @app.post("/api/v1/retrieve", response_model=RetrieveResponse)
 async def retrieve_endpoint(
     request: Request, body: RetrieveRequest, actor: Principal = Depends(principal)
 ) -> RetrieveResponse:
+    cost = quota.estimate_retrieve(match=list(body.match), limit=body.limit)
     try:
-        return await retrieve(
-            request.app.state.pool,
-            request.app.state.embedder,
-            actor,
-            body,
-            embed_generator=request.app.state.current_generators["embedding"],
-        )
+        async with admitted(request, actor, cost, project_id=body.filter.project_id):
+            return await retrieve(
+                request.app.state.pool,
+                request.app.state.embedder,
+                actor,
+                body,
+                embed_generator=request.app.state.current_generators["embedding"],
+            )
     except AuthError as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc

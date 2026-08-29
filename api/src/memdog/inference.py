@@ -19,6 +19,8 @@ from typing import Protocol
 
 import httpx
 
+from . import usage
+
 from .chunking import CHUNKER_VERSION
 from .config import Settings
 
@@ -177,25 +179,46 @@ class GeminiEmbedder:
             return []
         task_type = self.TASKS.get(task, self.TASKS["document"])
         vectors: list[list[float]] = []
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            for start in range(0, len(texts), self.BATCH):
-                chunk = texts[start:start + self.BATCH]
-                vectors.extend(await self._batch(client, chunk, task_type))
+        # One metered call even though it pages: the batches are an artifact of
+        # a provider request ceiling, not separate work the caller asked for.
+        # Embedding is the highest-volume model call in the system -- every
+        # chunk of every item -- so leaving it unmetered, which is the usual
+        # shortcut, misses the largest line in a bulk ingest.
+        async with usage.meter("embed", "gemini", model_id=self.model_id):
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                for start in range(0, len(texts), self.BATCH):
+                    chunk = texts[start:start + self.BATCH]
+                    vectors.extend(await self._batch(client, chunk, task_type))
         return vectors
 
     async def _batch(self, client: httpx.AsyncClient, texts: list[str],
                      task_type: str) -> list[list[float]]:
+        sent = [text[:20_000] for text in texts]
         payload = {
             "requests": [
                 {
                     "model": f"models/{self._model}",
-                    "content": {"parts": [{"text": text[:20_000]}]},
+                    "content": {"parts": [{"text": text}]},
                     "taskType": task_type,
                     "outputDimensionality": self.dim,
                 }
-                for text in texts
+                for text in sent
             ]
         }
+        # `batchEmbedContents` reports no token usage, so this is estimated from
+        # the characters actually sent -- after truncation, since the tail we
+        # dropped is not billed. Flagged as an estimate rather than presented as
+        # a provider figure: a number that is quietly approximate is the one
+        # that gets reconciled against an invoice and cannot be explained.
+        #
+        # Recorded before the request rather than after, so a batch that is
+        # accepted and then times out is still counted. That over-counts a
+        # connection that never opened, which is the rarer case and the safer
+        # direction to be wrong in.
+        usage.observe(
+            tokens_in=sum(len(text) for text in sent) // 4,
+            estimated=True,
+        )
         try:
             response = await client.post(
                 f"{self._base}/models/{self._model}:batchEmbedContents",

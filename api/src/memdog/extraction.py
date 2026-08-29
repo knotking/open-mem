@@ -25,6 +25,8 @@ from collections import Counter
 from typing import Protocol
 
 import httpx
+
+from . import usage
 from pydantic import BaseModel, Field
 
 from .inference import EmbeddingUnavailable
@@ -330,8 +332,15 @@ class GeminiExtractor:
         if not parsed.get("title"):
             raise ExtractionFailed("model returned no title")
         envelope = Envelope(**{k: v for k, v in parsed.items() if k in Envelope.model_fields})
+        meta = data.get("usageMetadata") or {}
+        usage.observe(
+            tokens_in=meta.get("promptTokenCount", 0),
+            tokens_out=meta.get("candidatesTokenCount", 0),
+            tokens_cached=meta.get("cachedContentTokenCount", 0),
+            prompt=prompt_name,
+        )
         envelope.fields["prompt"] = prompt_name
-        envelope.fields["tokens"] = (data.get("usageMetadata") or {}).get("totalTokenCount", 0)
+        envelope.fields["tokens"] = meta.get("totalTokenCount", 0)
         # The build that answered, not the alias we asked for.
         envelope.model_version = data.get("modelVersion")
         envelope.response_id = data.get("responseId")

@@ -34,6 +34,8 @@ from typing import Protocol
 import asyncpg
 import httpx
 
+from . import quota, usage
+
 from .auth import DATA_READ, Principal
 from .contracts import (
     AnswerCitation,
@@ -255,13 +257,24 @@ class GeminiAnswerer:
         if not text:
             raise AnswerFailed("model returned an empty answer")
         cited = [c for c in parsed.get("citations") or [] if isinstance(c, int)]
+        meta = data.get("usageMetadata") or {}
+        # Reported here rather than from the `Generated` the caller receives,
+        # because this is the last point at which input, output and cached are
+        # still three numbers. `Generated.tokens` is their sum, and a sum cannot
+        # be priced -- providers charge several times more for output.
+        usage.observe(
+            tokens_in=meta.get("promptTokenCount", 0),
+            tokens_out=meta.get("candidatesTokenCount", 0),
+            tokens_cached=meta.get("cachedContentTokenCount", 0),
+            response_id=data.get("responseId"),
+        )
         return Generated(
             text,
             cited,
             bool(parsed.get("grounded")),
             model_version=data.get("modelVersion"),
             response_id=data.get("responseId"),
-            tokens=(data.get("usageMetadata") or {}).get("totalTokenCount", 0),
+            tokens=meta.get("totalTokenCount", 0),
         )
 
 
@@ -363,6 +376,16 @@ async def _ask(
         embed_generator,
     )
     passages = found.results[: request.passages]
+
+    # The budget gate goes here rather than at the front of the request.
+    # Retrieval is not where the money is -- generation costs roughly a thousand
+    # times a vector search -- so checking on arrival would refuse cheap searches
+    # to protect an expensive stage, and refuse them *after* the search had
+    # already been paid for on the way in.
+    await quota.check_budget(
+        pool, org_id=principal.org_id, project_id=request.filter.project_id,
+        user_id=principal.user_id,
+    )
 
     generated = await answerer.answer(request.question, passages)
 

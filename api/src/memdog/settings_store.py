@@ -71,6 +71,31 @@ REGISTER: dict[str, Definition] = {
         "enrich_by_default", True, ("platform", "org", "project", "user"), False,
         "Whether writes enqueue enrichment unless told otherwise.",
     ),
+    "budget_daily_credits": Definition(
+        # Null means no ceiling. Settable per user as well as per project --
+        # one person's sandbox must not be able to spend the team's month --
+        # and safe to expose there only because `quota` composes caps as a
+        # minimum down the hierarchy rather than resolving them by precedence.
+        # Most-specific-wins is right for a preference and wrong for a ceiling:
+        # it would let the person being limited raise their own limit.
+        "budget_daily_credits", None, ("platform", "org", "project", "user"), True,
+        "Credits that may be spent on model calls per day. Every level binds: "
+        "a user is held to the tightest of their own value, their "
+        "organization's and the platform's, so setting a larger number lower "
+        "down cannot raise a ceiling set above it.",
+    ),
+    "rate_limit_credits_per_minute": Definition(
+        "rate_limit_credits_per_minute", 6000, ("platform", "org", "project"), True,
+        "Burst ceiling per credential, in cost-weighted credits rather than "
+        "requests -- a hundred searches and a hundred generations are the same "
+        "number to a request counter and a thousand times apart in cost. "
+        "0 disables the limit.",
+    ),
+    "max_concurrent_requests": Definition(
+        "max_concurrent_requests", 8, ("platform", "org", "project"), True,
+        "Requests in flight per credential. A rate limit bounds arrival; this "
+        "is what stops one client occupying the whole model tier. 0 disables.",
+    ),
     "default_project": Definition(
         # A user setting an admin cannot set for them: it is a preference about
         # how one person works, not a policy about what they may do.

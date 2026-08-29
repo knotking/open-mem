@@ -8,6 +8,7 @@ import sys
 from .bootstrap import bootstrap_tenant
 from .config import load_settings
 from .inference import build_embedder
+from . import usage
 from .db import create_pool, migrate
 
 
@@ -148,6 +149,11 @@ async def _reconcile(grace: int) -> None:
 
     settings = load_settings()
     pool = await create_pool(settings)
+    # Scheduled sweeps are exactly the spend nobody is watching: nobody is
+    # waiting on the response, so an unmetered reconcile is a bill with no
+    # request behind it. The meter is configured here for the same reason the
+    # service configures it at startup.
+    usage.configure(pool)
     queue = InProcessQueue()
     # The parse tier must be subscribed here too, or the sweep publishes work
     # that nothing consumes -- which looks exactly like the sweep doing nothing.
@@ -194,6 +200,7 @@ async def _crawl_tick(limit: int) -> None:
 
     settings = load_settings()
     pool = await create_pool(settings)
+    usage.configure(pool)
     queue = InProcessQueue()
     blobs = build_blob_store(settings)
     ParseWorker(pool, blobs, queue=queue, multimodal=build_multimodal(settings)).register(queue)
