@@ -33,7 +33,7 @@ uv venv --python 3.12 .venv && uv pip install -e ".[dev]"
 For something to look at rather than an empty database:
 
 ```bash
-.venv/bin/python -m memdog seed --demo      # 40 records, one worked sales renewal
+.venv/bin/python -m memdog seed --demo      # 42 records, one worked sales renewal
 ```
 
 The seed goes in through the public write API with a registered producer, then asks the corpus five
@@ -120,9 +120,6 @@ Stated as plainly as the rest, because a README that only lists strengths is not
 - **Model spend is not attributable to a crawl run or a reprocess job.** `usage_events` has the
   column; nothing populates it, because a stored item carries no reference to the run that fetched
   it. So a dry-run's estimate still cannot be checked against what the run actually cost
-- **Normalization schemas can be registered but are never applied.** `POST /api/v1/schemas` stores
-  one and `normalize.project()` knows how to run it, but nothing on the write path calls it — so
-  `identifiers[]` and `event_time` are whatever the writer sent, never a projection
 - **No OAuth connections**, so Gmail, Drive and Calendar are unreachable — and with them the crawler
   strategies that walk a folder or enumerate an object
 - **No point-in-time facts.** Edges have no validity interval, so *"who worked there in 2024"* is

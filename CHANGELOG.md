@@ -11,6 +11,22 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **Registration is closed by default, and an invite is how the second user
+  arrives.** `POST /api/v1/invites` issues one, `GET` lists them with their
+  state, `DELETE` revokes before redemption, and `POST /api/v1/invites/redeem`
+  — **unauthenticated**, because whoever is redeeming has no account yet —
+  exchanges the single-use token for an API key scoped to the invited role.
+- An invite is a bearer credential and is treated as one: hashed at rest, shown
+  once at creation, expiring in 7 days by default, revocable, and **bound to an
+  email address unless `transferable: true` is passed explicitly**. A link bound
+  to nobody is a link anyone can forward, so opting out of that is a decision
+  rather than a default.
+- **Invites are audited on creation and on redemption.** Who invited them and
+  who walked through the door are different questions, and a forwarded invite
+  answers only the second. Neither record contains the token.
+- Every redemption failure returns the same sentence. Expired, revoked, already
+  redeemed, wrong address, never existed — the distinctions are real and all of
+  them disclose whether an organization exists.
 - **`python -m memdog seed --demo` — a demo tenant, and the end-to-end check the
   repo did not have.** Forty records about one Acme renewal, written through the
   public write verb with a registered producer, enriched synchronously, in a few
@@ -320,6 +336,20 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 - `.claude/skills/changelog` and this file.
 
 ### Changed
+- **A new identity no longer becomes a `users` row just for authenticating.**
+  `registration_mode` is enforced where the account would be created, not only
+  where membership is granted: `disabled` refuses outright, `invite_only`
+  admits an address that is already a user or holds a live invite, and `open`
+  behaves as before. Existing users and existing members are unaffected; what
+  changes is who can newly appear.
+- **`python -m memdog bootstrap` refuses once any user exists**, with a message
+  saying so and pointing at invites. It creates the first admin and only the
+  first — an exception that can be taken twice is an unauthenticated
+  account-creation endpoint wearing an operations script's clothes. The
+  library function is deliberately not guarded, because the seed and the test
+  fixtures use it and both carry their own guards.
+- **New setting `registration_mode`** (platform and org scope, lockable,
+  default `invite_only`). A deployment that wants self-service must now say so.
 - **Quota is cost-weighted rather than counted.** A hundred vector searches and
   a hundred generations are the same number to a request limiter and three
   orders of magnitude apart in what they cost, so a limiter built on request
@@ -383,6 +413,8 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   accepted content types are documents only.
 
 ### Migrations
+- `0024_invites.sql` — the `invites` table. Run before deploying; the registration
+  check reads it on every first-time sign-in.
 - `0023_usage.sql` — `usage_events` (raw, short retention) and `usage_spend`
   (the daily rollup enforcement reads, so a budget check is one indexed row
   rather than an aggregate over a table that grows with ingest). Run before

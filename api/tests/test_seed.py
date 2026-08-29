@@ -8,6 +8,8 @@ schema, so the exit criterion stops being something someone remembers to check.
 
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 
@@ -44,17 +46,20 @@ async def test_the_seed_satisfies_the_phase_1_exit_criterion(app_client):
     app, client, drain = app_client
     result = await seed_demo(app.state.pool, client, drain=drain)
 
-    assert result.written == 40
+    assert result.written == 42
     # Three usage exports are written with enrichment off. Recording is cheap
     # and synchronous; spending is opt-in, and the staircase showing two
     # different heights is the honest picture rather than a curated one.
-    assert result.enriched == 37
+    assert result.enriched == 39
     assert result.questions_passed == len(seed_mod.QUESTIONS)
     assert result.private_item_hidden
     # One record names the case; the rest join it on the deal identifier. If
     # this collapses to all-asserted or all-inferred, correlation has stopped
     # being demonstrable even though nothing errored.
-    assert result.case_members == {"asserted": 1, "inferred": 39}
+    assert result.case_members == {"asserted": 1, "inferred": 41}
+    # One payload projects and one cannot, because a demo where everything
+    # worked teaches an expectation the user's own corpus will not meet.
+    assert result.normalization == {"projected": 1, "failed": 1}
 
 
 async def test_seeding_twice_is_refused(app_client):
@@ -75,7 +80,7 @@ async def test_reset_purges_through_the_ordinary_cascade(app_client):
 
     removed = await reset_demo(app.state.pool, client, drain=drain)
     assert removed["org_id"] == first.org_id
-    assert removed["purged"] == 40
+    assert removed["purged"] == 42
     # Users do not cascade from an org and must be removed by name, or the next
     # seed dies on the unique constraint over email.
     assert removed["users_removed"] == 2
@@ -103,7 +108,20 @@ async def test_reset_recovers_a_half_built_demo(app_client):
     assert removed["users_removed"] == 2
 
     reseeded = await seed_demo(app.state.pool, client, drain=drain)
-    assert reseeded.written == 40
+    assert reseeded.written == 42
+
+
+async def test_a_structured_record_carries_its_marker_inside_the_payload(app_client):
+    """A marker prefixed to JSON stops it being JSON, and normalization would
+    report a mapping failure that is really a seeding bug."""
+    app, client, drain = app_client
+    await seed_demo(app.state.pool, client, drain=drain)
+
+    text = await app.state.pool.fetchval(
+        "SELECT content_text FROM data_items WHERE external_id = $1",
+        "invoice-record-august",
+    )
+    assert json.loads(text)["note"] == seed_mod.MARKER
 
 
 async def test_every_record_is_visibly_synthetic(app_client):
@@ -128,8 +146,8 @@ async def test_every_record_is_visibly_synthetic(app_client):
 async def test_the_corpus_uses_reserved_names_and_fake_identifiers():
     """A demo company that is a real company is a problem someone else did not
     agree to, and a realistic-format identifier can collide with a real one."""
-    corpus = seed_mod._corpus()
-    assert len(corpus) == 40
+    corpus = seed_mod._corpus() + seed_mod._structured()
+    assert len(corpus) == 42
 
     for item in corpus:
         for identifier in item.payload()["identifiers"]:

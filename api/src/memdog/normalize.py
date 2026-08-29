@@ -46,15 +46,25 @@ def extract_path(payload: object, path: str):
 
 
 async def project(
-    pool: asyncpg.Pool,
+    conn,
     *,
     data_id: str,
     project_id: str,
     text: str,
     data_type: str | None,
 ) -> dict | None:
-    """Apply the first matching schema for this project, if any."""
-    schema = await pool.fetchrow(
+    """Apply the first matching schema for this project, if any.
+
+    Takes a **connection, not a pool**, so it runs inside the caller's
+    transaction. That is not a convenience: `normalized_records` references
+    `data_items`, so a projection written on its own connection either races the
+    insert it describes or survives a write that rolled back. Both are wrong in
+    the direction that leaves a projection pointing at nothing.
+
+    Returns `None` when no schema matches, which is the ordinary case -- a
+    project with no registered schema is not normalized, and nothing is written.
+    """
+    schema = await conn.fetchrow(
         """
         SELECT target_type, version, fields, mapping FROM normalization_schemas
         WHERE (project_id = $1 OR project_id IS NULL)
@@ -69,7 +79,7 @@ async def project(
     try:
         payload_in = json.loads(text)
     except ValueError:
-        await _record_failure(pool, data_id, schema, "content is not JSON")
+        await _record_failure(conn, data_id, schema, "content is not JSON")
         return None
 
     mapping = dict(schema["mapping"])
@@ -85,7 +95,7 @@ async def project(
 
     if missing:
         await _record_failure(
-            pool, data_id, schema, f"missing required fields: {', '.join(missing)}"
+            conn, data_id, schema, f"missing required fields: {', '.join(missing)}"
         )
         return None
 
@@ -93,31 +103,47 @@ async def project(
         str(projected[f]) for f in mapping.get("identifier_fields", []) if f in projected
     ]
 
-    async with pool.acquire() as conn, conn.transaction():
-        await conn.execute(
+    await conn.execute(
+        """
+        INSERT INTO normalized_records (data_id, target_type, schema_version,
+                                        payload, identifiers, status)
+        VALUES ($1, $2, $3, $4, $5, 'ok')
+        ON CONFLICT (data_id) DO UPDATE SET target_type = EXCLUDED.target_type,
+            schema_version = EXCLUDED.schema_version, payload = EXCLUDED.payload,
+            identifiers = EXCLUDED.identifiers, status = 'ok', failure_reason = NULL
+        """,
+        data_id, schema["target_type"], schema["version"], projected, identifiers,
+    )
+    # Mirrored onto the item because correlation joins on it, and **merged**
+    # rather than assigned: an identifier the writer supplied is a fact they
+    # know and the projection does not, so a schema that extracts one field must
+    # not silently drop the rest.
+    merged: list[str] = []
+    if identifiers:
+        merged = await conn.fetchval(
             """
-            INSERT INTO normalized_records (data_id, target_type, schema_version,
-                                            payload, identifiers, status)
-            VALUES ($1, $2, $3, $4, $5, 'ok')
-            ON CONFLICT (data_id) DO UPDATE SET target_type = EXCLUDED.target_type,
-                schema_version = EXCLUDED.schema_version, payload = EXCLUDED.payload,
-                identifiers = EXCLUDED.identifiers, status = 'ok', failure_reason = NULL
-            """,
-            data_id, schema["target_type"], schema["version"], projected, identifiers,
-        )
-        # Mirrored onto the item because correlation joins on it.
-        if identifiers:
-            await conn.execute(
-                "UPDATE data_items SET identifiers = $2 WHERE data_id = $1",
-                data_id, identifiers,
+            UPDATE data_items
+            SET identifiers = (
+                SELECT coalesce(array_agg(DISTINCT i), '{}')
+                FROM unnest(identifiers || $2::text[]) AS i
             )
+            WHERE data_id = $1
+            RETURNING identifiers
+            """,
+            data_id, identifiers,
+        ) or []
     return {"target_type": schema["target_type"], "payload": projected,
-            "identifiers": identifiers}
+            "identifiers": identifiers, "merged_identifiers": list(merged)}
 
 
-async def _record_failure(pool, data_id: str, schema, reason: str) -> None:
-    """Raw, with a reason, and retryable. Never a rejected write."""
-    await pool.execute(
+async def _record_failure(conn, data_id: str, schema, reason: str) -> None:
+    """Raw, with a reason, and retryable. Never a rejected write.
+
+    A schema that cannot read one record is not grounds for losing it -- the
+    original is already stored, and the projection is a derived view. So this
+    records why the view is missing and leaves everything else alone.
+    """
+    await conn.execute(
         """
         INSERT INTO normalized_records (data_id, target_type, schema_version, status, failure_reason)
         VALUES ($1, $2, $3, 'failed', $4)

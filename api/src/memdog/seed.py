@@ -41,6 +41,7 @@ someone who was not there when it was seeded.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
@@ -92,11 +93,18 @@ class Item:
     asserts_case: bool = False
     enrich: bool = True
     private: bool = False
+    structured: bool = False
 
     def payload(self) -> dict:
+        # A structured record carries the marker *inside* the payload rather
+        # than prefixed to it -- a marker outside the JSON would stop it being
+        # JSON, and normalization would report a mapping failure that is really
+        # a seeding bug.
+        text = self.text.strip()
         body: dict = {
             "external_id": self.external_id,
-            "content": {"kind": "inline", "text": f"{MARKER}\n\n{self.text.strip()}"},
+            "content": {"kind": "inline",
+                        "text": text if self.structured else f"{MARKER}\n\n{text}"},
             "data_type": self.data_type,
             "source_type": self.source_type,
             "event_time": (REFERENCE - timedelta(days=self.days_ago)).isoformat(),
@@ -591,6 +599,70 @@ in July.""",
     ]
 
 
+# The normalization schema the sales domain ships. A demo that contains only
+# data shows what the product stores; one that contains the configuration which
+# made the data useful shows how to use it, and configuration is the part new
+# users get wrong.
+INVOICE_SCHEMA = {
+    "target_type": "sales_invoice",
+    "fields": {
+        "deal_id": {"required": True},
+        "amount": {"required": True},
+        "period": {"required": False},
+    },
+    "mapping": {
+        "data_type": "invoice_record",
+        "deal_id": "deal.id",
+        "amount": "totals.due",
+        "period": "period.label",
+        # This is the whole point: the deal id is inside the payload, not in the
+        # write request, so correlation depends on the projection running.
+        "identifier_fields": ["deal_id"],
+    },
+}
+
+
+def _structured() -> list[Item]:
+    """Two records that arrive as payloads rather than prose.
+
+    The second is missing `totals.due` and lands raw with a reason. **A demo
+    that only shows success teaches a false expectation** -- the user's own
+    corpus will not look like that, and the gap reads as the product failing
+    rather than as normal. So one record here is deliberately broken, and it is
+    broken the way real ones are: a field the sender did not populate.
+    """
+    # `ensure_ascii=False` is load-bearing: the marker contains an em-dash, and
+    # the default would escape it to \u2014 -- leaving a record that carries the
+    # marker in spirit and does not match a search for it.
+    return [
+        Item(
+            "invoice-record-august",
+            json.dumps({
+                "deal": {"id": DEAL_ID},
+                "totals": {"due": 0, "currency": "USD"},
+                "period": {"label": "August 2026"},
+                "note": MARKER,
+            }, indent=2, ensure_ascii=False),
+            "invoice_record", "billing", 0, ["billing", "structured"],
+            structured=True,
+        ),
+        Item(
+            "invoice-record-september-draft",
+            json.dumps({
+                "deal": {"id": DEAL_ID},
+                # `totals` has not been calculated yet upstream. The projection
+                # cannot complete and says so; the record is stored regardless,
+                # because a mapping that cannot read one payload is not grounds
+                # for losing it.
+                "period": {"label": "September 2026"},
+                "note": MARKER,
+            }, indent=2, ensure_ascii=False),
+            "invoice_record", "billing", 0, ["billing", "structured"],
+            structured=True,
+        ),
+    ]
+
+
 @dataclass(frozen=True)
 class Question:
     """A saved query, and what it must find.
@@ -628,6 +700,7 @@ class Seeded:
     questions_passed: int
     private_item_hidden: bool
     case_members: dict
+    normalization: dict
 
 
 class SeedError(RuntimeError):
@@ -789,7 +862,17 @@ async def seed_demo(pool: asyncpg.Pool, client, *, drain) -> Seeded:
     if created.status_code != 200:
         raise SeedError(f"could not create the case: {created.text[:300]}")
 
-    corpus = _corpus()
+    # Registered before anything is written: a schema applies to writes that
+    # follow it, so registering afterwards would leave the corpus unprojected
+    # and the demo showing an empty normalization table.
+    schema = await client.post(
+        "/api/v1/schemas", headers=admin,
+        json={"project_id": tenant.project_id, **INVOICE_SCHEMA},
+    )
+    if schema.status_code != 200:
+        raise SeedError(f"could not register the schema: {schema.text[:300]}")
+
+    corpus = _corpus() + _structured()
     # The case-asserting record goes first and alone. Everything after it joins
     # the case by identifier rather than by assertion, which is what makes the
     # asserted/inferred split real rather than staged.
@@ -904,6 +987,27 @@ async def _verify(pool, client, tenant, *, member_key, member_id, written) -> Se
 
     case_members = await _case_summary(client, admin_key, project_id)
 
+    # ... and the corpus shows a failure as well as successes. A demo where
+    # everything worked teaches an expectation the user's own corpus will not
+    # meet, and the gap then reads as the product failing rather than as normal.
+    normalization = dict(await pool.fetchrow(
+        """
+        SELECT count(*) FILTER (WHERE n.status = 'ok')::int AS projected,
+               count(*) FILTER (WHERE n.status = 'failed')::int AS failed
+        FROM normalized_records n
+        JOIN data_items d ON d.data_id = n.data_id
+        WHERE d.project_id = $1
+        """,
+        project_id,
+    ))
+    if not normalization["projected"] or not normalization["failed"]:
+        raise SeedError(
+            "the registered schema produced "
+            f"{normalization['projected']} projections and "
+            f"{normalization['failed']} failures; the demo needs both, and a "
+            "zero on either side means normalization is not running"
+        )
+
     return Seeded(
         org_id=tenant.org_id,
         project_id=project_id,
@@ -916,6 +1020,7 @@ async def _verify(pool, client, tenant, *, member_key, member_id, written) -> Se
         questions_passed=passed,
         private_item_hidden=private_hidden,
         case_members=case_members,
+        normalization=normalization,
     )
 
 

@@ -384,6 +384,8 @@ async def _seed(*, reset: bool, demo: bool) -> int:
     print(f"records     {result.written} written, {result.enriched} enriched")
     print(f"case        {result.case_members['asserted']} asserted, "
           f"{result.case_members['inferred']} inferred members")
+    print(f"normalized  {result.normalization['projected']} projected, "
+          f"{result.normalization['failed']} failed with a reason")
     print(f"questions   {result.questions_passed}/{len(QUESTIONS)} answered by the corpus")
     print(f"acl         the private record is hidden from the second member: "
           f"{result.private_item_hidden}")

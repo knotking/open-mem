@@ -25,10 +25,11 @@ from .db import vector_literal
 from .ids import new_id
 from .acl import Acl, strictest
 from .entities import resolve_mentions
+from .cases import route_case
 from .graph import record_edges
 from .extraction import EXTRACT_PURPOSE, Extractor
 from .inference import EmbeddingEngine, generator_version
-from . import quota, usage
+from . import normalize, quota, usage
 from .telemetry import continue_trace, record, span
 from .queue import Message, Queue
 
@@ -519,7 +520,7 @@ class ParseWorker:
         row = await self._pool.fetchrow(
             """
             SELECT storage_ref, mime_type, external_id, content_text,
-                   extracted_text, deleted_at
+                   extracted_text, deleted_at, org_id, project_id, data_type
             FROM data_items WHERE data_id = $1
             """,
             data_id,
@@ -576,6 +577,31 @@ class ParseWorker:
                 detail={"tier": parsed.tier, "structure": parsed.structure,
                         "warnings": parsed.warnings},
             )
+            # Content that arrived as bytes could not be normalized at write
+            # time -- there was no text to project. This is the first moment
+            # there is, so the projection happens here and correlation is run
+            # again with whatever identifiers it found.
+            #
+            # Re-running is safe rather than merely tolerable: `add_case_member`
+            # upserts and never demotes an asserted membership to inferred, so
+            # a second pass adds what the first could not know.
+            projected = await normalize.project(
+                conn,
+                data_id=data_id,
+                project_id=row["project_id"],
+                text=parsed.text,
+                data_type=row["data_type"],
+            )
+            if projected and projected["merged_identifiers"]:
+                await route_case(
+                    conn,
+                    org_id=row["org_id"],
+                    project_id=row["project_id"],
+                    data_id=data_id,
+                    case_type=None,
+                    external_id=None,
+                    identifiers=projected["merged_identifiers"],
+                )
         if self._queue is not None and parsed.text.strip():
             await self._queue.publish("embed", {"data_id": data_id})
 

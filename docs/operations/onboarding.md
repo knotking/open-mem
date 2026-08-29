@@ -193,8 +193,13 @@ incomplete and the demo has just found the bug.
 
 ## What is built
 
-`python -m memdog seed --demo` ships the **sales domain**, forty records about one Acme renewal,
+`python -m memdog seed --demo` ships the **sales domain**, forty-two records about one Acme renewal,
 enriched synchronously, in a few seconds against local engines. `--reset` purges and re-seeds.
+
+It registers a **normalization schema** and writes two structured payloads through it — one that
+projects cleanly and one missing a required field, which lands raw with a reason. That second record
+is deliberate: a demo where everything worked teaches an expectation the user's own corpus will not
+meet, and the gap then reads as the product failing rather than as normal.
 
 **It runs the real path.** The corpus goes in through `POST /api/v1/write` with a registered
 producer, the case is created through `PUT /api/v1/cases`, the questions are asked through
@@ -271,7 +276,6 @@ owned by an org.
 | Deferred | Reason |
 |----------|--------|
 | **`seed --demo --full`** — the other five domains | Clinical, legal, support, telemetry and personal each demonstrate a mechanism the sales domain cannot, but four of those mechanisms — `sensitivity: phi` candidacy, legal hold, the question index, connection-scope ACLs — are only partly built. Seeding a domain to demonstrate something absent produces a demo that lies |
-| **The item that failed normalization** | `normalize.project()` **is never called from the write path** — only `create_schema` and `list_schemas` are wired up. A normalization schema can be registered today and will never be applied, so the failure this record exists to show cannot be produced honestly. This is a real gap in the pipeline, not a gap in the seed |
 | **The item still enriching** | Approximated by three usage exports written with `enrich: false`, which leaves the staircase at two heights in a steady state. A genuinely mid-flight item needs the seed to return before the queue drains, and a seed that returns before it is ready cannot verify itself |
 
 ---
