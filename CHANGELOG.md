@@ -47,18 +47,17 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 - Demo credentials are **generated per deployment and printed once**. A known
   demo user with a known password, present in every install, is a shipped
   default credential.
+- The demo also **registers a normalization schema and writes two structured
+  payloads through it** — one that projects cleanly and one missing a required
+  field, which lands raw with a reason. A demo where everything worked teaches
+  an expectation the user's own corpus will not meet, and the gap then reads as
+  the product failing rather than as normal.
 - The demo ships **one domain rather than the six the design calls for**.
   Clinical, legal, support, telemetry and personal each demonstrate a mechanism
   sales cannot, and four of those mechanisms are only partly built — seeding a
   domain to demonstrate something absent produces a demo that lies. The
   deferrals are listed in [onboarding.md](docs/operations/onboarding.md) rather
   than left to be discovered.
-- Building it surfaced a gap now recorded in the README: **normalization schemas
-  can be registered and are never applied.** `POST /api/v1/schemas` stores one
-  and `normalize.project()` knows how to run it, but nothing on the write path
-  calls it, so `identifiers[]` and `event_time` are whatever the writer sent and
-  never a projection. The seed wanted a deliberately-failed normalization to
-  show that a mapping bug loses nothing, and could not produce one honestly.
 - **Every model call is now metered, and what it cost is recorded rather than
   counted.** One `usage_events` row per inference call, carrying who pays, which
   engine actually answered, and input, output and cached tokens as three
@@ -306,6 +305,24 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   Supermemory's latency, Letta's working context.
 
 ### Fixed
+- **A registered normalization schema was never applied.** `POST /api/v1/schemas`
+  stored one and `normalize.project()` knew how to run it, but nothing on the
+  write path called it — so `normalized_records` stayed empty and `identifiers`
+  was only ever what the writer restated, which for a structured record is
+  nothing: the sender posts a payload, not a list of keys. It now runs on the
+  write path where there is text, and after parse where the text arrives as
+  bytes.
+- **The projection runs before correlation, not after.** The identifier a case
+  joins on lives inside the payload, so projecting second would correlate on
+  nothing — the ordering the previous code would have had, if anything had
+  called it.
+- **Projected identifiers are merged onto the item rather than assigned.** One
+  the writer supplied is a fact they know and the schema does not, so a schema
+  extracting a single field no longer silently drops the rest.
+- `normalize.project()` takes a connection rather than a pool, so it shares the
+  caller's transaction. `normalized_records` references `data_items`: on its own
+  connection a projection either raced the insert it describes or survived a
+  write that rolled back.
 - **Self-hosting was presented as a differentiator**, which
   `docs/competition/README.md` had already researched and rejected: Onyx is
   MIT-licensed, air-gapped and SOC 2 Type II with 40+ connectors, Khoj runs
@@ -335,6 +352,19 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   attempts and are not bounded the same way.
 - `.claude/skills/changelog` and this file.
 
+- A model rate limit surfaced as a `502` carrying the upstream provider URL. It
+  is now a `429` with `Retry-After` — the same shape admission control already
+  uses for a deep queue — and other upstream failures no longer echo the
+  outbound request back to the caller.
+- `/api/v1/runs/{run_id}` already existed for deletion and reprocess runs, so
+  the crawler route registered at the same path was silently shadowed and every
+  crawl-run lookup returned 404. Crawl runs now live at `/api/v1/crawl-runs/`.
+- Two tables were minting the `run_` id prefix, so an id could no longer say
+  which thing it identified. Crawl runs are `crun_`.
+- A link crawl stored stylesheets as records: `text/css` passes a bare `text/`
+  prefix check, so every page's stylesheet was fetched and kept, spending the
+  crawl budget on assets. Asset URLs are now skipped before the fetch and the
+  accepted content types are documents only.
 ### Changed
 - **A new identity no longer becomes a `users` row just for authenticating.**
   `registration_mode` is enforced where the account would be created, not only
@@ -396,21 +426,6 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 - Deleting a crawler keeps the data it wrote and disables its producer rather
   than removing it — the items still point at that producer for provenance.
 - **New dependency**: `jmespath`. `pip install -e .` before deploying.
-
-### Fixed
-- A model rate limit surfaced as a `502` carrying the upstream provider URL. It
-  is now a `429` with `Retry-After` — the same shape admission control already
-  uses for a deep queue — and other upstream failures no longer echo the
-  outbound request back to the caller.
-- `/api/v1/runs/{run_id}` already existed for deletion and reprocess runs, so
-  the crawler route registered at the same path was silently shadowed and every
-  crawl-run lookup returned 404. Crawl runs now live at `/api/v1/crawl-runs/`.
-- Two tables were minting the `run_` id prefix, so an id could no longer say
-  which thing it identified. Crawl runs are `crun_`.
-- A link crawl stored stylesheets as records: `text/css` passes a bare `text/`
-  prefix check, so every page's stylesheet was fetched and kept, spending the
-  crawl budget on assets. Asset URLs are now skipped before the fetch and the
-  accepted content types are documents only.
 
 ### Migrations
 - `0024_invites.sql` — the `invites` table. Run before deploying; the registration

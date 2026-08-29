@@ -149,7 +149,7 @@ rather than believing.
 
 | Path | What is in it |
 |------|---------------|
-| [`api/`](api/README.md) | The service. 52 modules, 97 endpoints, 54 tables across 24 migrations |
+| [`api/`](api/README.md) | The service. 52 modules, 97 endpoints, 54 tables across 25 migrations |
 | [`ui/`](ui/README.md) | The console. Sign-in, ingestion, search, chat, entities, graph, governance |
 | [`docs/`](docs/README.md) | The design, in eleven parts — requirements speak in roles, products appear only in the technology documents |
 | [`docs/graph.md`](docs/graph.md) | Why the graph is not a graph database, and what it costs |

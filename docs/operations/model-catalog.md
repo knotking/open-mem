@@ -344,6 +344,46 @@ review, simply absent from the list of models the system will offer.
 Getting it wrong stops being possible through the normal path, which is a stronger guarantee than
 getting it right being the documented practice.
 
+### What is built
+
+The candidacy half is enforced; the proposal surface is not.
+
+`model_cards.hosting` (`local` | `remote`) is the column the residency rule needs, and it is
+**deliberately not derived from `provider`** — provider is who made the model, hosting is where the
+bytes go, and Ollama is the same adapter against a local process and against Ollama Cloud. A card
+that does not declare it defaults to `remote`, so an operator who did not think about hosting gets
+the answer that costs something rather than the one that leaks something.
+
+Two rules are checked, in `models.candidacy_failure`:
+
+- a **`regulated`** data type is served only by a `local` model
+- **`allowed_providers`**, once non-empty, is exhaustive — the setting register had described it as
+  "enforced rather than suggested" while nothing read it at all
+
+Both are applied at **assignment** (the roadmap's "never a *candidate*") and again at **resolution**,
+because an assignment made before the rules existed would otherwise still route content, and the
+deployment *default* was never checked by anything — so a regulated type with no assignment went
+wherever the deployment happened to point.
+
+Resolution keys on the modality, and sensitivity is a property of the item, so `ParseWorker` checks
+the record's own `data_type` before handing bytes to a model. A clinical note that arrived as a scan
+is a regulated record *and* an ordinary image; checking only the modality sends it to a cloud vision
+model because `image` is standard. A refusal is recorded as `needs_model` with the reason rather
+than raised — the item is stored and readable, it simply has no transcript.
+
+**Existing assignments are reported, not voided.** `GET /api/v1/models` carries a `violations` list.
+Retroactively invalidating what a deployment is already running takes a service down to enforce a
+control it did not know it was breaking.
+
+Not built: the ranked proposal with its exclusions shown, and the hardware-feasibility inputs it
+would rank on. Those are the Phase 6 surface.
+
+> **The vocabulary above does not match this document.** The shipped
+> `data_type_profiles.sensitivity` admits `standard | restricted | regulated`, where this document
+> says `phi | pii | confidential | internal | public`. The code follows the migration because
+> changing the constraint is a migration over existing rows and a decision about how many tiers the
+> product actually needs — worth making deliberately rather than as a side effect.
+
 ### The system proposes; a person assigns
 
 **Derivation never auto-applies.** Same rule as

@@ -616,7 +616,8 @@ class ParseWorker:
         # the setting decorative -- it reported a value that had no effect, and
         # an org could not decline the expensive tier.
         owner = await self._pool.fetchrow(
-            "SELECT org_id, project_id, owner_id FROM data_items WHERE data_id = $1",
+            "SELECT org_id, project_id, owner_id, data_type "
+            "FROM data_items WHERE data_id = $1",
             data_id,
         )
         org_id = owner["org_id"] if owner else None
@@ -649,14 +650,47 @@ class ParseWorker:
         # default applies, which is why most installations never configure this.
         purpose = "transcription" if modality in ("audio", "video") else "vision"
         if org_id and hasattr(engine, "model_for"):
-            from .models import resolve_model
+            from .models import ModelError, candidacy_failure, resolve_model
 
-            assignment = await resolve_model(
-                self._pool, purpose=purpose, data_type=modality,
-                org_id=org_id, default_model=engine.model_for(modality),
-            )
+            try:
+                assignment = await resolve_model(
+                    self._pool, purpose=purpose, data_type=modality,
+                    org_id=org_id, default_model=engine.model_for(modality),
+                )
+            except ModelError as exc:
+                await self._record(
+                    data_id, "needs_model",
+                    {"capability": capability, "reason": str(exc)},
+                )
+                return None
             if assignment.source == "assignment":
                 engine._per_modality[modality] = assignment.model_id
+
+            # Resolution keys on the *modality* -- which model can see an image
+            # -- and sensitivity is a property of the **item**. A clinical note
+            # that arrived as a scan is a regulated record and an ordinary
+            # image, and checking only the modality would send it to a cloud
+            # vision model because `image` is standard.
+            card = await self._pool.fetchrow(
+                "SELECT provider, hosting FROM model_cards WHERE model_id = $1",
+                engine.model_for(modality),
+            )
+            refusal = await candidacy_failure(
+                self._pool, org_id=org_id,
+                data_type=owner["data_type"] or "unknown",
+                model_id=engine.model_for(modality),
+                provider=card["provider"] if card else None,
+                hosting=card["hosting"] if card else None,
+            )
+            if refusal:
+                # Recorded, not raised: the item is stored and readable, it
+                # simply has no transcript. Retrying would send the same bytes
+                # to the same place.
+                await self._record(
+                    data_id, "needs_model",
+                    {"capability": capability, "reason": refusal},
+                )
+                return None
 
         try:
             # Media is the most expensive per-item call the platform makes --
