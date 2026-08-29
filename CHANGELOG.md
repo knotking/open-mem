@@ -195,6 +195,38 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 - `GET /api/v1/capabilities` is unauthenticated because the sign-in page has no
   session. It counts registries only; the route in front of it carries the
   platform identity token and never an API key.
+- **The graph — typed edges and traversal**, in Postgres behind a `GraphStore`
+  seam. `GET /entities/{id}/graph?depth=&predicates=`,
+  `GET /entities/{id}/co-mentions`, `GET /graph/predicates`, and a Connections
+  panel in the console with 1/2/3-hop controls.
+- **Two kinds of connection, not merged.** An *asserted edge* is a claim a
+  document made, carrying the records that assert it and how many — one document
+  saying something is a claim, three saying it independently is closer to a fact.
+  A *co-mention* is two entities named in the same record; it is not stored,
+  because `entity_mentions` already records it and a copy would go stale.
+- Co-mentions **need no model at all**, so the graph is useful the moment
+  entities exist rather than only once extraction has read for relationships —
+  which is the state the system is in whenever the extractor is degraded.
+- Traversal carries the visibility predicate **inside the recursive query**. A
+  path through a record the caller cannot read is never returned, because
+  arriving at its far end would disclose that the record exists. Edges traverse
+  in both directions — which end was written as the subject is a grammatical
+  accident of the sentence.
+- Relations ride the existing extraction pass, so no extra model call. A
+  relation naming an entity the resolver did not produce is **dropped, never
+  guessed at** — inventing an endpoint attaches a real claim to the wrong node.
+  The predicate vocabulary is closed (12 values); `related_to` is the honest
+  escape hatch, because a precise-looking wrong edge is worse than a vague right
+  one.
+- Erasure reaches edges: deleting a record deletes the claims it made, and
+  `entity_edges` is checked by `verify_erasure`.
+- `docs/graph.md` — why this is not a graph database, the vocabulary, visibility
+  rules, erasure, a worked example, and what is not built.
+- The **landing page** gains the graph and a competitor comparison. Every
+  mem-dog cell is verifiable in this repository; every competitor cell describes
+  what that product publicly positions itself on, never what it lacks. It ends
+  with where the others lead — Zep's temporal facts, Mem0's adoption,
+  Supermemory's latency, Letta's working context.
 
 ### Fixed
 - **An artifact produced by a fallback engine was invisible to the reconciler.**
@@ -257,6 +289,7 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   accepted content types are documents only.
 
 ### Migrations
+- `0022_edges.sql` — `entity_edges`.
 - `0021_entities.sql` — `entities`, `entity_mentions`, `entity_merges`.
 - `0019_answers.sql` — adds `queries.answer_access_level` and extends the
   `query_sources.excluded_reason` enumeration. Run before deploying.

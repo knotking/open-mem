@@ -607,3 +607,91 @@ select {
 .compare td:nth-child(2) { color: var(--muted); }
 .compare td:last-child { color: var(--muted); }
 .compare td strong { color: var(--ink); font-weight: 560; }
+
+/* ---------------------------------------------------------------- tabs */
+.topbar { gap: 20px; }
+.tabs { display: flex; gap: 20px; margin-right: auto; }
+.tabs a {
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 13.5px;
+  padding: 4px 0;
+  border-bottom: 1.5px solid transparent;
+  white-space: nowrap;
+}
+.tabs a:hover { color: var(--ink); border-bottom-color: var(--line); }
+.tabs a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 2px; }
+.tab-cta {
+  color: var(--accent);
+  text-decoration: none;
+  font-size: 13.5px;
+  font-weight: 560;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  background: var(--accent-soft);
+  border-radius: 7px;
+  padding: 6px 13px;
+  white-space: nowrap;
+}
+.tab-cta:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Anchored sections must not land under the header. */
+[id] { scroll-margin-top: 24px; }
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
+/* -------------------------------------------------------------- matrix */
+.matrix { border-collapse: collapse; width: 100%; min-width: 900px; font-size: 13px; }
+.matrix th, .matrix td {
+  text-align: left;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+  line-height: 1.45;
+}
+.matrix thead th {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 620;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--ink);
+}
+/* Our column is emphasised by ground, not by a different mark — the marks
+   have to mean the same thing in every column or the table is worthless. */
+.matrix .mine { background: var(--accent-soft); }
+.matrix thead th.mine { color: var(--accent); }
+.matrix tbody th {
+  font-weight: 560;
+  color: var(--ink);
+  width: 190px;
+  min-width: 170px;
+}
+.matrix td { color: var(--muted); min-width: 132px; }
+.rownote { display: block; font-weight: 400; color: var(--muted); font-size: 11.5px; margin-top: 4px; line-height: 1.45; }
+
+/* Shape as well as fill, so the marks survive colourblindness, greyscale
+   printing and forced-colors mode. */
+.mark {
+  display: inline-block;
+  width: 9px; height: 9px;
+  margin-right: 7px;
+  vertical-align: 1px;
+  border-radius: 50%;
+  border: 1.4px solid var(--muted);
+}
+.mark.yes { background: var(--accent); border-color: var(--accent); }
+.mark.part {
+  background: linear-gradient(to right, var(--accent) 0 50%, transparent 50% 100%);
+  border-color: var(--accent);
+}
+.mark.scope { background: transparent; border-style: dotted; }
+.mark.no { background: transparent; border-color: var(--muted); border-radius: 2px; }
+.srmark { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+.legend { display: flex; flex-wrap: wrap; gap: 18px; margin: 14px 0 0; font-size: 12.5px; color: var(--muted); }
+.caveat { font-size: 12.5px; color: var(--muted); max-width: 78ch; margin: 12px 0 0; line-height: 1.55; }
+
+@media (max-width: 760px) {
+  .tabs { display: none; }
+}

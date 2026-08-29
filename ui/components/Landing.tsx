@@ -23,6 +23,13 @@ type Capabilities = {
   media_interpretation: boolean;
 };
 
+const TABS = [
+  { id: "flow", label: "How it works" },
+  { id: "graph", label: "Graph" },
+  { id: "compare", label: "Comparison" },
+  { id: "principles", label: "Principles" },
+];
+
 const STEPS = [
   {
     n: "01",
@@ -116,6 +123,187 @@ const PILLARS = [
     ),
   },
 ];
+
+
+/* Every mem-dog cell is verifiable in this repository. Every other cell
+   reflects what that product publicly documents as of August 2026 — and where
+   something simply is not part of a product's stated scope it is marked so,
+   rather than asserted absent. That distinction is the difference between a
+   comparison and a smear, and it is also the difference between a table that
+   survives a reader who knows the space and one that does not. */
+const COMPETITORS = ["mem-dog", "Mem0", "Zep", "Letta", "Cognee", "Supermemory"];
+
+type Mark = "yes" | "part" | "scope" | "no";
+
+const MATRIX: { row: string; note?: string; cells: [Mark, string][] }[] = [
+  {
+    row: "What it is",
+    cells: [
+      ["yes", "Memory platform with an audit trail"],
+      ["yes", "Memory layer you bolt onto an agent"],
+      ["yes", "Temporal graph built from conversation"],
+      ["yes", "Runtime where the agent is its memory"],
+      ["yes", "Graph built from everything else"],
+      ["yes", "Memory plus RAG over user context"],
+    ],
+  },
+  {
+    row: "Runs on your infrastructure",
+    note: "Zep retired its self-hosted Community Edition in 2025; Graphiti remains Apache-2.0 but self-hosting means owning Neo4j.",
+    cells: [
+      ["yes", "Your own cloud project"],
+      ["yes", "Apache-2.0, needs a vector store"],
+      ["part", "Graphiti only, Neo4j burden"],
+      ["yes", "Apache-2.0"],
+      ["yes", "Apache-2.0, embedded stores"],
+      ["scope", "Managed service"],
+    ],
+  },
+  {
+    row: "Knowledge graph",
+    cells: [
+      ["yes", "Typed edges, evidence per edge"],
+      ["part", "Graph memory available"],
+      ["yes", "Graphiti, graph-native"],
+      ["scope", "Not the model"],
+      ["yes", "Graph-native"],
+      ["scope", "Not emphasised"],
+    ],
+  },
+  {
+    row: "Point-in-time facts",
+    note: "The sharpest divider in the category, and the one place mem-dog is plainly behind.",
+    cells: [
+      ["no", "No validity interval modelled"],
+      ["part", "Timestamps, no past state"],
+      ["yes", "Bi-temporal validity windows"],
+      ["scope", "Not the model"],
+      ["part", "Graph-native, time not a strategy"],
+      ["scope", "Not emphasised"],
+    ],
+  },
+  {
+    row: "Correct a wrong merge",
+    cells: [
+      ["yes", "Reversible, evidence retained"],
+      ["scope", "Not documented"],
+      ["yes", "Merge and cleanup tools"],
+      ["part", "Edit core memory by hand"],
+      ["yes", "Merge and cleanup tools"],
+      ["scope", "Not documented"],
+    ],
+  },
+  {
+    row: "Why a result was excluded",
+    note: "Ranked results are common. Reporting what was considered and dropped, with the reason, is not.",
+    cells: [
+      ["yes", "Per record: threshold, or not yet searchable"],
+      ["scope", "Not documented"],
+      ["scope", "Not documented"],
+      ["scope", "Not documented"],
+      ["scope", "Not documented"],
+      ["scope", "Not documented"],
+    ],
+  },
+  {
+    row: "Access control",
+    cells: [
+      ["yes", "Predicate inside the query"],
+      ["part", "Per-user scoping"],
+      ["part", "Per-user scoping"],
+      ["part", "Per-agent"],
+      ["scope", "Not documented"],
+      ["part", "Per-user scoping"],
+    ],
+  },
+  {
+    row: "Erasure you can evidence",
+    cells: [
+      ["yes", "Async purge, then a re-queried certificate"],
+      ["part", "Delete APIs"],
+      ["part", "Delete APIs"],
+      ["part", "Delete APIs"],
+      ["part", "Delete APIs"],
+      ["part", "Delete APIs"],
+    ],
+  },
+  {
+    row: "Provenance on derived rows",
+    note: "Which model, which build, and a fingerprint of prompt + model + schema + parser, so a changed default makes old output detectably stale.",
+    cells: [
+      ["yes", "On every artifact and vector"],
+      ["scope", "Not documented"],
+      ["scope", "Not documented"],
+      ["scope", "Not documented"],
+      ["scope", "Not documented"],
+      ["scope", "Not documented"],
+    ],
+  },
+  {
+    row: "Ingestion breadth",
+    cells: [
+      ["yes", "54 formats, audio and video transcribed"],
+      ["part", "Text and messages"],
+      ["part", "Conversation"],
+      ["part", "Conversation"],
+      ["yes", "Documents and structured data"],
+      ["part", "Documents and text"],
+    ],
+  },
+  {
+    row: "Adoption",
+    note: "Where mem-dog is furthest behind, and by a very long way.",
+    cells: [
+      ["no", "Prototype. No users"],
+      ["yes", "~48k stars, 186M calls a quarter"],
+      ["yes", "Widely deployed"],
+      ["yes", "Large community"],
+      ["part", "Growing"],
+      ["part", "Growing"],
+    ],
+  },
+];
+
+const MARK_LABEL: Record<Mark, string> = {
+  yes: "yes",
+  part: "partial",
+  scope: "not a stated focus",
+  no: "no",
+};
+
+function Matrix() {
+  return (
+    <div className="scroll">
+      <table className="matrix">
+        <thead>
+          <tr>
+            <th>Dimension</th>
+            {COMPETITORS.map((c) => (
+              <th key={c} className={c === "mem-dog" ? "mine" : undefined}>{c}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {MATRIX.map((row) => (
+            <tr key={row.row}>
+              <th scope="row">
+                {row.row}
+                {row.note && <span className="rownote">{row.note}</span>}
+              </th>
+              {row.cells.map(([mark, text], i) => (
+                <td key={COMPETITORS[i]} className={COMPETITORS[i] === "mem-dog" ? "mine" : undefined}>
+                  <span className={`mark ${mark}`} aria-hidden="true" />
+                  <span className="srmark">{MARK_LABEL[mark]}: </span>
+                  {text}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
 
 function GraphFigure() {
   return (
@@ -273,8 +461,14 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
           <span className="dot" aria-hidden="true" />
           mem-dog
         </div>
+        <nav className="tabs" aria-label="Sections">
+          {TABS.map((tab) => (
+            <a key={tab.id} href={`#${tab.id}`}>{tab.label}</a>
+          ))}
+        </nav>
         <div className="row">
           <ThemeToggle />
+          <a className="tab-cta" href="#signin">Sign in</a>
         </div>
       </header>
 
@@ -308,7 +502,7 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
         </div>
 
         {authEnabled ? (
-          <form className="signin-card" onSubmit={submit}>
+          <form className="signin-card" id="signin" onSubmit={submit}>
             <h2>Sign in</h2>
             <p className="empty" style={{ marginTop: 0 }}>
               Opens the console: add data, search it, and inspect every step.
@@ -343,7 +537,7 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
             </p>
           </form>
         ) : (
-          <div className="signin-card">
+          <div className="signin-card" id="signin">
             <h2>Sign-in is not configured</h2>
             <p className="empty">
               This deployment has no identity provider set, so the console cannot be opened from a
@@ -355,7 +549,7 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
 
       <Pipeline />
 
-      <section className="steps">
+      <section className="steps" id="flow">
         <h2 className="section-title">How a record moves</h2>
         <div className="steps-grid">
           {STEPS.map((step) => (
@@ -368,7 +562,7 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
         </div>
       </section>
 
-      <section className="steps">
+      <section className="steps" id="graph">
         <h2 className="section-title">It knows what connects to what</h2>
         <p className="hero-lede" style={{ marginBottom: 22 }}>
           Records name people, organizations and places. Those resolve into entities — cautiously,
@@ -411,7 +605,7 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
         </div>
       </section>
 
-      <section className="steps">
+      <section className="steps" id="principles">
         <h2 className="section-title">What it holds itself to</h2>
         <div className="pillars-grid">
           {PILLARS.map((pillar) => (
@@ -423,7 +617,7 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
         </div>
       </section>
 
-      <section className="steps">
+      <section className="steps" id="compare">
         <h2 className="section-title">Where this sits</h2>
         <p className="hero-lede" style={{ marginBottom: 8 }}>
           Agent memory is a crowded category — Mem0, Zep, Letta, Supermemory and a steady stream of
@@ -437,69 +631,20 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
           across a team, or subject to erasure requests.
         </p>
 
-        <div className="scroll">
-          <table className="compare">
-            <thead>
-              <tr>
-                <th>Dimension</th>
-                <th>Common approach</th>
-                <th>mem-dog</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>Why did I get this result?</td>
-                <td>Ranked results</td>
-                <td><strong>Ranked results, plus what was considered and dropped — with the
-                reason.</strong> &ldquo;Missing something I know is there&rdquo; has several causes
-                and they need different fixes</td>
-              </tr>
-              <tr>
-                <td>Access control</td>
-                <td>Filter or namespace per user</td>
-                <td><strong>A predicate inside the retrieval query.</strong> Asking for ten and
-                hiding three is a different and worse thing than returning the right ten</td>
-              </tr>
-              <tr>
-                <td>Deletion</td>
-                <td>Delete the record</td>
-                <td><strong>Tombstone, async reclamation of chunks, vectors, blobs, artifacts,
-                mentions and edges — then a certificate re-queried from every table</strong></td>
-              </tr>
-              <tr>
-                <td>Provenance</td>
-                <td>Store the memory</td>
-                <td><strong>Every derived row records the model, the build that answered, and a
-                fingerprint of prompt + model + schema + parser.</strong> Nothing is mutated in
-                place</td>
-              </tr>
-              <tr>
-                <td>Readiness</td>
-                <td>Written or not</td>
-                <td><strong>stored → searchable → enriched, visible on every read.</strong>
-                &ldquo;I uploaded it and search cannot find it&rdquo; is a state, not a bug</td>
-              </tr>
-              <tr>
-                <td>Graph edges</td>
-                <td>Extracted relationships</td>
-                <td><strong>Every edge names the records asserting it, and how many.</strong> Plus
-                co-mentions, which need no model at all</td>
-              </tr>
-              <tr>
-                <td>Ingestion</td>
-                <td>Text and chat turns</td>
-                <td><strong>54 file formats</strong> — documents, spreadsheets, calendars, email,
-                archives, geospatial, code; audio and video transcribed, images described</td>
-              </tr>
-              <tr>
-                <td>Where it runs</td>
-                <td>Managed SaaS</td>
-                <td><strong>Your own cloud project.</strong> Postgres, object storage, serverless
-                — no data leaves your network</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
+        <Matrix />
+
+        <p className="legend">
+          <span><span className="mark yes" aria-hidden="true" /> yes</span>
+          <span><span className="mark part" aria-hidden="true" /> partial</span>
+          <span><span className="mark scope" aria-hidden="true" /> not a stated focus</span>
+          <span><span className="mark no" aria-hidden="true" /> no</span>
+        </p>
+        <p className="caveat">
+          Every mem-dog cell is verifiable in this repository. Every other cell reflects what that
+          product publicly documents as of August&nbsp;2026 — and where something is simply not part
+          of a product&rsquo;s stated scope it is marked so, rather than asserted absent. Those are
+          different claims, and only one of them is defensible.
+        </p>
 
         <h3 style={{ marginTop: 30 }}>Where the others are ahead</h3>
         <p className="hero-lede" style={{ marginBottom: 0 }}>
