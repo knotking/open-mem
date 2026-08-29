@@ -272,7 +272,12 @@ async def write(
 ) -> JSONResponse:
     state = request.app.state
     cost = quota.estimate_write(
-        items=len(body.items), enrich=bool(body.options.enrich)
+        # `None` means the project's setting decides, which this cannot know
+        # without a lookup it should not do on the hot path. Unspecified is
+        # charged as expensive: for a burst limiter the conservative direction
+        # is to assume the costly case, and under-charging is how a retry loop
+        # gets through.
+        items=len(body.items), enrich=body.options.enrich is not False,
     )
     try:
         async with admitted(request, actor, cost):

@@ -68,8 +68,13 @@ REGISTER: dict[str, Definition] = {
         "Genuinely external sharing. Off by default; some orgs never enable it.",
     ),
     "enrich_by_default": Definition(
-        "enrich_by_default", True, ("platform", "org", "project", "user"), False,
-        "Whether writes enqueue enrichment unless told otherwise.",
+        # Was declared `True` and read by nothing, so the shipped behaviour was
+        # the contract's `False` and the register described a system that did
+        # not exist. Corrected to match what actually happens rather than
+        # switching every deployment's spending on to match the document.
+        "enrich_by_default", False, ("platform", "org", "project", "user"), False,
+        "Whether a write enqueues enrichment when it does not say either way. "
+        "Off, because enrichment is the part that costs money.",
     ),
     "registration_mode": Definition(
         # Closed by default, and that is the whole point. Shipping `open` and

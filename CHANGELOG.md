@@ -314,6 +314,30 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   Supermemory's latency, Letta's working context.
 
 ### Fixed
+- **A regulated record was still summarised by whatever the deployment
+  configured.** The candidacy rules below gated model *assignment* and the image
+  path; enrichment consulted none of them, and enrichment is where the whole
+  corpus goes. A `clinical_note` was sent to the deployment's extractor — a
+  cloud provider in the shipped configuration.
+- A regulated record now **narrows the extraction chain to its locally-hosted
+  steps** rather than being refused. The floor is a local extractor, so the
+  record still gets a title and a summary and simply never reaches an engine
+  that would have received its text — the same reasoning the chain already uses
+  for availability, applied to legality. Where no step survives, the record is
+  left unenriched and an `enrichment.refused` event says why.
+- The narrowed extractor carries **its own `generator_version`**. Reusing the
+  primary's would attribute a locally-produced envelope to the model that was
+  refused, which is the staleness-invisibility defect a fallback artifact
+  carrying the primary's fingerprint already caused once.
+- **Six metrics were emitted and never registered, so every measurement was
+  dropped.** `record()` returns quietly for a name it does not know — right at
+  the call site, wrong across a release, because a counter that silently goes
+  nowhere is indistinguishable from one that is genuinely always zero, and
+  always-zero is what an operator reads as *good*. The four `usage.*` counters
+  shipped with the meter, `enrich_refused` shipped with this change, and
+  `entity_mentions` had been dark for longer. A test now walks every `record()`
+  call in the package and fails on any name the registry does not carry.
+
 - **A regulated data type could be assigned to a cloud model.**
   `data_type_profiles.sensitivity` shipped with the catalog, carrying its own
   comment that a clinical or legal type must not be routed to an unapproved

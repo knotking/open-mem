@@ -120,6 +120,10 @@ Stated as plainly as the rest, because a README that only lists strengths is not
 - **Model spend is not attributable to a crawl run or a reprocess job.** `usage_events` has the
   column; nothing populates it, because a stored item carries no reference to the run that fetched
   it. So a dry-run's estimate still cannot be checked against what the run actually cost
+- **Eight schema columns are declared and wired to nothing** — `memory_links` end to end, the
+  model-proposal inputs, and an `allow_public_sharing` flag superseded by the setting that actually
+  gates it. They are listed with reasons in `tests/test_wiring.py`, which fails if one is quietly
+  added to that list or quietly removed from the schema
 - **No OAuth connections**, so Gmail, Drive and Calendar are unreachable — and with them the crawler
   strategies that walk a folder or enumerate an object
 - **No point-in-time facts.** Edges have no validity interval, so *"who worked there in 2024"* is

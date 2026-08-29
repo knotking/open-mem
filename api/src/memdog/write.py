@@ -41,6 +41,7 @@ from .events import emit, emit_audited
 from .ids import new_id
 from . import normalize
 from .cases import route_case
+from .settings_store import resolve as resolve_setting
 from .memories import route_write
 from .workers import record_version
 from .queue import Queue
@@ -205,6 +206,17 @@ async def _write(pool, queue, blobs, settings, principal, request, idempotency_k
             )
             return response
 
+        # Resolved once for the batch, not per item: it is a property of the
+        # project, and a settings lookup per item would be five hundred queries
+        # to answer the same question.
+        enrich = request.options.enrich
+        if enrich is None:
+            enrich = bool((await resolve_setting(
+                pool, "enrich_by_default",
+                org_id=producer.org_id, project_id=producer.project_id,
+                user_id=principal.user_id,
+            )).value)
+
         results: list[WriteResult] = []
         for index, item in enumerate(request.items):
             try:
@@ -215,7 +227,8 @@ async def _write(pool, queue, blobs, settings, principal, request, idempotency_k
                     (
                         data_id, created, downloaded, has_text, memories, case_ids, events
                     ) = await _write_one(
-                        conn, blobs, principal, producer, item, request.options
+                        conn, blobs, principal, producer, item, request.options,
+                        enrich,
                     )
                 results.append(
                     WriteResult(
@@ -275,6 +288,7 @@ async def _write_one(
     producer: ProducerRow,
     item: WriteItem,
     options: "WriteOptions",
+    enrich: bool,
 ) -> tuple[str, bool, bool, bool, list[str], list[str], list[str]]:
     content = item.content
     data_id = new_id("data")
@@ -495,7 +509,7 @@ async def _write_one(
         )
         events.append(fetch_event)
 
-    if options.enrich:
+    if enrich:
         events.append(await emit_audited(
             conn, principal,
             event_type="enrichment.requested",

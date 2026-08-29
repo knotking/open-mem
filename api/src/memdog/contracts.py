@@ -127,10 +127,16 @@ class EnrichmentOptions(BaseModel):
 
 
 class WriteOptions(BaseModel):
-    # OFF by default. Recording data is cheap and synchronous; anything that
-    # spends money is opt-in, and a default that quietly bills people is the
-    # wrong default however convenient it looks in a demo.
-    enrich: bool = False
+    # `None` means "whatever the project decided", which is what the
+    # `enrich_by_default` setting exists to say -- and which nothing consulted,
+    # so a project that turned it on got silence. An explicit `true` or `false`
+    # still wins, because a per-request option is the most specific level of the
+    # settings chain.
+    #
+    # The resolved default is OFF. Recording data is cheap and synchronous;
+    # anything that spends money is opt-in, and a default that quietly bills
+    # people is the wrong default however convenient it looks in a demo.
+    enrich: bool | None = None
     enrichment: EnrichmentOptions = Field(default_factory=EnrichmentOptions)
     priority: Literal["live", "batch"] = "live"
 

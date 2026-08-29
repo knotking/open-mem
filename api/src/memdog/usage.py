@@ -116,10 +116,6 @@ def attributed(attribution: Attribution | None = None, **overrides):
         _attribution.reset(token)
 
 
-def current_attribution() -> Attribution | None:
-    return _attribution.get()
-
-
 @dataclass
 class _Attempt:
     purpose: str

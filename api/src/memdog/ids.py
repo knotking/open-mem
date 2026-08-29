@@ -32,15 +32,6 @@ def ulid(now_ms: int | None = None) -> str:
     return _encode(ms, 10) + _encode(rand, 16)
 
 
-def timestamp_ms(value: str) -> int:
-    """Recover creation time from the first 10 characters."""
-    body = value.split("_")[-1]
-    ms = 0
-    for char in body[:10]:
-        ms = (ms << 5) | _DECODE[char.upper()]
-    return ms
-
-
 def new_id(prefix: str) -> str:
     """`data_01JQRS...` -- the prefix names the type, the body carries the time."""
     return f"{prefix}_{ulid()}"

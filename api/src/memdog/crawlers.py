@@ -720,10 +720,3 @@ def next_watermark(config: CrawlerConfig, found: list[Discovered],
     return max(highest, current) if current else highest
 
 
-def due_after(schedule: dict, from_time: datetime) -> datetime | None:
-    kind = schedule.get("type", "manual")
-    if kind == "interval":
-        return from_time + timedelta(seconds=int(schedule.get("every_seconds", 3600)))
-    if kind == "once":
-        return None
-    return None

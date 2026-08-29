@@ -191,6 +191,16 @@ async def _reconcile(grace: int) -> None:
     )
     print(f"re-enqueued: parse={swept.parse} embed={swept.embed} "
           f"enrich={swept.enrich} events={swept.events}")
+
+    # Retention, on the sweep that already runs on a schedule. `purge_events`
+    # existed, was tested, and was called by nothing -- so the raw table grew
+    # without limit while the retention story read as implemented.
+    if settings.usage_retention_days:
+        dropped = await usage.purge_events(
+            pool, older_than_days=settings.usage_retention_days
+        )
+        print(f"usage events purged: {dropped} "
+              f"(older than {settings.usage_retention_days} days)")
     if swept.total:
         await queue.drain(timeout=600)
     await queue.close()
