@@ -1,0 +1,156 @@
+# mem-dog
+
+**A memory layer that can show its work.**
+
+Write anything — documents, spreadsheets, calendars, email, audio, video — and get it back by
+meaning, with a trace of exactly why each result was returned and what was considered and dropped.
+
+Most memory systems answer *what do you remember?* This one also answers **why did you say that,
+which model produced it, who is allowed to see it, and can you prove you deleted it.**
+
+```
+54 file formats   ·   24 data types   ·   18 extraction prompts
+9 webhook providers   ·   3 crawler strategies   ·   12 graph predicates
+344 tests, against a real database, no mocks
+```
+
+Every number above is counted from the build at request time, not written into this file. The
+sign-in page reads them from `GET /api/v1/capabilities`.
+
+---
+
+## Run it
+
+```bash
+cd api
+docker compose up -d                        # Postgres 16 + pgvector on :54329
+uv venv --python 3.12 .venv && uv pip install -e ".[dev]"
+.venv/bin/python -m pytest                  # real database, no mocks
+.venv/bin/python -m memdog bootstrap        # prints an org, project, producer and key
+.venv/bin/uvicorn memdog.app:app --port 8200
+```
+
+```bash
+cd ui && npm install && npm run build
+MEMDOG_API_URL=http://localhost:8200 MEMDOG_API_KEY=... \
+MEMDOG_PROJECT_ID=prj_... MEMDOG_PRODUCER_ID=key_... npm start
+```
+
+No cloud account is needed to run the whole thing locally. The embedding engine, extractor and blob
+store all have offline implementations, and they are registered models rather than mocks — their
+rows carry a `model_id`, so the day a real engine is assigned the old ones are identifiable and
+re-embeddable rather than quietly mixed in.
+
+---
+
+## The shape
+
+```
+producers ──▶ POST /api/v1/write ──▶ stored ┄▶ searchable ┄▶ enriched
+                                       │
+                                       └┄▶ parse → embed → enrich → entities → edges
+```
+
+**Solid is synchronous, dashed is not.** The write commits before it returns; everything after it
+happens behind the request. That asymmetry is why ingest latency is a database write rather than a
+model call, and why the pipeline being down delays enrichment without losing data.
+
+Those three states are visible on every read, so *"I uploaded it and search cannot find it"* is a
+state you can look at rather than a bug report.
+
+---
+
+## What it does
+
+| | |
+|---|---|
+| **One write path** | Webhook, crawler, upload, SDK — all through `POST /api/v1/write`. A crawled record and a webhook-delivered one are indistinguishable downstream |
+| **Broad ingestion** | 54 formats. Audio and video transcribed, images described. The handler is chosen from sniffed bytes, never the caller's claim about them |
+| **Semantic retrieval** | Vector and lexical arms fused in one query, with asymmetric document/query embedding — a question finds the passage answering it in different words |
+| **Answers with evidence** | Every claim cites a passage, the passages ship with the answer, and an unsupported question is refused rather than filled in |
+| **A knowledge graph** | Entities resolved cautiously, typed edges carrying the records that assert them, plus co-mentions that need no model at all |
+| **Inbound webhooks** | 9 providers, each signing a different string over a different encoding |
+| **Crawlers** | Templated HTTP, feeds and bounded link traversal, with a mandatory dry run |
+| **Deletion that completes** | Four blast radii, async reclamation, and a certificate re-queried from every table that could hold a trace |
+
+---
+
+## The four commitments
+
+Everything above is a feature. These are the reasons to choose it.
+
+**Retrieval reports what it excluded, and why.** Ranked results are ordinary. Returning the records
+that were *considered and dropped* — below the threshold, or not searchable yet — is not.
+*"Missing something I know is in there"* has several causes and they need different fixes.
+
+**The access rule is a predicate inside the query.** Never a filter over results. Asking for ten and
+hiding three is a different and worse thing than returning the right ten — and it leaks: reporting
+that three were hidden discloses that they exist. The same predicate serves search, chat and graph
+traversal, so there is one place for it to be wrong instead of three.
+
+**Every derived row carries its provenance.** The model, the build that answered, and a fingerprint
+of prompt + model + schema + parser + chunker. Nothing is mutated in place, so *"why does this say
+something different than last week?"* has an answer, and changing a default makes everything it
+produced detectably stale without anyone remembering to bump a number.
+
+**Rows are the record of work; the queue only delivers.** A durable event log with a reconciler in
+front of it. Every scale-to-zero recovery in this system falls out of that one decision.
+
+---
+
+## What is not built
+
+Stated as plainly as the rest, because a README that only lists strengths is not read as confident.
+
+- **No rate limiting, quota or token budget.** There is a public write endpoint and crawlers that
+  discover unattended. This is the gap where the risk is external rather than a quality ceiling
+- **No OAuth connections**, so Gmail, Drive and Calendar are unreachable — and with them the crawler
+  strategies that walk a folder or enumerate an object
+- **No point-in-time facts.** Edges have no validity interval, so *"who worked there in 2024"* is
+  unanswerable. [Zep](https://www.getzep.com) does this natively and this does not
+- **The graph is browsable, not yet an input to retrieval or chat**
+- **No bulk write verb or idempotency key**, so external ETL pays a round trip per record
+- **No users.** This is a prototype. [Mem0](https://mem0.ai) processes more API calls in a quarter
+  than this has served in its life
+
+---
+
+## Where it sits
+
+The agent-memory category — Mem0, Zep, Letta, Cognee, Supermemory — mostly optimises for adoption,
+latency and time-to-first-memory. This optimises for whether you can prove what the system knew.
+
+**Self-hosting is not the differentiator**, despite being the obvious thing to claim. Onyx is
+MIT-licensed, air-gapped, SOC 2 Type II, and ships 40+ connectors; Khoj runs entirely on local
+models. Private deployment is table stakes in this category, and
+[the competitive research](docs/competition/README.md) says so at length.
+
+The differentiator is the four commitments above, and they are unusual enough to be worth checking
+rather than believing.
+
+---
+
+## The repository
+
+| Path | What is in it |
+|------|---------------|
+| [`api/`](api/README.md) | The service. 48 modules, 92 endpoints, 51 tables across 22 migrations |
+| [`ui/`](ui/README.md) | The console. Sign-in, ingestion, search, chat, entities, graph, governance |
+| [`docs/`](docs/README.md) | The design, in eleven parts — requirements speak in roles, products appear only in the technology documents |
+| [`docs/graph.md`](docs/graph.md) | Why the graph is not a graph database, and what it costs |
+| [`TBD.md`](TBD.md) | Twelve decisions designed but not decided, ordered by how expensive each becomes if made late |
+| [`CHANGELOG.md`](CHANGELOG.md) | What changed and why, one entry per commit that altered behaviour |
+
+---
+
+## The thing that surprised us
+
+Nearly every defect found while building this was **silent**. The request succeeded, the response
+looked right, and the result was quietly wrong: a proxy that failed *open* and promoted signed-in
+users to org owner; a reconcile job that re-embedded with the old model and concluded nothing was
+stale; a rate limit that consumed a retry budget so a re-embed reported success having embedded
+almost nothing.
+
+None of those had an error to notice. That is most of why this system reports its trace, its
+provenance and its exclusions — not because auditors ask for it, but because it is the only way to
+see the bugs that do not announce themselves.

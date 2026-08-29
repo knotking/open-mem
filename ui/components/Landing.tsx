@@ -149,7 +149,7 @@ const MATRIX: { row: string; note?: string; cells: [Mark, string][] }[] = [
   },
   {
     row: "Runs on your infrastructure",
-    note: "Zep retired its self-hosted Community Edition in 2025; Graphiti remains Apache-2.0 but self-hosting means owning Neo4j.",
+    note: "Table stakes, not a moat — Onyx is MIT and air-gapped with SOC 2, Khoj runs fully local. Listed for completeness, not as an advantage. Zep retired its self-hosted Community Edition in 2025.",
     cells: [
       ["yes", "Your own cloud project"],
       ["yes", "Apache-2.0, needs a vector store"],
@@ -629,6 +629,12 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
           why it answered that, and that you actually deleted it?</strong> That is a worse trade if
           you are shipping a chatbot this week, and the right one if the data is regulated, shared
           across a team, or subject to erasure requests.
+        </p>
+        <p className="hero-lede" style={{ marginBottom: 26 }}>
+          One thing this deliberately does <em>not</em> claim: self-hosting is not a
+          differentiator. Onyx is MIT-licensed, air-gapped and SOC&nbsp;2 Type&nbsp;II with 40+
+          connectors; Khoj runs entirely on local models. Private deployment is table stakes here,
+          and treating it as a moat is the most common way this category oversells itself.
         </p>
 
         <Matrix />
