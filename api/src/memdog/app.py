@@ -2066,6 +2066,79 @@ async def get_usage(
     }
 
 
+
+@app.post("/api/v1/mcp")
+@app.post("/api/v1/mcp/sse")
+async def mcp_endpoint(
+    request: Request, actor: Principal = Depends(principal)
+) -> Response:
+    """The MCP surface, authenticated exactly like everything else.
+
+    Two paths for one handler: `/mcp` is what the streamable transport calls,
+    and `/mcp/sse` exists because that is the path the requirement names and a
+    configuration written against it should resolve rather than 404.
+
+    Stateless by design -- see `mcp.py` for why a session-bearing transport and
+    a service that scales to zero do not combine.
+    """
+    from . import mcp as mcp_mod
+
+    try:
+        message = await request.json()
+    except ValueError:
+        return JSONResponse(
+            status_code=400,
+            content={"jsonrpc": "2.0", "id": None,
+                     "error": {"code": mcp_mod.PARSE_ERROR,
+                               "message": "invalid JSON"}},
+        )
+
+    # A batch is a list. Notifications inside it produce nothing, so a batch of
+    # only notifications correctly answers with no body at all.
+    batch = isinstance(message, list)
+    messages = message if batch else [message]
+    replies = []
+    for one in messages:
+        reply = await mcp_mod.dispatch(request.app.state, actor, one)
+        if reply is not None:
+            replies.append(reply)
+
+    if not replies:
+        return Response(status_code=202)
+
+    payload = replies if batch else replies[0]
+    if "text/event-stream" in (request.headers.get("accept") or ""):
+        return Response(
+            content=mcp_mod.as_sse(payload),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache"},
+        )
+    return JSONResponse(content=payload)
+
+
+@app.get("/api/v1/mcp")
+@app.get("/api/v1/mcp/sse")
+async def mcp_manifest(request: Request) -> dict:
+    """What this server is, for a human pointing a client at it.
+
+    Unauthenticated on purpose: it names the transport and the tools and
+    discloses nothing about anyone's data. Someone configuring a client needs to
+    know the URL works before they have a credential in it.
+    """
+    from . import mcp as mcp_mod
+
+    return {
+        "protocolVersion": mcp_mod.PROTOCOL_VERSION,
+        "serverInfo": mcp_mod.SERVER_INFO,
+        "transport": "streamable-http",
+        "endpoint": str(request.url_for("mcp_endpoint")),
+        "authentication": "Authorization: Bearer <api key>",
+        "tools": [
+            {"name": t["name"], "description": t["description"]} for t in mcp_mod.TOOLS
+        ],
+    }
+
+
 @app.post("/api/v1/retrieve", response_model=RetrieveResponse)
 async def retrieve_endpoint(
     request: Request, body: RetrieveRequest, actor: Principal = Depends(principal)

@@ -232,6 +232,19 @@ table.kv { width: 100%; border-collapse: collapse; font-size: 13px; }
 table.kv td { padding: 4px 0; vertical-align: top; }
 table.kv td:first-child { color: var(--muted); width: 150px; }
 code { font-family: var(--mono); font-size: 12.5px; }
+/* A block someone is going to copy into a config file. Scrolls on its own so a
+   long URL cannot make the page scroll sideways. */
+pre.code {
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.55;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin: 12px 0 0;
+  overflow-x: auto;
+}
 
 /* capture */
 .filebtn {

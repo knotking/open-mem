@@ -115,6 +115,24 @@ front of it. Every scale-to-zero recovery in this system falls out of that one d
 
 ---
 
+## Use it from Claude
+
+An MCP server at `/api/v1/mcp` exposes the corpus as eight tools — search, chat, add, get, list,
+delete, entities, memories. Point Claude Desktop or Cursor at it with an ordinary API key:
+
+```json
+{"mcpServers": {"mem-dog": {"url": "https://<host>/api/v1/mcp",
+                            "headers": {"Authorization": "Bearer <key>"}}}}
+```
+
+Each tool calls the same function its REST endpoint calls, so the credential check and the ACL
+predicate are the ones that already exist — a record your key cannot fetch over HTTP is one it
+cannot reach through a tool. The transport is streamable HTTP rather than the older
+session-bearing SSE, because this service scales to zero and a stream and its posts would not
+reliably land on the same instance.
+
+---
+
 ## What is not built
 
 Stated as plainly as the rest, because a README that only lists strengths is not read as confident.

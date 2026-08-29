@@ -32,7 +32,7 @@ import {
 
 type Section =
   | "overview"
-  | "add" | "update" | "search" | "ask" | "inbound" | "crawlers"
+  | "add" | "update" | "search" | "ask" | "inbound" | "crawlers" | "mcp"
   | "memory" | "cases" | "entities"
   | "audit" | "sharing" | "deletion"
   | "settings" | "models" | "prompts"
@@ -81,6 +81,7 @@ const GROUPS: { title: string; items: { key: Section; label: string; hint: strin
       { key: "settings", label: "Settings", hint: "precedence and locks" },
       { key: "models", label: "Models", hint: "assignment per purpose" },
       { key: "prompts", label: "Prompts", hint: "per data type, test first" },
+      { key: "mcp", label: "MCP", hint: "use this corpus from Claude" },
     ],
   },
   {
@@ -235,6 +236,7 @@ export default function Console({
         {section === "settings" && <SettingsSection projectId={projectId} />}
         {section === "models" && <ModelsSection />}
         {section === "prompts" && <PromptsSection projectId={projectId} />}
+        {section === "mcp" && <McpSection projectId={projectId} />}
         {section === "projects" && <ProjectsSection />}
         {section === "keys" && <KeysSection />}
         {section === "producers" && <ProducersSection />}
@@ -2824,6 +2826,128 @@ function ModelsSection() {
             </p>
           </section>
         </>
+      )}
+    </>
+  );
+}
+
+/* --------------------------------------------------------------- MCP */
+
+type McpTool = { name: string; description: string };
+type McpManifest = {
+  protocolVersion: string;
+  serverInfo: { name: string; version: string };
+  transport: string;
+  endpoint: string;
+  authentication: string;
+  tools: McpTool[];
+};
+
+function McpSection({ projectId }: { projectId: string }) {
+  const [manifest, setManifest] = useState<McpManifest | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState<string | null>(null);
+
+  useEffect(() => {
+    call<McpManifest>("api/v1/mcp", undefined, "GET")
+      .then(setManifest)
+      .catch((e) => setError((e as Error).message));
+  }, []);
+
+  // The address a *client* uses, which is this console's own origin: the API
+  // sits behind Cloud Run IAM and the browser never reaches it directly, so
+  // printing the API's URL here would give people something that cannot work.
+  const endpoint =
+    typeof window === "undefined" ? "" : `${window.location.origin}/api/proxy/api/v1/mcp`;
+
+  const config = JSON.stringify(
+    {
+      mcpServers: {
+        "mem-dog": {
+          url: endpoint,
+          headers: { Authorization: "Bearer YOUR_API_KEY" },
+        },
+      },
+    },
+    null,
+    2,
+  );
+
+  async function copy(what: string, text: string) {
+    await navigator.clipboard.writeText(text);
+    setCopied(what);
+    setTimeout(() => setCopied(null), 1500);
+  }
+
+  return (
+    <>
+      <h1>MCP</h1>
+      <p className="lede">
+        This corpus as tools an assistant can call. The tools are the same functions the API
+        serves, so a record your key cannot retrieve over HTTP is one it cannot reach here
+        either — the access rule is inside the query, not layered on top.
+      </p>
+
+      {error && <p className="err">{error}</p>}
+
+      <section className="panel">
+        <h2>Point a client at it</h2>
+        <div className="row" style={{ marginBottom: 10 }}>
+          <code style={{ flex: 1, wordBreak: "break-all" }}>{endpoint}</code>
+          <button className="secondary" onClick={() => copy("url", endpoint)}>
+            {copied === "url" ? "Copied" : "Copy URL"}
+          </button>
+        </div>
+        <p className="empty">
+          Authenticate with an ordinary API key — the same one the REST API takes, carrying
+          the same capabilities. Create one under <strong>Admin → Keys</strong>.
+        </p>
+        <div className="row end" style={{ marginTop: 12 }}>
+          <button className="secondary" onClick={() => copy("config", config)}>
+            {copied === "config" ? "Copied" : "Copy client config"}
+          </button>
+        </div>
+        <pre className="code">{config}</pre>
+      </section>
+
+      <section className="panel">
+        <h2>Tools</h2>
+        <p className="empty">
+          Eight, and the descriptions matter: an assistant picks between them on what they
+          say. <code>search</code> returns evidence, <code>chat</code> returns prose with
+          citations — calling both &ldquo;search&rdquo; would make the choice arbitrary.
+        </p>
+        {(manifest?.tools ?? []).map((tool) => (
+          <div className="hit" key={tool.name}>
+            <div className="meta">
+              <span className="chip on">{tool.name}</span>
+            </div>
+            <div className="text">{tool.description}</div>
+          </div>
+        ))}
+        {manifest && manifest.tools.length === 0 && (
+          <p className="empty">The server reports no tools, which should not happen.</p>
+        )}
+      </section>
+
+      {manifest && (
+        <section className="panel">
+          <h2>What this server is</h2>
+          <div className="meta">
+            <span className="chip">protocol {manifest.protocolVersion}</span>
+            <span className="chip">{manifest.transport}</span>
+            <span className="chip">
+              {manifest.serverInfo.name} {manifest.serverInfo.version}
+            </span>
+            <span className="chip">project {projectId}</span>
+          </div>
+          <p className="empty" style={{ marginTop: 10 }}>
+            Streamable HTTP rather than the older session-bearing SSE: this service scales to
+            zero and out to four, so a stream and the posts belonging to it would not reliably
+            land on the same instance. A client that requires <code>text/event-stream</code>
+            still gets its response as one event.
+          </p>
+        </section>
       )}
     </>
   );

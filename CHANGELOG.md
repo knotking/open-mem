@@ -358,6 +358,16 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   Supermemory's latency, Letta's working context.
 
 ### Fixed
+- **The graph arm read `entity_edges` directly instead of going through
+  `GraphStore`.** It passed every behavioural test — including both about
+  disclosure — while making the seam a lie: swapping the store would have moved
+  the Entities panel and left search reading Postgres. It now hands its seeds to
+  `neighbourhood` and only fetches chunks for the entities it is given, so the
+  rule that an edge is traversable only when the record asserting it is readable
+  lives in one place rather than two. Endpoints pass the configured store rather
+  than letting the arm build one. The cost is a query per seed instead of one
+  fused query, bounded by the eight-seed cap.
+
 - **The test suite would drop whatever database `DATABASE_URL` happened to
   point at.** Every `pool` fixture begins with `DROP SCHEMA public CASCADE`, and
   the only thing choosing the target was `os.environ.setdefault` — so an
