@@ -222,6 +222,16 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   `entity_edges` is checked by `verify_erasure`.
 - `docs/graph.md` — why this is not a graph database, the vocabulary, visibility
   rules, erasure, a worked example, and what is not built.
+- **A root README.** There was none — twenty-six commits of implementation and a
+  visitor saw a directory listing. It leads with counted numbers, runs entirely
+  locally with no cloud account, states the four commitments that are the actual
+  reasons to choose this, and lists what is not built in as much detail as what
+  is.
+- **A comparison matrix** on the sign-in page: six products across eleven
+  dimensions, with sticky tab navigation. Every mem-dog cell is verifiable in
+  this repository; every other cell reflects what that product publicly
+  documents, and where something is simply not part of a product's stated scope
+  it is marked so rather than asserted absent — nineteen cells carry that mark.
 - The **landing page** gains the graph and a competitor comparison. Every
   mem-dog cell is verifiable in this repository; every competitor cell describes
   what that product publicly positions itself on, never what it lacks. It ends
@@ -229,6 +239,15 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   Supermemory's latency, Letta's working context.
 
 ### Fixed
+- **Self-hosting was presented as a differentiator**, which
+  `docs/competition/README.md` had already researched and rejected: Onyx is
+  MIT-licensed, air-gapped and SOC 2 Type II with 40+ connectors, Khoj runs
+  fully local, and private deployment is table stakes here. The README and the
+  landing page now say so explicitly rather than quietly dropping the claim.
+- **The sign-in page navigation scrolled away.** It is sticky now — negative
+  margins so the bar spans the full width rather than stopping at the text
+  column, and `scroll-margin-top` so an anchor jump does not land with its
+  heading hidden under the bar that took you there.
 - **An artifact produced by a fallback engine was invisible to the reconciler.**
   It carries the primary's `generator_version` — correctly, since the prompt and
   schema were the primary's — so every staleness check considered it finished,
