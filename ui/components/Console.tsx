@@ -1071,6 +1071,16 @@ function EntitiesSection({
 
 /* ---------------------------------------------------------- 4. crawlers */
 
+type ConnectorScope = {
+  key: string; label: string; placeholder: string; help: string;
+};
+type Connector = {
+  key: string; label: string; category: string; pulls: string;
+  auth_style: string; auth_name: string | null; auth_help: string;
+  available: boolean; requires: string | null; verified: boolean; notes: string;
+  scopes: ConnectorScope[];
+};
+
 type Connection = {
   connection_id: string;
   provider: string;
@@ -1170,15 +1180,21 @@ function CrawlersSection({ projectId }: { projectId: string }) {
   const [newConn, setNewConn] = useState({
     provider: "", credential: "", auth_style: "bearer", auth_name: "",
   });
+  const [apps, setApps] = useState<Connector[]>([]);
+  const [chosenApp, setChosenApp] = useState<Connector | null>(null);
+  const [appScope, setAppScope] = useState<Record<string, string>>({});
+  const [appConn, setAppConn] = useState("");
 
   const load = useCallback(async () => {
     try {
-      const [page, connections] = await Promise.all([
+      const [page, connections, catalog] = await Promise.all([
         call<{ crawlers: Crawler[] }>(`api/v1/projects/${projectId}/crawlers`),
         call<{ connections: Connection[] }>(
           `api/v1/connections?project_id=${projectId}`, undefined, "GET"),
+        call<{ connectors: Connector[] }>("api/v1/connectors", undefined, "GET"),
       ]);
       setConns(connections.connections);
+      setApps(catalog.connectors);
       setCrawlers(page.crawlers);
     } catch (e) {
       setError((e as Error).message);
@@ -1282,6 +1298,113 @@ function CrawlersSection({ projectId }: { projectId: string }) {
           Created disabled, always. A website crawler is refused outright unless it declares an
           allowlist — an unbounded link crawl does not stop on its own.
         </p>
+      </section>
+
+      <section className="panel">
+        <h2>Pull from an app</h2>
+        <p className="empty">
+          Each one carries the endpoint, the pagination and the field mapping, so what you supply
+          is the part only you know. None has been run against a live account — the dry run every
+          crawler must pass is where an entry stops being a guess.
+        </p>
+
+        {Object.entries(
+          apps.reduce((byCat, app) => {
+            (byCat[app.category] ||= []).push(app);
+            return byCat;
+          }, {} as Record<string, Connector[]>),
+        ).map(([category, entries]) => (
+          <div key={category} style={{ marginTop: 14 }}>
+            <div className="muted" style={{ fontSize: 12, letterSpacing: "0.06em",
+                                            textTransform: "uppercase", marginBottom: 7 }}>
+              {category}
+            </div>
+            <div className="row">
+              {entries.map((app) => (
+                <button
+                  key={app.key}
+                  className={chosenApp?.key === app.key ? "" : "secondary"}
+                  disabled={busy || !app.available}
+                  title={app.available ? app.pulls : app.notes}
+                  onClick={() => {
+                    setChosenApp(app);
+                    setAppScope({});
+                  }}
+                >
+                  {app.label}
+                  {!app.available && " ·"}
+                </button>
+              ))}
+            </div>
+          </div>
+        ))}
+
+        {chosenApp && (
+          <div style={{ marginTop: 18, paddingTop: 16, borderTop: "1px solid var(--line)" }}>
+            <p className="what">{chosenApp.label} — {chosenApp.pulls}</p>
+            {chosenApp.auth_help && (
+              <p className="empty" style={{ marginTop: 4 }}>{chosenApp.auth_help}</p>
+            )}
+            {chosenApp.notes && (
+              <p className="empty" style={{ marginTop: 4 }}>{chosenApp.notes}</p>
+            )}
+
+            {chosenApp.scopes.map((scope) => (
+              <div className="row" style={{ marginTop: 9 }} key={scope.key}>
+                <span className="muted" style={{ fontSize: 13, minWidth: 118 }}>
+                  {scope.label}
+                </span>
+                <input
+                  type="text"
+                  value={appScope[scope.key] ?? ""}
+                  onChange={(e) =>
+                    setAppScope({ ...appScope, [scope.key]: e.target.value })
+                  }
+                  placeholder={scope.placeholder}
+                  style={{ flex: 1 }}
+                />
+              </div>
+            ))}
+
+            <div className="row" style={{ marginTop: 12 }}>
+              <span className="muted" style={{ fontSize: 13, minWidth: 118 }}>Credential</span>
+              <select value={appConn} onChange={(e) => setAppConn(e.target.value)}>
+                <option value="">Choose a connection…</option>
+                {conns.map((c) => (
+                  <option key={c.connection_id} value={c.connection_id}>
+                    {c.provider} ({c.auth_style})
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={() =>
+                  act(`${chosenApp.label} crawler created — run a dry run next`, async () => {
+                    await call("api/v1/crawlers/from-connector", {
+                      project_id: projectId,
+                      connector: chosenApp.key,
+                      scope: appScope,
+                      connection_id: appConn || null,
+                      enrich,
+                    });
+                    setChosenApp(null);
+                    setAppScope({});
+                    setAppConn("");
+                  })
+                }
+                disabled={
+                  busy ||
+                  chosenApp.scopes.some((sc) => !(appScope[sc.key] ?? "").trim())
+                }
+              >
+                Create
+              </button>
+            </div>
+            <p className="empty" style={{ marginTop: 8 }}>
+              It arrives disabled, like every crawler. A dry run walks the same code a live run
+              does and tells you what it would have written before anything is.
+            </p>
+          </div>
+        )}
       </section>
 
       <section className="panel">

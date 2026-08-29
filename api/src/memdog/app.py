@@ -32,7 +32,7 @@ from . import entities as entities_mod
 from . import graph as graph_mod
 from .graph import GraphError
 from .entities import EntityError
-from . import account, agents, cases, connections, control, memories as memories_mod, models, normalize, sharing
+from . import account, agents, cases, connections, connectors, control, memories as memories_mod, models, normalize, sharing
 from .account import AccountError
 from .agents import AgentConfigError
 from .memories import MemoryError
@@ -1456,6 +1456,62 @@ async def set_inbound(
     return {"producer_id": producer_id, "inbound_auth": method,
             "mapping": body.get("mapping"), "url": f"/webhooks/{producer_id}"}
 
+
+
+
+@app.get("/api/v1/connectors")
+async def get_connectors() -> dict:
+    """The catalog of apps a crawler can pull from.
+
+    Unauthenticated: it is a list of what this build supports and discloses
+    nothing about anyone's data. Someone deciding whether this is worth an
+    account should be able to see it before they have one.
+    """
+    return {"connectors": connectors.catalog()}
+
+
+@app.post("/api/v1/crawlers/from-connector")
+async def post_crawler_from_connector(
+    request: Request, body: dict, actor: Principal = Depends(principal)
+) -> dict:
+    """Create a crawler from a catalog entry plus the scope only you know.
+
+    The config it produces is the ordinary one, so the crawler that comes out is
+    indistinguishable from a hand-written one -- including still being `draft`
+    until a dry run passes. A catalog entry is a shortcut through the
+    configuration, never around the gate.
+    """
+    state = request.app.state
+    try:
+        config = connectors.build(
+            body.get("connector", ""),
+            body.get("scope") or {},
+            name=body.get("name"),
+            enrich=bool(body.get("enrich")),
+        )
+    except connectors.ConnectorError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+    try:
+        created = await crawling.create_crawler(
+            state.pool, actor,
+            project_id=body.get("project_id", ""),
+            config=CrawlerConfig.model_validate(config),
+        )
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    except CrawlerError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+    if body.get("connection_id"):
+        try:
+            await connections.attach(
+                state.pool, actor, created["crawler_id"], body["connection_id"]
+            )
+        except connections.ConnectionError_ as exc:
+            raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+        created["connection_id"] = body["connection_id"]
+    return created
 
 
 @app.post("/api/v1/connections")
