@@ -277,3 +277,112 @@ async def test_hosting_is_not_inferred_from_the_provider_name(pool):
         pool, org_id="org_x", data_type="clinical_note",
         model_id="ollama-local", provider="ollama", hosting="local",
     ) is None
+
+
+# --- the text path -----------------------------------------------------------
+
+
+async def test_a_regulated_record_is_not_sent_to_a_remote_extractor(
+    pool, blobs, settings, tenant
+):
+    """The gap the image path did not cover, and the larger one: enrichment
+    used the deployment-wide extractor and consulted nothing."""
+    from memdog.extraction import GeminiExtractor, LocalHeuristicExtractor
+    from memdog.routing import Chain, Step
+    from memdog.extraction import ChainedExtractor
+    from memdog.workers import EnrichWorker
+
+    await models.ensure_catalog(pool)
+    await _profile(pool, "clinical_note", "regulated", requires=["extraction"])
+    await _card(pool, "gemini-3.7-flash", provider="google", hosting="remote",
+                capabilities=["extraction"])
+
+    remote = GeminiExtractor("key-not-used", "gemini-3.7-flash")
+    floor = LocalHeuristicExtractor()
+    chained = ChainedExtractor(Chain("extract", [
+        Step(name="gemini", model_id=remote.model_id, call=remote.extract),
+        Step(name="local", model_id=floor.model_id, call=floor.extract),
+    ]))
+
+    worker = EnrichWorker(pool, chained, settings)
+    await worker.ensure_generator()
+
+    permitted, generator, refusal = await worker._permitted_extractor("clinical_note")
+    assert refusal is None
+    # Narrowed, not refused: the floor is local, so the record still gets an
+    # envelope — it simply never reaches the engine that would have read it.
+    assert permitted.model_ids == ["local-heuristic-v1"]
+    # And it carries its own fingerprint, or a locally-produced envelope would
+    # be attributed to the model that was refused.
+    assert generator != worker.generator_version
+
+
+async def test_an_ordinary_record_uses_the_whole_chain(pool, settings, tenant):
+    from memdog.extraction import build_extractor
+    from memdog.workers import EnrichWorker
+
+    await models.ensure_catalog(pool)
+    worker = EnrichWorker(pool, build_extractor(settings), settings)
+    await worker.ensure_generator()
+
+    permitted, generator, refusal = await worker._permitted_extractor("email")
+    assert refusal is None
+    assert permitted is worker._extractor
+    assert generator == worker.generator_version
+
+
+async def test_a_regulated_record_with_no_local_engine_is_refused(
+    pool, settings, tenant
+):
+    """Withheld rather than sent. The item stays stored and searchable; it is
+    the understanding of it that does not happen."""
+    from memdog.extraction import GeminiExtractor
+    from memdog.workers import EnrichWorker
+
+    await models.ensure_catalog(pool)
+    await _profile(pool, "clinical_note", "regulated", requires=["extraction"])
+    await _card(pool, "gemini-3.7-flash", provider="google", hosting="remote",
+                capabilities=["extraction"])
+
+    worker = EnrichWorker(
+        pool, GeminiExtractor("key-not-used", "gemini-3.7-flash"), settings
+    )
+    await worker.ensure_generator()
+
+    permitted, generator, refusal = await worker._permitted_extractor("clinical_note")
+    assert permitted is None
+    assert "regulated" in refusal
+    assert "inside this deployment" in refusal
+
+
+async def test_a_chain_restricted_to_nothing_is_a_decision_not_to_run(pool):
+    """`None` rather than an empty chain: a chain with no steps is not a
+    degraded chain."""
+    from memdog.routing import Chain, Step
+
+    async def call(*_a, **_k):
+        return "x"
+
+    chain = Chain("extract", [Step(name="a", model_id="m-a", call=call)])
+    assert chain.restricted(lambda s: True) is not None
+    assert chain.restricted(lambda s: False) is None
+
+
+async def test_restriction_does_not_inherit_the_original_breaker(pool):
+    """Failures recorded against steps that are no longer in the chain would
+    open a circuit on evidence about somebody else."""
+    from memdog.routing import Chain, Step
+
+    async def call(*_a, **_k):
+        return "x"
+
+    chain = Chain("extract", [
+        Step(name="a", model_id="m-a", call=call),
+        Step(name="b", model_id="m-b", call=call),
+    ])
+    for _ in range(5):
+        chain.breaker.record_failure("b")
+    assert chain.breaker.is_open("b")
+
+    narrowed = chain.restricted(lambda s: s.model_id == "m-b")
+    assert not narrowed.breaker.is_open("b")

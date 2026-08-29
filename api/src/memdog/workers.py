@@ -26,6 +26,7 @@ from .ids import new_id
 from .acl import Acl, strictest
 from .entities import resolve_mentions
 from .cases import route_case
+from .events import emit
 from .graph import record_edges
 from .extraction import EXTRACT_PURPOSE, Extractor
 from .inference import EmbeddingEngine, generator_version
@@ -224,6 +225,10 @@ class EnrichWorker:
             model_id=extractor.model_id,
             spec={"envelope": "core-v1"},
         )
+        # Extractors narrowed by a sensitivity policy, keyed by the models they
+        # were narrowed to. Cached because the narrowing is the same for every
+        # item of a given type and the lookup is a query.
+        self._restricted: dict[frozenset, tuple] = {}
 
     def register(self, queue: Queue, topic: str = ENRICH_TOPIC) -> None:
         queue.subscribe(topic, self.handle)
@@ -245,6 +250,55 @@ class EnrichWorker:
         data_id = message.body["data_id"]
         with continue_trace("enrich.message", message.headers, data_id=data_id):
             await self._enrich(data_id)
+
+    async def _permitted_extractor(self, data_type: str | None):
+        """The extractor this data type may use, and the generator that names it.
+
+        Returns `(extractor, generator_version, refusal)`. A refusal is a
+        sentence, not an exception: nothing here is retryable, and the item is
+        already stored and searchable -- it is the *understanding* of it that is
+        withheld, which is a state rather than a failure.
+
+        The narrowed extractor gets its **own** generator version. Reusing the
+        primary's would attribute a locally-produced envelope to the model that
+        was refused, which is the same staleness-invisibility defect a fallback
+        artifact carrying the primary's fingerprint already caused once.
+        """
+        from . import models as models_mod
+        from .extraction import candidate_models, restrict
+
+        sensitivity = await models_mod.sensitivity_of(self._pool, data_type)
+        if sensitivity != "regulated":
+            return self._extractor, self.generator_version, None
+
+        allowed = await models_mod.local_models(
+            self._pool, candidate_models(self._extractor)
+        )
+        key = frozenset(allowed)
+        if key in self._restricted:
+            return (*self._restricted[key], None)
+
+        narrowed = restrict(self._extractor, allowed)
+        if narrowed is None:
+            return None, None, (
+                f"{data_type} is regulated and no configured extraction engine "
+                "runs inside this deployment"
+            )
+
+        version = generator_version(
+            purpose=EXTRACT_PURPOSE,
+            model_id=narrowed.model_id,
+            spec={"envelope": "core-v1"},
+        )
+        await self._pool.execute(
+            """
+            INSERT INTO generators (generator_version, purpose, model_id, spec)
+            VALUES ($1, $2, $3, $4) ON CONFLICT (generator_version) DO NOTHING
+            """,
+            version, EXTRACT_PURPOSE, narrowed.model_id, {"envelope": "core-v1"},
+        )
+        self._restricted[key] = (narrowed, version)
+        return narrowed, version, None
 
     async def _enrich(
         self,
@@ -276,6 +330,32 @@ class EnrichWorker:
         if row is None or row["deleted_at"] is not None or row["indexable_text"] is None:
             return
 
+        # A regulated record must not be sent to a model that would receive it,
+        # and the deployment-wide extractor was never checked against the
+        # profile -- so `clinical_note` was summarised by whatever the
+        # deployment configured, which in the shipped configuration is a cloud
+        # provider. The image path is gated at assignment; text had nothing.
+        #
+        # Narrowed rather than refused: the chain's floor is a local extractor,
+        # so the record still gets a title and a summary. It simply never
+        # reaches an engine that would have received its text.
+        extractor, generator, refusal = await self._permitted_extractor(
+            row["data_type"]
+        )
+        if refusal is not None:
+            async with self._pool.acquire() as conn, conn.transaction():
+                await emit(
+                    conn,
+                    event_type="enrichment.refused",
+                    org_id=row["org_id"],
+                    project_id=row["project_id"],
+                    data_id=data_id,
+                    payload={"reason": refusal, "data_type": row["data_type"]},
+                )
+            record("enrich_refused", 1, data_type=row["data_type"] or "unknown")
+            log.warning("not enriching %s: %s", data_id, refusal)
+            return
+
         # Enrichment is where the write path spends money, and it runs
         # unattended -- which is exactly the spend nobody is watching. Refusing
         # here raises `BudgetExhausted`, which the queue treats as a busy
@@ -291,7 +371,6 @@ class EnrichWorker:
         # persisted as configuration: an override that quietly became the
         # default would change a project's behaviour with no audit trail on the
         # setting that appears to control it.
-        extractor = self._extractor
         if model_override and hasattr(extractor, "model_id"):
             import copy
 
@@ -363,7 +442,7 @@ class EnrichWorker:
                 envelope.language,
                 envelope.fields,
                 extractor.model_id,
-                self.generator_version,
+                generator,
                 # The chain may have served this from a fallback, in which
                 # case the assigned model and the serving one differ -- which
                 # is the whole reason these are two columns.

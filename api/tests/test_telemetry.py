@@ -76,3 +76,37 @@ def test_crawler_identity_is_kept_because_the_alert_needs_it():
     deliberately not on the unbounded list."""
     assert "crawler_id" not in telemetry.UNBOUNDED_LABELS
     assert "strategy" not in telemetry.UNBOUNDED_LABELS
+
+
+def test_every_metric_recorded_anywhere_is_registered():
+    """`record()` drops an unknown metric silently, which is right at the call
+    site and wrong across a release.
+
+    Losing one measurement should never fail a request, so `record()` returns
+    quietly when it does not recognise a name. The cost is that a typo, or a
+    counter added without a matching `create_counter`, is indistinguishable
+    from a counter that is genuinely always zero — and "always zero" is exactly
+    what an operator reads as *good*.
+
+    This caught five real ones: four `usage.*` counters added with the meter and
+    never registered, and `enrich_refused`. Each was emitting into nothing.
+    """
+    import re
+    from pathlib import Path
+
+    telemetry.setup()
+    source = Path(telemetry.__file__).parent
+    emitted: dict[str, str] = {}
+    for module in sorted(source.glob("*.py")):
+        for name in re.findall(r'record\(\s*"([a-z0-9_.]+)"', module.read_text()):
+            emitted.setdefault(name, module.name)
+
+    assert emitted, "found no record() calls at all — the pattern must have drifted"
+    missing = {
+        name: where for name, where in emitted.items()
+        if name not in telemetry._metrics
+    }
+    assert not missing, (
+        "these metrics are emitted and never registered, so every measurement "
+        f"is dropped: {missing}"
+    )

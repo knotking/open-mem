@@ -11,6 +11,15 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **Model cards declare `hosting`** (`local` or `remote`), which is what makes
+  the residency rule checkable. Deliberately not derived from `provider`:
+  provider is who made the model, hosting is where the bytes go, and Ollama is
+  the same adapter against a local process and against Ollama Cloud. A card that
+  does not say defaults to `remote`.
+- **`GET /api/v1/models` reports `violations`** — assignments that already exist
+  and would now be refused. Reported rather than voided, because retroactively
+  invalidating what a deployment is running takes a service down to enforce a
+  control it did not know it was breaking.
 - **Registration is closed by default, and an invite is how the second user
   arrives.** `POST /api/v1/invites` issues one, `GET` lists them with their
   state, `DELETE` revokes before redemption, and `POST /api/v1/invites/redeem`
@@ -305,6 +314,28 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   Supermemory's latency, Letta's working context.
 
 ### Fixed
+- **A regulated data type could be assigned to a cloud model.**
+  `data_type_profiles.sensitivity` shipped with the catalog, carrying its own
+  comment that a clinical or legal type must not be routed to an unapproved
+  provider — and assignment validation selected the column beside `requires` and
+  used only `requires`. `clinical_note` ships as `regulated`; assigning it to a
+  cloud model succeeded.
+- **`allowed_providers` was never read.** The settings register describes it as
+  how "only our approved providers" is enforced rather than suggested; it
+  appeared in one comment and nothing else. It is now exhaustive once set —
+  an *empty* list still means "no list", because an empty list forbidding
+  everything would break every deployment that never set one.
+- Both rules are checked at **assignment** and again at **resolution**. An
+  assignment made before the rules existed would otherwise still route content,
+  and the deployment default was checked by nothing at all — so a regulated type
+  with no assignment went wherever the deployment happened to point.
+- **The parse worker checks the item's own sensitivity before handing bytes to a
+  model.** Resolution keys on the modality, and a clinical note that arrived as
+  a scan is a regulated record *and* an ordinary image — checking only the
+  modality sent it to a cloud vision model, because `image` is standard. A
+  refusal is recorded as `needs_model` with the reason; the record is still
+  stored and readable, it simply has no transcript.
+
 - **A registered normalization schema was never applied.** `POST /api/v1/schemas`
   stored one and `normalize.project()` knew how to run it, but nothing on the
   write path called it — so `normalized_records` stayed empty and `identifiers`
@@ -428,6 +459,10 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 - **New dependency**: `jmespath`. `pip install -e .` before deploying.
 
 ### Migrations
+- `0025_hosting.sql` — `model_cards.hosting`, defaulting to `remote`, with the
+  two shipped local engines corrected by name. **Review your model cards after
+  deploying**: any card an operator registered is now declared remote, so a
+  locally-hosted model needs saying so before it can serve a regulated type.
 - `0024_invites.sql` — the `invites` table. Run before deploying; the registration
   check reads it on every first-time sign-in.
 - `0023_usage.sql` — `usage_events` (raw, short retention) and `usage_spend`

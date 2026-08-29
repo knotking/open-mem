@@ -173,6 +173,29 @@ async def candidacy_failure(
     return None
 
 
+async def local_models(pool: asyncpg.Pool, model_ids) -> set[str]:
+    """Which of these run inside the deployment boundary.
+
+    A model with no card is absent from the result, which is the failing-closed
+    direction: an engine nobody described is not evidence that content may be
+    sent to it.
+    """
+    rows = await pool.fetch(
+        "SELECT model_id FROM model_cards WHERE model_id = ANY($1::text[]) "
+        "AND hosting = 'local'",
+        list(model_ids),
+    )
+    return {r["model_id"] for r in rows}
+
+
+async def sensitivity_of(pool: asyncpg.Pool, data_type: str | None) -> str:
+    if not data_type:
+        return "standard"
+    return await pool.fetchval(
+        "SELECT sensitivity FROM data_type_profiles WHERE data_type = $1", data_type
+    ) or "standard"
+
+
 async def violations(pool: asyncpg.Pool, org_id: str) -> list[dict]:
     """Assignments that exist and would now be refused.
 

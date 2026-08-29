@@ -141,6 +141,48 @@ def setup(service_name: str = "memdog-api") -> None:
         "memdog.model_tokens", description="Tokens spent, by model and purpose"
     )
 
+    # `resolved_by` is the label that earns this counter: an entity layer that
+    # resolves everything by fuzzy name match and nothing by identifier is
+    # merging people, and it looks identical to one that is working until
+    # somebody breaks the two apart.
+    _metrics["entity_mentions"] = meter.create_counter(
+        "memdog.entity.mentions",
+        description="Entity mentions resolved, by type and by what resolved them",
+    )
+
+    # ------------------------------------------------------------------ cost
+    #
+    # The meter in `usage.py` is the durable record and these are the live view
+    # of it. Both exist because they answer different questions: a counter can
+    # be dropped under load, which is fine for "is spend climbing" and
+    # disqualifying for "what does this tenant owe".
+    _metrics["usage_credits"] = meter.create_counter(
+        "memdog.usage.credits",
+        description="Cost-weighted credits consumed, by purpose, engine and status",
+    )
+    _metrics["usage_crossed_to_paid"] = meter.create_counter(
+        "memdog.usage.crossed_to_paid",
+        description="Fallbacks that moved a call from a free engine to a paid one",
+    )
+    # A model call with nobody to bill. Its own counter because the alternative
+    # is spend that simply does not appear anywhere -- which looks identical to
+    # spend that did not happen.
+    _metrics["usage_unattributed"] = meter.create_counter(
+        "memdog.usage.unattributed",
+        description="Inference calls made with no attribution to charge",
+    )
+    _metrics["usage_write_failures"] = meter.create_counter(
+        "memdog.usage.write_failures",
+        description="Usage rows the meter could not persist",
+    )
+    # Enrichment withheld by a sensitivity policy. Not a failure and not a
+    # success: an operator who does not know this is firing sees clinical
+    # records that never get summaries and no reason anywhere.
+    _metrics["enrich_refused"] = meter.create_counter(
+        "memdog.enrich.refused",
+        description="Records not enriched because no permitted engine was available",
+    )
+
     # --------------------------------------------------------------- inbound
     #
     # A disabled webhook answers 200 and drops the payload, so an error rate

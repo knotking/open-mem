@@ -365,6 +365,15 @@ because an assignment made before the rules existed would otherwise still route 
 deployment *default* was never checked by anything — so a regulated type with no assignment went
 wherever the deployment happened to point.
 
+Enrichment is gated too, and that is the larger half: `EnrichWorker` used the deployment-wide
+extractor and consulted nothing, so a `clinical_note` was summarised by whatever the deployment
+configured — a cloud provider in the shipped configuration. A regulated record now **narrows the
+chain to locally-hosted steps** rather than being refused outright: the floor is a local extractor,
+so the record still gets a title and a summary and simply never reaches an engine that would have
+read its text. The narrowed extractor carries its own `generator_version`, or a locally-produced
+envelope would be attributed to the model that was refused. Where no step survives, the record is
+left unenriched and an `enrichment.refused` event says why.
+
 Resolution keys on the modality, and sensitivity is a property of the item, so `ParseWorker` checks
 the record's own `data_type` before handing bytes to a model. A clinical note that arrived as a scan
 is a regulated record *and* an ordinary image; checking only the modality sends it to a cloud vision
