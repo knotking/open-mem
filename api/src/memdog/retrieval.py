@@ -26,6 +26,7 @@ from .contracts import (
     RetrieveResponse,
 )
 from .db import vector_literal
+from .graph import build_graph
 from .ids import new_id
 from .telemetry import span
 from .inference import EmbeddingEngine
@@ -124,18 +125,60 @@ async def graph_seeds(
     ]
 
 
+async def _expand(
+    graph, principal: Principal, seeds: list[GraphSeed], *, limit: int
+) -> dict[str, int]:
+    """Seeds, plus what one hop reaches, with the fewest hops to each.
+
+    Goes through `GraphStore` rather than reading `entity_edges` here. The
+    traversal and the access rule have to be the same query -- an edge whose
+    evidence the caller cannot read must not be walked, because returning its
+    far endpoint discloses that the evidence exists -- and that rule is already
+    implemented once, inside the store. Writing a second traversal in a
+    retrieval CTE would be a second place for it to be right, and it costs the
+    seam its meaning: swap the store for another and browsing would follow
+    while search quietly did not.
+
+    The price is a query per seed rather than one fused query. Seeds are capped
+    at eight and each call is an indexed traversal, so the ceiling is small and
+    known -- which is a better trade than a faster query that has to be audited
+    separately.
+    """
+    from .graph import GraphError
+
+    reachable: dict[str, int] = {}
+    for seed in seeds:
+        try:
+            found = await graph.neighbourhood(
+                principal, entity_id=seed.entity_id, depth=1,
+                predicates=None, limit=limit,
+            )
+        except GraphError:
+            # The entity resolved a moment ago and is gone, or is not visible
+            # after all. Not an error for the search -- the other seeds still
+            # stand, and one that does not is simply absent from the results.
+            continue
+        for node in [found.root, *found.nodes]:
+            hops = min(node.depth, reachable.get(node.entity_id, node.depth))
+            reachable[node.entity_id] = hops
+    return reachable
+
+
 async def retrieve(
     pool: asyncpg.Pool,
     embedder: EmbeddingEngine,
     principal: Principal,
     request: RetrieveRequest,
     embed_generator: str | None = None,
+    graph=None,
 ) -> RetrieveResponse:
     """Traced as one span so the arms, the fusion and the audit write are all
     attributable to the query that caused them."""
     with span("retrieve", project_id=request.filter.project_id,
               match=",".join(request.match), model_id=embedder.model_id):
-        return await _retrieve(pool, embedder, principal, request, embed_generator)
+        return await _retrieve(
+            pool, embedder, principal, request, embed_generator, graph
+        )
 
 
 async def _retrieve(
@@ -144,6 +187,7 @@ async def _retrieve(
     principal: Principal,
     request: RetrieveRequest,
     embed_generator: str | None = None,
+    graph=None,
 ) -> RetrieveResponse:
     principal.require(DATA_READ)
     org_id, user_id, principals = visibility_params(principal)
@@ -211,12 +255,18 @@ async def _retrieve(
             )"""
         )
     seeds: list[GraphSeed] = []
+    reachable: dict[str, int] = {}
     if "graph" in request.match:
         seeds = await graph_seeds(
             pool, principal, project_id=request.filter.project_id, query=request.query
         )
-    if seeds:
-        seed_p = bind([s.entity_id for s in seeds])
+        if seeds:
+            reachable = await _expand(
+                graph or build_graph(pool), principal, seeds, limit=request.limit * 8
+            )
+    if reachable:
+        ids_p = bind(list(reachable))
+        hops_p = bind([reachable[entity_id] for entity_id in reachable])
         # One hop, and the ACL is *inside* the traversal rather than applied to
         # its result. Filtering afterwards leaks structure: if a path runs
         # through a record the caller cannot read, returning its endpoints tells
@@ -231,16 +281,14 @@ async def _retrieve(
             f"""
             gph AS (
                 WITH reachable AS (
-                    SELECT unnest({seed_p}::text[]) AS entity_id, 0 AS hops
-                    UNION
-                    SELECT CASE WHEN g.subject_id = ANY({seed_p}::text[])
-                                THEN g.object_id ELSE g.subject_id END, 1
-                    FROM entity_edges g
-                    JOIN data_items sd ON sd.data_id = g.source_data_id
-                    WHERE (g.subject_id = ANY({seed_p}::text[])
-                           OR g.object_id = ANY({seed_p}::text[]))
-                      AND {visibility_sql("sd", int(org_p[1:]), int(user_p[1:]),
-                                          int(principals_p[1:]))}
+                    -- Handed in, not walked here. The traversal ran through
+                    -- `GraphStore`, which is the seam the whole graph layer
+                    -- sits behind -- a second implementation of it inside a
+                    -- retrieval query would be a second place the access rule
+                    -- has to be right, and the second place is always the one
+                    -- that is wrong.
+                    SELECT * FROM unnest({ids_p}::text[], {hops_p}::int[])
+                        AS r(entity_id, hops)
                 ),
                 touched AS (
                     -- MIN(hops) because a record can mention both a seed and a

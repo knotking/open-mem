@@ -235,7 +235,15 @@ note mentions Northwind.
 
 Four properties make it defensible rather than magic:
 
-**The access rule is inside the traversal.** An edge is only traversable when
+**The traversal is the store's, not the query's.** The arm hands seeds to
+`GraphStore.neighbourhood` and receives the entities one hop reaches; the SQL
+below it only fetches chunks for entities it was given. It was first written as
+its own recursive CTE over `entity_edges`, which passed every behavioural test
+while making the seam a lie — swap the store and browsing would follow while
+search quietly kept reading Postgres. It costs a query per seed instead of one
+fused query, which is the right price for the access rule existing in one place.
+
+**The access rule is inside that traversal.** An edge is only traversable when
 the record that asserts it is readable. Walking first and filtering after would
 still surface the far endpoint — and the existence of a connection is itself
 what the unreadable record's ACL protects.

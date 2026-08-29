@@ -357,3 +357,73 @@ async def test_a_partial_name_does_not_resolve(pool, embedder, tenant):
         project_id=tenant.project_id, query="what about Acme Corporation",
     )
     assert [s.display_name for s in seeded] == ["Acme Corporation"]
+
+
+async def test_retrieval_traverses_through_the_graph_store(pool, embedder, tenant):
+    """The seam has to be the thing search actually uses.
+
+    This arm was first written as its own recursive CTE over `entity_edges`,
+    which passed every test above while quietly making `GraphStore` a lie:
+    swapping the store for another would have moved the Entities panel and left
+    search reading Postgres directly. Nothing then in the suite could tell the
+    difference — so this asserts the call, not the result.
+    """
+    from memdog.graph import PostgresGraph
+
+    world = await _world(pool, tenant)
+    calls: list[str] = []
+
+    class Watched(PostgresGraph):
+        async def neighbourhood(self, principal, *, entity_id, depth=1,
+                                predicates=None, limit=120):
+            calls.append(entity_id)
+            return await super().neighbourhood(
+                principal, entity_id=entity_id, depth=depth,
+                predicates=predicates, limit=limit,
+            )
+
+    response = await retrieve(
+        pool, embedder, await _principal(pool, tenant),
+        RetrieveRequest(
+            query="Priya Raman",
+            filter=RetrieveFilter(project_id=tenant.project_id),
+            match=["lexical", "graph"], limit=20,
+        ),
+        graph=Watched(pool),
+    )
+    assert calls == [world["priya"]], "the arm did not go through the store"
+    assert "the-connected-one" in await _external(pool, response)
+
+
+async def test_a_store_that_reaches_nothing_yields_no_graph_hits(
+    pool, embedder, tenant
+):
+    """A different store is a different answer, which is the point of the seam
+    being real. Search must follow it rather than reading the tables itself."""
+    from memdog.graph import Neighbourhood, Node
+
+    await _world(pool, tenant)
+
+    class Empty:
+        async def neighbourhood(self, principal, *, entity_id, depth=1,
+                                predicates=None, limit=120):
+            # Knows the entity, reaches nothing from it.
+            return Neighbourhood(
+                root=Node(entity_id=entity_id, display_name="?", type="person",
+                          depth=0),
+                nodes=[], edges=[],
+            )
+
+    response = await retrieve(
+        pool, embedder, await _principal(pool, tenant),
+        RetrieveRequest(
+            query="Priya Raman",
+            filter=RetrieveFilter(project_id=tenant.project_id),
+            match=["graph"], limit=20,
+        ),
+        graph=Empty(),
+    )
+    found = await _external(pool, response)
+    # The seed's own records still match; nothing a hop away does.
+    assert "the-assertion" in found
+    assert "the-connected-one" not in found

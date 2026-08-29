@@ -339,6 +339,7 @@ async def ask(
     principal: Principal,
     request: AskRequest,
     embed_generator: str | None = None,
+    graph=None,
 ) -> AskResponse:
     principal.require(DATA_READ)
     with span(
@@ -347,7 +348,7 @@ async def ask(
         model_id=answerer.model_id,
     ):
         return await _ask(
-            pool, embedder, answerer, principal, request, embed_generator
+            pool, embedder, answerer, principal, request, embed_generator, graph
         )
 
 
@@ -358,6 +359,7 @@ async def _ask(
     principal: Principal,
     request: AskRequest,
     embed_generator: str | None,
+    graph=None,
 ) -> AskResponse:
     started = time.monotonic()
 
@@ -374,6 +376,7 @@ async def _ask(
             limit=max(request.passages, PASSAGES),
         ),
         embed_generator,
+        graph,
     )
     passages = found.results[: request.passages]
 

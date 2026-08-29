@@ -1982,6 +1982,7 @@ async def ask_endpoint(
                 actor,
                 body,
                 embed_generator=request.app.state.current_generators["embedding"],
+                graph=request.app.state.graph,
             )
     except AuthError as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
@@ -2078,6 +2079,10 @@ async def retrieve_endpoint(
                 actor,
                 body,
                 embed_generator=request.app.state.current_generators["embedding"],
+                # The configured store, not one built per request: the seam is
+                # only worth having if the deployment's choice is what search
+                # actually traverses.
+                graph=request.app.state.graph,
             )
     except AuthError as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc

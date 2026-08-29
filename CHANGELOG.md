@@ -358,6 +358,20 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   Supermemory's latency, Letta's working context.
 
 ### Fixed
+- **The test suite would drop whatever database `DATABASE_URL` happened to
+  point at.** Every `pool` fixture begins with `DROP SCHEMA public CASCADE`, and
+  the only thing choosing the target was `os.environ.setdefault` — so an
+  exported `DATABASE_URL`, of the kind anyone running a deploy or opening a
+  psql session has, silently became the thing that got dropped. It cost a
+  seeded corpus in development this week, which then looked like the API being
+  broken rather than the tests having wiped it. Against the production instance
+  the same command would have dropped the corpus.
+- The suite now runs only against a host that is obviously local, and names the
+  database it refused. **A disposable database elsewhere — a CI service
+  container — needs `I_KNOW_THIS_DATABASE_IS_DISPOSABLE=yes`**, a variable named
+  so that setting it is a sentence about that database and not something anyone
+  exports for another purpose.
+
 - **A graph-only search whose query named no entity returned a `500`.** With no
   seeds the arm built no SQL, so the "at least one match mode is required" guard
   fired on a perfectly ordinary question. Finding nothing to start from is an
