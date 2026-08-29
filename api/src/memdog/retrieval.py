@@ -119,7 +119,7 @@ async def _retrieve(
 
     arms = []
     if "vector" in request.match:
-        vector = (await embedder.embed([request.query]))[0]
+        vector = (await embedder.embed([request.query], task="query"))[0]
         vec_p = bind(vector_literal(vector))
         model_p = bind(embedder.model_id)
         arms.append(

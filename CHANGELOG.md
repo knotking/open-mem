@@ -128,6 +128,24 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   passes at once but says nothing about whose crawlers a pass picks up.
 - The chat panel is now called **Chat** rather than Ask, with example questions
   on the empty state. It was there before and hard to find.
+- **A prompt per kind of thing.** The prompt register went from 12 entries to 24
+  and the classifier from 8 MIME types to 39 (plus 83 extensions), so the
+  formats the parsers already handled now reach a prompt written for them:
+  spreadsheet, presentation, calendar, contact, log, config, audio, video,
+  archive and geo.
+- **Audio and video had no classification at all** — an mp3 was `binary_blob`
+  and extracted with the generic prompt *after* being transcribed, which is
+  exactly where a prompt most needs to say that speaker labels are unreliable
+  and garbled names must not be normalised into plausible ones.
+- A spreadsheet is no longer summarised as prose; the prompt asks for the
+  table's shape — columns, row count, ranges — and forbids inventing totals.
+- Two new prompts exist to prevent harm rather than improve quality: **config**
+  must never reproduce a secret (the value would reach the summary, then the
+  embedding, then an answer, where it cannot be recalled), and **contact** must
+  not enrich, because a guessed employer is indistinguishable from an entered
+  one afterwards.
+- A coverage test now requires the classifier and prompt registers to agree, so
+  a type with no prompt fails the build rather than silently degrading.
 - `.claude/skills/changelog` and this file.
 
 ### Changed

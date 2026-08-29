@@ -24,11 +24,27 @@ class Message:
     body: dict
     headers: dict[str, str] = field(default_factory=dict)
     attempt: int = 1
+    # Times this was put back because the provider was busy rather than
+    # because the message was bad. Tracked separately from `attempt` so a
+    # quota window cannot exhaust a retry budget meant for real failures.
+    deferrals: int = 0
 
 
 Handler = Callable[[Message], Awaitable[None]]
 
 log = logging.getLogger(__name__)
+
+
+# Provider capacity, not message fault. Matched by name so the queue does not
+# have to import the inference, chat and multimodal layers to know that a
+# rate limit is a different kind of problem from a bug.
+_CAPACITY_FAILURES = {
+    "EmbeddingUnavailable", "AnswerRateLimited", "MultimodalUnavailable",
+}
+
+
+def _is_capacity_failure(exc: BaseException) -> bool:
+    return exc.__class__.__name__ in _CAPACITY_FAILURES
 
 
 class Queue(Protocol):
@@ -46,6 +62,9 @@ class InProcessQueue:
     """
 
     def __init__(self, *, max_attempts: int = 5, base_delay: float = 0.05) -> None:
+        # Deferrals are counted separately from attempts and are not bounded
+        # the same way: waiting out a quota window is the correct behaviour,
+        # where retrying a genuinely broken message forever is not.
         self._queues: dict[str, asyncio.Queue[Message]] = {}
         self._handlers: dict[str, Handler] = {}
         self._workers: list[asyncio.Task] = []
@@ -108,6 +127,21 @@ class InProcessQueue:
             try:
                 await handler(message)
             except Exception as exc:
+                if _is_capacity_failure(exc):
+                    # A quota or rate limit is not a failing message, it is a
+                    # busy provider -- the same message will succeed unchanged
+                    # once capacity returns. Counting it against the retry
+                    # budget means five quick refusals discard work that was
+                    # never faulty, which is how a re-embed silently completes
+                    # having embedded almost nothing.
+                    #
+                    # Backoff still grows, so this is not a spin.
+                    message.deferrals += 1
+                    await asyncio.sleep(
+                        min(self._base_delay * 2 ** message.deferrals, 30.0)
+                    )
+                    await queue.put(message)
+                    continue
                 if message.attempt < self._max_attempts:
                     message.attempt += 1
                     await asyncio.sleep(self._base_delay * 2 ** (message.attempt - 1))
