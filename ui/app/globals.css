@@ -245,7 +245,7 @@ audio.preview { width: 100%; height: auto; }
 
 /* ---------------------------------------------------------- landing */
 
-.landing { max-width: 940px; margin: 0 auto; padding: 22px 24px 80px; }
+.landing { max-width: 1080px; margin: 0 auto; padding: 22px 26px 90px; }
 
 .topbar {
   display: flex;
@@ -433,3 +433,150 @@ select {
 /* Confirmation of a completed action. Distinct from .err in hue, and from
    .empty in weight — a result, not an absence. */
 .ok { color: var(--accent); font-size: 13.5px; }
+
+/* ------------------------------------------------------------- landing
+   The sign-in page is the first thing anyone sees, and it is making a claim
+   about care. The numbers on it come from the running build rather than from
+   copy, so the layout is built around real values of unknown width. */
+
+.landing .eyebrow {
+  font-size: 11.5px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 10px;
+}
+
+.hero-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(300px, 0.85fr);
+  gap: 44px;
+  align-items: start;
+  padding: 30px 0 34px;
+  border-top: 1px solid var(--line);
+}
+
+.hero-split h1 {
+  font-size: clamp(30px, 4.6vw, 46px);
+  line-height: 1.06;
+  letter-spacing: -0.028em;
+  font-weight: 660;
+  margin: 0 0 16px;
+  text-wrap: balance;
+}
+.hero-split h1 em { font-style: normal; color: var(--accent); }
+
+.hero-lede {
+  color: var(--muted);
+  font-size: 16.5px;
+  line-height: 1.58;
+  max-width: 54ch;
+  margin: 0;
+}
+
+/* Tabular figures so the numbers sit on a common baseline grid rather than
+   drifting with their digit widths. */
+.numbers {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+  gap: 18px 12px;
+  margin: 28px 0 0;
+  padding-top: 22px;
+  border-top: 1px solid var(--line);
+}
+.numbers > div { display: grid; gap: 3px; }
+.numbers-value {
+  font-size: 27px;
+  font-weight: 640;
+  letter-spacing: -0.02em;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+.numbers-label { font-size: 12.5px; color: var(--muted); line-height: 1.35; }
+.counted { font-size: 12.5px; color: var(--muted); margin: 14px 0 0; }
+.counted code { font-size: 12px; }
+
+.signin-card {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  border-radius: 12px;
+  padding: 22px 22px 20px;
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+.signin-card h2 { margin: 0; font-size: 17px; letter-spacing: -0.01em; }
+.signin-card label { display: grid; gap: 6px; font-size: 13px; color: var(--muted); }
+.signin-card input {
+  font-size: 14px;
+  padding: 9px 11px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--ink);
+}
+.signin-card input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-color: transparent;
+}
+.signin-card button { margin-top: 2px; }
+
+.pipeline { margin: 8px 0 6px; padding: 0; }
+.pipeline-svg {
+  width: 100%;
+  height: auto;
+  color: var(--muted);
+  display: block;
+}
+.pipeline figcaption {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+  max-width: 74ch;
+  margin: 6px 0 0;
+}
+
+.section-title {
+  font-size: 13px;
+  letter-spacing: 0.075em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 600;
+  margin: 0 0 18px;
+  padding-top: 34px;
+  border-top: 1px solid var(--line);
+}
+
+.steps-grid, .pillars-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(268px, 1fr));
+  gap: 26px 30px;
+}
+.steps-grid article, .pillars-grid article { display: grid; gap: 7px; align-content: start; }
+/* The numbering encodes a real sequence -- a record does move through these
+   in order -- which is the only thing that justifies numbering them. */
+.step-n {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--accent);
+  letter-spacing: 0.06em;
+}
+.steps-grid h3, .pillars-grid h3 {
+  margin: 0;
+  font-size: 15.5px;
+  letter-spacing: -0.012em;
+  font-weight: 620;
+}
+.steps-grid p, .pillars-grid p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.58;
+}
+
+.landfoot { padding-top: 34px; margin-top: 34px; border-top: 1px solid var(--line); }
+
+@media (max-width: 860px) {
+  .hero-split { grid-template-columns: 1fr; gap: 30px; }
+}

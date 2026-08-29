@@ -340,3 +340,42 @@ def for_data_type(data_type: str | None) -> tuple[str, str]:
     nothing -- an unhandled type still has to produce a renderable envelope."""
     prompt = BY_DATA_TYPE.get(data_type or "", GENERIC)
     return NAMES.get(id(prompt), "generic"), prompt
+
+
+def registry() -> list[dict]:
+    """The data-type to prompt mapping, as data.
+
+    Served to the console so its list cannot drift from the register the way a
+    hardcoded one did -- it showed six types while twenty-four were routed,
+    which is exactly the kind of divergence that is invisible until someone
+    looks for a type that is missing.
+    """
+    from .classify import _EXTENSION_MAP, _MIME_MAP, _SOURCE_TYPE_MAP
+
+    extensions: dict[str, list[str]] = {}
+    for extension, data_type in _EXTENSION_MAP.items():
+        extensions.setdefault(data_type, []).append("." + extension)
+    mimes: dict[str, list[str]] = {}
+    for mime, data_type in _MIME_MAP.items():
+        mimes.setdefault(data_type, []).append(mime)
+
+    shared: dict[int, int] = {}
+    for prompt in BY_DATA_TYPE.values():
+        shared[id(prompt)] = shared.get(id(prompt), 0) + 1
+
+    rows = []
+    for data_type in sorted(set(BY_DATA_TYPE) | set(_EXTENSION_MAP.values())
+                            | set(_MIME_MAP.values()) | set(_SOURCE_TYPE_MAP.values())):
+        name, prompt = for_data_type(data_type)
+        rows.append({
+            "data_type": data_type,
+            "prompt": name,
+            # Sharing a prompt is a decision, not an omission: a .docx asks a
+            # PDF's questions. Saying which are shared makes that visible.
+            "shared": shared.get(id(prompt), 0) > 1,
+            "is_default": prompt is GENERIC and data_type not in BY_DATA_TYPE,
+            "extensions": sorted(extensions.get(data_type, [])),
+            "mime_types": sorted(mimes.get(data_type, [])),
+            "excerpt": prompt.strip().split("\n")[0],
+        })
+    return rows

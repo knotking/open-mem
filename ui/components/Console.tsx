@@ -2557,10 +2557,29 @@ function ModelsSection() {
 
 /* ----------------------------------------------------- 9. prompts */
 
+type PromptRow = {
+  data_type: string;
+  prompt: string;
+  shared: boolean;
+  extensions: string[];
+  mime_types: string[];
+  excerpt: string;
+};
+
 function PromptsSection({ projectId }: { projectId: string }) {
-  const [dataType, setDataType] = useState("document");
+  const [dataType, setDataType] = useState("document_pdf");
+  const [rows, setRows] = useState<PromptRow[]>([]);
   const [config, setConfig] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    // Served from the register rather than hardcoded here: a list in the
+    // console drifts from the one the classifier uses, and the drift is
+    // invisible until someone looks for a type that is missing.
+    call<{ prompts: PromptRow[] }>("api/v1/prompts")
+      .then((d) => setRows(d.prompts))
+      .catch((e) => setError((e as Error).message));
+  }, []);
 
   const load = useCallback(() => {
     call<Record<string, unknown>>(`api/v1/agents/${dataType}/config?project_id=${projectId}`)
@@ -2578,8 +2597,16 @@ function PromptsSection({ projectId }: { projectId: string }) {
         <code> generator_version</code>, which is what makes old artifacts detectably stale.
       </p>
       <section className="panel">
+        <h2>
+          {rows.length} data types, {new Set(rows.map((r) => r.prompt)).size} prompts
+        </h2>
+        <p className="empty" style={{ marginTop: 0 }}>
+          Some prompts are shared on purpose — a .docx asks a PDF&rsquo;s questions. The bar for a
+          new one is whether a reader would ask something different of it, not whether it is a
+          distinct file format.
+        </p>
         <div className="row">
-          {["document", "message_email", "chat_message", "transcript", "structured_record", "code"].map(
+          {rows.map((r) => r.data_type).map(
             (t) => (
               <button
                 key={t}
@@ -2592,6 +2619,25 @@ function PromptsSection({ projectId }: { projectId: string }) {
           )}
         </div>
         {error && <p className="err">{error}</p>}
+        {(() => {
+          const row = rows.find((r) => r.data_type === dataType);
+          if (!row) return null;
+          return (
+            <div className="meta" style={{ marginTop: 12 }}>
+              <span className="chip on">{row.prompt}</span>
+              {row.shared && <span className="chip">shared with other types</span>}
+              {row.extensions.slice(0, 8).map((e) => (
+                <span className="chip" key={e}>{e}</span>
+              ))}
+              {row.extensions.length > 8 && (
+                <span className="chip">+{row.extensions.length - 8} more</span>
+              )}
+              {row.extensions.length === 0 && (
+                <span className="chip">no file extension — routed by source</span>
+              )}
+            </div>
+          );
+        })()}
         {config && (
           <>
             <table className="kv" style={{ marginTop: 14 }}>

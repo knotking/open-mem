@@ -712,3 +712,12 @@ def parse(payload: bytes, *, mime: str, name: str) -> Parsed:
             code="unsupported",
         )
     return handler(payload, mime=mime, name=name).capped()
+
+
+def supported_formats() -> set[str]:
+    """Every format a handler exists for, counted rather than asserted.
+
+    The landing page quotes this number. A number someone typed into copy is
+    wrong within a month and wrong in the flattering direction.
+    """
+    return {e.lstrip(".") for e in BY_EXTENSION} | set(BY_MIME)

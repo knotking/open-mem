@@ -1599,6 +1599,51 @@ async def run_crawler_endpoint(
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
 
 
+@app.get("/api/v1/capabilities")
+async def capabilities(request: Request) -> dict:
+    """What this build can do, counted from the registries themselves.
+
+    Unauthenticated on purpose -- it is shown on the sign-in page, and every
+    number is derived from shipped code rather than from tenant data. Nothing
+    here says anything about who is using the system or what they stored.
+
+    Counted rather than written down: a landing page that claims a number a
+    maintainer typed will be wrong within a month, and wrong in the direction
+    that overstates.
+    """
+    from .classify import _EXTENSION_MAP, _MIME_MAP
+    from .crawlers import STRATEGIES
+    from .parsers import supported_formats
+    from .prompts import BY_DATA_TYPE, registry
+    from .providers import PROVIDERS
+
+    rows = registry()
+    return {
+        "formats": len(supported_formats()),
+        "data_types": len(rows),
+        "prompts": len({r["prompt"] for r in rows}),
+        "mime_types": len(_MIME_MAP),
+        "extensions": len(_EXTENSION_MAP),
+        "webhook_providers": len(PROVIDERS),
+        "crawler_strategies": len(STRATEGIES),
+        "embed_model": request.app.state.embedder.model_id,
+        "media_interpretation": request.app.state.multimodal.enabled,
+    }
+
+
+@app.get("/api/v1/prompts")
+async def prompt_registry_endpoint(actor: Principal = Depends(principal)) -> dict:
+    """Every data type the classifier can produce, and the prompt it reaches."""
+    from .prompts import registry
+
+    rows = registry()
+    return {
+        "prompts": rows,
+        "data_types": len(rows),
+        "distinct_prompts": len({r["prompt"] for r in rows}),
+    }
+
+
 @app.get("/api/v1/projects/{project_id}/entities")
 async def list_entities_endpoint(
     request: Request, project_id: str, type: str | None = None,

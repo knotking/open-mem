@@ -18,6 +18,7 @@ const ALLOWED = [
   /^api\/v1\/crawlers\/[\w-]+\/(dry-run|run|runs)$/,
   /^api\/v1\/crawl-runs\/[\w-]+$/,
   /^api\/v1\/crawl-tick$/,
+  /^api\/v1\/prompts$/,
   /^api\/v1\/projects\/[\w-]+\/entities$/,
   /^api\/v1\/entities\/[\w-]+$/,
   /^api\/v1\/entities\/merge$/,
