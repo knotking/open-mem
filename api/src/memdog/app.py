@@ -28,6 +28,10 @@ from .contracts import (
 from .chat import ask, build_answerer
 from .crawlers import CrawlerConfig, CrawlerError
 from . import crawling
+from . import entities as entities_mod
+from . import graph as graph_mod
+from .graph import GraphError
+from .entities import EntityError
 from . import account, agents, cases, control, memories as memories_mod, models, normalize, sharing
 from .account import AccountError
 from .agents import AgentConfigError
@@ -123,6 +127,7 @@ async def lifespan(app: FastAPI):
     app.state.embedder = embedder
     app.state.extractor = extractor
     app.state.answerer = answerer
+    app.state.graph = graph_mod.build_graph(pool, settings)
     app.state.crawl_worker = crawling.CrawlWorker(
         pool, queue, app.state.blobs, settings
     )
@@ -1593,6 +1598,173 @@ async def run_crawler_endpoint(
     try:
         run = await crawling.start_run(state.pool, actor, crawler_id, mode="live")
         return await state.crawl_worker.execute(run["run_id"])
+    except (CrawlerError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/capabilities")
+async def capabilities(request: Request) -> dict:
+    """What this build can do, counted from the registries themselves.
+
+    Unauthenticated on purpose -- it is shown on the sign-in page, and every
+    number is derived from shipped code rather than from tenant data. Nothing
+    here says anything about who is using the system or what they stored.
+
+    Counted rather than written down: a landing page that claims a number a
+    maintainer typed will be wrong within a month, and wrong in the direction
+    that overstates.
+    """
+    from .classify import _EXTENSION_MAP, _MIME_MAP
+    from .crawlers import STRATEGIES
+    from .parsers import supported_formats
+    from .prompts import BY_DATA_TYPE, registry
+    from .providers import PROVIDERS
+
+    rows = registry()
+    return {
+        "formats": len(supported_formats()),
+        "data_types": len(rows),
+        "prompts": len({r["prompt"] for r in rows}),
+        "mime_types": len(_MIME_MAP),
+        "extensions": len(_EXTENSION_MAP),
+        "webhook_providers": len(PROVIDERS),
+        "crawler_strategies": len(STRATEGIES),
+        "embed_model": request.app.state.embedder.model_id,
+        "media_interpretation": request.app.state.multimodal.enabled,
+    }
+
+
+@app.get("/api/v1/prompts")
+async def prompt_registry_endpoint(actor: Principal = Depends(principal)) -> dict:
+    """Every data type the classifier can produce, and the prompt it reaches."""
+    from .prompts import registry
+
+    rows = registry()
+    return {
+        "prompts": rows,
+        "data_types": len(rows),
+        "distinct_prompts": len({r["prompt"] for r in rows}),
+    }
+
+
+@app.get("/api/v1/projects/{project_id}/entities")
+async def list_entities_endpoint(
+    request: Request, project_id: str, type: str | None = None,
+    q: str | None = None, actor: Principal = Depends(principal),
+) -> dict:
+    """Entities the caller can see evidence for. An entity whose every mention
+    is hidden does not appear -- listing it would disclose the record."""
+    try:
+        return {"entities": await entities_mod.list_entities(
+            request.app.state.pool, actor, project_id, kind=type, query=q)}
+    except (EntityError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/entities/{entity_id}")
+async def get_entity_endpoint(
+    request: Request, entity_id: str, actor: Principal = Depends(principal)
+) -> dict:
+    try:
+        return await entities_mod.get_entity(request.app.state.pool, actor, entity_id)
+    except (EntityError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/entities/{entity_id}/graph")
+async def entity_graph_endpoint(
+    request: Request, entity_id: str, depth: int = 1,
+    predicates: str | None = None, limit: int = 120,
+    actor: Principal = Depends(principal),
+) -> dict:
+    """The neighbourhood around an entity, as asserted edges.
+
+    Visibility is enforced on every hop rather than on the result, so a path
+    cannot pass through a record the caller cannot read — the endpoints of such
+    a path would disclose that the record exists.
+    """
+    try:
+        result = await request.app.state.graph.neighbourhood(
+            actor, entity_id=entity_id, depth=depth,
+            predicates=[p for p in (predicates or "").split(",") if p] or None,
+            limit=limit,
+        )
+    except (GraphError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    return {
+        "root": vars(result.root),
+        "nodes": [vars(n) for n in result.nodes],
+        "edges": [vars(e) for e in result.edges],
+        "truncated": result.truncated,
+    }
+
+
+@app.get("/api/v1/entities/{entity_id}/co-mentions")
+async def co_mentions_endpoint(
+    request: Request, entity_id: str, limit: int = 25,
+    actor: Principal = Depends(principal),
+) -> dict:
+    """Entities named in the same records as this one.
+
+    Weak evidence, reported as a count so a reader can judge it — but it needs
+    no extraction, so it works before a model has read anything for
+    relationships.
+    """
+    try:
+        return {"co_mentions": await request.app.state.graph.co_mentioned(
+            actor, entity_id=entity_id, limit=limit)}
+    except (GraphError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/graph/predicates")
+async def graph_predicates_endpoint(actor: Principal = Depends(principal)) -> dict:
+    """The closed predicate vocabulary, served rather than documented twice."""
+    from .graph import MAX_DEPTH, PREDICATES
+
+    return {"predicates": list(PREDICATES), "max_depth": MAX_DEPTH}
+
+
+@app.post("/api/v1/entities/merge")
+async def merge_entities_endpoint(
+    request: Request, body: dict, actor: Principal = Depends(principal)
+) -> dict:
+    try:
+        return await entities_mod.merge(
+            request.app.state.pool, actor,
+            source_id=body.get("source_id", ""), target_id=body.get("target_id", ""),
+            reason=body.get("reason"),
+        )
+    except (EntityError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/entities/merges/{merge_id}/undo")
+async def unmerge_endpoint(
+    request: Request, merge_id: str, actor: Principal = Depends(principal)
+) -> dict:
+    try:
+        return await entities_mod.unmerge(request.app.state.pool, actor, merge_id)
+    except (EntityError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/crawl-tick", status_code=202)
+async def crawl_tick_endpoint(
+    request: Request, body: dict | None = None, actor: Principal = Depends(principal)
+) -> dict:
+    """Run one scheduler pass now, for this organization's due crawlers.
+
+    The same code Cloud Scheduler drives, scoped to the caller's org -- so
+    "what would the scheduler do" is answerable without waiting for the next
+    tick, and without being able to start somebody else's crawls.
+    """
+    state = request.app.state
+    try:
+        return await crawling.tick_for(
+            state.pool, actor, state.crawl_worker,
+            limit=int((body or {}).get("limit", 5)),
+        )
     except (CrawlerError, AuthError) as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
 

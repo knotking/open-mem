@@ -38,12 +38,45 @@ gcloud run deploy "$SERVICE" \
   --image "$IMAGE" \
   --service-account "$SA" \
   --network default --subnet default --vpc-egress private-ranges-only \
-  --set-env-vars "DB_HOST=${DB_HOST},DB_NAME=${DB_NAME},DB_USER=postgres,EMBED_DIM=768,RAW_BUCKET=${RAW_BUCKET},MEDIA_INTERPRETATION=true,EXTRACT_ENGINE=gemini,MULTIMODAL_MODEL=${MULTIMODAL_MODEL:-gemini-3.7-flash},TRANSCRIBE_MODEL=${TRANSCRIBE_MODEL:-gemini-3.5-transcribe},FIREBASE_PROJECT_ID=${PROJECT},OTEL_GCP_PROJECT=${PROJECT},IMAGE_TAG=${TAG}" \
+  --set-env-vars "DB_HOST=${DB_HOST},DB_NAME=${DB_NAME},DB_USER=postgres,EMBED_DIM=768,EMBED_ENGINE=${EMBED_ENGINE:-gemini},EMBED_MODEL=${EMBED_MODEL:-gemini-embedding-001},RAW_BUCKET=${RAW_BUCKET},MEDIA_INTERPRETATION=true,EXTRACT_ENGINE=gemini,MULTIMODAL_MODEL=${MULTIMODAL_MODEL:-gemini-3.7-flash},TRANSCRIBE_MODEL=${TRANSCRIBE_MODEL:-gemini-3.5-transcribe},FIREBASE_PROJECT_ID=${PROJECT},OTEL_GCP_PROJECT=${PROJECT},IMAGE_TAG=${TAG}" \
   --set-secrets "DB_PASSWORD=memdog-db-password:latest,MEMDOG_MASTER_KEY=memdog-master-key:latest,GEMINI_API_KEY=gemini-api-key:latest" \
   --allow-unauthenticated \
   --min-instances 0 --max-instances 4 \
   --cpu 1 --memory 1Gi --timeout 600 \
   --quiet
+
+# The reconciler runs the same image with the same configuration, and must be
+# deployed with the service rather than separately. It had drifted twenty tags
+# behind and was missing EMBED_ENGINE entirely, so it re-embedded with the old
+# model and concluded nothing was stale -- a repair job that quietly repaired
+# the corpus back to the state it was supposed to be moving away from.
+#
+# Anything that reads `current_generators` has to agree with the service about
+# what "current" means, or its idea of stale is the inverse of the truth.
+step "Deploying the reconcile job"
+JOB_ENV="DB_HOST=${DB_HOST},DB_NAME=${DB_NAME},DB_USER=postgres,EMBED_DIM=768,EMBED_ENGINE=${EMBED_ENGINE:-gemini},EMBED_MODEL=${EMBED_MODEL:-gemini-embedding-001},RAW_BUCKET=${RAW_BUCKET},MEDIA_INTERPRETATION=true,EXTRACT_ENGINE=gemini,MULTIMODAL_MODEL=${MULTIMODAL_MODEL:-gemini-3.7-flash},TRANSCRIBE_MODEL=${TRANSCRIBE_MODEL:-gemini-3.5-transcribe},OTEL_GCP_PROJECT=${PROJECT},IMAGE_TAG=${TAG}"
+JOB_SECRETS="DB_PASSWORD=memdog-db-password:latest,MEMDOG_MASTER_KEY=memdog-master-key:latest,GEMINI_API_KEY=gemini-api-key:latest"
+
+for job_spec in "memdog-reconcile:reconcile" "memdog-crawl-tick:crawl-tick"; do
+  job="${job_spec%%:*}"
+  command="${job_spec##*:}"
+  if gcloud run jobs describe "$job" --project "$PROJECT" --region "$REGION" >/dev/null 2>&1; then
+    verb=update
+  else
+    verb=create
+  fi
+  gcloud run jobs "$verb" "$job" \
+    --project "$PROJECT" --region "$REGION" \
+    --image "$IMAGE" \
+    --service-account "$SA" \
+    --network default --subnet default --vpc-egress private-ranges-only \
+    --set-env-vars "$JOB_ENV" \
+    --set-secrets "$JOB_SECRETS" \
+    --command python --args="-m,memdog,$command" \
+    --max-retries 1 --task-timeout 1800 \
+    --cpu 1 --memory 1Gi \
+    --quiet
+done
 
 step "Done"
 gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" \

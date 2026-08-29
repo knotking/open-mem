@@ -242,3 +242,82 @@ async def test_an_item_already_examined_is_not_swept_again(
     # declined". The item must not be re-parsed; unconsumed events are a
     # separate concern and may legitimately be re-delivered.
     assert swept.parse == 0
+
+
+async def test_an_artifact_produced_by_a_fallback_is_enriched_again(
+    pool, blobs, settings, embedder, extractor, tenant, principal_for
+):
+    """A degraded artifact is stamped with the primary's generator_version --
+    correctly, because the prompt and schema really were the primary's. That
+    makes it invisible to every other staleness check, so without this tier an
+    item enriched during a provider outage keeps its worse summary forever.
+    """
+    from memdog.contracts import Inline, WriteItem, WriteOptions, WriteRequest
+    from memdog.workers import EnrichWorker, EventWorker
+    from memdog.write import write_items
+
+    actor = await principal_for(tenant.api_key)
+    queue = InProcessQueue()
+    enrich = EnrichWorker(pool, extractor, settings)
+    await enrich.ensure_generator()
+    enrich.register(queue)
+    EventWorker(pool, queue, enrich_worker=enrich).register(queue)
+
+    written = await write_items(
+        pool, queue, blobs, settings, actor,
+        WriteRequest(producer_id=tenant.producer_id, items=[
+            WriteItem(external_id="degraded-1",
+                      content=Inline(text="A record enriched while the provider was down.")),
+        ], options=WriteOptions(enrich=True)),
+    )
+    await queue.drain()
+    data_id = written.results[0].data_id
+
+    # Exactly what a fallback leaves behind: current generator, non-zero depth.
+    await pool.execute(
+        """
+        UPDATE artifacts SET fallback_depth = 1
+         WHERE artifact_id IN (SELECT artifact_id FROM artifact_sources WHERE data_id = $1)
+        """,
+        data_id,
+    )
+    await pool.execute("UPDATE data_items SET state = 'enriched' WHERE data_id = $1", data_id)
+
+    swept = await reconcile(
+        pool, queue, embed_generator=embedder.model_id,
+        enrich_generator=enrich.generator_version, grace_seconds=0,
+    )
+    await queue.close()
+    assert swept.enrich >= 1, "a fallback-produced artifact must be revisited"
+
+
+async def test_a_clean_artifact_is_not_enriched_again(
+    pool, blobs, settings, embedder, extractor, tenant, principal_for
+):
+    """The tier must not become a permanent re-enrichment loop over the whole
+    corpus -- that would be an expensive way to change nothing."""
+    from memdog.contracts import Inline, WriteItem, WriteOptions, WriteRequest
+    from memdog.workers import EnrichWorker, EventWorker
+    from memdog.write import write_items
+
+    actor = await principal_for(tenant.api_key)
+    queue = InProcessQueue()
+    enrich = EnrichWorker(pool, extractor, settings)
+    await enrich.ensure_generator()
+    enrich.register(queue)
+    EventWorker(pool, queue, enrich_worker=enrich).register(queue)
+
+    await write_items(
+        pool, queue, blobs, settings, actor,
+        WriteRequest(producer_id=tenant.producer_id, items=[
+            WriteItem(external_id="clean-1", content=Inline(text="Enriched normally.")),
+        ], options=WriteOptions(enrich=True)),
+    )
+    await queue.drain()
+
+    swept = await reconcile(
+        pool, queue, embed_generator=embedder.model_id,
+        enrich_generator=enrich.generator_version, grace_seconds=0,
+    )
+    await queue.close()
+    assert swept.enrich == 0

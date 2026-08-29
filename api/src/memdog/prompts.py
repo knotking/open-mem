@@ -131,6 +131,163 @@ Extract only what is plainly present. Where the type is unclear, a sparse,
 correct extraction is better than a rich, speculative one."""
 
 
+SPREADSHEET = """Extract from a spreadsheet or tabular export.
+
+A table is not prose and must not be summarised as though it were. What a
+reader needs is its shape.
+
+title:       what the table is OF -- "Q3 pipeline by region", not "Spreadsheet".
+description: name the columns and say how many rows, in one sentence.
+summary:     what the data covers -- the range of dates, the categories present,
+             the magnitudes involved. Not a narration of individual rows.
+keywords:    column names and the domain terms in them.
+
+Never invent totals or averages you have not been given. A number stated
+confidently and wrongly is worse than an absent one, because a reader cannot
+tell the two apart from the summary.
+
+If several sheets are present, say so and describe each briefly. If the first
+row is clearly a header, treat it as one rather than extracting it as data."""
+
+PRESENTATION = """Extract from a slide deck.
+
+A deck is an argument delivered in fragments, and the argument is the
+interesting part -- no single slide contains it.
+
+title:       the deck's own title slide if present.
+description: who it was for and what it argued, where that is evident.
+summary:     the through-line across the slides, not a slide-by-slide list.
+
+Speaker notes, where present, are usually more substantive than the slide text.
+Weight them accordingly.
+
+Bullet fragments are not sentences. Do not pad them into sentences that claim
+more than the slide did."""
+
+CALENDAR = """Extract from a calendar event or invitation.
+
+This type maps almost perfectly onto structured fields, so prefer precision
+over prose.
+
+title:       the event's own summary line.
+description: "A meeting on <date> with N attendees", or the equivalent.
+keywords:    the subject matter, never the attendees' names.
+
+Record the organiser and attendee count in fields. Do not list attendees by
+name in keywords -- an attendee list is personal data and belongs in the entity
+layer where it is governed, not in a free-text field where it is not.
+
+A recurring event describes a series. Say so, rather than describing one
+instance as though it were the whole thing.
+
+If the event has nothing beyond a title, that is a complete extraction. Do not
+speculate about its purpose."""
+
+CONTACT = """Extract from a contact record.
+
+This is personal data about an identifiable person, and it is almost entirely
+structured. Extract exactly what is present.
+
+title:       the person's or organization's name as written.
+description: role and affiliation if stated -- nothing inferred.
+
+Do not enrich. Do not guess a company from an email domain, a location from a
+phone prefix, or anything at all from a name. The value of a contact record is
+that it is what someone entered; a plausible invention is indistinguishable
+from it afterwards and cannot be separated out again."""
+
+LOG = """Extract from a log file or diagnostic output.
+
+Logs are overwhelmingly repetitive, and nearly all the information is in the
+small part that differs.
+
+title:       what produced it, and over what period.
+description: the time span covered and roughly how many lines.
+summary:     the errors and anomalies, the distinct failure modes, and whether
+             they cluster in time. Not a description of normal operation.
+
+Report the shape of the failures rather than every instance: "142 connection
+timeouts to the payments host, all between 02:10 and 02:40" beats reproducing
+any one of them.
+
+If nothing anomalous is present, say so plainly. A quiet log is a real and
+useful finding."""
+
+CONFIG = """Extract from a configuration or infrastructure-definition file.
+
+title:       what it configures.
+description: the system or tool, and the environment where evident.
+keywords:    service, resource and component names.
+
+**Never reproduce a secret.** Keys, tokens, passwords and connection strings
+must be reported as present and redacted. Naming the variable is useful; naming
+its value leaks it into the summary, and from there into embeddings and answers,
+where it cannot be recalled.
+
+Describe what the configuration does, not its syntax."""
+
+AUDIO = """Extract from an audio recording, working from its transcript.
+
+title:       what the recording is about, never "Audio recording".
+description: the kind of audio -- a call, a voice note, a meeting, a broadcast --
+             and its approximate length if known.
+summary:     what was discussed and decided.
+
+Speaker labels are frequently wrong or missing in automatic transcription.
+Attribute statements only where the transcript is explicit, and prefer "one
+speaker said" to guessing which.
+
+Transcription errors cluster in names, numbers and technical terms. Where a term
+is clearly garbled, do not confidently normalise it into something plausible --
+a wrong name recorded confidently is worse than an uncertain one, because
+nothing downstream can tell it was a guess.
+
+Emphasise decisions, commitments and action items. Speech is where things get
+agreed, and where they are least likely to be written down anywhere else."""
+
+VIDEO = """Extract from a video recording.
+
+Two channels carry meaning and they are not the same: what is said, and what is
+shown. A screen-share of a dashboard and a conversation about it are different
+content.
+
+title:       what the video is about.
+description: its kind -- a meeting, a screen recording, a demo, a clip -- and length.
+summary:     the spoken content first, then anything visually distinct that the
+             speech does not already cover.
+
+If it is primarily a screen recording, what is on screen may matter more than the
+narration. Say which one you drew from.
+
+Do not narrate the visuals shot by shot. As with audio, treat speaker attribution
+and garbled terms with suspicion."""
+
+ARCHIVE = """Extract from an archive or container file.
+
+The archive itself has almost no content. Its members do, and they are processed
+separately.
+
+title:       what the archive appears to contain, from its name and its listing.
+description: how many members, and of what kinds.
+summary:     the structure -- top-level folders, the dominant file types.
+
+Do not speculate about the contents of members whose names are all you have seen.
+Listing them is useful; imagining what is inside them is not."""
+
+GEO = """Extract from geospatial data -- a track, a route, or a set of features.
+
+title:       what the data describes -- a journey, an area, a set of locations.
+description: the kind of geometry, and how many features or points.
+summary:     the extent covered, the time span if the points are timestamped, and
+             anything distinctive about the shape of the data.
+
+Location data is sensitive. Describe the extent -- a city, a region -- rather than
+reproducing precise coordinates in free text, where they escape the governance
+that applies to the structured fields.
+
+Do not infer a purpose. A track between two points is a track between two points."""
+
+
 # data_type -> prompt. The cascade produces the data_type; this maps it onto the
 # agent that handles it, which is the whole reason those are separate fields.
 BY_DATA_TYPE: dict[str, str] = {
@@ -146,6 +303,22 @@ BY_DATA_TYPE: dict[str, str] = {
     "image": IMAGE,
     "code": CODE_OR_CONFIG,
     "binary_blob": GENERIC,
+    # Types whose interesting questions genuinely differ from a document's.
+    # The test for adding one is not "is this a distinct file format" -- it is
+    # "would a reader ask something different of it". A .docx asks the same
+    # questions as a PDF and shares its prompt; a spreadsheet does not.
+    "document_office": DOCUMENT,
+    "document_markup": DOCUMENT,
+    "spreadsheet": SPREADSHEET,
+    "presentation": PRESENTATION,
+    "calendar": CALENDAR,
+    "contact": CONTACT,
+    "log": LOG,
+    "config": CONFIG,
+    "audio": AUDIO,
+    "video": VIDEO,
+    "archive": ARCHIVE,
+    "geo": GEO,
 }
 
 NAMES: dict[str, str] = {
@@ -154,6 +327,10 @@ NAMES: dict[str, str] = {
         "document": DOCUMENT, "transcript": TRANSCRIPT,
         "structured_record": STRUCTURED_RECORD, "code_or_config": CODE_OR_CONFIG,
         "image": IMAGE, "generic": GENERIC,
+        "spreadsheet": SPREADSHEET, "presentation": PRESENTATION,
+        "calendar": CALENDAR, "contact": CONTACT, "log": LOG,
+        "config": CONFIG, "audio": AUDIO, "video": VIDEO,
+        "archive": ARCHIVE, "geo": GEO,
     }.items()
 }
 
@@ -163,3 +340,42 @@ def for_data_type(data_type: str | None) -> tuple[str, str]:
     nothing -- an unhandled type still has to produce a renderable envelope."""
     prompt = BY_DATA_TYPE.get(data_type or "", GENERIC)
     return NAMES.get(id(prompt), "generic"), prompt
+
+
+def registry() -> list[dict]:
+    """The data-type to prompt mapping, as data.
+
+    Served to the console so its list cannot drift from the register the way a
+    hardcoded one did -- it showed six types while twenty-four were routed,
+    which is exactly the kind of divergence that is invisible until someone
+    looks for a type that is missing.
+    """
+    from .classify import _EXTENSION_MAP, _MIME_MAP, _SOURCE_TYPE_MAP
+
+    extensions: dict[str, list[str]] = {}
+    for extension, data_type in _EXTENSION_MAP.items():
+        extensions.setdefault(data_type, []).append("." + extension)
+    mimes: dict[str, list[str]] = {}
+    for mime, data_type in _MIME_MAP.items():
+        mimes.setdefault(data_type, []).append(mime)
+
+    shared: dict[int, int] = {}
+    for prompt in BY_DATA_TYPE.values():
+        shared[id(prompt)] = shared.get(id(prompt), 0) + 1
+
+    rows = []
+    for data_type in sorted(set(BY_DATA_TYPE) | set(_EXTENSION_MAP.values())
+                            | set(_MIME_MAP.values()) | set(_SOURCE_TYPE_MAP.values())):
+        name, prompt = for_data_type(data_type)
+        rows.append({
+            "data_type": data_type,
+            "prompt": name,
+            # Sharing a prompt is a decision, not an omission: a .docx asks a
+            # PDF's questions. Saying which are shared makes that visible.
+            "shared": shared.get(id(prompt), 0) > 1,
+            "is_default": prompt is GENERIC and data_type not in BY_DATA_TYPE,
+            "extensions": sorted(extensions.get(data_type, [])),
+            "mime_types": sorted(mimes.get(data_type, [])),
+            "excerpt": prompt.strip().split("\n")[0],
+        })
+    return rows

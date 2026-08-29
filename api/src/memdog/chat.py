@@ -115,6 +115,10 @@ class Generated:
         self.model_version = model_version
         self.response_id = response_id
         self.tokens = tokens
+        # Filled in by the chain. Zero means the primary answered.
+        self.depth = 0
+        self.engine: str | None = None
+        self.generator_version: str | None = None
 
 
 class Answerer(Protocol):
@@ -261,17 +265,51 @@ class GeminiAnswerer:
         )
 
 
+class ChainedAnswerer:
+    """Several answerers, tried in order, behind the `Answerer` protocol.
+
+    The failure this fixes was real and observed: a free-tier quota error left
+    chat returning 429 for an hour while the extractive answerer -- which needs
+    no network and cannot be rate limited -- sat configured and unused. A
+    quoted-passages answer is much worse than a written one and enormously
+    better than an error.
+    """
+
+    def __init__(self, chain) -> None:
+        self._chain = chain
+        self.model_id = chain.model_id
+        self.generator_version = _fingerprint(chain.model_id)
+
+    async def answer(self, question: str, passages: list[Citation]) -> Generated:
+        served = await self._chain.run(question, passages)
+        generated = served.result
+        generated.depth = served.depth
+        generated.engine = served.step.name
+        # The generator version has to be the one that actually answered. A
+        # fallback answer attributed to the primary's fingerprint would be
+        # indistinguishable from one the primary wrote.
+        generated.generator_version = _fingerprint(served.step.model_id)
+        return generated
+
+
 def build_answerer(settings) -> Answerer:
     """Chat rides the extraction engine's configuration.
 
-    Running the answerer on a different provider than the enrichment agent would
-    mean two `allowed_providers` decisions where the org made one.
+    Running the answerer on a different provider than the enrichment agent
+    would mean two `allowed_providers` decisions where the org made one.
     """
+    from .routing import Chain, Step
+
     if settings.extract_engine == "gemini" and settings.gemini_api_key:
-        return GeminiAnswerer(
+        primary = GeminiAnswerer(
             settings.gemini_api_key,
             settings.extract_model or settings.multimodal_model,
         )
+        floor = ExtractiveAnswerer()
+        return ChainedAnswerer(Chain("answer", [
+            Step(name="gemini", model_id=primary.model_id, call=primary.answer),
+            Step(name="extractive", model_id=floor.model_id, call=floor.answer),
+        ]))
     return ExtractiveAnswerer()
 
 
@@ -388,7 +426,7 @@ async def _ask(
             found.query_id,
             generated.text if keep_text else None,
             generated.model_version or answerer.model_id,
-            answerer.generator_version,
+            generated.generator_version or answerer.generator_version,
             generated.tokens,
             latency_ms,
             strictest,
@@ -420,7 +458,9 @@ async def _ask(
         excluded=found.excluded,
         model_id=answerer.model_id,
         served_by_model=generated.model_version or answerer.model_id,
-        generator_version=answerer.generator_version,
+        generator_version=generated.generator_version or answerer.generator_version,
+        fallback_depth=generated.depth,
+        served_by_engine=generated.engine,
         answer_stored=keep_text,
         latency_ms=latency_ms,
     )

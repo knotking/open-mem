@@ -31,7 +31,7 @@ import {
 type Section =
   | "overview"
   | "add" | "update" | "search" | "ask" | "inbound" | "crawlers"
-  | "memory" | "cases"
+  | "memory" | "cases" | "entities"
   | "audit" | "sharing" | "deletion"
   | "settings" | "models" | "prompts"
   | "projects" | "keys" | "producers" | "platform";
@@ -52,7 +52,7 @@ const GROUPS: { title: string; items: { key: Section; label: string; hint: strin
       { key: "add", label: "Add data", hint: "paste, upload or record" },
       { key: "update", label: "Update data", hint: "re-write a key, see revisions" },
       { key: "search", label: "Search", hint: "retrieve, with the trace" },
-      { key: "ask", label: "Ask", hint: "answer, with its evidence" },
+      { key: "ask", label: "Chat", hint: "ask your data, with citations" },
       { key: "inbound", label: "Inbound", hint: "webhooks providers post to" },
       { key: "crawlers", label: "Crawlers", hint: "pull what won't push" },
     ],
@@ -62,6 +62,7 @@ const GROUPS: { title: string; items: { key: Section; label: string; hint: strin
     items: [
       { key: "memory", label: "Memories", hint: "lifecycle containers" },
       { key: "cases", label: "Cases", hint: "subjects and timelines" },
+      { key: "entities", label: "Entities", hint: "who and what, with evidence" },
     ],
   },
   {
@@ -200,6 +201,7 @@ export default function Console({
         {section === "audit" && <Audit projectId={projectId} />}
         {section === "memory" && <MemorySection projectId={projectId} />}
         {section === "cases" && <CasesSection projectId={projectId} />}
+        {section === "entities" && <EntitiesSection projectId={projectId} />}
         {section === "sharing" && <SharingSection />}
         {section === "deletion" && <DeletionSection projectId={projectId} onChange={refresh} />}
         {section === "settings" && <SettingsSection projectId={projectId} />}
@@ -672,7 +674,342 @@ function UpdateData({
   );
 }
 
-/* ---------------------------------------------------------- 3. crawlers */
+/* --------------------------------------------------------- 3. entities */
+
+type Entity = {
+  entity_id: string;
+  type: string;
+  display_name: string;
+  identifiers: string[];
+  visible_mentions: number;
+};
+
+type GraphNode = { entity_id: string; display_name: string; type: string; depth: number };
+type GraphEdge = {
+  subject_id: string; predicate: string; object_id: string;
+  evidence: number; source_data_ids: string[]; confidence: number;
+};
+type GraphView = {
+  root: GraphNode; nodes: GraphNode[]; edges: GraphEdge[]; truncated: boolean;
+};
+type CoMention = {
+  entity_id: string; display_name: string; type: string; shared_records: number;
+};
+
+type EntityDetail = Entity & {
+  mentions: { data_id: string; surface: string; resolved_by: string;
+              external_id: string; state: string; data_type: string | null }[];
+  visible_mention_count: number;
+};
+
+const ENTITY_TYPES = ["person", "organization", "location", "product",
+                      "event", "topic", "other"];
+
+function EntitiesSection({ projectId }: { projectId: string }) {
+  const [list, setList] = useState<Entity[]>([]);
+  const [kind, setKind] = useState<string | null>(null);
+  const [detail, setDetail] = useState<EntityDetail | null>(null);
+  const [chosen, setChosen] = useState<string[]>([]);
+  const [graph, setGraph] = useState<GraphView | null>(null);
+  const [together, setTogether] = useState<CoMention[]>([]);
+  const [depth, setDepth] = useState(1);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const [lastMerge, setLastMerge] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const page = await call<{ entities: Entity[] }>(
+        `api/v1/projects/${projectId}/entities${kind ? `?type=${kind}` : ""}`,
+      );
+      setList(page.entities);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, [projectId, kind]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function act(message: string, work: () => Promise<void>) {
+    setBusy(true);
+    setError(null);
+    setNote(null);
+    try {
+      await work();
+      setNote(message);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function toggle(id: string) {
+    setChosen((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id].slice(-2),
+    );
+  }
+
+  return (
+    <>
+      <h1>Organize / entities</h1>
+      <p className="lede">
+        The people, organizations and things your records name. Resolution is
+        deliberately cautious: it joins on a shared email or an exact name and
+        otherwise keeps them apart, because two nodes you can merge later beat one
+        node that fused two people and cannot be separated.
+      </p>
+
+      <section className="panel">
+        <div className="row">
+          <button className={kind === null ? "" : "secondary"} onClick={() => setKind(null)}>
+            All
+          </button>
+          {ENTITY_TYPES.map((t) => (
+            <button key={t} className={kind === t ? "" : "secondary"} onClick={() => setKind(t)}>
+              {t}
+            </button>
+          ))}
+        </div>
+        {note && <p className="ok">{note}</p>}
+        {error && <p className="err">{error}</p>}
+      </section>
+
+      {chosen.length === 2 && (
+        <section className="panel">
+          <h2>Merge these two?</h2>
+          <p className="empty">
+            The second becomes the survivor. Nothing is destroyed — the merge can be undone,
+            because &ldquo;these are the same person&rdquo; is a judgement and judgements are
+            sometimes wrong.
+          </p>
+          <div className="row">
+            <button
+              disabled={busy}
+              onClick={() =>
+                act("Merged. You can undo this.", async () => {
+                  const result = await call<{ merge_id: string }>("api/v1/entities/merge", {
+                    source_id: chosen[0], target_id: chosen[1],
+                  });
+                  setLastMerge(result.merge_id);
+                  setChosen([]);
+                  setDetail(null);
+                  await load();
+                })
+              }
+            >
+              Merge
+            </button>
+            <button className="secondary" onClick={() => setChosen([])}>Cancel</button>
+          </div>
+        </section>
+      )}
+
+      {lastMerge && (
+        <section className="panel">
+          <div className="row" style={{ alignItems: "center", gap: 12 }}>
+            <button
+              className="secondary"
+              disabled={busy}
+              onClick={() =>
+                act("Merge undone.", async () => {
+                  await call(`api/v1/entities/merges/${lastMerge}/undo`, {});
+                  setLastMerge(null);
+                  await load();
+                })
+              }
+            >
+              Undo that merge
+            </button>
+          </div>
+        </section>
+      )}
+
+      <section className="panel">
+        <h2>{list.length} entities</h2>
+        {list.length === 0 ? (
+          <p className="empty">
+            Nothing yet. Entities are resolved when a record is enriched, so enrich something
+            first.
+          </p>
+        ) : (
+          list.map((entity) => (
+            <div
+              className="hit"
+              key={entity.entity_id}
+              style={{
+                cursor: "pointer",
+                borderColor: chosen.includes(entity.entity_id) ? "var(--accent)" : undefined,
+              }}
+              onClick={() =>
+                act("", async () => {
+                  const [d, g, c] = await Promise.all([
+                    call<EntityDetail>(`api/v1/entities/${entity.entity_id}`,
+                                       undefined, "GET"),
+                    call<GraphView>(
+                      `api/v1/entities/${entity.entity_id}/graph?depth=${depth}`,
+                      undefined, "GET"),
+                    call<{ co_mentions: CoMention[] }>(
+                      `api/v1/entities/${entity.entity_id}/co-mentions`,
+                      undefined, "GET"),
+                  ]);
+                  setDetail(d);
+                  setGraph(g);
+                  setTogether(c.co_mentions);
+                })
+              }
+            >
+              <div className="meta">
+                <span className="chip on">{entity.type}</span>
+                <span className="chip">{entity.visible_mentions} record
+                  {entity.visible_mentions === 1 ? "" : "s"}</span>
+                {entity.identifiers?.map((id) => (
+                  <span className="chip" key={id}>{id}</span>
+                ))}
+              </div>
+              <div className="text">{entity.display_name}</div>
+              <div className="row" style={{ marginTop: 6 }}>
+                <button
+                  className="secondary"
+                  onClick={(e) => { e.stopPropagation(); toggle(entity.entity_id); }}
+                >
+                  {chosen.includes(entity.entity_id) ? "Selected" : "Select to merge"}
+                </button>
+              </div>
+            </div>
+          ))
+        )}
+      </section>
+
+      {graph && (
+        <section className="panel">
+          <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
+            <h2 style={{ margin: 0 }}>Connections</h2>
+            <div className="row">
+              {[1, 2, 3].map((d) => (
+                <button
+                  key={d}
+                  className={depth === d ? "" : "secondary"}
+                  disabled={busy}
+                  onClick={() =>
+                    act("", async () => {
+                      setDepth(d);
+                      setGraph(
+                        await call<GraphView>(
+                          `api/v1/entities/${graph.root.entity_id}/graph?depth=${d}`,
+                          undefined, "GET"),
+                      );
+                    })
+                  }
+                >
+                  {d} hop{d > 1 ? "s" : ""}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {graph.edges.length === 0 ? (
+            <p className="empty">
+              No asserted relationships yet. Edges come from what a document actually stated —
+              &ldquo;Priya works for Northwind&rdquo; — so they need an enrichment pass that read
+              for them. Co-mentions below need nothing and work today.
+            </p>
+          ) : (
+            <>
+              <p className="empty" style={{ marginTop: 4 }}>
+                Each edge names the records that assert it. One document saying something is a
+                claim; several saying it independently is closer to a fact.
+              </p>
+              {graph.edges.map((edge, i) => {
+                const name = (id: string) =>
+                  graph.nodes.find((n) => n.entity_id === id)?.display_name ?? id;
+                return (
+                  <div className="hit" key={`${edge.subject_id}-${edge.predicate}-${i}`}>
+                    <div className="meta">
+                      <span className="chip on">{edge.predicate.replace(/_/g, " ")}</span>
+                      <span className="chip">
+                        {edge.evidence} record{edge.evidence === 1 ? "" : "s"} assert this
+                      </span>
+                    </div>
+                    <div className="text">
+                      {name(edge.subject_id)} <span className="edge-arrow">→</span>{" "}
+                      {name(edge.object_id)}
+                    </div>
+                    <p className="provenance">{edge.source_data_ids.join(" · ")}</p>
+                  </div>
+                );
+              })}
+            </>
+          )}
+
+          {graph.nodes.length > 1 && (
+            <>
+              <h3>Reachable within {depth} hop{depth > 1 ? "s" : ""}</h3>
+              <div className="row">
+                {graph.nodes
+                  .filter((n) => n.entity_id !== graph.root.entity_id)
+                  .map((n) => (
+                    <span className="chip" key={n.entity_id}>
+                      {n.display_name} · {n.depth}
+                    </span>
+                  ))}
+              </div>
+              {graph.truncated && (
+                <p className="empty">
+                  Truncated at the result limit — there is more here than is shown.
+                </p>
+              )}
+            </>
+          )}
+        </section>
+      )}
+
+      {together.length > 0 && (
+        <section className="panel">
+          <h2>Mentioned alongside</h2>
+          <p className="empty" style={{ marginTop: 4 }}>
+            Entities appearing in the same records. This is weak evidence — appearing together is
+            not a relationship — but it needs no extraction, so it works before any model has read
+            for relationships.
+          </p>
+          <div className="row">
+            {together.map((c) => (
+              <span className="chip" key={c.entity_id}>
+                {c.display_name} · {c.shared_records} shared
+              </span>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {detail && (
+        <section className="panel">
+          <h2>{detail.display_name}</h2>
+          <p className="empty">
+            Every mention is kept with the record it came from and why it resolved here — so a
+            wrong join is something you can see rather than something you inherit.
+          </p>
+          {detail.mentions.map((m, i) => (
+            <div className="hit" key={`${m.data_id}-${i}`}>
+              <div className="meta">
+                <span className="chip">as &ldquo;{m.surface}&rdquo;</span>
+                <span className="chip on">{m.resolved_by.replace("_", " ")}</span>
+                <span className={`chip ${m.state}`}>{m.state}</span>
+                {m.data_type && <span className="chip">{m.data_type}</span>}
+              </div>
+              <p className="provenance">{m.external_id} · {m.data_id}</p>
+            </div>
+          ))}
+        </section>
+      )}
+    </>
+  );
+}
+
+/* ---------------------------------------------------------- 4. crawlers */
 
 type Crawler = {
   crawler_id: string;
@@ -708,6 +1045,14 @@ type RunResult = {
   skipped: number;
   failed: number;
   reason: string | null;
+};
+
+type TickResult = {
+  started: string[];
+  skipped: string[];
+  reaped: number;
+  runs: RunResult[];
+  skipped_lock?: boolean;
 };
 
 type RunDetail = RunResult & {
@@ -863,7 +1208,39 @@ function CrawlersSection({ projectId }: { projectId: string }) {
       </section>
 
       <section className="panel">
-        <h2>Configured</h2>
+        <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
+          <h2 style={{ margin: 0 }}>Configured</h2>
+          <button
+            className="secondary"
+            disabled={busy}
+            onClick={() =>
+              act("Scheduler pass finished.", async () => {
+                const tick = await call<TickResult>("api/v1/crawl-tick", {});
+                setNote(
+                  tick.skipped_lock
+                    ? "Another scheduler pass is already running."
+                    : `Started ${tick.started.length}, skipped ${tick.skipped.length} still` +
+                      ` in flight, recovered ${tick.reaped} abandoned.`,
+                );
+                if (tick.runs.length > 0) {
+                  setDetail(
+                    await call<RunDetail>(
+                      `api/v1/crawl-runs/${tick.runs[0].run_id}`, undefined, "GET",
+                    ),
+                  );
+                }
+                await load();
+              })
+            }
+          >
+            Run due crawlers
+          </button>
+        </div>
+        <p className="empty">
+          The same pass the scheduler makes, for crawlers of yours that are due — so what it would
+          do is answerable now rather than at the next tick. A crawler already running is skipped,
+          not queued.
+        </p>
         {crawlers.length === 0 ? (
           <p className="empty">Nothing yet.</p>
         ) : (
@@ -1017,6 +1394,8 @@ type Answer = {
   excluded: { data_id: string; reason: string; score: number | null; state: string | null }[];
   model_id: string;
   served_by_model: string | null;
+  fallback_depth: number;
+  served_by_engine: string | null;
   answer_stored: boolean;
   latency_ms: number;
 };
@@ -1028,8 +1407,8 @@ function AskSection({ projectId }: { projectId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
 
-  async function send() {
-    const asked = question.trim();
+  async function send(preset?: string) {
+    const asked = (preset ?? question).trim();
     if (!asked) return;
     setBusy(true);
     setError(null);
@@ -1050,19 +1429,37 @@ function AskSection({ projectId }: { projectId: string }) {
 
   return (
     <>
-      <h1>Read / ask</h1>
+      <h1>Chat with your data</h1>
       <p className="lede">
-        The same retrieval as search, with a model reading the passages. Every claim carries the
-        number of the passage it came from, and the passages are here — so a wrong answer is a
-        thing you can check rather than a thing you have to believe.
+        Ask a question and a model answers from your records — the same retrieval as search, with
+        the passages read back to you. Every claim carries the number of the passage it came from,
+        and those passages are shown, so a wrong answer is something you can check rather than
+        something you have to believe.
       </p>
 
       {turns.length === 0 && (
         <section className="panel">
-          <p className="empty">
-            Ask about data in this project. Answers come only from records you can already read;
-            when the corpus does not support an answer, it says so instead of composing one.
+          <p className="empty" style={{ marginTop: 0 }}>
+            Answers come only from records you can already read. When your data does not support an
+            answer, it says so instead of composing one.
           </p>
+          <h3>Try one</h3>
+          <div className="row">
+            {[
+              "What did we write about most recently?",
+              "Summarise what is in this project.",
+              "What caused the last incident?",
+            ].map((example) => (
+              <button
+                key={example}
+                className="secondary"
+                disabled={busy}
+                onClick={() => void send(example)}
+              >
+                {example}
+              </button>
+            ))}
+          </div>
         </section>
       )}
 
@@ -1084,6 +1481,11 @@ function AskSection({ projectId }: { projectId: string }) {
               </span>
             )}
             <span className="chip">{turn.served_by_model || turn.model_id}</span>
+            {turn.fallback_depth > 0 && (
+              <span className="chip warnchip">
+                fallback: {turn.served_by_engine} answered
+              </span>
+            )}
             <span className="chip">{turn.latency_ms} ms</span>
             {!turn.answer_stored && <span className="chip">text not stored</span>}
           </div>
@@ -1131,7 +1533,7 @@ function AskSection({ projectId }: { projectId: string }) {
             onKeyDown={(e) => e.key === "Enter" && void send()}
             style={{ flex: 1 }}
           />
-          <button onClick={send} disabled={busy || !question.trim()}>
+          <button onClick={() => void send()} disabled={busy || !question.trim()}>
             {busy ? "Reading…" : "Ask"}
           </button>
         </div>
@@ -2280,10 +2682,29 @@ function ModelsSection() {
 
 /* ----------------------------------------------------- 9. prompts */
 
+type PromptRow = {
+  data_type: string;
+  prompt: string;
+  shared: boolean;
+  extensions: string[];
+  mime_types: string[];
+  excerpt: string;
+};
+
 function PromptsSection({ projectId }: { projectId: string }) {
-  const [dataType, setDataType] = useState("document");
+  const [dataType, setDataType] = useState("document_pdf");
+  const [rows, setRows] = useState<PromptRow[]>([]);
   const [config, setConfig] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    // Served from the register rather than hardcoded here: a list in the
+    // console drifts from the one the classifier uses, and the drift is
+    // invisible until someone looks for a type that is missing.
+    call<{ prompts: PromptRow[] }>("api/v1/prompts")
+      .then((d) => setRows(d.prompts))
+      .catch((e) => setError((e as Error).message));
+  }, []);
 
   const load = useCallback(() => {
     call<Record<string, unknown>>(`api/v1/agents/${dataType}/config?project_id=${projectId}`)
@@ -2301,8 +2722,16 @@ function PromptsSection({ projectId }: { projectId: string }) {
         <code> generator_version</code>, which is what makes old artifacts detectably stale.
       </p>
       <section className="panel">
+        <h2>
+          {rows.length} data types, {new Set(rows.map((r) => r.prompt)).size} prompts
+        </h2>
+        <p className="empty" style={{ marginTop: 0 }}>
+          Some prompts are shared on purpose — a .docx asks a PDF&rsquo;s questions. The bar for a
+          new one is whether a reader would ask something different of it, not whether it is a
+          distinct file format.
+        </p>
         <div className="row">
-          {["document", "message_email", "chat_message", "transcript", "structured_record", "code"].map(
+          {rows.map((r) => r.data_type).map(
             (t) => (
               <button
                 key={t}
@@ -2315,6 +2744,25 @@ function PromptsSection({ projectId }: { projectId: string }) {
           )}
         </div>
         {error && <p className="err">{error}</p>}
+        {(() => {
+          const row = rows.find((r) => r.data_type === dataType);
+          if (!row) return null;
+          return (
+            <div className="meta" style={{ marginTop: 12 }}>
+              <span className="chip on">{row.prompt}</span>
+              {row.shared && <span className="chip">shared with other types</span>}
+              {row.extensions.slice(0, 8).map((e) => (
+                <span className="chip" key={e}>{e}</span>
+              ))}
+              {row.extensions.length > 8 && (
+                <span className="chip">+{row.extensions.length - 8} more</span>
+              )}
+              {row.extensions.length === 0 && (
+                <span className="chip">no file extension — routed by source</span>
+              )}
+            </div>
+          );
+        })()}
         {config && (
           <>
             <table className="kv" style={{ marginTop: 14 }}>

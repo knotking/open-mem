@@ -160,6 +160,20 @@ def setup(service_name: str = "memdog-api") -> None:
         description="Deliveries refused, by reason: auth, signature, body_size, unknown",
     )
 
+    # ------------------------------------------------------------- inference
+    #
+    # Running permanently on a fallback looks exactly like running normally
+    # unless something says so: the answers keep arriving, they are just worse
+    # and cheaper than the ones being paid for.
+    _metrics["inference_fallback_depth"] = meter.create_histogram(
+        "memdog.inference.fallback_depth",
+        description="How far down the chain the engine that answered was; 0 is the primary",
+    )
+    _metrics["inference_attempts"] = meter.create_counter(
+        "memdog.inference.attempts",
+        description="Engine attempts by outcome: served, unavailable, rejected, skipped",
+    )
+
     # ----------------------------------------------------------------- crawl
     _metrics["crawl_discovered"] = meter.create_counter(
         "memdog.crawl.discovered",

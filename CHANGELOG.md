@@ -85,6 +85,168 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   shown in the console as a fresh/stale chip. It measures the last **success**,
   not the last attempt: a crawler failing every tick has a recent run and stale
   data, and nothing else tells those apart.
+- **Telemetry now exports.** Traces go to Cloud Trace and metrics to Cloud
+  Monitoring, via the Google exporters directly — those services do not speak
+  OTLP, and this avoids running a collector purely to translate. Verified live:
+  spans for `webhook.receive`, `crawl.run`, `crawl.discover`, `write`,
+  `retrieve` and `enrich`, and per-crawler metric series.
+- **A cardinality guard in `record()`.** A metrics store keeps one time series
+  per distinct label combination, so an unbounded label multiplies the series
+  count rather than adding a dimension — and that is how a metrics store falls
+  over, taking the ability to see anything with it. `user_id`, `data_id`,
+  `run_id`, `host`, `url` and friends are dropped from metrics and kept on
+  spans. The measurement still goes out with its remaining labels: losing a
+  dimension degrades a dashboard, losing the measurement hides the outage.
+- **New env var**: `OTEL_GCP_PROJECT` selects the GCP exporters (already wired
+  into `deploy/cloudrun.sh`). Unset, the service exports nothing, which stays
+  the local default. The service account needs `roles/cloudtrace.agent` and
+  `roles/monitoring.metricWriter`.
+- **New dependencies**: `opentelemetry-exporter-gcp-trace`,
+  `opentelemetry-exporter-gcp-monitoring`.
+- **Model routing is an ordered chain, not a single engine.** A provider that
+  rate-limits or errors falls through to the next; the chain always ends at a
+  local engine that needs no network, so an outage becomes a worse answer
+  rather than no answer. This fixes an observed failure: chat returned `429`
+  for an hour on free-tier quota while a working local answerer sat idle.
+- Only **availability** failures fall through. A `429`, a `5xx` or a timeout
+  means the model never answered. A schema or parse failure means it answered
+  badly — a prompt problem a weaker model is unlikely to fix — so those stay
+  terminal and reach the DLQ instead of quietly costing a second call.
+- A circuit breaker stops hammering a dead engine, but is never applied to the
+  last step in a chain: an open breaker on the only remaining engine would turn
+  the protection into the outage.
+- Answers and artifacts now carry `fallback_depth` and `served_by_engine`, and
+  the console shows a chip when something other than the primary answered.
+  Running permanently on a fallback is otherwise invisible — the answers keep
+  arriving, just worse than the ones being paid for. The `generator_version`
+  follows the engine that actually answered, so a fallback artifact is never
+  attributed to the primary's fingerprint.
+- New metrics `inference.fallback_depth` and `inference.attempts` (by engine and
+  outcome: served, unavailable, rejected, skipped).
+- **Manual scheduler tick**: `POST /api/v1/crawl-tick` and a **Run due crawlers**
+  button. Scoped to the caller's organization — the advisory lock stops two
+  passes at once but says nothing about whose crawlers a pass picks up.
+- The chat panel is now called **Chat** rather than Ask, with example questions
+  on the empty state. It was there before and hard to find.
+- **A prompt per kind of thing.** The prompt register went from 12 entries to 24
+  and the classifier from 8 MIME types to 39 (plus 83 extensions), so the
+  formats the parsers already handled now reach a prompt written for them:
+  spreadsheet, presentation, calendar, contact, log, config, audio, video,
+  archive and geo.
+- **Audio and video had no classification at all** — an mp3 was `binary_blob`
+  and extracted with the generic prompt *after* being transcribed, which is
+  exactly where a prompt most needs to say that speaker labels are unreliable
+  and garbled names must not be normalised into plausible ones.
+- A spreadsheet is no longer summarised as prose; the prompt asks for the
+  table's shape — columns, row count, ranges — and forbids inventing totals.
+- Two new prompts exist to prevent harm rather than improve quality: **config**
+  must never reproduce a secret (the value would reach the summary, then the
+  embedding, then an answer, where it cannot be recalled), and **contact** must
+  not enrich, because a guessed employer is indistinguishable from an entered
+  one afterwards.
+- A coverage test now requires the classifier and prompt registers to agree, so
+  a type with no prompt fails the build rather than silently degrading.
+- **Retrieval is semantic.** The embedder moved from `local-hash-v1` — hashed
+  term frequencies, not learned meaning — to `gemini-embedding-001@768`.
+  Queries that share no vocabulary with their answers now work: "why did people
+  not able to pay?" returns the checkout postmortem, where the lexical arm
+  returns nothing at all.
+- Documents and queries are embedded **asymmetrically** (`RETRIEVAL_DOCUMENT` vs
+  `RETRIEVAL_QUERY`). A question and the passage answering it are different
+  kinds of text, and symmetric embedding is much of why naive vector search
+  disappoints.
+- The embedder deliberately has **no fallback**, unlike every other engine.
+  Vectors from two models in one index are not comparable, so degrading would
+  silently corrupt retrieval for every row it touched — and a bad vector, unlike
+  a bad summary, is invisible. Unavailability defers instead.
+- **New env vars**: `EMBED_ENGINE=gemini`, `EMBED_MODEL=gemini-embedding-001`
+  (both wired into `deploy/cloudrun.sh`). Switching engines invalidates existing
+  vectors; the reconciler re-embeds them, and retrieval returns nothing for the
+  affected rows until it has, rather than comparing across vector spaces.
+
+- **Entities — graph layer 1.** Records now resolve the people, organizations
+  and things they name into a typed entity layer, with `GET`/merge/undo
+  endpoints and an **Entities** panel under Organize. Resolution rides the
+  extraction pass that already reads the text, so it costs no extra model call.
+- Resolution is deliberately cautious: it joins on a shared strong identifier
+  (an email, a URL) or an exact normalized name within one project, and
+  otherwise keeps entities apart. The two errors are not symmetric —
+  under-merging leaves two nodes you can join later, over-merging fuses two
+  people's records and once their mentions interleave nobody can say which fact
+  belonged to whom.
+- Every mention keeps the surface form as written, the record it came from, and
+  why it resolved there. Merges are recorded rather than applied destructively
+  and can be undone — "these are the same person" is a judgement, and a
+  judgement nobody can take back is one people will not make.
+- Entities live in Postgres, not a graph store, so traversal carries the same
+  visibility predicate as retrieval. An entity with no visible mention does not
+  appear at all, and counts report what the caller can see — "42 mentions" shown
+  against a list of three is itself a disclosure.
+- `entity_mentions` is covered by purge and by `verify_erasure`: a mention is
+  personal data derived from a record.
+- **The Prompts screen showed 6 data types while 24 were routed** — and its six
+  mixed prompt names with data types. It now renders from `GET /api/v1/prompts`,
+  which returns the register itself, including which prompts are shared and the
+  extensions routing to each.
+- **A rebuilt sign-in page.** It leads with numbers counted from the running
+  build — 54 formats, 24 data types, 18 prompts, 9 webhook providers — and names
+  the embedding model actually serving retrieval. A figure written into copy is
+  wrong within a month and wrong in the flattering direction.
+- `GET /api/v1/capabilities` is unauthenticated because the sign-in page has no
+  session. It counts registries only; the route in front of it carries the
+  platform identity token and never an API key.
+- **The graph — typed edges and traversal**, in Postgres behind a `GraphStore`
+  seam. `GET /entities/{id}/graph?depth=&predicates=`,
+  `GET /entities/{id}/co-mentions`, `GET /graph/predicates`, and a Connections
+  panel in the console with 1/2/3-hop controls.
+- **Two kinds of connection, not merged.** An *asserted edge* is a claim a
+  document made, carrying the records that assert it and how many — one document
+  saying something is a claim, three saying it independently is closer to a fact.
+  A *co-mention* is two entities named in the same record; it is not stored,
+  because `entity_mentions` already records it and a copy would go stale.
+- Co-mentions **need no model at all**, so the graph is useful the moment
+  entities exist rather than only once extraction has read for relationships —
+  which is the state the system is in whenever the extractor is degraded.
+- Traversal carries the visibility predicate **inside the recursive query**. A
+  path through a record the caller cannot read is never returned, because
+  arriving at its far end would disclose that the record exists. Edges traverse
+  in both directions — which end was written as the subject is a grammatical
+  accident of the sentence.
+- Relations ride the existing extraction pass, so no extra model call. A
+  relation naming an entity the resolver did not produce is **dropped, never
+  guessed at** — inventing an endpoint attaches a real claim to the wrong node.
+  The predicate vocabulary is closed (12 values); `related_to` is the honest
+  escape hatch, because a precise-looking wrong edge is worse than a vague right
+  one.
+- Erasure reaches edges: deleting a record deletes the claims it made, and
+  `entity_edges` is checked by `verify_erasure`.
+- `docs/graph.md` — why this is not a graph database, the vocabulary, visibility
+  rules, erasure, a worked example, and what is not built.
+- The **landing page** gains the graph and a competitor comparison. Every
+  mem-dog cell is verifiable in this repository; every competitor cell describes
+  what that product publicly positions itself on, never what it lacks. It ends
+  with where the others lead — Zep's temporal facts, Mem0's adoption,
+  Supermemory's latency, Letta's working context.
+
+### Fixed
+- **An artifact produced by a fallback engine was invisible to the reconciler.**
+  It carries the primary's `generator_version` — correctly, since the prompt and
+  schema were the primary's — so every staleness check considered it finished,
+  and an item enriched during a provider outage would have kept its degraded
+  summary forever. The real `fallback_depth` now lands on the artifact and the
+  reconciler revisits anything a fallback produced.
+- **The reconcile job was twenty image tags stale and had no `EMBED_ENGINE`**, so
+  it re-embedded with the *old* model and concluded nothing was stale — a repair
+  job quietly repairing the corpus back toward the state it was meant to leave.
+  The deploy script never touched Cloud Run jobs at all, so the drift was
+  structural; it now deploys them alongside the service, and creates a
+  `memdog-crawl-tick` job too.
+- **A rate limit consumed the retry budget**, so five refusals in a few hundred
+  milliseconds dead-lettered work that was never faulty. A re-embed reported
+  success having embedded almost nothing, leaving the corpus split across two
+  vector spaces — the one state retrieval cannot recover from on its own. A busy
+  provider is not a broken message; deferrals are now counted separately from
+  attempts and are not bounded the same way.
 - `.claude/skills/changelog` and this file.
 
 ### Changed
@@ -127,6 +289,8 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   accepted content types are documents only.
 
 ### Migrations
+- `0022_edges.sql` — `entity_edges`.
+- `0021_entities.sql` — `entities`, `entity_mentions`, `entity_merges`.
 - `0019_answers.sql` — adds `queries.answer_access_level` and extends the
   `query_sources.excluded_reason` enumeration. Run before deploying.
 - `0020_crawlers.sql` — the six crawler tables, and extends the
