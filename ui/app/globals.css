@@ -251,7 +251,20 @@ audio.preview { width: 100%; height: auto; }
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding-bottom: 26px;
+  /* Sticky, because the tabs are the only way back once you have scrolled
+     into the comparison -- a navigation that scrolls away is a navigation
+     that only works before you have used it.
+
+     The negative margins cancel the container's padding so the bar spans the
+     full width. Without them the background stops at the text column and page
+     content scrolls visibly through the gutters beside it. */
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+  margin: -22px -26px 26px;
+  padding: 16px 26px;
 }
 .wordmark, .brand .dot, .wordmark .dot { font-weight: 650; letter-spacing: -0.01em; }
 .wordmark { display: flex; align-items: center; gap: 8px; font-size: 16px; }
@@ -452,8 +465,9 @@ select {
   grid-template-columns: minmax(0, 1.35fr) minmax(300px, 0.85fr);
   gap: 44px;
   align-items: start;
+  /* No border-top: the sticky bar now carries that rule, and two hairlines
+     26px apart read as a mistake rather than as structure. */
   padding: 30px 0 34px;
-  border-top: 1px solid var(--line);
 }
 
 .hero-split h1 {
@@ -634,8 +648,9 @@ select {
 }
 .tab-cta:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-/* Anchored sections must not land under the header. */
-[id] { scroll-margin-top: 24px; }
+/* Anchored sections must clear the sticky bar, or every jump lands with the
+   heading it was aiming at hidden underneath it. */
+[id] { scroll-margin-top: 84px; }
 html { scroll-behavior: smooth; }
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
 
