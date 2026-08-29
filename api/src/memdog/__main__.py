@@ -165,7 +165,8 @@ async def _reconcile(grace: int) -> None:
     enrich.register(queue)
 
     swept = await reconcile(
-        pool, queue, embed_generator=embed.generator_version, grace_seconds=grace
+        pool, queue, embed_generator=embed.generator_version,
+        enrich_generator=enrich.generator_version, grace_seconds=grace,
     )
     print(f"re-enqueued: parse={swept.parse} embed={swept.embed} "
           f"enrich={swept.enrich} events={swept.events}")

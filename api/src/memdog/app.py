@@ -28,6 +28,8 @@ from .contracts import (
 from .chat import ask, build_answerer
 from .crawlers import CrawlerConfig, CrawlerError
 from . import crawling
+from . import entities as entities_mod
+from .entities import EntityError
 from . import account, agents, cases, control, memories as memories_mod, models, normalize, sharing
 from .account import AccountError
 from .agents import AgentConfigError
@@ -1594,6 +1596,54 @@ async def run_crawler_endpoint(
         run = await crawling.start_run(state.pool, actor, crawler_id, mode="live")
         return await state.crawl_worker.execute(run["run_id"])
     except (CrawlerError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/projects/{project_id}/entities")
+async def list_entities_endpoint(
+    request: Request, project_id: str, type: str | None = None,
+    q: str | None = None, actor: Principal = Depends(principal),
+) -> dict:
+    """Entities the caller can see evidence for. An entity whose every mention
+    is hidden does not appear -- listing it would disclose the record."""
+    try:
+        return {"entities": await entities_mod.list_entities(
+            request.app.state.pool, actor, project_id, kind=type, query=q)}
+    except (EntityError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/entities/{entity_id}")
+async def get_entity_endpoint(
+    request: Request, entity_id: str, actor: Principal = Depends(principal)
+) -> dict:
+    try:
+        return await entities_mod.get_entity(request.app.state.pool, actor, entity_id)
+    except (EntityError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/entities/merge")
+async def merge_entities_endpoint(
+    request: Request, body: dict, actor: Principal = Depends(principal)
+) -> dict:
+    try:
+        return await entities_mod.merge(
+            request.app.state.pool, actor,
+            source_id=body.get("source_id", ""), target_id=body.get("target_id", ""),
+            reason=body.get("reason"),
+        )
+    except (EntityError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/entities/merges/{merge_id}/undo")
+async def unmerge_endpoint(
+    request: Request, merge_id: str, actor: Principal = Depends(principal)
+) -> dict:
+    try:
+        return await entities_mod.unmerge(request.app.state.pool, actor, merge_id)
+    except (EntityError, AuthError) as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
 
 

@@ -39,7 +39,11 @@ TOPIC_FOR_EVENT: dict[str, str] = {
     "reprocess.requested": "reprocess",
 }
 
-NO_CONSUMER = {"graph.build.requested", "entity.extraction.requested"}
+# `entity.extraction.requested` now has one: entities are resolved inside the
+# enrichment transaction, so the event is consumed rather than logged for a
+# worker that does not exist. `graph.build.requested` remains unconsumed -- the
+# edge layer is not built, and pretending otherwise would make the log lie.
+NO_CONSUMER = {"graph.build.requested"}
 
 MAX_ATTEMPTS = 5
 

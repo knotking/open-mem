@@ -24,6 +24,7 @@ from .config import Settings
 from .db import vector_literal
 from .ids import new_id
 from .acl import Acl, strictest
+from .entities import resolve_mentions
 from .extraction import EXTRACT_PURPOSE, Extractor
 from .inference import EmbeddingEngine, generator_version
 from .telemetry import continue_trace, record, span
@@ -311,7 +312,7 @@ class EnrichWorker:
                     model_id, generator_version, served_by_model, fallback_depth,
                     access_level, shared_with, model_version, response_id)
                 VALUES ($1, $2, $3, $4, 'envelope', $5, $6, $7, $8, $9, $10, $11,
-                        $12, $13, 0, $14, $15, $16, $17)
+                        $12, $13, $18, $14, $15, $16, $17)
                 """,
                 artifact_id,
                 row["org_id"],
@@ -325,14 +326,21 @@ class EnrichWorker:
                 envelope.fields,
                 extractor.model_id,
                 self.generator_version,
-                # No router in front of the extractor yet, so the model that was
-                # assigned is the model that served it. The column exists so the
-                # day that stops being true, the artifact says so.
-                extractor.model_id,
+                # The chain may have served this from a fallback, in which
+                # case the assigned model and the serving one differ -- which
+                # is the whole reason these are two columns.
+                envelope.fields.get("served_by_engine") or extractor.model_id,
                 acl.access_level,
                 acl.shared_with,
                 envelope.model_version,
                 envelope.response_id,
+                # The real depth, not zero. An artifact produced by a fallback
+                # is stamped with the primary's generator_version -- because
+                # the prompt and schema really were the primary's -- so this
+                # column is the only thing that distinguishes a degraded
+                # artifact from a good one, and the reconciler needs it to know
+                # there is anything to come back for.
+                int(envelope.fields.get("fallback_depth") or 0),
             )
             await conn.execute(
                 """
@@ -342,6 +350,17 @@ class EnrichWorker:
                 artifact_id,
                 data_id,
                 len(row["indexable_text"]),
+            )
+            # Resolved in the same transaction as the artifact. An item that is
+            # enriched but whose entities were not recorded, or the reverse, is
+            # a state nothing downstream can reason about.
+            await resolve_mentions(
+                conn,
+                data_id=data_id,
+                org_id=row["org_id"],
+                project_id=row["project_id"],
+                candidates=envelope.entities,
+                generator_version=self.generator_version,
             )
             await conn.execute(
                 "UPDATE data_items SET state = 'enriched', updated_at = now() WHERE data_id = $1",

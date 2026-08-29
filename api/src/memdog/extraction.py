@@ -44,7 +44,20 @@ If a field cannot be determined from the content, return null. Do not infer it,
 do not guess, and do not fill it from world knowledge. A null is correct.
 A plausible invention is not.
 
-Extract only what is present. Do not summarise beyond what the schema asks for."""
+Extract only what is present. Do not summarise beyond what the schema asks for.
+
+ENTITIES: named things the content refers to -- people, organizations, places,
+products, events. Use the name as written; do not expand initials, resolve
+nicknames, or normalise a spelling into the one you think is correct. Where the
+text supplies an email, handle or URL for something, record it as the
+identifier -- that is what separates a confident match from a hopeful one.
+
+Do not invent an identifier you were not given, and do not infer one from a
+name or a domain. A wrong identifier merges two different people permanently
+and silently, which is far worse than leaving them separate.
+
+A pronoun is not an entity. A job title with no name is not an entity. If the
+content names nothing, return an empty array."""
 
 
 class Envelope(BaseModel):
@@ -56,6 +69,9 @@ class Envelope(BaseModel):
     summary: str | None = None
     keywords: list[str] = Field(default_factory=list)
     language: str | None = None
+    # Named things the text refers to. Resolved into the entity layer, where
+    # they are governed; the envelope only reports what the document said.
+    entities: list[dict] = Field(default_factory=list)
     fields: dict = Field(default_factory=dict)
     # Provider-reported provenance, absent for deterministic extractors --
     # which is itself informative: a null here means no model was involved.
@@ -86,6 +102,26 @@ def build_prompt(
     return system, user
 
 
+# Entities ride the pass that is already reading the text. A separate
+# extraction call would double the cost and the latency of enrichment to read
+# the same document twice, and would let the two disagree about what it said.
+ENTITY_SCHEMA = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "required": ["name", "type"],
+        "properties": {
+            "name": {"type": "string"},
+            "type": {"type": "string",
+                     "enum": ["person", "organization", "location", "product",
+                              "event", "topic", "other"]},
+            # An email, handle or URL if the text supplies one. This is what
+            # separates a confident resolution from a hopeful one.
+            "identifier": {"type": ["string", "null"]},
+        },
+    },
+}
+
 ENVELOPE_SCHEMA = {
     "type": "object",
     "required": ["title"],
@@ -95,6 +131,7 @@ ENVELOPE_SCHEMA = {
         "summary": {"type": ["string", "null"]},
         "keywords": {"type": "array", "items": {"type": "string"}},
         "language": {"type": ["string", "null"]},
+        "entities": ENTITY_SCHEMA,
     },
 }
 
@@ -272,6 +309,20 @@ def _gemini_schema() -> dict:
             "summary": {"type": "string"},
             "keywords": {"type": "array", "items": {"type": "string"}},
             "language": {"type": "string"},
+            "entities": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["name", "type"],
+                    "properties": {
+                        "name": {"type": "string"},
+                        "type": {"type": "string",
+                                 "enum": ["person", "organization", "location",
+                                          "product", "event", "topic", "other"]},
+                        "identifier": {"type": "string"},
+                    },
+                },
+            },
         },
     }
 

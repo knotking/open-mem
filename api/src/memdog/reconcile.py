@@ -54,6 +54,7 @@ async def reconcile(
     queue: Queue,
     *,
     embed_generator: str,
+    enrich_generator: str | None = None,
     grace_seconds: int = 300,
     limit: int = 500,
 ) -> Swept:
@@ -145,9 +146,31 @@ async def reconcile(
         limit,
     )
 
+    # Enriched, but by a fallback engine. Without this the item is finished
+    # forever: its generator_version matches the current one, so every other
+    # staleness check considers it done, and the degraded summary it got during
+    # a provider outage is the summary it keeps.
+    degraded = await pool.fetch(
+        """
+        SELECT DISTINCT s.data_id FROM artifacts a
+        JOIN artifact_sources s ON s.artifact_id = a.artifact_id
+        JOIN data_items d ON d.data_id = s.data_id
+        WHERE a.fallback_depth > 0
+          AND a.generator_version = $1
+          AND d.deleted_at IS NULL
+          AND d.state = 'enriched'
+        ORDER BY s.data_id
+        LIMIT $2
+        """,
+        enrich_generator,
+        limit,
+    ) if enrich_generator else []
+
     to_parse = {r["data_id"] for r in unparsed}
     to_embed = ({r["data_id"] for r in stored} | {r["data_id"] for r in stale_vectors}) - to_parse
-    to_enrich = {r["data_id"] for r in searchable} - to_embed - to_parse
+    to_enrich = (
+        {r["data_id"] for r in searchable} | {r["data_id"] for r in degraded}
+    ) - to_embed - to_parse
 
     for data_id in sorted(to_parse):
         await queue.publish(PARSE_TOPIC, {"data_id": data_id})

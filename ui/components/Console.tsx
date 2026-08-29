@@ -31,7 +31,7 @@ import {
 type Section =
   | "overview"
   | "add" | "update" | "search" | "ask" | "inbound" | "crawlers"
-  | "memory" | "cases"
+  | "memory" | "cases" | "entities"
   | "audit" | "sharing" | "deletion"
   | "settings" | "models" | "prompts"
   | "projects" | "keys" | "producers" | "platform";
@@ -62,6 +62,7 @@ const GROUPS: { title: string; items: { key: Section; label: string; hint: strin
     items: [
       { key: "memory", label: "Memories", hint: "lifecycle containers" },
       { key: "cases", label: "Cases", hint: "subjects and timelines" },
+      { key: "entities", label: "Entities", hint: "who and what, with evidence" },
     ],
   },
   {
@@ -200,6 +201,7 @@ export default function Console({
         {section === "audit" && <Audit projectId={projectId} />}
         {section === "memory" && <MemorySection projectId={projectId} />}
         {section === "cases" && <CasesSection projectId={projectId} />}
+        {section === "entities" && <EntitiesSection projectId={projectId} />}
         {section === "sharing" && <SharingSection />}
         {section === "deletion" && <DeletionSection projectId={projectId} onChange={refresh} />}
         {section === "settings" && <SettingsSection projectId={projectId} />}
@@ -672,7 +674,217 @@ function UpdateData({
   );
 }
 
-/* ---------------------------------------------------------- 3. crawlers */
+/* --------------------------------------------------------- 3. entities */
+
+type Entity = {
+  entity_id: string;
+  type: string;
+  display_name: string;
+  identifiers: string[];
+  visible_mentions: number;
+};
+
+type EntityDetail = Entity & {
+  mentions: { data_id: string; surface: string; resolved_by: string;
+              external_id: string; state: string; data_type: string | null }[];
+  visible_mention_count: number;
+};
+
+const ENTITY_TYPES = ["person", "organization", "location", "product",
+                      "event", "topic", "other"];
+
+function EntitiesSection({ projectId }: { projectId: string }) {
+  const [list, setList] = useState<Entity[]>([]);
+  const [kind, setKind] = useState<string | null>(null);
+  const [detail, setDetail] = useState<EntityDetail | null>(null);
+  const [chosen, setChosen] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const [lastMerge, setLastMerge] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const page = await call<{ entities: Entity[] }>(
+        `api/v1/projects/${projectId}/entities${kind ? `?type=${kind}` : ""}`,
+      );
+      setList(page.entities);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, [projectId, kind]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function act(message: string, work: () => Promise<void>) {
+    setBusy(true);
+    setError(null);
+    setNote(null);
+    try {
+      await work();
+      setNote(message);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function toggle(id: string) {
+    setChosen((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id].slice(-2),
+    );
+  }
+
+  return (
+    <>
+      <h1>Organize / entities</h1>
+      <p className="lede">
+        The people, organizations and things your records name. Resolution is
+        deliberately cautious: it joins on a shared email or an exact name and
+        otherwise keeps them apart, because two nodes you can merge later beat one
+        node that fused two people and cannot be separated.
+      </p>
+
+      <section className="panel">
+        <div className="row">
+          <button className={kind === null ? "" : "secondary"} onClick={() => setKind(null)}>
+            All
+          </button>
+          {ENTITY_TYPES.map((t) => (
+            <button key={t} className={kind === t ? "" : "secondary"} onClick={() => setKind(t)}>
+              {t}
+            </button>
+          ))}
+        </div>
+        {note && <p className="ok">{note}</p>}
+        {error && <p className="err">{error}</p>}
+      </section>
+
+      {chosen.length === 2 && (
+        <section className="panel">
+          <h2>Merge these two?</h2>
+          <p className="empty">
+            The second becomes the survivor. Nothing is destroyed — the merge can be undone,
+            because &ldquo;these are the same person&rdquo; is a judgement and judgements are
+            sometimes wrong.
+          </p>
+          <div className="row">
+            <button
+              disabled={busy}
+              onClick={() =>
+                act("Merged. You can undo this.", async () => {
+                  const result = await call<{ merge_id: string }>("api/v1/entities/merge", {
+                    source_id: chosen[0], target_id: chosen[1],
+                  });
+                  setLastMerge(result.merge_id);
+                  setChosen([]);
+                  setDetail(null);
+                  await load();
+                })
+              }
+            >
+              Merge
+            </button>
+            <button className="secondary" onClick={() => setChosen([])}>Cancel</button>
+          </div>
+        </section>
+      )}
+
+      {lastMerge && (
+        <section className="panel">
+          <div className="row" style={{ alignItems: "center", gap: 12 }}>
+            <button
+              className="secondary"
+              disabled={busy}
+              onClick={() =>
+                act("Merge undone.", async () => {
+                  await call(`api/v1/entities/merges/${lastMerge}/undo`, {});
+                  setLastMerge(null);
+                  await load();
+                })
+              }
+            >
+              Undo that merge
+            </button>
+          </div>
+        </section>
+      )}
+
+      <section className="panel">
+        <h2>{list.length} entities</h2>
+        {list.length === 0 ? (
+          <p className="empty">
+            Nothing yet. Entities are resolved when a record is enriched, so enrich something
+            first.
+          </p>
+        ) : (
+          list.map((entity) => (
+            <div
+              className="hit"
+              key={entity.entity_id}
+              style={{
+                cursor: "pointer",
+                borderColor: chosen.includes(entity.entity_id) ? "var(--accent)" : undefined,
+              }}
+              onClick={() =>
+                act("", async () => {
+                  setDetail(
+                    await call<EntityDetail>(`api/v1/entities/${entity.entity_id}`,
+                                             undefined, "GET"),
+                  );
+                })
+              }
+            >
+              <div className="meta">
+                <span className="chip on">{entity.type}</span>
+                <span className="chip">{entity.visible_mentions} record
+                  {entity.visible_mentions === 1 ? "" : "s"}</span>
+                {entity.identifiers?.map((id) => (
+                  <span className="chip" key={id}>{id}</span>
+                ))}
+              </div>
+              <div className="text">{entity.display_name}</div>
+              <div className="row" style={{ marginTop: 6 }}>
+                <button
+                  className="secondary"
+                  onClick={(e) => { e.stopPropagation(); toggle(entity.entity_id); }}
+                >
+                  {chosen.includes(entity.entity_id) ? "Selected" : "Select to merge"}
+                </button>
+              </div>
+            </div>
+          ))
+        )}
+      </section>
+
+      {detail && (
+        <section className="panel">
+          <h2>{detail.display_name}</h2>
+          <p className="empty">
+            Every mention is kept with the record it came from and why it resolved here — so a
+            wrong join is something you can see rather than something you inherit.
+          </p>
+          {detail.mentions.map((m, i) => (
+            <div className="hit" key={`${m.data_id}-${i}`}>
+              <div className="meta">
+                <span className="chip">as &ldquo;{m.surface}&rdquo;</span>
+                <span className="chip on">{m.resolved_by.replace("_", " ")}</span>
+                <span className={`chip ${m.state}`}>{m.state}</span>
+                {m.data_type && <span className="chip">{m.data_type}</span>}
+              </div>
+              <p className="provenance">{m.external_id} · {m.data_id}</p>
+            </div>
+          ))}
+        </section>
+      )}
+    </>
+  );
+}
+
+/* ---------------------------------------------------------- 4. crawlers */
 
 type Crawler = {
   crawler_id: string;

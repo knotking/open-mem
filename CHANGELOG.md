@@ -146,6 +146,37 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   one afterwards.
 - A coverage test now requires the classifier and prompt registers to agree, so
   a type with no prompt fails the build rather than silently degrading.
+- **Retrieval is semantic.** The embedder moved from `local-hash-v1` — hashed
+  term frequencies, not learned meaning — to `gemini-embedding-001@768`.
+  Queries that share no vocabulary with their answers now work: "why did people
+  not able to pay?" returns the checkout postmortem, where the lexical arm
+  returns nothing at all.
+- Documents and queries are embedded **asymmetrically** (`RETRIEVAL_DOCUMENT` vs
+  `RETRIEVAL_QUERY`). A question and the passage answering it are different
+  kinds of text, and symmetric embedding is much of why naive vector search
+  disappoints.
+- The embedder deliberately has **no fallback**, unlike every other engine.
+  Vectors from two models in one index are not comparable, so degrading would
+  silently corrupt retrieval for every row it touched — and a bad vector, unlike
+  a bad summary, is invisible. Unavailability defers instead.
+- **New env vars**: `EMBED_ENGINE=gemini`, `EMBED_MODEL=gemini-embedding-001`
+  (both wired into `deploy/cloudrun.sh`). Switching engines invalidates existing
+  vectors; the reconciler re-embeds them, and retrieval returns nothing for the
+  affected rows until it has, rather than comparing across vector spaces.
+
+### Fixed
+- **The reconcile job was twenty image tags stale and had no `EMBED_ENGINE`**, so
+  it re-embedded with the *old* model and concluded nothing was stale — a repair
+  job quietly repairing the corpus back toward the state it was meant to leave.
+  The deploy script never touched Cloud Run jobs at all, so the drift was
+  structural; it now deploys them alongside the service, and creates a
+  `memdog-crawl-tick` job too.
+- **A rate limit consumed the retry budget**, so five refusals in a few hundred
+  milliseconds dead-lettered work that was never faulty. A re-embed reported
+  success having embedded almost nothing, leaving the corpus split across two
+  vector spaces — the one state retrieval cannot recover from on its own. A busy
+  provider is not a broken message; deferrals are now counted separately from
+  attempts and are not bounded the same way.
 - `.claude/skills/changelog` and this file.
 
 ### Changed
