@@ -50,6 +50,41 @@ outside the cluster entirely.
 The pull-only connectors in the catalog — review platforms, app stores, warehouses — are all
 `search` or `query` crawlers. They stop needing bespoke code and become configuration.
 
+## Credentials
+
+A crawler authenticates through a **connection**, not through its config. The config is stored,
+versioned and readable by anyone who can read a crawler; a credential in it would be a secret in the
+clear, next to the `connections` table that exists to hold one enveloped.
+
+```
+POST /api/v1/connections   {"project_id", "provider", "credential", "auth_style", "auth_name"}
+PATCH /api/v1/crawlers/{id}/connection   {"connection_id"}
+```
+
+Four auth styles, closed: `bearer`, `header` (with a name), `query` (with a name), `basic`. APIs
+differ here far more than they differ in pagination, and the difference is small enough to be data.
+An open "template the header yourself" field would put the secret back where this took it out of —
+so **the credential is applied last and a config cannot override it**.
+
+`auth_style: header` and `query` refuse without an `auth_name`. Defaulting to `X-Api-Key` would send
+the secret to a header the source ignores, and the failure would read as a wrong credential rather
+than a wrong configuration.
+
+**A credential is written and never read back.** Listing reports whether one is held, never a prefix
+— a prefix is enough to confirm a guess. The plaintext exists only in the expression that builds the
+request.
+
+**No connection is not a degraded case.** A sitemap or an RSS feed needs nobody's permission, and
+`connection_id` is null for them. A crawler that *does* name a connection and cannot decrypt it
+fails as a configuration error rather than reaching its source unauthenticated — a run that carried
+on would report the source's 401 and send whoever debugs it in the wrong direction.
+
+The connection cannot be deleted while a crawler points at it. Removing it would leave that crawler
+enabled, scheduled, and failing every tick with an authentication error: nothing errors loudly and
+the data simply stops arriving.
+
+---
+
 ## Anatomy of a config
 
 Declarative and stored, following the pattern already used for agent configs and normalization

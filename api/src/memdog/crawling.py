@@ -19,6 +19,7 @@ from .blobs import BlobStore
 from .config import Settings
 from .contracts import Inline, WriteItem, WriteOptions, WriteRequest
 from .crawlers import (
+    Auth,
     CrawlerConfig,
     CrawlerError,
     Discovered,
@@ -355,11 +356,46 @@ class CrawlWorker:
     """
 
     def __init__(self, pool: asyncpg.Pool, queue: Queue, blobs: BlobStore,
-                 settings: Settings) -> None:
+                 settings: Settings, envelope=None) -> None:
         self.pool = pool
         self.queue = queue
         self.blobs = blobs
         self.settings = settings
+        # Needed only to decrypt a crawler's connection. Absent, an
+        # authenticated crawler refuses rather than reaching its source
+        # unauthenticated and reporting the 401 as the source's fault.
+        self.envelope = envelope
+
+    async def _auth(self, crawler) -> "Auth | None":
+        """The credential this crawler was given, resolved at the moment of use.
+
+        `None` for a public source, which is the ordinary case: a sitemap or an
+        RSS feed needs nobody's permission, and treating that as unauthenticated
+        rather than as a missing credential is the difference between a working
+        crawler and a confusing error.
+        """
+        from .connections import ConnectionError_, authorize
+
+        connection_id = crawler["connection_id"]
+        if not connection_id:
+            return None
+        if self.envelope is None:
+            raise CrawlerError(
+                "this crawler authenticates through a connection and the "
+                "deployment has no encryption configured", status=503,
+            )
+        try:
+            headers, query = await authorize(
+                self.pool, self.envelope, connection_id, crawler["org_id"]
+            )
+        except ConnectionError_ as exc:
+            # Surfaced as the crawler's failure, which is what it is. Letting
+            # the run continue unauthenticated would turn a configuration
+            # problem into a 401 from the source and send whoever debugs it in
+            # the wrong direction.
+            raise CrawlerError(str(exc), status=exc.status) from exc
+        return Auth(headers=headers, query=query)
+
 
     async def execute(self, run_id: str) -> dict:
         started = time.monotonic()
@@ -432,7 +468,8 @@ class CrawlWorker:
         found: list[Discovered] = []
         try:
             found, budget, stopped = await discover(
-                config, watermark=claimed["watermark_before"], checkpoint=checkpoint
+                config, watermark=claimed["watermark_before"], checkpoint=checkpoint,
+                auth=await self._auth(crawler),
             )
             if stopped:
                 # Hitting a limit is a partial run, not a complete one. Calling

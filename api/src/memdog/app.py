@@ -32,7 +32,7 @@ from . import entities as entities_mod
 from . import graph as graph_mod
 from .graph import GraphError
 from .entities import EntityError
-from . import account, agents, cases, control, memories as memories_mod, models, normalize, sharing
+from . import account, agents, cases, connections, control, memories as memories_mod, models, normalize, sharing
 from .account import AccountError
 from .agents import AgentConfigError
 from .memories import MemoryError
@@ -139,7 +139,8 @@ async def lifespan(app: FastAPI):
     app.state.answerer = answerer
     app.state.graph = graph_mod.build_graph(pool, settings)
     app.state.crawl_worker = crawling.CrawlWorker(
-        pool, queue, app.state.blobs, settings
+        pool, queue, app.state.blobs, settings,
+        envelope=Envelope.from_settings(settings),
     )
     app.state.multimodal = multimodal
     await models.ensure_catalog(pool)
@@ -1417,6 +1418,60 @@ async def set_inbound(
         raise HTTPException(status_code=404, detail="not found")
     return {"producer_id": producer_id, "inbound_auth": method,
             "mapping": body.get("mapping"), "url": f"/webhooks/{producer_id}"}
+
+
+
+@app.post("/api/v1/connections")
+async def post_connection(
+    request: Request, body: dict, actor: Principal = Depends(principal)
+) -> dict:
+    """Register a credential a crawler can authenticate with.
+
+    The credential is enveloped on the way in and there is no endpoint that
+    reads one back out. Listing reports whether one is held, never a prefix --
+    a prefix is enough to confirm a guess.
+    """
+    state = request.app.state
+    try:
+        return await connections.create(
+            state.pool, actor, state.envelope,
+            project_id=body.get("project_id", ""),
+            provider=body.get("provider", "generic"),
+            credential=body.get("credential"),
+            auth_style=body.get("auth_style", "bearer"),
+            auth_name=body.get("auth_name"),
+            scope=body.get("scope", "personal"),
+        )
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    except connections.ConnectionError_ as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/connections")
+async def get_connections(
+    request: Request, project_id: str | None = None,
+    actor: Principal = Depends(principal),
+) -> dict:
+    return {"connections": await connections.listing(
+        request.app.state.pool, actor, project_id
+    )}
+
+
+@app.patch("/api/v1/crawlers/{crawler_id}/connection")
+async def set_crawler_connection(
+    request: Request, crawler_id: str, body: dict,
+    actor: Principal = Depends(principal),
+) -> dict:
+    """Point a crawler at a connection, or pass null to detach it."""
+    try:
+        return await connections.attach(
+            request.app.state.pool, actor, crawler_id, body.get("connection_id")
+        )
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    except connections.ConnectionError_ as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
 
 
 @app.post("/api/v1/uploads")

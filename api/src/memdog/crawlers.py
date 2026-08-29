@@ -211,6 +211,20 @@ def fingerprint(config: CrawlerConfig) -> str:
 
 # --------------------------------------------------------------- discovery
 
+@dataclass(frozen=True)
+class Auth:
+    """What a connection adds to a request.
+
+    Passed in already resolved rather than as a connection id, so a strategy
+    never reaches the database and cannot decrypt anything on its own. The
+    secret exists in this object and in the request it produces, and nowhere a
+    config or a log can reach it.
+    """
+
+    headers: dict[str, str] = field(default_factory=dict)
+    query: dict[str, str] = field(default_factory=dict)
+
+
 @dataclass
 class Discovered:
     """One thing found. Not yet written, not yet fetched."""
@@ -331,7 +345,7 @@ def _as_text(value: Any) -> str | None:
 
 async def discover_http(
     config: CrawlerConfig, *, watermark: str | None, budget: Budget,
-    throttle: Throttle, checkpoint: dict,
+    throttle: Throttle, checkpoint: dict, auth: Auth | None = None,
 ) -> list[Discovered]:
     """A templated request with declared pagination.
 
@@ -348,6 +362,12 @@ async def discover_http(
         query[config.watermark_param] = watermark
     headers = {k: _render(v, variables) for k, v in request.headers.items()}
     headers.setdefault("User-Agent", config.politeness.user_agent)
+    # The credential goes on last and cannot be overridden by the config. A
+    # template that could set `Authorization` would be a place to put a secret
+    # in the clear, which is the thing the connection exists to prevent.
+    if auth is not None:
+        headers.update(auth.headers)
+        query.update(auth.query)
 
     page = int(checkpoint.get("page", 0))
     cursor = checkpoint.get("cursor")
@@ -468,7 +488,7 @@ def _tag(block: str, *names: str) -> str | None:
 
 async def discover_feed(
     config: CrawlerConfig, *, watermark: str | None, budget: Budget,
-    throttle: Throttle, checkpoint: dict,
+    throttle: Throttle, checkpoint: dict, auth: Auth | None = None,
 ) -> list[Discovered]:
     """RSS, Atom and sitemaps -- an index someone already maintains.
 
@@ -605,7 +625,7 @@ def in_scope(config: CrawlerConfig, url: str) -> bool:
 
 async def discover_traverse(
     config: CrawlerConfig, *, watermark: str | None, budget: Budget,
-    throttle: Throttle, checkpoint: dict,
+    throttle: Throttle, checkpoint: dict, auth: Auth | None = None,
 ) -> list[Discovered]:
     """Breadth-first link following, inside a declared allowlist.
 
@@ -690,15 +710,17 @@ def _now_iso() -> str:
 
 
 async def discover(
-    config: CrawlerConfig, *, watermark: str | None, checkpoint: dict
+    config: CrawlerConfig, *, watermark: str | None, checkpoint: dict,
+    auth: "Auth | None" = None,
 ) -> tuple[list[Discovered], Budget, str | None]:
     budget = Budget(config.limits)
     throttle = Throttle(config.limits.rate_per_sec)
     with span("crawl.discover", strategy=config.strategy,
-              incremental=config.incremental) as current:
+              incremental=config.incremental,
+              authenticated=auth is not None) as current:
         found = await STRATEGIES[config.strategy](
             config, watermark=watermark, budget=budget,
-            throttle=throttle, checkpoint=checkpoint,
+            throttle=throttle, checkpoint=checkpoint, auth=auth,
         )
         current.set_attribute("discovered", len(found))
     return found, budget, budget.exhausted()
