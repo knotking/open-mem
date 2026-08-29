@@ -219,3 +219,57 @@ def test_an_exempted_column_still_exists_and_is_still_unwired(column, reason):
         f"{column} is wired up now ({reason} is out of date) — remove it from "
         "UNWIRED_COLUMNS so the guard watches it again"
     )
+
+
+# --- the guard on the suite itself -------------------------------------------
+
+
+def test_the_test_database_guard_refuses_a_remote_host():
+    """Every `pool` fixture starts with `DROP SCHEMA public CASCADE`.
+
+    Until this existed, the only thing choosing which database that ran against
+    was `os.environ.setdefault` — so an exported `DATABASE_URL`, of the kind
+    anyone running a deploy or opening a psql session has, silently became the
+    thing the suite dropped. It cost a seeded corpus in development; against
+    Cloud SQL it would have cost the corpus.
+    """
+    import conftest
+
+    with pytest.raises(pytest.UsageError) as exc:
+        conftest._guard("postgresql://postgres:secret@10.100.0.3:5432/memdog")
+    # The message has to name the host, or the reader cannot tell which
+    # database they nearly dropped.
+    assert "10.100.0.3" in str(exc.value)
+    assert "docker compose up" in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "postgresql://memdog:memdog@localhost:54329/memdog",
+        "postgresql://memdog:memdog@127.0.0.1:5432/memdog",
+        "postgresql://memdog:memdog@postgres:5432/memdog",   # docker compose
+    ],
+)
+def test_the_guard_allows_a_local_database(url):
+    import conftest
+
+    assert conftest._guard(url) == url
+
+
+def test_the_escape_hatch_cannot_be_tripped_by_accident(monkeypatch):
+    """A guard people switch off without meaning to is not a guard.
+
+    The variable is named so that setting it is a sentence about the database,
+    and it is not one anybody exports for another purpose.
+    """
+    import conftest
+
+    remote = "postgresql://postgres:secret@10.100.0.3:5432/memdog"
+    for value in ("1", "true", "TRUE", "on", ""):
+        monkeypatch.setenv("I_KNOW_THIS_DATABASE_IS_DISPOSABLE", value)
+        with pytest.raises(pytest.UsageError):
+            conftest._guard(remote)
+
+    monkeypatch.setenv("I_KNOW_THIS_DATABASE_IS_DISPOSABLE", "yes")
+    assert conftest._guard(remote) == remote

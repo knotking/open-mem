@@ -500,6 +500,32 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   duplicate — it is the copy someone fixes by mistake.
 
 ### Changed
+- **A model assignment now governs extraction and answering, not just images.**
+  `resolve_model` was consulted from one place — the multimodal path — so the
+  catalog, the assignment endpoints and the candidacy rules applied to image
+  interpretation and nothing else, while extraction, answering and embedding
+  each ran on whatever an environment variable built at boot. An org that
+  assigns a model for `extraction` now gets it, per data type, resolved per
+  request.
+- The `engines` row an assignment names is finally **read**: provider, base URL,
+  and the credential that had been encrypted there since the first release and
+  used by nothing. Clients are cached on `(engine_id, model_id, kind)`, so two
+  orgs on the same model share one and an org assigned a different engine can
+  never be handed it.
+- **An org that assigned nothing is unaffected** — it gets the same object it
+  got before, not a reconstruction. A disabled engine or a provider with no
+  implementation falls back to the deployment default and logs. A *candidacy*
+  refusal is raised instead: falling back on a regulated type assigned to a
+  remote model would route the content the rule exists to protect.
+- **Answering follows the extraction assignment** rather than becoming a purpose
+  of its own, because chat was already tied to that configuration so an org
+  makes one `allowed_providers` decision rather than two. The coupling is now
+  per-org instead of per-deployment; it is not looser.
+- **Embedding is deliberately still a deployment decision.** Two orgs extracting
+  with different models produce artifacts that each record which model made
+  them, which is recoverable; two orgs *embedding* with different models write
+  vectors from different spaces into one index, and the only signal is that
+  ranking quietly gets worse.
 - **A new identity no longer becomes a `users` row just for authenticating.**
   `registration_mode` is enforced where the account would be created, not only
   where membership is granted: `disabled` refuses outright, `invite_only`

@@ -25,7 +25,7 @@ sign-in page reads them from `GET /api/v1/capabilities`.
 cd api
 docker compose up -d                        # Postgres 16 + pgvector on :54329
 uv venv --python 3.12 .venv && uv pip install -e ".[dev]"
-.venv/bin/python -m pytest                  # real database, no mocks
+.venv/bin/python -m pytest                  # real database, no mocks — and it drops the schema
 .venv/bin/python -m memdog bootstrap        # prints an org, project, producer and key
 .venv/bin/uvicorn memdog.app:app --port 8200
 ```
@@ -47,6 +47,11 @@ cd ui && npm install && npm run build
 MEMDOG_API_URL=http://localhost:8200 MEMDOG_API_KEY=... \
 MEMDOG_PROJECT_ID=prj_... MEMDOG_PRODUCER_ID=key_... npm start
 ```
+
+**The suite drops and recreates the public schema on every test**, so it refuses to run against
+anything but a database on `localhost` — an exported `DATABASE_URL` pointing at a real instance
+would otherwise be exactly what it dropped. A disposable database on a remote host, such as a CI
+service container, needs `I_KNOW_THIS_DATABASE_IS_DISPOSABLE=yes`.
 
 No cloud account is needed to run the whole thing locally. The embedding engine, extractor and blob
 store all have offline implementations, and they are registered models rather than mocks — their
