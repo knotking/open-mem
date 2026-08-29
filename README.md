@@ -30,6 +30,18 @@ uv venv --python 3.12 .venv && uv pip install -e ".[dev]"
 .venv/bin/uvicorn memdog.app:app --port 8200
 ```
 
+For something to look at rather than an empty database:
+
+```bash
+.venv/bin/python -m memdog seed --demo      # 40 records, one worked sales renewal
+```
+
+The seed goes in through the public write API with a registered producer, then asks the corpus five
+questions and checks it answers them, checks a second member cannot read the private record, and
+checks the audit log recorded the reads. **A failing seed names the step that broke** — which is the
+point of it running the real path rather than inserting rows. `--reset` purges the demo through the
+ordinary delete cascade and seeds again.
+
 ```bash
 cd ui && npm install && npm run build
 MEMDOG_API_URL=http://localhost:8200 MEMDOG_API_KEY=... \
@@ -108,6 +120,9 @@ Stated as plainly as the rest, because a README that only lists strengths is not
 - **Model spend is not attributable to a crawl run or a reprocess job.** `usage_events` has the
   column; nothing populates it, because a stored item carries no reference to the run that fetched
   it. So a dry-run's estimate still cannot be checked against what the run actually cost
+- **Normalization schemas can be registered but are never applied.** `POST /api/v1/schemas` stores
+  one and `normalize.project()` knows how to run it, but nothing on the write path calls it — so
+  `identifiers[]` and `event_time` are whatever the writer sent, never a projection
 - **No OAuth connections**, so Gmail, Drive and Calendar are unreachable — and with them the crawler
   strategies that walk a folder or enumerate an object
 - **No point-in-time facts.** Edges have no validity interval, so *"who worked there in 2024"* is
@@ -137,7 +152,7 @@ rather than believing.
 
 | Path | What is in it |
 |------|---------------|
-| [`api/`](api/README.md) | The service. 50 modules, 93 endpoints, 53 tables across 23 migrations |
+| [`api/`](api/README.md) | The service. 51 modules, 93 endpoints, 53 tables across 23 migrations |
 | [`ui/`](ui/README.md) | The console. Sign-in, ingestion, search, chat, entities, graph, governance |
 | [`docs/`](docs/README.md) | The design, in eleven parts — requirements speak in roles, products appear only in the technology documents |
 | [`docs/graph.md`](docs/graph.md) | Why the graph is not a graph database, and what it costs |

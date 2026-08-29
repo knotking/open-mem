@@ -11,6 +11,25 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **Every model call is now metered, and what it cost is recorded rather than
+  counted.** One `usage_events` row per inference call, carrying who pays, which
+  engine actually answered, and input, output and cached tokens as three
+  separate numbers. The telemetry counters that existed before are in-process
+  and droppable under load, which is the right instrument for "is inference
+  working" and the wrong one for "who spent this".
+- **A call that failed is billed for what it generated.** A request that
+  produced three thousand tokens and then timed out consumed three thousand
+  tokens; counting only successes under-reports spend, and in the direction that
+  produces a surprise bill. Breaker-skipped engines are recorded too, because a
+  chain permanently serving from its fallback otherwise looks exactly like a
+  chain with no primary.
+- **`crossed_to_paid`** marks a fallback that moved a call from a free local
+  engine to a paid cloud one. It is its own flag rather than something inferred
+  from a non-zero fallback depth: money appearing where there was none is a
+  category change, not a degradation, and the two want different alerts.
+- **`GET /api/v1/usage`** — spend today against the ceiling that binds, and a
+  breakdown by purpose, engine and status. A spending control nobody can see is
+  a spending control nobody trusts.
 - **`POST /api/v1/ask` — reading the corpus by asking it.** Retrieval, then a
   model reading only the passages retrieval returned. Every factual sentence
   carries the bracketed number of the passage it came from, and the response
@@ -269,6 +288,30 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 - `.claude/skills/changelog` and this file.
 
 ### Changed
+- **Quota is cost-weighted rather than counted.** A hundred vector searches and
+  a hundred generations are the same number to a request limiter and three
+  orders of magnitude apart in what they cost, so a limiter built on request
+  count either throttles the cheap calls or admits the expensive ones. `/write`,
+  `/retrieve`, `/ask` and the public `/webhooks/{producer_id}` are now charged in
+  credits weighted by the work they authorise, and refuse with `429` and
+  `Retry-After`. The webhook endpoint had no limit at all before.
+- **The budget is checked before generation, not on arrival.** Retrieval is not
+  where the money is, and refusing a cheap search to protect an expensive stage
+  throttles the wrong thing — and does it after the search has already been
+  paid for.
+- **A budget refusal defers work instead of discarding it.** `BudgetExhausted`
+  is classed with provider rate limits: the message is not faulty and will
+  succeed unchanged once the window rolls, so enrichment stays queued and the
+  item keeps its state rather than being dead-lettered.
+- **New settings**, all lockable. **`budget_daily_credits`** — daily model
+  spend, settable at platform, org, project and user scope, defaulting to no
+  ceiling. **Every level binds and the tightest one wins**, so a project cannot
+  raise the ceiling its organization set and a user cannot lift their own;
+  ordinary most-specific-wins precedence would let exactly the party being
+  limited do so. **`rate_limit_credits_per_minute`** (default 6000) and
+  **`max_concurrent_requests`** (default 8), per credential — `0` disables
+  either. An existing deployment behaves as it did until a ceiling is set,
+  except that the burst limit now applies where there was previously none.
 - Subscription handshakes that carry nothing to verify are answered before
   authentication, declared per adapter rather than assumed. Microsoft Graph
   sends its validation request with an empty body and no `clientState`; without
@@ -308,6 +351,10 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   accepted content types are documents only.
 
 ### Migrations
+- `0023_usage.sql` — `usage_events` (raw, short retention) and `usage_spend`
+  (the daily rollup enforcement reads, so a budget check is one indexed row
+  rather than an aggregate over a table that grows with ingest). Run before
+  deploying; the API writes to both on every model call.
 - `0022_edges.sql` — `entity_edges`.
 - `0021_entities.sql` — `entities`, `entity_mentions`, `entity_merges`.
 - `0019_answers.sql` — adds `queries.answer_access_level` and extends the

@@ -6,6 +6,7 @@ import asyncio
 import sys
 
 from .bootstrap import bootstrap_tenant
+from .seed import QUESTIONS
 from .config import load_settings
 from .inference import build_embedder
 from . import usage
@@ -317,10 +318,75 @@ async def _smoke(url: str, key: str, producer_id: str, project_id: str) -> int:
     return 0
 
 
+async def _seed(*, reset: bool, demo: bool) -> int:
+    """Create the demo tenant, through the running application.
+
+    The app is mounted in-process rather than reached over a socket, so this
+    needs no deployed service -- but it is emphatically not a fixture path:
+    every request goes through the real routing, the real credential check, the
+    real admission control and the real write verb. The only thing missing
+    compared to an external client is the network.
+
+    `seed --demo` is explicit and has no default. A production install is not
+    seeded by accident.
+    """
+    import httpx
+
+    from .app import app
+    from .seed import SeedError, reset_demo, seed_demo
+
+    if not demo:
+        print("usage: python -m memdog seed --demo [--reset]", file=sys.stderr)
+        return 2
+
+    async with app.router.lifespan_context(app):
+        async def drain() -> None:
+            # Synchronous enrichment for the single-domain seed: the point is to
+            # finish with a corpus that answers questions, and a seed that
+            # returned before it was ready could not verify itself.
+            await app.state.queue.drain(timeout=600)
+
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://seed", timeout=120.0
+        ) as client:
+            try:
+                if reset:
+                    removed = await reset_demo(app.state.pool, client, drain=drain)
+                    if removed["org_id"]:
+                        print(f"purged {removed['purged']} records and the demo org "
+                              f"{removed['org_id']} through the ordinary cascade "
+                              f"({removed['users_removed']} users removed)")
+                result = await seed_demo(app.state.pool, client, drain=drain)
+            except SeedError as exc:
+                # A failing seed is the useful case: it names the step that
+                # broke, which is the whole reason this runs the real path.
+                print(f"seed failed: {exc}", file=sys.stderr)
+                return 1
+
+    print()
+    print(f"org         {result.org_id}")
+    print(f"project     {result.project_id}")
+    print(f"records     {result.written} written, {result.enriched} enriched")
+    print(f"case        {result.case_members['asserted']} asserted, "
+          f"{result.case_members['inferred']} inferred members")
+    print(f"questions   {result.questions_passed}/{len(QUESTIONS)} answered by the corpus")
+    print(f"acl         the private record is hidden from the second member: "
+          f"{result.private_item_hidden}")
+    print()
+    # Shown once and never again. A known demo credential present in every
+    # deployment is a shipped default password, which is the failure mode that
+    # appears in breach write-ups more reliably than any other.
+    print("credentials below are shown once and are not recoverable:")
+    print(f"  {result.admin_email:<38} {result.admin_key}")
+    print(f"  {result.member_email:<38} {result.member_key}")
+    return 0
+
+
 def main() -> int:
     if len(sys.argv) < 2 or sys.argv[1] not in (
         "bootstrap", "smoke", "revoke-key", "bootstrap-to-secret", "reconcile",
-        "crawl-tick",
+        "crawl-tick", "seed",
         "grant-key", "add-member",
     ):
         print("usage: python -m memdog bootstrap [email] [personal|shared]",
@@ -330,10 +396,16 @@ def main() -> int:
         print("       python -m memdog revoke-key <prefix>", file=sys.stderr)
         print("       python -m memdog reconcile [grace_seconds]", file=sys.stderr)
         print("       python -m memdog crawl-tick [max_crawlers]", file=sys.stderr)
+        print("       python -m memdog seed --demo [--reset]", file=sys.stderr)
         print("       python -m memdog bootstrap-to-secret <email> <scope> "
               "<project> <secret_name>   # for jobs: stdout is Cloud Logging",
               file=sys.stderr)
         return 2
+    if sys.argv[1] == "seed":
+        flags = set(sys.argv[2:])
+        return asyncio.run(
+            _seed(reset="--reset" in flags, demo="--demo" in flags)
+        )
     if sys.argv[1] == "smoke":
         return asyncio.run(_smoke(*sys.argv[2:6]))
     if sys.argv[1] == "crawl-tick":
