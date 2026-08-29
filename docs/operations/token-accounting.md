@@ -168,6 +168,43 @@ same store as user content without becoming a meaningful share of it.
 Same shape as the [tracing-memories concern](telemetry.md): observability whose volume scales with
 ingest volume needs its own retention story, decided deliberately.
 
+## What is built
+
+The meter and the two enforcement mechanisms exist; rating does not. Concretely:
+
+| Requirement | State |
+|-------------|-------|
+| **FR-TOK-1** every call recorded, including failures | **Built.** `usage.meter()` is a context manager wrapped around each routing-chain attempt, so no exit path can skip the row. Failed, timed-out and breaker-skipped attempts all land |
+| **FR-TOK-2** input, output and cached split | **Built.** Three columns on `usage_events`, reported from inside each adapter where the split still exists — by the time a result is an envelope it is a total, and a total cannot be priced |
+| **FR-TOK-3** embeddings accounted | **Built**, with a caveat: `batchEmbedContents` reports no usage, so the figure is estimated from characters sent and flagged `estimated` in `detail` rather than presented as a provider number |
+| **FR-TOK-4** cost follows the serving provider | **Built.** `serving_engine` and `serving_model` are what the chain actually reached; `configured_model` is recorded beside them |
+| **FR-TOK-5** free-to-paid crossings counted separately | **Built.** `crossed_to_paid`, plus its own telemetry counter, so it can be alerted on without alerting on every fallback |
+| **FR-TOK-6** attribution to run, import, job or case | **Partial.** The columns exist and `usage.attributed()` will populate them, but nothing sets `run_id`: a stored item carries no reference to the crawl run that fetched it, so the link cannot be reconstructed at enrichment time. **This is the gap that keeps FR-TOK-7 unmet** |
+| **FR-TOK-7** estimates reconciled against actuals | **Not built**, for the reason above — and because the estimate a dry-run shows is not itself stored |
+| **FR-TOK-8** budgets distinguish user, org and platform credentials | **Partial.** `billing_account` is on every row and defaults to `platform`; nothing yet sets it to `user_key`, because per-user provider credentials are not a thing the platform holds |
+| **FR-TOK-9** mid-operation exhaustion stops as partial | **Built for the queue.** `BudgetExhausted` is classed as a capacity failure, so a worker returns the message rather than burning a retry, and the item stays at its current state. Crawl-run watermark behaviour is unchanged and untested against this |
+| **FR-TOK-10** separate retention for raw and rollup | **Built.** `usage.purge_events()` drops raw events past a retention; `usage_spend` is untouched by it |
+
+### And the read side
+
+The cost-weighted quota this document argues for is implemented in `quota.py`, which keeps two
+mechanisms deliberately apart:
+
+- The **bucket** is per-credential, in-process, and charged a request's *estimate* before it runs.
+  It is a burst and denial-of-service control, and in-process is the right scope for it.
+- The **budget** is durable, daily, and decremented by *actual* recorded credits. It is checked
+  before generation rather than on arrival, because refusing a cheap search to protect an expensive
+  stage throttles the wrong thing.
+
+Charging the estimate to the bucket and the actual to the budget is what keeps a request from being
+billed twice.
+
+Of the controls listed above, four exist — cost-weighted quota, the budget check before the
+expensive stage, per-key concurrency, and a bounded candidate count via the `limit` weighting. Two
+do not: there is no reranker to gate by tier, and no query timeout.
+
+---
+
 ## Requirements
 
 Extends `FR-OBS-4`:

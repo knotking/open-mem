@@ -40,6 +40,19 @@ log = logging.getLogger(__name__)
 # rate limit is a different kind of problem from a bug.
 _CAPACITY_FAILURES = {
     "EmbeddingUnavailable", "AnswerRateLimited", "MultimodalUnavailable",
+    # A spent budget is the same shape as a busy provider: the message is not
+    # faulty and will succeed unchanged once the window rolls. Burning the retry
+    # budget on it would discard work that was never wrong -- and unlike a rate
+    # limit, this one is *our* refusal, so dropping the item would be the
+    # platform losing data because the platform said no.
+    #
+    # The window here is a day rather than a minute, and the backoff caps at
+    # thirty seconds, so an exhausted budget re-checks roughly twice a minute
+    # until it rolls. That is deliberate and it is not free: each retry is one
+    # indexed row read. It is cheap enough to prefer over the alternatives,
+    # which are dropping the work or sleeping the whole topic -- and the topic
+    # is shared, so a long sleep would stall tenants who have budget left.
+    "BudgetExhausted",
 }
 
 

@@ -102,14 +102,17 @@ front of it. Every scale-to-zero recovery in this system falls out of that one d
 
 Stated as plainly as the rest, because a README that only lists strengths is not read as confident.
 
-- **No rate limiting, quota or token budget.** There is a public write endpoint and crawlers that
-  discover unattended. This is the gap where the risk is external rather than a quality ceiling
+- **No rating, invoicing or rollups.** Spend is metered and budgeted in cost-weighted credits, and
+  credits are not currency — turning them into a bill needs a rate card, hourly rollups and
+  reconciliation against provider invoices, none of which exist
+- **Model spend is not attributable to a crawl run or a reprocess job.** `usage_events` has the
+  column; nothing populates it, because a stored item carries no reference to the run that fetched
+  it. So a dry-run's estimate still cannot be checked against what the run actually cost
 - **No OAuth connections**, so Gmail, Drive and Calendar are unreachable — and with them the crawler
   strategies that walk a folder or enumerate an object
 - **No point-in-time facts.** Edges have no validity interval, so *"who worked there in 2024"* is
   unanswerable. [Zep](https://www.getzep.com) does this natively and this does not
 - **The graph is browsable, not yet an input to retrieval or chat**
-- **No bulk write verb or idempotency key**, so external ETL pays a round trip per record
 - **No users.** This is a prototype. [Mem0](https://mem0.ai) processes more API calls in a quarter
   than this has served in its life
 
@@ -134,7 +137,7 @@ rather than believing.
 
 | Path | What is in it |
 |------|---------------|
-| [`api/`](api/README.md) | The service. 48 modules, 92 endpoints, 51 tables across 22 migrations |
+| [`api/`](api/README.md) | The service. 50 modules, 93 endpoints, 53 tables across 23 migrations |
 | [`ui/`](ui/README.md) | The console. Sign-in, ingestion, search, chat, entities, graph, governance |
 | [`docs/`](docs/README.md) | The design, in eleven parts — requirements speak in roles, products appear only in the technology documents |
 | [`docs/graph.md`](docs/graph.md) | Why the graph is not a graph database, and what it costs |

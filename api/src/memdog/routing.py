@@ -31,6 +31,7 @@ from typing import Any, Awaitable, Callable
 
 import httpx
 
+from . import usage
 from .telemetry import record, span
 
 
@@ -138,6 +139,8 @@ class Chain:
         errors: list[str] = []
         last: BaseException | None = None
 
+        primary = self.steps[0].name
+
         for depth, step in enumerate(self.steps):
             if self.breaker.is_open(step.name) and depth < len(self.steps) - 1:
                 # Never skipped for the final step: the floor has to stay
@@ -145,9 +148,21 @@ class Chain:
                 errors.append(f"{step.name}: circuit open")
                 record("inference_attempts", 1, engine=step.name,
                        purpose=self.purpose, outcome="skipped")
+                await usage.skipped(self.purpose, step.name, depth=depth)
                 continue
             try:
-                result = await step.call(*args, **kwargs)
+                # Every attempt is metered, including the ones that fail: a call
+                # that generated tokens and then timed out still cost what it
+                # generated. The meter is a context manager so there is no exit
+                # from this block that forgets to record one.
+                async with usage.meter(
+                    self.purpose, step.name,
+                    model_id=step.model_id,
+                    configured_model=self.steps[0].model_id,
+                    depth=depth,
+                    primary_engine=primary,
+                ):
+                    result = await step.call(*args, **kwargs)
             except BaseException as exc:  # noqa: BLE001
                 if not is_transient(exc):
                     # The model answered badly. That is not something another

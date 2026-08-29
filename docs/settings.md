@@ -107,8 +107,9 @@ describe a *corpus*, and a corpus belongs to a project.
 | Invite expiry | **O** 🔒 | 7 days | Single-use, revocable, audited on create *and* redeem |
 | Invite email binding | **O** 🔒 | **on** | An unscoped link is transferable by design |
 | Auth providers | **PL** O | per variant | |
-| Budget | **U** **P** O | none | Both levels — one person's sandbox must not spend the team's month |
-| Rate limits | **O** PL | per provider | |
+| **`budget_daily_credits`** | **U** **P** O PL 🔒 | **none** | Daily model spend in cost-weighted credits. Every level binds — a user is held to the tightest of their own value, their org's and the platform's — so one person's sandbox cannot spend the team's month *and* cannot lift its own ceiling |
+| **`rate_limit_credits_per_minute`** | **O** P PL 🔒 | 6000 | Burst, per credential. Weighted by cost rather than counted by request: a hundred searches and a hundred generations are the same number to a counter and a thousand times apart in spend. `0` disables |
+| **`max_concurrent_requests`** | **O** P PL 🔒 | 8 | In flight, per credential. A rate limit bounds arrival; this is what stops one client occupying the model tier. `0` disables |
 
 ---
 

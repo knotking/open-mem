@@ -28,6 +28,7 @@ from .entities import resolve_mentions
 from .graph import record_edges
 from .extraction import EXTRACT_PURPOSE, Extractor
 from .inference import EmbeddingEngine, generator_version
+from . import quota, usage
 from .telemetry import continue_trace, record, span
 from .queue import Message, Queue
 
@@ -125,7 +126,10 @@ class EmbedWorker:
 
     async def _embed_inner(self, data_id: str) -> None:
         row = await self._pool.fetchrow(
-            "SELECT indexable_text, deleted_at, ingested_at FROM data_items WHERE data_id = $1",
+            """
+            SELECT indexable_text, deleted_at, ingested_at, org_id, project_id, owner_id
+            FROM data_items WHERE data_id = $1
+            """,
             data_id,
         )
         if row is None or row["deleted_at"] is not None or row["indexable_text"] is None:
@@ -139,7 +143,15 @@ class EmbedWorker:
         if not chunks:
             return
 
-        vectors = await self._embedder.embed([c.text for c in chunks])
+        # Embedding is the highest-volume call the platform makes, and it is
+        # not gated on the budget: refusing it would leave the item stored and
+        # unfindable, which is a silent corpus hole rather than a saving. It is
+        # metered, so the spend is visible even where it is not refusable.
+        with usage.attributed(
+            org_id=row["org_id"], project_id=row["project_id"],
+            user_id=row["owner_id"], data_id=data_id,
+        ):
+            vectors = await self._embedder.embed([c.text for c in chunks])
         if len(vectors) != len(chunks):
             raise RuntimeError("engine returned a different number of vectors than chunks")
 
@@ -263,6 +275,17 @@ class EnrichWorker:
         if row is None or row["deleted_at"] is not None or row["indexable_text"] is None:
             return
 
+        # Enrichment is where the write path spends money, and it runs
+        # unattended -- which is exactly the spend nobody is watching. Refusing
+        # here raises `BudgetExhausted`, which the queue treats as a busy
+        # provider rather than a bad message: the item stays at its current
+        # state and is retried when the window rolls, so an exhausted budget
+        # costs a delay rather than an enrichment nobody notices is missing.
+        await quota.check_budget(
+            self._pool, org_id=row["org_id"], project_id=row["project_id"],
+            user_id=row["owner_id"],
+        )
+
         # A per-request override applies to this call only and is never
         # persisted as configuration: an override that quietly became the
         # default would change a project's behaviour with no audit trail on the
@@ -275,20 +298,33 @@ class EnrichWorker:
             extractor.model_id = model_override
 
         data_type = row["data_type"] or "unknown"
+        # Every model call inside this block is charged to the item's own org
+        # and project rather than to whoever happened to trigger the queue --
+        # a reconcile sweep is not the payer, the data's owner is.
+        attribution = usage.attributed(
+            org_id=row["org_id"], project_id=row["project_id"],
+            user_id=row["owner_id"], data_id=data_id,
+        )
         if prompt_override:
             import memdog.prompts as prompt_module
 
             original = prompt_module.BY_DATA_TYPE.get(data_type)
             prompt_module.BY_DATA_TYPE[data_type] = prompt_override
             try:
-                envelope = await extractor.extract(row["indexable_text"], data_type=data_type)
+                with attribution:
+                    envelope = await extractor.extract(
+                        row["indexable_text"], data_type=data_type
+                    )
             finally:
                 if original is None:
                     prompt_module.BY_DATA_TYPE.pop(data_type, None)
                 else:
                     prompt_module.BY_DATA_TYPE[data_type] = original
         else:
-            envelope = await extractor.extract(row["indexable_text"], data_type=data_type)
+            with attribution:
+                envelope = await extractor.extract(
+                    row["indexable_text"], data_type=data_type
+                )
 
         # One source here, but the rule is written for the general case: an
         # artifact spanning mixed-ACL sources takes the intersection.
@@ -553,9 +589,13 @@ class ParseWorker:
         # platform default. Previously the env var decided outright, which made
         # the setting decorative -- it reported a value that had no effect, and
         # an org could not decline the expensive tier.
-        org_id = await self._pool.fetchval(
-            "SELECT org_id FROM data_items WHERE data_id = $1", data_id
+        owner = await self._pool.fetchrow(
+            "SELECT org_id, project_id, owner_id FROM data_items WHERE data_id = $1",
+            data_id,
         )
+        org_id = owner["org_id"] if owner else None
+        project_id = owner["project_id"] if owner else None
+        owner_id = owner["owner_id"] if owner else None
         if org_id is not None:
             from .settings_store import resolve
 
@@ -593,7 +633,27 @@ class ParseWorker:
                 engine._per_modality[modality] = assignment.model_id
 
         try:
-            result = await engine.interpret(payload, mime=mime, modality=modality)
+            # Media is the most expensive per-item call the platform makes --
+            # ten hours of uploaded video is a large bill on somebody's key --
+            # so it is both gated and attributed. The gate raises
+            # `BudgetExhausted`, which the queue defers rather than drops.
+            if org_id is None:
+                # No owning row to charge. Should not happen -- we are parsing
+                # its bytes -- so it is interpreted unmetered rather than
+                # refused, and `usage_unattributed` counts it.
+                result = await engine.interpret(payload, mime=mime, modality=modality)
+            else:
+                await quota.check_budget(
+                    self._pool, org_id=org_id, project_id=project_id,
+                    user_id=owner_id,
+                )
+                with usage.attributed(
+                    org_id=org_id, project_id=project_id,
+                    user_id=owner_id, data_id=data_id,
+                ):
+                    result = await engine.interpret(
+                        payload, mime=mime, modality=modality
+                    )
         except QuotaExhausted as exc:
             # Leave the row untouched -- no parse_status -- so the reconciler
             # picks it up on a later sweep. Recording a status here would mark
