@@ -3,6 +3,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import Capture, { humanBytes } from "./Capture";
+import { ARMS, type ArmKey } from "@/lib/types";
+
+// The sandbox is a demonstration of the write-then-find path, so it searches
+// the way an ordinary caller does. The graph arm belongs in the console, where
+// there is an entity layer to explain it.
+const SANDBOX_ARMS: ArmKey[] = ["vector", "lexical"];
 
 type Stair = {
   total: number;
@@ -400,9 +406,16 @@ function TracePanels({ trace }: { trace: Trace }) {
               <div className="meta">
                 <span className="chip">#{index + 1}</span>
                 <span className="chip">score {hit.score.toFixed(4)}</span>
-                {["vec", "lex"].map((arm) => (
-                  <span key={arm} className={`chip${hit.matched_by.includes(arm) ? " on" : ""}`}>
-                    {arm === "vec" ? "vector" : "lexical"}
+                {/* The arms this sandbox actually asks for, read from the one
+                    place their names live. Hardcoding the pair here is how the
+                    console ended up rendering a graph-matched result with every
+                    chip dark, as though it had matched nothing. */}
+                {ARMS.filter((arm) => SANDBOX_ARMS.includes(arm.key)).map((arm) => (
+                  <span
+                    key={arm.key}
+                    className={`chip${hit.matched_by.includes(arm.chip) ? " on" : " off"}`}
+                  >
+                    {arm.label}
                   </span>
                 ))}
                 <span className="chip">{hit.state}</span>

@@ -11,6 +11,31 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **The graph is a retrieval arm.** `match: ["vector", "lexical", "graph"]` on
+  `/retrieve` and `/ask` adds a third arm, fused by the same reciprocal rank
+  fusion as the other two and reported in `matched_by` as `gph`. It returns what
+  neither other arm can: a search for *"Priya Raman"* finds the quarterly
+  revenue note, because a different record said Priya works for Northwind and
+  the note names Northwind. Nothing in that note matches the query, which is the
+  point.
+- **`graph_seeds`** on both responses names the entities a query resolved to and
+  how. A graph-only result contains none of the words searched for, so without
+  the seed a reader cannot tell whether the connection found was the one they
+  meant — and an empty list says the arm found nothing to *start* from, which is
+  a different answer from finding nothing connected.
+- The arm is **opt-in, not a default**. It answers a different question from the
+  other two and is only as good as the entity layer beneath it: with extraction
+  degraded to the local heuristic there are no entities, so it correctly returns
+  nothing. It walks **one hop** and returns each connected record's opening
+  chunk — it claims the *record* is connected and has no view about which
+  passage answers the question.
+- Two disclosure rules are enforced inside the SQL rather than after it. **An
+  edge is traversable only when the record asserting it is readable** — walking
+  first and filtering after would still surface the far endpoint, and the
+  existence of a connection is itself what the unreadable record's ACL protects.
+  **An entity seeds only through a readable record**, since resolving against
+  the entity table alone confirms a name exists in this project to somebody who
+  can see no record containing it.
 - **Three wiring guards** in `tests/test_wiring.py`: every settings key is read
   somewhere, every public function is referenced somewhere, every schema column
   is named somewhere. Six defects in one week shared the shape of something that

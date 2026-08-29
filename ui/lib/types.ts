@@ -24,6 +24,13 @@ export type Excluded = {
   state: string | null;
 };
 
+export type GraphSeed = {
+  entity_id: string;
+  display_name: string;
+  type: string;
+  matched_on: "name" | "identifier";
+};
+
 export type Trace = {
   query_id: string;
   results: Citation[];
@@ -31,7 +38,23 @@ export type Trace = {
   generator_version: string | null;
   corpus: Stair | null;
   excluded: Excluded[];
+  // The entities a query resolved to, when the graph arm was asked for. A
+  // graph-only result contains none of the words searched for, so this is the
+  // only thing that explains why it is in the list.
+  graph_seeds: GraphSeed[];
 };
+
+// The retrieval arms, and the one place their names and labels live. The API
+// models `match` as a list, so these are a multi-select and not a mode: the
+// value of the graph arm is that its hits are fused with the others, and an
+// exclusive control would throw that away.
+export const ARMS = [
+  { key: "vector", chip: "vec", label: "vector", hint: "meaning" },
+  { key: "lexical", chip: "lex", label: "lexical", hint: "words" },
+  { key: "graph", chip: "gph", label: "graph", hint: "connections" },
+] as const;
+
+export type ArmKey = (typeof ARMS)[number]["key"];
 
 export type Version = {
   version_id: string;

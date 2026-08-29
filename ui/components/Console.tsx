@@ -15,11 +15,13 @@ import { useCallback, useEffect, useState } from "react";
 import Capture, { humanBytes } from "./Capture";
 import ThemeToggle from "./ThemeToggle";
 import {
+  ARMS,
+  ArmKey,
   AuditTrail,
   Item,
+  Membership,
   Memory,
   MemoryMember,
-  Membership,
   MemoryType,
   Stair,
   Trace,
@@ -107,6 +109,12 @@ export default function Console({
   // Only the group you are working in is expanded. Fifteen items visible at
   // once is a list to scan; four groups with one open is a place to be.
   const [openGroup, setOpenGroup] = useState<string>("Data");
+  // Handoffs between Search and Entities. A search result explains itself by
+  // naming the entity it was reached through; the entity panel hands a name
+  // back. Held here because the two panels are siblings and neither owns the
+  // other.
+  const [focusEntity, setFocusEntity] = useState<string | null>(null);
+  const [seededQuery, setSeededQuery] = useState<string | null>(null);
   const [stair, setStair] = useState<Stair | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -194,14 +202,34 @@ export default function Console({
         {section === "update" && (
           <UpdateData projectId={projectId} producerId={producerId} onChange={refresh} />
         )}
-        {section === "search" && <ReadSearch projectId={projectId} />}
+        {section === "search" && (
+          <ReadSearch
+            projectId={projectId}
+            seeded={seededQuery}
+            onOpenEntity={(entityId) => {
+              setFocusEntity(entityId);
+              setSection("entities");
+              setOpenGroup("Organize");
+            }}
+          />
+        )}
         {section === "ask" && <AskSection projectId={projectId} />}
         {section === "inbound" && <InboundSection projectId={projectId} />}
         {section === "crawlers" && <CrawlersSection projectId={projectId} />}
         {section === "audit" && <Audit projectId={projectId} />}
         {section === "memory" && <MemorySection projectId={projectId} />}
         {section === "cases" && <CasesSection projectId={projectId} />}
-        {section === "entities" && <EntitiesSection projectId={projectId} />}
+        {section === "entities" && (
+          <EntitiesSection
+            projectId={projectId}
+            focus={focusEntity}
+            onSearchFor={(name) => {
+              setSeededQuery(name);
+              setSection("search");
+              setOpenGroup("Data");
+            }}
+          />
+        )}
         {section === "sharing" && <SharingSection />}
         {section === "deletion" && <DeletionSection projectId={projectId} onChange={refresh} />}
         {section === "settings" && <SettingsSection projectId={projectId} />}
@@ -705,7 +733,18 @@ type EntityDetail = Entity & {
 const ENTITY_TYPES = ["person", "organization", "location", "product",
                       "event", "topic", "other"];
 
-function EntitiesSection({ projectId }: { projectId: string }) {
+function EntitiesSection({
+  projectId,
+  focus,
+  onSearchFor,
+}: {
+  projectId: string;
+  // An entity the search trace linked through to. Opened on arrival, so the
+  // hop from "why is this result here?" to "what else is connected?" is one
+  // click rather than a name to remember and re-find in a list.
+  focus?: string | null;
+  onSearchFor?: (name: string) => void;
+}) {
   const [list, setList] = useState<Entity[]>([]);
   const [kind, setKind] = useState<string | null>(null);
   const [detail, setDetail] = useState<EntityDetail | null>(null);
@@ -728,6 +767,30 @@ function EntitiesSection({ projectId }: { projectId: string }) {
       setError((e as Error).message);
     }
   }, [projectId, kind]);
+
+  const inspect = useCallback(
+    async (entityId: string) => {
+      try {
+        const [d, g, c] = await Promise.all([
+          call<EntityDetail>(`api/v1/entities/${entityId}`, undefined, "GET"),
+          call<GraphView>(
+            `api/v1/entities/${entityId}/graph?depth=${depth}`, undefined, "GET"),
+          call<{ co_mentions: CoMention[] }>(
+            `api/v1/entities/${entityId}/co-mentions`, undefined, "GET"),
+        ]);
+        setDetail(d);
+        setGraph(g);
+        setTogether(c.co_mentions);
+      } catch (e) {
+        setError((e as Error).message);
+      }
+    },
+    [depth],
+  );
+
+  useEffect(() => {
+    if (focus) void inspect(focus);
+  }, [focus, inspect]);
 
   useEffect(() => {
     void load();
@@ -844,23 +907,7 @@ function EntitiesSection({ projectId }: { projectId: string }) {
                 cursor: "pointer",
                 borderColor: chosen.includes(entity.entity_id) ? "var(--accent)" : undefined,
               }}
-              onClick={() =>
-                act("", async () => {
-                  const [d, g, c] = await Promise.all([
-                    call<EntityDetail>(`api/v1/entities/${entity.entity_id}`,
-                                       undefined, "GET"),
-                    call<GraphView>(
-                      `api/v1/entities/${entity.entity_id}/graph?depth=${depth}`,
-                      undefined, "GET"),
-                    call<{ co_mentions: CoMention[] }>(
-                      `api/v1/entities/${entity.entity_id}/co-mentions`,
-                      undefined, "GET"),
-                  ]);
-                  setDetail(d);
-                  setGraph(g);
-                  setTogether(c.co_mentions);
-                })
-              }
+              onClick={() => act("", () => inspect(entity.entity_id))}
             >
               <div className="meta">
                 <span className="chip on">{entity.type}</span>
@@ -987,7 +1034,18 @@ function EntitiesSection({ projectId }: { projectId: string }) {
 
       {detail && (
         <section className="panel">
-          <h2>{detail.display_name}</h2>
+          <div className="row" style={{ justifyContent: "space-between" }}>
+            <h2 style={{ margin: 0 }}>{detail.display_name}</h2>
+            {onSearchFor && (
+              <button
+                className="secondary"
+                onClick={() => onSearchFor(detail.display_name)}
+                title="Search with the graph arm, seeded from this entity"
+              >
+                Search from here
+              </button>
+            )}
+          </div>
           <p className="empty">
             Every mention is kept with the record it came from and why it resolved here — so a
             wrong join is something you can see rather than something you inherit.
@@ -1550,19 +1608,61 @@ function AskSection({ projectId }: { projectId: string }) {
 
 /* ------------------------------------------------------------ 4. search */
 
-function ReadSearch({ projectId }: { projectId: string }) {
+function ReadSearch({
+  projectId,
+  seeded,
+  onOpenEntity,
+}: {
+  projectId: string;
+  // A name handed over from the Entities panel. Arriving with one turns the
+  // graph arm on, because that is the question being asked -- "what else is
+  // connected to this?" -- and leaving it off would answer a different one.
+  seeded?: string | null;
+  onOpenEntity?: (entityId: string) => void;
+}) {
   const [query, setQuery] = useState("rollback recovered error rates");
+  const [match, setMatch] = useState<ArmKey[]>(["vector", "lexical"]);
   const [trace, setTrace] = useState<Trace | null>(null);
+  // What the last search actually asked for, which is not what the controls say
+  // once they are changed. Chips read from this, or a result would be rendered
+  // against arms it never ran under.
+  const [ran, setRan] = useState<ArmKey[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  function toggleArm(key: ArmKey) {
+    setMatch((current) =>
+      current.includes(key)
+        ? // Never all-off: a search with no arms is not a narrower search, it
+          // is an error from the API.
+          current.length === 1
+          ? current
+          : current.filter((arm) => arm !== key)
+        : [...current, key],
+    );
+  }
+
+  useEffect(() => {
+    if (seeded) {
+      setQuery(seeded);
+      setMatch((current) =>
+        current.includes("graph") ? current : [...current, "graph"],
+      );
+    }
+  }, [seeded]);
 
   async function search() {
     setBusy(true);
     setError(null);
     try {
       setTrace(
-        await call<Trace>("api/v1/retrieve", { query, filter: { project_id: projectId } }),
+        await call<Trace>("api/v1/retrieve", {
+          query,
+          filter: { project_id: projectId },
+          match,
+        }),
       );
+      setRan(match);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -1596,6 +1696,27 @@ function ReadSearch({ projectId }: { projectId: string }) {
             {busy ? "Searching…" : "Retrieve"}
           </button>
         </div>
+        <div className="row" style={{ marginTop: 10 }}>
+          <span className="muted" style={{ fontSize: 13 }}>Match on</span>
+          <div className="arms">
+            {ARMS.map((arm) => (
+              <button
+                key={arm.key}
+                type="button"
+                aria-pressed={match.includes(arm.key)}
+                onClick={() => toggleArm(arm.key)}
+                title={`${arm.label} — ${arm.hint}`}
+              >
+                {arm.label}
+              </button>
+            ))}
+          </div>
+          {match.includes("graph") && (
+            <span className="muted" style={{ fontSize: 12.5 }}>
+              Records connected to what you named, even when they do not contain it.
+            </span>
+          )}
+        </div>
         {error && <p className="err">{error}</p>}
       </section>
 
@@ -1610,6 +1731,31 @@ function ReadSearch({ projectId }: { projectId: string }) {
                 {trace.corpus.stored > 0 && ` — ${trace.corpus.stored} not searchable yet`}.
               </p>
             )}
+            {ran.includes("graph") && (
+              <p className="seeds">
+                <span className="label">
+                  {trace.graph_seeds.length === 0
+                    ? "The graph arm found nothing in your query to start from —"
+                    : "Expanded from"}
+                </span>
+                {trace.graph_seeds.map((seed) => (
+                  <button
+                    key={seed.entity_id}
+                    className="linkish"
+                    onClick={() => onOpenEntity?.(seed.entity_id)}
+                    title="Open in Entities"
+                  >
+                    {seed.display_name} <span className="muted">({seed.type})</span>
+                  </button>
+                ))}
+                {trace.graph_seeds.length === 0 && (
+                  <span className="muted">
+                    it matches whole entity names against the ones you can see, so
+                    &ldquo;Acme&rdquo; will not find &ldquo;Acme Corporation&rdquo;.
+                  </span>
+                )}
+              </p>
+            )}
             {trace.results.length === 0 ? (
               <p className="empty">
                 Nothing matched. Check the panel below for whether anything was eligible to match.
@@ -1620,9 +1766,12 @@ function ReadSearch({ projectId }: { projectId: string }) {
                   <div className="meta">
                     <span className="chip">#{index + 1}</span>
                     <span className="chip">score {hit.score.toFixed(4)}</span>
-                    {["vec", "lex"].map((arm) => (
-                      <span key={arm} className={`chip${hit.matched_by.includes(arm) ? " on" : ""}`}>
-                        {arm === "vec" ? "vector" : "lexical"}
+                    {ARMS.filter((arm) => ran.includes(arm.key)).map((arm) => (
+                      <span
+                        key={arm.key}
+                        className={`chip${hit.matched_by.includes(arm.chip) ? " on" : " off"}`}
+                      >
+                        {arm.label}
                       </span>
                     ))}
                     <span className={`chip ${hit.state}`}>{hit.state}</span>

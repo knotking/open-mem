@@ -193,6 +193,33 @@ button.secondary { background: transparent; color: var(--accent); border: 1px so
   background: var(--bg);
 }
 .chip.on { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 35%, transparent); color: var(--accent); }
+/* An arm that was not asked for, as distinct from one that was asked for and
+   did not match. Without the distinction a result appears to have matched
+   nothing at all. */
+.chip.off { opacity: 0.4; }
+
+/* Which arms a search uses. Segmented like a set of tabs and behaving like a
+   set of checkboxes, because `match` is a list: the graph arm earns its keep by
+   being fused with the others, and an exclusive control would lose that. */
+.arms { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.arms button {
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 6px 12px;
+  border: 0;
+  border-right: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--bg);
+  color: var(--muted);
+}
+.arms button:last-child { border-right: 0; }
+.arms button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); }
+.arms button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* What the graph arm started from. Sits above the results because it explains
+   the ones that contain none of the query's words. */
+.seeds { display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline; font-size: 13px; margin: 0 0 10px; }
+.seeds .label { color: var(--muted); }
 
 .excluded { display: grid; gap: 6px; }
 .excluded .item { display: flex; gap: 10px; align-items: baseline; font-size: 13px; }

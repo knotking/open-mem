@@ -307,3 +307,53 @@ async def test_seeds_do_not_cross_a_project_boundary(pool, embedder, tenant):
         project_id=other["project_id"], query="Priya Raman",
     )
     assert seeds == []
+
+
+async def test_a_graph_only_search_with_no_seed_is_empty_not_an_error(
+    pool, embedder, tenant
+):
+    """Asking for a mode that exists and having nothing to start from is an
+    empty result. This returned a 500: with no seeds the arm built no SQL, and
+    the "at least one match mode" guard fired on a perfectly ordinary question.
+    """
+    await _world(pool, tenant)
+    response = await _search(pool, embedder, tenant, "badger husbandry", ["graph"])
+    assert response.results == []
+    assert response.graph_seeds == []
+    # The search still happened, so it is still recorded.
+    assert response.query_id
+
+
+async def test_asking_for_no_modes_at_all_is_still_a_bad_request(
+    pool, embedder, tenant
+):
+    """The guard is about an empty `match`, not an empty result."""
+    with pytest.raises(ValueError):
+        await _search(pool, embedder, tenant, "anything", [])
+
+
+async def test_a_partial_name_does_not_resolve(pool, embedder, tenant):
+    """"Acme" does not seed "Acme Corporation", and that is deliberate.
+
+    The entity layer resolves a mention by identifier or by exact name and
+    refuses to guess, because a wrong join merges two people permanently and
+    silently. A retrieval arm that matched loosely would be doing the guessing
+    the layer beneath it declines to do — and would do it invisibly, since the
+    seed is reported but the near-miss that produced it would not be.
+    """
+    await _entity(pool, tenant, "Acme Corporation", kind="organization")
+    record = await _item(pool, tenant, "acme-note", "Acme Corporation renewed.")
+    entity = await pool.fetchval(
+        "SELECT entity_id FROM entities WHERE display_name = 'Acme Corporation'"
+    )
+    await _mention(pool, tenant, entity, record, "Acme Corporation")
+    principal = await _principal(pool, tenant)
+
+    assert await graph_seeds(
+        pool, principal, project_id=tenant.project_id, query="what about Acme"
+    ) == []
+    seeded = await graph_seeds(
+        pool, principal,
+        project_id=tenant.project_id, query="what about Acme Corporation",
+    )
+    assert [s.display_name for s in seeded] == ["Acme Corporation"]

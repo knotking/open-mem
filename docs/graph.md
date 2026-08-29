@@ -255,6 +255,14 @@ the other arms answer, and it is only as good as the entity layer beneath it —
 with extraction degraded to the local heuristic there are no entities, so there
 is nothing to seed and the arm correctly returns nothing.
 
+**It resolves a full name or nothing.** "Acme" does not seed "Acme
+Corporation". The entity layer resolves a mention by identifier or by exact
+name and refuses to guess, because a wrong join merges two people permanently
+and silently — so an arm that matched loosely would be doing the guessing the
+layer beneath it declines to do, and doing it invisibly, since the seed is
+reported but the near-miss that produced it would not be. The cost is real: a
+query saying "Acme" gets no expansion, and the seed line is what tells you so.
+
 One hop, and the arm returns each connected record's opening chunk: it is
 claiming the *record* is connected and has no view about which passage answers
 the question. Choosing a passage by relevance would be the other arms' job done

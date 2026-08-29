@@ -281,7 +281,7 @@ async def _retrieve(
             )"""
         )
 
-    if not arms:
+    if not request.match:
         raise ValueError("at least one match mode is required")
 
     names = [a.strip().split()[0] for a in arms]
@@ -313,7 +313,15 @@ async def _retrieve(
         ORDER BY score DESC
         LIMIT {limit_p}
     """
-    rows = await pool.fetch(sql, *params)
+    # A graph-only search whose query named no entity builds no arms at all.
+    # That is an empty result, not a bad request: the caller asked for a mode
+    # that exists and it had nothing to start from, which `graph_seeds` says.
+    # Raising here returned a 500 for a perfectly ordinary question.
+    #
+    # The search still runs through everything below -- the query row, the
+    # corpus counts, the audit -- because a search that found nothing is still
+    # a search that happened, and the trace is the part that explains why.
+    rows = await pool.fetch(sql, *params) if arms else []
 
     query_id = new_id("qry")
     all_hits = [
