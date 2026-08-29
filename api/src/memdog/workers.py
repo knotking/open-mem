@@ -25,6 +25,7 @@ from .db import vector_literal
 from .ids import new_id
 from .acl import Acl, strictest
 from .entities import resolve_mentions
+from .graph import record_edges
 from .extraction import EXTRACT_PURPOSE, Extractor
 from .inference import EmbeddingEngine, generator_version
 from .telemetry import continue_trace, record, span
@@ -354,12 +355,24 @@ class EnrichWorker:
             # Resolved in the same transaction as the artifact. An item that is
             # enriched but whose entities were not recorded, or the reverse, is
             # a state nothing downstream can reason about.
-            await resolve_mentions(
+            resolved = await resolve_mentions(
                 conn,
                 data_id=data_id,
                 org_id=row["org_id"],
                 project_id=row["project_id"],
                 candidates=envelope.entities,
+                generator_version=self.generator_version,
+            )
+            # Edges after mentions, in the same transaction: a relation names
+            # its endpoints by name, and the only thing that can turn a name
+            # into an id is the resolution that just ran for this record.
+            await record_edges(
+                conn,
+                data_id=data_id,
+                org_id=row["org_id"],
+                project_id=row["project_id"],
+                resolved=resolved,
+                relations=envelope.relations,
                 generator_version=self.generator_version,
             )
             await conn.execute(

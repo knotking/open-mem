@@ -684,6 +684,18 @@ type Entity = {
   visible_mentions: number;
 };
 
+type GraphNode = { entity_id: string; display_name: string; type: string; depth: number };
+type GraphEdge = {
+  subject_id: string; predicate: string; object_id: string;
+  evidence: number; source_data_ids: string[]; confidence: number;
+};
+type GraphView = {
+  root: GraphNode; nodes: GraphNode[]; edges: GraphEdge[]; truncated: boolean;
+};
+type CoMention = {
+  entity_id: string; display_name: string; type: string; shared_records: number;
+};
+
 type EntityDetail = Entity & {
   mentions: { data_id: string; surface: string; resolved_by: string;
               external_id: string; state: string; data_type: string | null }[];
@@ -698,6 +710,9 @@ function EntitiesSection({ projectId }: { projectId: string }) {
   const [kind, setKind] = useState<string | null>(null);
   const [detail, setDetail] = useState<EntityDetail | null>(null);
   const [chosen, setChosen] = useState<string[]>([]);
+  const [graph, setGraph] = useState<GraphView | null>(null);
+  const [together, setTogether] = useState<CoMention[]>([]);
+  const [depth, setDepth] = useState(1);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [lastMerge, setLastMerge] = useState<string | null>(null);
@@ -831,10 +846,19 @@ function EntitiesSection({ projectId }: { projectId: string }) {
               }}
               onClick={() =>
                 act("", async () => {
-                  setDetail(
-                    await call<EntityDetail>(`api/v1/entities/${entity.entity_id}`,
-                                             undefined, "GET"),
-                  );
+                  const [d, g, c] = await Promise.all([
+                    call<EntityDetail>(`api/v1/entities/${entity.entity_id}`,
+                                       undefined, "GET"),
+                    call<GraphView>(
+                      `api/v1/entities/${entity.entity_id}/graph?depth=${depth}`,
+                      undefined, "GET"),
+                    call<{ co_mentions: CoMention[] }>(
+                      `api/v1/entities/${entity.entity_id}/co-mentions`,
+                      undefined, "GET"),
+                  ]);
+                  setDetail(d);
+                  setGraph(g);
+                  setTogether(c.co_mentions);
                 })
               }
             >
@@ -859,6 +883,107 @@ function EntitiesSection({ projectId }: { projectId: string }) {
           ))
         )}
       </section>
+
+      {graph && (
+        <section className="panel">
+          <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
+            <h2 style={{ margin: 0 }}>Connections</h2>
+            <div className="row">
+              {[1, 2, 3].map((d) => (
+                <button
+                  key={d}
+                  className={depth === d ? "" : "secondary"}
+                  disabled={busy}
+                  onClick={() =>
+                    act("", async () => {
+                      setDepth(d);
+                      setGraph(
+                        await call<GraphView>(
+                          `api/v1/entities/${graph.root.entity_id}/graph?depth=${d}`,
+                          undefined, "GET"),
+                      );
+                    })
+                  }
+                >
+                  {d} hop{d > 1 ? "s" : ""}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {graph.edges.length === 0 ? (
+            <p className="empty">
+              No asserted relationships yet. Edges come from what a document actually stated —
+              &ldquo;Priya works for Northwind&rdquo; — so they need an enrichment pass that read
+              for them. Co-mentions below need nothing and work today.
+            </p>
+          ) : (
+            <>
+              <p className="empty" style={{ marginTop: 4 }}>
+                Each edge names the records that assert it. One document saying something is a
+                claim; several saying it independently is closer to a fact.
+              </p>
+              {graph.edges.map((edge, i) => {
+                const name = (id: string) =>
+                  graph.nodes.find((n) => n.entity_id === id)?.display_name ?? id;
+                return (
+                  <div className="hit" key={`${edge.subject_id}-${edge.predicate}-${i}`}>
+                    <div className="meta">
+                      <span className="chip on">{edge.predicate.replace(/_/g, " ")}</span>
+                      <span className="chip">
+                        {edge.evidence} record{edge.evidence === 1 ? "" : "s"} assert this
+                      </span>
+                    </div>
+                    <div className="text">
+                      {name(edge.subject_id)} <span className="edge-arrow">→</span>{" "}
+                      {name(edge.object_id)}
+                    </div>
+                    <p className="provenance">{edge.source_data_ids.join(" · ")}</p>
+                  </div>
+                );
+              })}
+            </>
+          )}
+
+          {graph.nodes.length > 1 && (
+            <>
+              <h3>Reachable within {depth} hop{depth > 1 ? "s" : ""}</h3>
+              <div className="row">
+                {graph.nodes
+                  .filter((n) => n.entity_id !== graph.root.entity_id)
+                  .map((n) => (
+                    <span className="chip" key={n.entity_id}>
+                      {n.display_name} · {n.depth}
+                    </span>
+                  ))}
+              </div>
+              {graph.truncated && (
+                <p className="empty">
+                  Truncated at the result limit — there is more here than is shown.
+                </p>
+              )}
+            </>
+          )}
+        </section>
+      )}
+
+      {together.length > 0 && (
+        <section className="panel">
+          <h2>Mentioned alongside</h2>
+          <p className="empty" style={{ marginTop: 4 }}>
+            Entities appearing in the same records. This is weak evidence — appearing together is
+            not a relationship — but it needs no extraction, so it works before any model has read
+            for relationships.
+          </p>
+          <div className="row">
+            {together.map((c) => (
+              <span className="chip" key={c.entity_id}>
+                {c.display_name} · {c.shared_records} shared
+              </span>
+            ))}
+          </div>
+        </section>
+      )}
 
       {detail && (
         <section className="panel">

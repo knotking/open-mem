@@ -29,6 +29,8 @@ from .chat import ask, build_answerer
 from .crawlers import CrawlerConfig, CrawlerError
 from . import crawling
 from . import entities as entities_mod
+from . import graph as graph_mod
+from .graph import GraphError
 from .entities import EntityError
 from . import account, agents, cases, control, memories as memories_mod, models, normalize, sharing
 from .account import AccountError
@@ -125,6 +127,7 @@ async def lifespan(app: FastAPI):
     app.state.embedder = embedder
     app.state.extractor = extractor
     app.state.answerer = answerer
+    app.state.graph = graph_mod.build_graph(pool, settings)
     app.state.crawl_worker = crawling.CrawlWorker(
         pool, queue, app.state.blobs, settings
     )
@@ -1666,6 +1669,60 @@ async def get_entity_endpoint(
         return await entities_mod.get_entity(request.app.state.pool, actor, entity_id)
     except (EntityError, AuthError) as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/entities/{entity_id}/graph")
+async def entity_graph_endpoint(
+    request: Request, entity_id: str, depth: int = 1,
+    predicates: str | None = None, limit: int = 120,
+    actor: Principal = Depends(principal),
+) -> dict:
+    """The neighbourhood around an entity, as asserted edges.
+
+    Visibility is enforced on every hop rather than on the result, so a path
+    cannot pass through a record the caller cannot read — the endpoints of such
+    a path would disclose that the record exists.
+    """
+    try:
+        result = await request.app.state.graph.neighbourhood(
+            actor, entity_id=entity_id, depth=depth,
+            predicates=[p for p in (predicates or "").split(",") if p] or None,
+            limit=limit,
+        )
+    except (GraphError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    return {
+        "root": vars(result.root),
+        "nodes": [vars(n) for n in result.nodes],
+        "edges": [vars(e) for e in result.edges],
+        "truncated": result.truncated,
+    }
+
+
+@app.get("/api/v1/entities/{entity_id}/co-mentions")
+async def co_mentions_endpoint(
+    request: Request, entity_id: str, limit: int = 25,
+    actor: Principal = Depends(principal),
+) -> dict:
+    """Entities named in the same records as this one.
+
+    Weak evidence, reported as a count so a reader can judge it — but it needs
+    no extraction, so it works before a model has read anything for
+    relationships.
+    """
+    try:
+        return {"co_mentions": await request.app.state.graph.co_mentioned(
+            actor, entity_id=entity_id, limit=limit)}
+    except (GraphError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/graph/predicates")
+async def graph_predicates_endpoint(actor: Principal = Depends(principal)) -> dict:
+    """The closed predicate vocabulary, served rather than documented twice."""
+    from .graph import MAX_DEPTH, PREDICATES
+
+    return {"predicates": list(PREDICATES), "max_depth": MAX_DEPTH}
 
 
 @app.post("/api/v1/entities/merge")

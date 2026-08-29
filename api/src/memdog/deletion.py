@@ -269,6 +269,11 @@ class DeleteWorker:
             # the row goes, but the purge deletes explicitly so erasure does
             # not depend on a cascade nobody re-checks.
             await conn.execute("DELETE FROM entity_mentions WHERE data_id = $1", data_id)
+            # An edge names the record that asserted it. Deleting the record
+            # and keeping the claim would leave a graph asserting something
+            # with no evidence behind it -- and the endpoints of that edge are
+            # themselves derived personal data.
+            await conn.execute("DELETE FROM entity_edges WHERE source_data_id = $1", data_id)
             await conn.execute("DELETE FROM normalized_records WHERE data_id = $1", data_id)
             # A share link to a purged item can only 404; removing it stops the
             # public inventory listing something that no longer exists.
@@ -323,6 +328,7 @@ async def verify_erasure(pool: asyncpg.Pool, data_id: str) -> dict:
         "memory_members": "SELECT count(*) FROM memory_members WHERE data_id = $1",
         "case_members": "SELECT count(*) FROM case_members WHERE data_id = $1",
         "entity_mentions": "SELECT count(*) FROM entity_mentions WHERE data_id = $1",
+        "entity_edges": "SELECT count(*) FROM entity_edges WHERE source_data_id = $1",
         "normalized_records": "SELECT count(*) FROM normalized_records WHERE data_id = $1",
         "share_links": "SELECT count(*) FROM share_links WHERE data_id = $1",
     }

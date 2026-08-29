@@ -164,7 +164,45 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   vectors; the reconciler re-embeds them, and retrieval returns nothing for the
   affected rows until it has, rather than comparing across vector spaces.
 
+- **Entities — graph layer 1.** Records now resolve the people, organizations
+  and things they name into a typed entity layer, with `GET`/merge/undo
+  endpoints and an **Entities** panel under Organize. Resolution rides the
+  extraction pass that already reads the text, so it costs no extra model call.
+- Resolution is deliberately cautious: it joins on a shared strong identifier
+  (an email, a URL) or an exact normalized name within one project, and
+  otherwise keeps entities apart. The two errors are not symmetric —
+  under-merging leaves two nodes you can join later, over-merging fuses two
+  people's records and once their mentions interleave nobody can say which fact
+  belonged to whom.
+- Every mention keeps the surface form as written, the record it came from, and
+  why it resolved there. Merges are recorded rather than applied destructively
+  and can be undone — "these are the same person" is a judgement, and a
+  judgement nobody can take back is one people will not make.
+- Entities live in Postgres, not a graph store, so traversal carries the same
+  visibility predicate as retrieval. An entity with no visible mention does not
+  appear at all, and counts report what the caller can see — "42 mentions" shown
+  against a list of three is itself a disclosure.
+- `entity_mentions` is covered by purge and by `verify_erasure`: a mention is
+  personal data derived from a record.
+- **The Prompts screen showed 6 data types while 24 were routed** — and its six
+  mixed prompt names with data types. It now renders from `GET /api/v1/prompts`,
+  which returns the register itself, including which prompts are shared and the
+  extensions routing to each.
+- **A rebuilt sign-in page.** It leads with numbers counted from the running
+  build — 54 formats, 24 data types, 18 prompts, 9 webhook providers — and names
+  the embedding model actually serving retrieval. A figure written into copy is
+  wrong within a month and wrong in the flattering direction.
+- `GET /api/v1/capabilities` is unauthenticated because the sign-in page has no
+  session. It counts registries only; the route in front of it carries the
+  platform identity token and never an API key.
+
 ### Fixed
+- **An artifact produced by a fallback engine was invisible to the reconciler.**
+  It carries the primary's `generator_version` — correctly, since the prompt and
+  schema were the primary's — so every staleness check considered it finished,
+  and an item enriched during a provider outage would have kept its degraded
+  summary forever. The real `fallback_depth` now lands on the artifact and the
+  reconciler revisits anything a fallback produced.
 - **The reconcile job was twenty image tags stale and had no `EMBED_ENGINE`**, so
   it re-embedded with the *old* model and concluded nothing was stale — a repair
   job quietly repairing the corpus back toward the state it was meant to leave.
@@ -219,6 +257,7 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   accepted content types are documents only.
 
 ### Migrations
+- `0021_entities.sql` — `entities`, `entity_mentions`, `entity_merges`.
 - `0019_answers.sql` — adds `queries.answer_access_level` and extends the
   `query_sources.excluded_reason` enumeration. Run before deploying.
 - `0020_crawlers.sql` — the six crawler tables, and extends the

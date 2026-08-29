@@ -57,7 +57,22 @@ name or a domain. A wrong identifier merges two different people permanently
 and silently, which is far worse than leaving them separate.
 
 A pronoun is not an entity. A job title with no name is not an entity. If the
-content names nothing, return an empty array."""
+content names nothing, return an empty array.
+
+RELATIONS: relationships the content states between entities you extracted.
+Both endpoints must be names you listed in entities, spelled the same way --
+a relation naming something you did not extract cannot be attached to anything
+and will be discarded.
+
+Only record a relationship the content actually asserts. Two names appearing in
+the same sentence is not a relationship; "Priya works for Northwind" is. The
+system already knows which entities were mentioned together and does not need
+that guessed at.
+
+Prefer the most specific predicate that is true. If nothing in the closed list
+fits what the content says, use related_to rather than forcing a wrong one --
+a precise-looking wrong edge is worse than a vague right one, because nothing
+downstream can tell it was a stretch."""
 
 
 class Envelope(BaseModel):
@@ -72,6 +87,8 @@ class Envelope(BaseModel):
     # Named things the text refers to. Resolved into the entity layer, where
     # they are governed; the envelope only reports what the document said.
     entities: list[dict] = Field(default_factory=list)
+    # Relationships the document asserted between those entities.
+    relations: list[dict] = Field(default_factory=list)
     fields: dict = Field(default_factory=dict)
     # Provider-reported provenance, absent for deterministic extractors --
     # which is itself informative: a null here means no model was involved.
@@ -105,6 +122,12 @@ def build_prompt(
 # Entities ride the pass that is already reading the text. A separate
 # extraction call would double the cost and the latency of enrichment to read
 # the same document twice, and would let the two disagree about what it said.
+RELATION_PREDICATES = (
+    "works_for", "member_of", "reports_to", "collaborates_with",
+    "located_in", "part_of", "owns", "produces", "uses",
+    "attended", "about", "related_to",
+)
+
 ENTITY_SCHEMA = {
     "type": "array",
     "items": {
@@ -122,6 +145,23 @@ ENTITY_SCHEMA = {
     },
 }
 
+# Relations ride the same pass as entities. Naming the endpoints rather than
+# ids is deliberate: the model cannot know our identifiers, so it says what the
+# document said and the resolver matches it back.
+RELATION_SCHEMA = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "required": ["subject", "predicate", "object"],
+        "properties": {
+            "subject": {"type": "string"},
+            "predicate": {"type": "string", "enum": list(RELATION_PREDICATES)},
+            "object": {"type": "string"},
+            "confidence": {"type": ["number", "null"]},
+        },
+    },
+}
+
 ENVELOPE_SCHEMA = {
     "type": "object",
     "required": ["title"],
@@ -132,6 +172,7 @@ ENVELOPE_SCHEMA = {
         "keywords": {"type": "array", "items": {"type": "string"}},
         "language": {"type": ["string", "null"]},
         "entities": ENTITY_SCHEMA,
+        "relations": RELATION_SCHEMA,
     },
 }
 
@@ -309,6 +350,19 @@ def _gemini_schema() -> dict:
             "summary": {"type": "string"},
             "keywords": {"type": "array", "items": {"type": "string"}},
             "language": {"type": "string"},
+            "relations": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["subject", "predicate", "object"],
+                    "properties": {
+                        "subject": {"type": "string"},
+                        "predicate": {"type": "string",
+                                      "enum": list(RELATION_PREDICATES)},
+                        "object": {"type": "string"},
+                    },
+                },
+            },
             "entities": {
                 "type": "array",
                 "items": {

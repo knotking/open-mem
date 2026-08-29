@@ -580,3 +580,7 @@ select {
 @media (max-width: 860px) {
   .hero-split { grid-template-columns: 1fr; gap: 30px; }
 }
+
+/* An edge reads as a statement, so the arrow is set apart from the names it
+   joins rather than blending into them. */
+.edge-arrow { color: var(--accent); font-weight: 600; padding: 0 2px; }
