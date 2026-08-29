@@ -218,6 +218,42 @@ audit asserted against the wrong half of the trail.
 `tests/test_seed.py` runs the whole thing on every commit, so the exit criterion is a gate rather
 than something someone remembers to check.
 
+### And registration is closed
+
+`registration_mode` ships as a setting at platform and org scope, defaulting to `invite_only`, and
+it is enforced **where a new identity would become a `users` row** rather than only where membership
+is granted. Under `open` anyone who can authenticate gets an account and still no membership; under
+`disabled` account creation is refused outright; under the default an address is admitted if it is
+already a user or holds a live invite.
+
+| Endpoint | |
+|----------|--|
+| `POST /api/v1/invites` | Admin only. Email-bound unless `transferable: true` is passed explicitly. Token returned once |
+| `GET /api/v1/invites` | Outstanding invites with `pending` / `redeemed` / `expired` / `revoked`. Never a token |
+| `DELETE /api/v1/invites/{id}` | Revoke before redemption. An id from another org gets the same 404 an invented one does |
+| `POST /api/v1/invites/redeem` | **Unauthenticated** — the redeemer has no account yet, and the invite is the credential that covers it. Returns an API key scoped to the invited role |
+
+Three properties are worth naming because the obvious implementation misses each:
+
+**Single-use survives a race.** The update that marks an invite redeemed is conditional and happens
+*before* the account is provisioned. The other order has both racers reach `INSERT INTO users` with
+the same address, and the loser dies on a unique constraint — a 500 where the honest answer is that
+the invite was already used.
+
+**Every failure is the same sentence.** Expired, revoked, already redeemed, wrong address, never
+existed. The distinctions are real and all of them are disclosure, which is what turns the endpoint
+into an org-enumeration oracle.
+
+**The limiter is keyed on the peer address, not on the token.** Keying on anything the caller
+supplies hands them the bucket: vary the prefix, get a fresh allowance. `X-Forwarded-For` is
+deliberately not trusted, since a header the client writes is a bucket the client picks — which
+makes this a shared ceiling behind a proxy rather than a per-client one.
+
+**Bootstrap is one-time.** `python -m memdog bootstrap` refuses once any user exists and says so,
+because an exception that can be taken twice is an unauthenticated account-creation endpoint
+wearing an operations script's clothes. The library function it calls is not guarded — the seed and
+the test fixtures use it, and both have their own guards.
+
 ### Three things are still created directly
 
 An **organization**, a **connection** and a **second member's credential** have no endpoint behind

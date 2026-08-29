@@ -51,6 +51,32 @@ async def create_user(pool: asyncpg.Pool, email: str, display_name: str = "") ->
     return user_id
 
 
+class AlreadyBootstrapped(RuntimeError):
+    """There is already somebody here."""
+
+
+async def refuse_if_occupied(pool: asyncpg.Pool) -> None:
+    """Bootstrap is a one-time operation, not a standing capability.
+
+    Registration is invite-only, which has a chicken-and-egg problem: somebody
+    must exist before anyone can be invited, and this is the exception that
+    solves it. An exception that can be taken twice is not an exception -- it is
+    an unauthenticated account-creation endpoint wearing an operations script's
+    clothes, reachable by anyone who can run the command in the deployment.
+
+    So it refuses once anybody exists, and says so rather than silently doing
+    nothing: an operator who ran it twice needs to know which of the two
+    credentials is real.
+    """
+    existing = await pool.fetchval("SELECT count(*) FROM users")
+    if existing:
+        raise AlreadyBootstrapped(
+            f"{existing} user(s) already exist. Bootstrap creates the first "
+            "admin and only the first; everyone after them arrives by invite "
+            "(POST /api/v1/invites)."
+        )
+
+
 async def bootstrap_tenant(
     pool: asyncpg.Pool,
     *,

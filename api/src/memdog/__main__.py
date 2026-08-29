@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import sys
 
-from .bootstrap import bootstrap_tenant
+from .bootstrap import AlreadyBootstrapped, bootstrap_tenant, refuse_if_occupied
 from .seed import QUESTIONS
 from .config import load_settings
 from .inference import build_embedder
@@ -13,10 +13,16 @@ from . import usage
 from .db import create_pool, migrate
 
 
-async def _bootstrap(email: str, scope: str) -> None:
+async def _bootstrap(email: str, scope: str) -> int:
     settings = load_settings()
     pool = await create_pool(settings)
     await migrate(pool, settings)
+    try:
+        await refuse_if_occupied(pool)
+    except AlreadyBootstrapped as exc:
+        await pool.close()
+        print(f"bootstrap refused: {exc}", file=sys.stderr)
+        return 1
     tenant = await bootstrap_tenant(pool, email=email, connection_scope=scope)
     await pool.close()
     print(f"org_id      {tenant.org_id}")
@@ -24,6 +30,7 @@ async def _bootstrap(email: str, scope: str) -> None:
     print(f"user_id     {tenant.user_id}")
     print(f"producer_id {tenant.producer_id}")
     print(f"api_key     {tenant.api_key}    # shown once, never again")
+    return 0
 
 
 async def _store_secret(project: str, name: str, value: str) -> None:
@@ -121,10 +128,16 @@ async def _revoke_key(prefix: str) -> None:
     print(f"revoke {prefix}: {updated}")
 
 
-async def _bootstrap_to_secret(email: str, scope: str, project: str, secret: str) -> None:
+async def _bootstrap_to_secret(email: str, scope: str, project: str, secret: str) -> int:
     settings = load_settings()
     pool = await create_pool(settings)
     await migrate(pool, settings)
+    try:
+        await refuse_if_occupied(pool)
+    except AlreadyBootstrapped as exc:
+        await pool.close()
+        print(f"bootstrap refused: {exc}", file=sys.stderr)
+        return 1
     tenant = await bootstrap_tenant(pool, email=email, connection_scope=scope)
     await pool.close()
     print(f"org_id      {tenant.org_id}")
@@ -132,6 +145,7 @@ async def _bootstrap_to_secret(email: str, scope: str, project: str, secret: str
     print(f"user_id     {tenant.user_id}")
     print(f"producer_id {tenant.producer_id}")
     await _store_secret(project, secret, tenant.api_key)
+    return 0
 
 
 async def _reconcile(grace: int) -> None:
@@ -424,12 +438,10 @@ def main() -> int:
         asyncio.run(_revoke_key(sys.argv[2]))
         return 0
     if sys.argv[1] == "bootstrap-to-secret":
-        asyncio.run(_bootstrap_to_secret(*sys.argv[2:6]))
-        return 0
+        return asyncio.run(_bootstrap_to_secret(*sys.argv[2:6]))
     email = sys.argv[2] if len(sys.argv) > 2 else "owner@example.com"
     scope = sys.argv[3] if len(sys.argv) > 3 else "personal"
-    asyncio.run(_bootstrap(email, scope))
-    return 0
+    return asyncio.run(_bootstrap(email, scope))
 
 
 if __name__ == "__main__":

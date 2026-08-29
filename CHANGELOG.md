@@ -11,6 +11,38 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **`python -m memdog seed --demo` — a demo tenant, and the end-to-end check the
+  repo did not have.** Forty records about one Acme renewal, written through the
+  public write verb with a registered producer, enriched synchronously, in a few
+  seconds against the local engines. It is not a fixture: a seed that inserts
+  rows tests the seed, and diverges the moment the real path changes.
+- **The seed verifies itself and names the step that broke.** It asks the corpus
+  five saved questions and requires each to return the record that answers it,
+  requires a second member's search *not* to return the record written through a
+  personal connection, requires the access log to have rows after those reads,
+  and requires every embedding to record its model. Each is one clause of the
+  Phase 1 exit criterion, so a green seed is that criterion demonstrated rather
+  than asserted — and `tests/test_seed.py` runs it on every commit.
+- **`--reset` purges through the ordinary delete cascade** — the same
+  selector-delete an offboarding uses, narrowed by the `demo` tag because a
+  project id alone is deliberately not a selector. It also recovers a half-built
+  demo, since an interrupted seed leaves users behind with no org to hold them
+  and the alternative is a hand-written `DELETE` against a live database.
+- Demo credentials are **generated per deployment and printed once**. A known
+  demo user with a known password, present in every install, is a shipped
+  default credential.
+- The demo ships **one domain rather than the six the design calls for**.
+  Clinical, legal, support, telemetry and personal each demonstrate a mechanism
+  sales cannot, and four of those mechanisms are only partly built — seeding a
+  domain to demonstrate something absent produces a demo that lies. The
+  deferrals are listed in [onboarding.md](docs/operations/onboarding.md) rather
+  than left to be discovered.
+- Building it surfaced a gap now recorded in the README: **normalization schemas
+  can be registered and are never applied.** `POST /api/v1/schemas` stores one
+  and `normalize.project()` knows how to run it, but nothing on the write path
+  calls it, so `identifiers[]` and `event_time` are whatever the writer sent and
+  never a projection. The seed wanted a deliberately-failed normalization to
+  show that a mapping bug loses nothing, and could not produce one honestly.
 - **Every model call is now metered, and what it cost is recorded rather than
   counted.** One `usage_events` row per inference call, carrying who pays, which
   engine actually answered, and input, output and cached tokens as three
