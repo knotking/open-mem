@@ -119,7 +119,8 @@ async def lifespan(app: FastAPI):
     # The event worker is what turns the log into work. The individual workers
     # stay subscribed to their own topics too, because the reconciler still
     # publishes to them directly when repairing a corpus.
-    fetch_worker = FetchWorker(pool, app.state.blobs, settings, queue=queue)
+    fetch_worker = FetchWorker(pool, app.state.blobs, settings, queue=queue,
+                               envelope=Envelope.from_settings(settings))
     EventWorker(
         pool, queue,
         parse_worker=parse_worker, embed_worker=embed_worker,
@@ -1533,6 +1534,7 @@ async def post_connection(
             credential=body.get("credential"),
             auth_style=body.get("auth_style", "bearer"),
             auth_name=body.get("auth_name"),
+            auth_config=body.get("auth_config") or {},
             scope=body.get("scope", "personal"),
         )
     except AuthError as exc:
@@ -1922,6 +1924,7 @@ async def capabilities(request: Request) -> dict:
     that overstates.
     """
     from .classify import _EXTENSION_MAP, _MIME_MAP
+    from .connectors import CATALOG
     from .crawlers import STRATEGIES
     from .parsers import supported_formats
     from .prompts import BY_DATA_TYPE, registry
@@ -1936,6 +1939,11 @@ async def capabilities(request: Request) -> dict:
         "extensions": len(_EXTENSION_MAP),
         "webhook_providers": len(PROVIDERS),
         "crawler_strategies": len(STRATEGIES),
+        # Both, because the difference is the honest part: an entry that needs
+        # something not built is listed rather than hidden, and a count that
+        # silently dropped it would read as complete coverage.
+        "connectors": len(CATALOG),
+        "connectors_available": sum(1 for c in CATALOG if c.requires is None),
         "embed_model": request.app.state.embedder.model_id,
         "media_interpretation": request.app.state.multimodal.enabled,
     }

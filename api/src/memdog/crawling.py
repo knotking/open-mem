@@ -17,7 +17,7 @@ import asyncpg
 from .auth import CONFIG_WRITE, DATA_READ, DATA_WRITE, Principal
 from .blobs import BlobStore
 from .config import Settings
-from .contracts import Inline, WriteItem, WriteOptions, WriteRequest
+from .contracts import Inline, Pending, WriteItem, WriteOptions, WriteRequest
 from .crawlers import (
     Auth,
     CrawlerConfig,
@@ -481,6 +481,15 @@ class CrawlWorker:
             # a run that ended 'completed' would advance the watermark and the
             # skipped window would never be revisited.
             status, reason = "failed", str(exc)
+            if exc.status == 401 and crawler["connection_id"]:
+                # Drop the cached token as well. An exchanged credential is
+                # held until shortly before it expires, so a source that
+                # started refusing -- consent revoked, scope changed, secret
+                # rotated at the provider -- would go on being refused with the
+                # same dead token for up to an hour after the fix.
+                from .grants import forget
+
+                forget(crawler["connection_id"])
         except Exception as exc:  # noqa: BLE001 - a run must always terminate
             status, reason = "failed", f"{exc.__class__.__name__}: {exc}"
 
@@ -569,9 +578,22 @@ class CrawlWorker:
                 continue
             if dry:
                 continue
+            if item.pending:
+                # A listing found a reference, not a document. The bytes are a
+                # second request needing the same credential, so it names the
+                # connection and the fetch worker makes it -- which is where
+                # the byte cap and the blob store already are.
+                content = Pending(
+                    provider=item.pending["provider"],
+                    resource_id=item.pending["resource_id"],
+                    connection_id=crawler["connection_id"],
+                    hints=item.pending.get("hints") or {},
+                )
+            else:
+                content = Inline(text=item.text or item.title or item.external_id)
             batch.append(WriteItem(
                 external_id=item.external_id,
-                content=Inline(text=item.text or item.title or item.external_id),
+                content=content,
                 metadata={"tags": [*config.tags, f"crawler:{crawler['crawler_id']}"],
                           "title": item.title, "source_url": item.url, **item.fields},
                 memory={"key": config.memory_key or crawler["crawler_id"],

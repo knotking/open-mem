@@ -34,11 +34,19 @@ def test_every_available_entry_renders_a_config_the_crawler_accepts():
     available = [c for c in CATALOG if c.requires is None]
     assert available, "the catalog has nothing usable in it"
 
+    from memdog.crawlers import validate_config
+
     for connector in available:
         config = connectors.build(connector.key, _scope_for(connector))
-        # The validator the ordinary create path uses. Nothing here is a
-        # shortcut around it.
+        # The validators the ordinary create path uses. Nothing here is a
+        # shortcut around them.
         parsed = CrawlerConfig.model_validate(config)
+        if parsed.strategy == "tree":
+            # Runs the create path's second validator too. It is skipped for
+            # `http` only because the synthetic scope values here are not URLs.
+            validate_config(parsed)
+            assert parsed.tree is not None
+            continue
         assert parsed.strategy == "http"
         assert parsed.request is not None
         assert parsed.extract.items_path
@@ -65,12 +73,15 @@ def test_a_missing_scope_value_is_refused_rather_than_guessed():
 
 
 def test_a_blocked_connector_says_what_is_missing_and_refuses_to_build():
-    """"We do not support Google" and "Google needs a consent flow nobody has
-    built" are different sentences, and only one of them is true."""
+    """Only what genuinely cannot authenticate without a person stays blocked.
+
+    Google, Microsoft and Salesforce were all listed as needing OAuth and none
+    of them does: a service-account assertion and a client-credentials grant
+    have no browser and no consent screen in them. Zoho is the real case — it
+    issues a refresh token only through a one-time interactive authorization.
+    """
     blocked = [c for c in CATALOG if c.requires]
-    assert {c.key for c in blocked} >= {
-        "google_drive", "gmail", "sharepoint", "outlook", "salesforce",
-    }
+    assert {c.key for c in blocked} == {"zoho_crm"}
     for connector in blocked:
         assert connector.notes, f"{connector.key} is blocked and says nothing"
         with pytest.raises(ConnectorError) as exc:
@@ -80,14 +91,23 @@ def test_a_blocked_connector_says_what_is_missing_and_refuses_to_build():
 
 
 def test_the_catalog_lists_blocked_entries_rather_than_hiding_them():
-    """Hiding them would make the catalog look complete."""
+    """Hiding one would make the catalog look complete."""
     listed = connectors.catalog()
-    keys = {c["key"] for c in listed}
-    assert "google_drive" in keys
-    entry = next(c for c in listed if c["key"] == "google_drive")
+    entry = next(c for c in listed if c["key"] == "zoho_crm")
     assert entry["available"] is False
     assert entry["requires"] == "oauth"
-    assert "not built" in entry["notes"]
+    assert entry["notes"], "blocked and says nothing about why"
+
+
+def test_google_and_microsoft_authenticate_without_a_person():
+    """The correction this file records. Both were listed as needing an OAuth
+    consent flow; both have a grant with no human step in it."""
+    for key in ("google_drive", "gmail", "google_calendar"):
+        assert connectors.BY_KEY[key].auth_style == "google_service_account"
+        assert connectors.BY_KEY[key].requires is None
+    for key in ("sharepoint", "onedrive", "outlook", "teams", "salesforce"):
+        assert connectors.BY_KEY[key].auth_style == "client_credentials"
+        assert connectors.BY_KEY[key].requires is None
 
 
 def test_nothing_claims_to_be_verified_that_has_not_been():
@@ -184,7 +204,7 @@ async def test_creating_a_blocked_connector_is_refused_with_the_reason(
     response = await client.post(
         "/api/v1/crawlers/from-connector",
         headers={"Authorization": f"Bearer {tenant.api_key}"},
-        json={"project_id": tenant.project_id, "connector": "google_drive",
+        json={"project_id": tenant.project_id, "connector": "zoho_crm",
               "scope": {}},
     )
     assert response.status_code == 409
@@ -217,3 +237,28 @@ async def test_a_connection_can_be_attached_as_it_is_created(
         "SELECT connection_id FROM crawlers WHERE crawler_id = $1",
         response.json()["crawler_id"],
     ) == made["connection_id"]
+
+
+def test_a_tree_connector_walks_rather_than_lists():
+    """The pair exists because they differ in kind: one stores what a folder
+    contains, the other stores what the documents say."""
+    listing = CrawlerConfig.model_validate(
+        connectors.build("google_drive", {"folder": "1AbC"}))
+    walk = CrawlerConfig.model_validate(
+        connectors.build("google_drive_tree", {"folder": "1AbC"}))
+    assert listing.strategy == "http" and walk.strategy == "tree"
+    assert walk.tree is not None and walk.tree.api == "google_drive"
+    assert walk.tree.root == "1AbC"
+
+
+def test_the_graph_tree_roots_are_paths_graph_actually_serves():
+    """`sites/<id>/drive` and `users/<upn>/drive` are the two Graph accepts;
+    a root that is not one of them 404s on the first request."""
+    for key, scope, expected in (
+        ("sharepoint_tree", {"site": "acme,1,2"}, "sites/acme,1,2/drive"),
+        ("onedrive_tree", {"user": "a@acme.com"}, "users/a@acme.com/drive"),
+    ):
+        config = CrawlerConfig.model_validate(connectors.build(key, scope))
+        assert config.tree is not None
+        assert config.tree.root == expected
+        assert config.tree.api == "microsoft_graph"

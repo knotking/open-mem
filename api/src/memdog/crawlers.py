@@ -32,6 +32,7 @@ import hashlib
 import json
 import re
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
@@ -119,6 +120,29 @@ class HttpRequest(BaseModel):
     body: dict[str, Any] | None = None
 
 
+class Tree(BaseModel):
+    """Where a folder recursion starts, and on which API.
+
+    Two named APIs rather than a template, because folder recursion is the one
+    thing whose shape genuinely differs between them: Drive asks for children
+    with a query (`'<id>' in parents`), Graph asks for them with a path
+    (`/items/<id>/children`), and a folder is marked by a mime type in one and a
+    facet in the other. Everything else about these sources the `http` strategy
+    already covers.
+
+    Closed, so a name that does not resolve is a 422 at save rather than a
+    crawler that fails at 3am.
+    """
+
+    api: Literal["google_drive", "microsoft_graph"]
+    # Drive: the folder id from the folder's URL.
+    # Graph: the drive to walk -- `sites/<site-id>/drive` or `users/<upn>/drive`.
+    root: str
+    # An allowlist of mime prefixes. Empty means every file, which is usually
+    # not what anyone wants of a shared drive.
+    include_mime: list[str] = Field(default_factory=list)
+
+
 class CrawlerConfig(BaseModel):
     """Declarative and stored. Nothing here is code.
 
@@ -128,7 +152,7 @@ class CrawlerConfig(BaseModel):
     """
 
     name: str
-    strategy: Literal["http", "feed", "traverse"]
+    strategy: Literal["http", "feed", "traverse", "tree"]
 
     # http
     request: HttpRequest | None = None
@@ -136,6 +160,9 @@ class CrawlerConfig(BaseModel):
     extract: Extract = Field(default_factory=Extract)
     transform: list[Transform] = Field(default_factory=list)
     filter_include: str | None = None
+
+    # tree
+    tree: Tree | None = None
 
     # feed / traverse
     seeds: list[str] = Field(default_factory=list)
@@ -181,6 +208,15 @@ def validate_config(config: CrawlerConfig) -> None:
         if config.request is None:
             raise CrawlerError("an http crawler needs a request", status=422)
         validate_url(config.request.url)
+    elif config.strategy == "tree":
+        if config.tree is None:
+            raise CrawlerError(
+                "a tree crawler needs `tree` -- which API, and the folder or "
+                "drive to walk", status=422,
+            )
+        if not config.tree.root.strip():
+            raise CrawlerError("a tree crawler needs a root to walk from",
+                               status=422)
     else:
         if not config.seeds:
             raise CrawlerError(f"a {config.strategy} crawler needs at least one seed",
@@ -236,6 +272,12 @@ class Discovered:
     version: str | None = None
     fields: dict[str, Any] = field(default_factory=dict)
     depth: int = 0
+    # Set when the discovery found a *reference* rather than the content: a
+    # listing returns a file's name and id, and the bytes are a second request
+    # that needs the same credential. Resolved by the fetch worker, which is
+    # where every other download already happens -- so the byte cap, the blob
+    # store and the parse pipeline are the ones already in use.
+    pending: dict[str, Any] | None = None
 
     def version_hash(self) -> str:
         """Whichever change signal the source offered, reduced to one column.
@@ -698,10 +740,168 @@ async def discover_traverse(
     return found
 
 
+# --------------------------------------------------------------- tree
+
+# A folder is a folder in two different vocabularies.
+DRIVE_FOLDER = "application/vnd.google-apps.folder"
+
+
+def _permitted(mime: str | None, prefixes: list[str]) -> bool:
+    if not prefixes:
+        return True
+    return any((mime or "").startswith(p) for p in prefixes)
+
+
+async def discover_tree(
+    config: CrawlerConfig, *, watermark: str | None, budget: Budget,
+    throttle: Throttle, checkpoint: dict, auth: Auth | None = None,
+) -> list[Discovered]:
+    """Walk a document library, breadth-first, and reference what it holds.
+
+    This is the strategy the Drive and SharePoint catalog entries had to admit
+    they were missing: listing one folder is one request, and a shared drive is
+    a tree. It is bounded by `max_depth` like `traverse` is, and by the same
+    budget as everything else -- a drive nobody has looked at in three years is
+    exactly where an unbounded walk finds forty thousand files.
+
+    **It discovers references, not documents.** A listing returns a name, an id
+    and a modified time; the bytes are a second request per file. Emitting them
+    as `Pending` puts that request in the fetch worker, where the byte cap, the
+    blob store and the parse pipeline already are -- rather than downloading a
+    hundred PDFs inside a discovery pass that is holding a run open.
+    """
+    assert config.tree is not None
+    tree = config.tree
+    if auth is None:
+        # Neither API has an anonymous mode. Saying so beats a 401 that reads
+        # as the source's problem.
+        raise CrawlerError(
+            f"a {tree.api} crawler needs a connection; neither Drive nor Graph "
+            "answers without one", status=401,
+        )
+
+    found: list[Discovered] = []
+    headers = {"User-Agent": config.politeness.user_agent, "Accept": "application/json"}
+    headers.update(auth.headers)
+
+    # Breadth-first so a shallow, wide drive is not exhausted by one deep
+    # branch when the budget runs out.
+    queue: deque[tuple[str, int]] = deque([(tree.root, 0)])
+    seen_folders: set[str] = set(checkpoint.get("folders") or [])
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        while queue:
+            if budget.exhausted():
+                break
+            folder, depth = queue.popleft()
+            if folder in seen_folders:
+                continue          # a shortcut in Drive can make the tree a graph
+            seen_folders.add(folder)
+
+            async for entry in _children(client, tree, folder, headers=headers,
+                                         auth=auth, throttle=throttle,
+                                         config=config):
+                if budget.exhausted():
+                    break
+                child_id, name, mime, url, modified, is_folder, ref = entry
+                if is_folder:
+                    if depth < config.limits.max_depth:
+                        queue.append((child_id, depth + 1))
+                    continue
+                if not _permitted(mime, tree.include_mime):
+                    continue
+                if config.incremental == "watermark" and watermark and modified:
+                    if modified <= watermark:
+                        continue
+                found.append(Discovered(
+                    external_id=f"{tree.api}:{child_id}",
+                    title=name,
+                    url=url,
+                    version=modified,
+                    depth=depth,
+                    pending={"provider": tree.api, "resource_id": ref,
+                             "hints": {"name": name, "mime_type": mime}},
+                ))
+                budget.take()
+            checkpoint["folders"] = sorted(seen_folders)
+
+    return found
+
+
+async def _children(client, tree: Tree, folder: str, *, headers, auth,
+                    throttle, config):
+    """One folder's entries, paged, normalised across the two APIs.
+
+    A generator so the budget is checked between pages rather than after the
+    whole folder has been read -- a folder with nine thousand files in it should
+    cost one page, not nine thousand records.
+    """
+    if tree.api == "google_drive":
+        url = "https://www.googleapis.com/drive/v3/files"
+        params = {
+            "q": f"'{folder}' in parents and trashed = false",
+            "fields": "nextPageToken,files(id,name,mimeType,modifiedTime,webViewLink)",
+            "pageSize": "100",
+        }
+    else:
+        base = tree.root.strip("/")
+        # The root of the walk is the drive itself; anything deeper is an item
+        # in it. Both are paths under the same drive, which is what makes the
+        # item's download URL constructible later.
+        path = f"{base}/root/children" if folder == tree.root \
+            else f"{base}/items/{folder}/children"
+        url = f"https://graph.microsoft.com/v1.0/{path}"
+        params = {"$top": "100", "$select":
+                  "id,name,file,folder,webUrl,lastModifiedDateTime,parentReference"}
+    params.update(auth.query)
+
+    while url:
+        await throttle.wait(url)
+        target = str(httpx.URL(url, params=params)) if params else url
+        response = await _get(client, target, headers=headers,
+                              max_bytes=config.limits.max_bytes_per_item)
+        if response.status_code in (401, 403):
+            # Fails the run rather than ending it quietly: a quiet completion
+            # advances the watermark past files that were never read.
+            raise CrawlerError(f"source returned {response.status_code}", status=401)
+        if response.status_code == 404:
+            # A folder that has been deleted mid-walk is not a failed crawl.
+            return
+        if response.status_code >= 400:
+            raise CrawlerError(f"source returned {response.status_code}", status=502)
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise CrawlerError("source did not return JSON", status=502) from exc
+
+        if tree.api == "google_drive":
+            for f in payload.get("files") or []:
+                mime = f.get("mimeType")
+                yield (f.get("id") or "", f.get("name"), mime,
+                       f.get("webViewLink"), f.get("modifiedTime"),
+                       mime == DRIVE_FOLDER, f.get("id") or "")
+            token = payload.get("nextPageToken")
+            if not token:
+                return
+            params = {**params, "pageToken": token}
+        else:
+            for f in payload.get("value") or []:
+                drive = (f.get("parentReference") or {}).get("driveId") or ""
+                item = f.get("id") or ""
+                yield (item, f.get("name"), (f.get("file") or {}).get("mimeType"),
+                       f.get("webUrl"), f.get("lastModifiedDateTime"),
+                       f.get("folder") is not None,
+                       f"drives/{drive}/items/{item}" if drive else "")
+            url, params = payload.get("@odata.nextLink"), {}
+            if not url:
+                return
+
+
 STRATEGIES = {
     "http": discover_http,
     "feed": discover_feed,
     "traverse": discover_traverse,
+    "tree": discover_tree,
 }
 
 

@@ -18,9 +18,10 @@ from __future__ import annotations
 
 import ipaddress
 import logging
+import re
 import socket
 from dataclasses import dataclass
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import httpx
 
@@ -96,7 +97,8 @@ def validate_url(url: str) -> str:
     return url
 
 
-async def fetch_url(url: str, *, max_bytes: int) -> Fetched:
+async def fetch_url(url: str, *, max_bytes: int,
+                    headers: dict[str, str] | None = None) -> Fetched:
     """Stream the download, enforcing the cap against bytes that actually arrive.
 
     `Content-Length` is the sender's claim, not a fact, so the cap is checked
@@ -105,11 +107,17 @@ async def fetch_url(url: str, *, max_bytes: int) -> Fetched:
     """
     validate_url(url)
     redirects, current = 0, url
+    # A credential belongs to the host it was issued for. Both Drive and Graph
+    # answer a download with a redirect to a pre-signed CDN URL, and forwarding
+    # the Authorization header there hands an access token to a host that never
+    # needed one -- the classic way a token ends up in somebody else's logs.
+    origin = urlparse(url).hostname
+    sending = dict(headers or {})
 
     async with httpx.AsyncClient(timeout=FETCH_TIMEOUT_SECONDS, follow_redirects=False) as client:
         while True:
             try:
-                async with client.stream("GET", current) as response:
+                async with client.stream("GET", current, headers=sending) as response:
                     if response.status_code in (301, 302, 303, 307, 308):
                         location = response.headers.get("location")
                         if not location or redirects >= MAX_REDIRECTS:
@@ -119,6 +127,9 @@ async def fetch_url(url: str, *, max_bytes: int) -> Fetched:
                         # metadata address is the standard way past a check
                         # that only ran once.
                         current = validate_url(str(response.url.join(location)))
+                        if urlparse(current).hostname != origin:
+                            sending = {k: v for k, v in sending.items()
+                                       if k.lower() != "authorization"}
                         continue
 
                     if response.status_code >= 500:
@@ -153,6 +164,56 @@ async def fetch_url(url: str, *, max_bytes: int) -> Fetched:
                 raise FetchError(f"fetch failed: {exc}", retryable=True) from exc
 
 
+# Google's own document formats have no bytes to download -- `?alt=media` on a
+# Doc returns a 403. They are exported, and the export format is the decision
+# about what gets indexed: plain text for a document, CSV for a sheet.
+GOOGLE_EXPORTS = {
+    "application/vnd.google-apps.document": "text/plain",
+    "application/vnd.google-apps.spreadsheet": "text/csv",
+    "application/vnd.google-apps.presentation": "text/plain",
+    "application/vnd.google-apps.script": "application/vnd.google-apps.script+json",
+}
+
+# A resource id reaches here from a listing, and is about to be put in a URL.
+# Anything with a slash or a dot-segment in it could address a different
+# resource on the same host -- which is a path traversal against an API rather
+# than a filesystem, and just as effective.
+_DRIVE_ID = re.compile(r"^[A-Za-z0-9_-]{1,256}$")
+_GRAPH_PATH = re.compile(r"^drives/[A-Za-z0-9_.!-]{1,128}/items/[A-Za-z0-9_.!-]{1,128}$")
+
+
+def download_url(provider: str, resource_id: str, hints: dict) -> str:
+    """Where the bytes for this reference actually live.
+
+    Constructed here rather than stored on the row: a stored URL is one more
+    thing that can be tampered with between the listing and the fetch, and the
+    host is not a choice -- it follows from the provider.
+    """
+    if provider == "google_drive":
+        if not _DRIVE_ID.match(resource_id):
+            raise FetchError(f"{resource_id!r} is not a Drive file id")
+        export = GOOGLE_EXPORTS.get(hints.get("mime_type") or "")
+        if export:
+            return (f"https://www.googleapis.com/drive/v3/files/{resource_id}"
+                    f"/export?mimeType={quote(export)}")
+        if (hints.get("mime_type") or "").startswith("application/vnd.google-apps."):
+            # A folder, a form, a shortcut. There is nothing to download, and
+            # saying which beats a 403 from Drive.
+            raise FetchError(
+                f"{hints['mime_type']} has no downloadable content"
+            )
+        return (f"https://www.googleapis.com/drive/v3/files/{resource_id}"
+                "?alt=media&supportsAllDrives=true")
+    if provider == "microsoft_graph":
+        if not _GRAPH_PATH.match(resource_id):
+            raise FetchError(
+                f"{resource_id!r} is not a Graph item path "
+                "(drives/<drive-id>/items/<item-id>)"
+            )
+        return f"https://graph.microsoft.com/v1.0/{resource_id}/content"
+    raise FetchError(f"no fetcher for provider {provider!r}")
+
+
 class FetchWorker:
     """Turns a `Pending` item into a `Stored` one.
 
@@ -161,11 +222,15 @@ class FetchWorker:
     bytes arrived.
     """
 
-    def __init__(self, pool, blobs, settings, queue=None) -> None:
+    def __init__(self, pool, blobs, settings, queue=None, envelope=None) -> None:
         self._pool = pool
         self._blobs = blobs
         self._settings = settings
         self._queue = queue
+        # Only a reference that names a connection needs this. Absent, such a
+        # reference fails as a configuration problem rather than being fetched
+        # unauthenticated and reported as the source refusing us.
+        self._envelope = envelope
 
     def register(self, queue, topic: str = "fetch") -> None:
         queue.subscribe(topic, self.handle)
@@ -205,6 +270,38 @@ class FetchWorker:
                 # request for a pending item names the fetch as its cause.
                 await dispatch_pending(self._pool, self._queue)
 
+    async def _credential(self, connection_id, org_id: str, provider: str
+                          ) -> dict[str, str]:
+        """The headers this provider's download needs, resolved at the moment
+        of use -- the same call the crawler made to list the folder."""
+        from .connections import ConnectionError_, authorize
+
+        if not connection_id:
+            raise FetchError(
+                f"a {provider} reference names no connection, and neither "
+                "Drive nor Graph answers without one"
+            )
+        if self._envelope is None:
+            raise FetchError(
+                "this reference authenticates through a connection and the "
+                "deployment has no encryption configured"
+            )
+        try:
+            headers, query = await authorize(
+                self._pool, self._envelope, connection_id, org_id
+            )
+        except ConnectionError_ as exc:
+            # Retryable when the token endpoint was unreachable rather than
+            # refusing: a 502 now is a 200 in five minutes, and marking the row
+            # unsupported would make an outage permanent.
+            raise FetchError(str(exc), retryable=exc.status >= 500) from exc
+        if query:
+            raise FetchError(
+                "this connection presents its credential in the query string, "
+                "which a file download would put in the source's access log"
+            )
+        return headers
+
     async def fetch(self, data_id: str) -> None:
         from .classify import classify, sniff_mime
         from .workers import record_version
@@ -220,14 +317,18 @@ class FetchWorker:
             return  # already fetched, or gone -- idempotent by construction
 
         ref = dict(row["pending_ref"])
-        if ref.get("provider") != "url":
-            # Every other provider needs a credential from its connection, which
-            # is connector work. Say which, rather than failing opaquely.
-            raise FetchError(f"no fetcher for provider {ref.get('provider')!r}")
+        provider = ref.get("provider")
+        hints = dict(ref.get("hints") or {})
 
-        result = await fetch_url(
-            ref.get("resource_id", ""), max_bytes=self._settings.max_upload_bytes
-        )
+        if provider == "url":
+            target, headers = ref.get("resource_id", ""), None
+        else:
+            target = download_url(provider, ref.get("resource_id", ""), hints)
+            headers = await self._credential(ref.get("connection_id"),
+                                             row["org_id"], provider)
+
+        result = await fetch_url(target, max_bytes=self._settings.max_upload_bytes,
+                                 headers=headers)
         # The server sniffs; the sender's Content-Type is a hint like any other.
         mime = sniff_mime(result.payload, None, result.mime_type)
         storage_ref, checksum = await self._blobs.put(

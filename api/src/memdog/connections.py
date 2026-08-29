@@ -6,10 +6,18 @@ way that particular API expects to receive it. The first was already modelled:
 was not modelled at all, so the only place to say "this one wants
 `X-Api-Key`" was the crawler's own config, in the clear.
 
-**Four styles, closed.** Bearer, a named header, a query parameter, basic auth.
-That is not a simplification of the space — it is the space, for token-issuing
-HTTP APIs, and keeping it closed is what stops the secret drifting back into a
-templated header where it would be readable by anyone who can see a config.
+**Six styles, closed, in two kinds.** Four are *presented* as stored — bearer, a
+named header, a query parameter, basic auth. Two are *exchanged* before use:
+client credentials and a Google service-account assertion trade the stored secret
+for a token that lives an hour.
+
+That second kind is why "Google and Microsoft need OAuth" was wrong here for
+weeks. Interactive OAuth is how a *person* connects their own account; an
+organization connecting its own data uses a grant with no human in it at all,
+which is a POST. See `grants.py`.
+
+Keeping the set closed is what stops a secret drifting back into a templated
+header, where it would be readable by anyone who can read a config.
 
 **A credential is written and never read back.** `list_connections` reports
 whether one is held, never a prefix of it. There is no endpoint that returns a
@@ -26,10 +34,19 @@ from .auth import CONFIG_WRITE, AuthError, Principal
 from .crypto import CryptoUnavailable, Envelope
 from .ids import new_id
 
-AUTH_STYLES = ("bearer", "header", "query", "basic")
+# Presented as stored, then exchanged for a short-lived token.
+PRESENTED = ("bearer", "header", "query", "basic")
+EXCHANGED = ("client_credentials", "google_service_account")
+AUTH_STYLES = PRESENTED + EXCHANGED
 
 # Styles that are meaningless without somewhere to put the value.
 NEEDS_NAME = {"header", "query"}
+
+# What each exchanged style needs in `auth_config`, which holds no secret.
+NEEDS_CONFIG = {
+    "client_credentials": ("token_url",),
+    "google_service_account": ("scope",),
+}
 
 
 class ConnectionError_(Exception):
@@ -48,6 +65,7 @@ async def create(
     credential: str | None,
     auth_style: str = "bearer",
     auth_name: str | None = None,
+    auth_config: dict | None = None,
     scope: str = "personal",
 ) -> dict:
     """Register a credential for a project.
@@ -68,6 +86,15 @@ async def create(
         raise ConnectionError_(
             f"auth_style {auth_style!r} needs auth_name -- the header or query "
             "parameter this source expects the credential in"
+        )
+    auth_config = auth_config or {}
+    missing = [k for k in NEEDS_CONFIG.get(auth_style, ()) if not auth_config.get(k)]
+    if missing:
+        # Refused rather than defaulted, for the same reason a header name is:
+        # a guessed token endpoint fails as a rejected credential rather than as
+        # the misconfiguration it is.
+        raise ConnectionError_(
+            f"auth_style {auth_style!r} needs {', '.join(missing)} in auth_config"
         )
     if scope not in ("personal", "shared"):
         raise ConnectionError_("scope must be personal or shared")
@@ -90,11 +117,11 @@ async def create(
             """
             INSERT INTO connections (connection_id, org_id, project_id, user_id,
                                      provider, scope, credential_ct,
-                                     auth_style, auth_name)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                                     auth_style, auth_name, auth_config)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             """,
             connection_id, principal.org_id, project_id, principal.user_id,
-            provider, scope, ciphertext, auth_style, auth_name,
+            provider, scope, ciphertext, auth_style, auth_name, auth_config,
         )
         await record_audit(
             conn, principal, action="connection.created", project_id=project_id,
@@ -103,12 +130,16 @@ async def create(
             # how it is presented are the reviewable parts.
             detail={"provider": provider, "scope": scope,
                     "auth_style": auth_style, "auth_name": auth_name,
+                    # `auth_config` holds no secret by construction, so it is
+                    # reviewable in full -- which is the point of keeping the
+                    # token endpoint out of the encrypted blob.
+                    "auth_config": auth_config,
                     "has_credential": bool(credential)},
         )
     return {
         "connection_id": connection_id, "provider": provider, "scope": scope,
         "auth_style": auth_style, "auth_name": auth_name,
-        "has_credential": bool(credential),
+        "auth_config": auth_config, "has_credential": bool(credential),
     }
 
 
@@ -118,7 +149,7 @@ async def listing(pool: asyncpg.Pool, principal: Principal,
     rows = await pool.fetch(
         """
         SELECT connection_id, project_id, provider, scope, auth_style, auth_name,
-               created_at, (credential_ct IS NOT NULL) AS has_credential
+               auth_config, created_at, (credential_ct IS NOT NULL) AS has_credential
         FROM connections
         WHERE org_id = $1 AND ($2::text IS NULL OR project_id = $2)
         ORDER BY created_at DESC
@@ -142,7 +173,7 @@ async def authorize(
     """
     row = await pool.fetchrow(
         """
-        SELECT credential_ct, auth_style, auth_name
+        SELECT credential_ct, auth_style, auth_name, auth_config
         FROM connections WHERE connection_id = $1 AND org_id = $2
         """,
         connection_id, org_id,
@@ -163,6 +194,21 @@ async def authorize(
         ) from exc
 
     style, name = row["auth_style"], row["auth_name"]
+
+    if style in EXCHANGED:
+        # The stored secret is not what goes to the source. It buys a token
+        # that does, and the token is cached until shortly before it expires.
+        from .grants import GrantError, token_for
+
+        try:
+            access = await token_for(
+                connection_id, style=style, secret=secret,
+                config=dict(row["auth_config"] or {}),
+            )
+        except GrantError as exc:
+            raise ConnectionError_(str(exc), status=exc.status) from exc
+        return {"Authorization": f"Bearer {access}"}, {}
+
     if style == "bearer":
         return {"Authorization": f"Bearer {secret}"}, {}
     if style == "header":

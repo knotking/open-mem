@@ -1,109 +1,190 @@
-# Connector Catalog
+# Connectors
 
-"What do we support" has **four honest answers**, and collapsing them is how coverage claims stop
-being defensible.
+A connector is **not an adapter**. There is no per-source code in this repository and no plugin to
+write. A connector is a catalog entry — a row of knowledge about one API, stored as data in
+[`api/src/memdog/connectors.py`](../../api/src/memdog/connectors.py) — that renders into a
+[crawler](crawlers.md) config the ordinary validator accepts.
 
-| Layer | Count | Meaning |
-|-------|-------|---------|
-| **Live** | 4 | Connected and moving data now — Slack, Gmail, Drive; Zoom configured awaiting a test recording |
-| **Adapter deployed** | 34 | Gateway code exists, whether or not anyone connected it |
-| **Documented** | 84 | Setup guide written under `docs/apps/` |
-| **Catalog** | 900+ | The credential broker has an OAuth template |
+That distinction is the whole design. The crawler could already reach any REST API with a
+credential; what nobody had was the endpoint, the pagination shape and the field mapping. Writing
+those down as data is what makes "we support Jira" a twenty-line entry rather than a module.
 
+> **Nothing in the catalog is verified.** `verified` is `false` on every entry, and it means what it
+> says: nobody has run it against a live account, because that needs a credential. An entry is a
+> researched guess until the dry run every crawler must pass turns it into a fact. This is stated in
+> the console too.
+
+---
+
+## The process, end to end
+
+Five steps, all in the console, none of them code.
+
+```mermaid
+flowchart LR
+    A["1 · Register<br/>a credential"] --> B["2 · Pick<br/>an app"]
+    B --> C["3 · Fill in<br/>what only you know"]
+    C --> D["4 · Dry run"]
+    D --> E["5 · Enable"]
+    D -.->|"count looks wrong"| C
+    style D fill:none,stroke-dasharray:0
 ```
-catalog          ████████████████████████████████████████  900+
-documented       ████████                                   84
-adapter deployed ███                                        34
-live             ▌                                           4
+
+**1 · Register a credential.** Console → *Credentials*. Pick how the source wants it presented and
+paste the secret. It is envelope-encrypted on the way in and **there is no endpoint that reads one
+back out** — the listing reports whether one is held, never a prefix, because a prefix is enough to
+confirm a guess.
+
+**2 · Pick an app.** Console → *Pull from an app*. The catalog is grouped by category and readable
+without an account, so you can see what is supported before you have one.
+
+**3 · Fill in what only you know.** Each entry declares its *scopes* — the Jira site, the GitHub
+repo, the Drive folder id. The endpoint, pagination and field mapping are already in the entry. A
+missing scope value is refused rather than rendered as `{database}` into a URL, because that request
+would authenticate, 404, and read as a broken integration rather than an unfinished form.
+
+**4 · Dry run.** Every crawler is created **disabled and draft**, and stays that way until a dry run
+passes. The dry run walks the identical code and stops short of the write, so the count it reports
+is what a live run would do. This is where an entry stops being a guess.
+
+**5 · Enable.** Enrichment is off by default and worth leaving off until you have seen the dry run's
+count — a crawler can discover fifty thousand records unattended, and enriching them is a model call
+per chunk on data nobody has asked a question about yet.
+
+---
+
+## Credentials: presented, or exchanged
+
+Six styles, closed. Keeping the set closed is what stops a secret drifting back into a templated
+header, where it would be readable by anyone who can read a config.
+
+**Four are presented as stored.**
+
+| Style | The stored secret | Goes out as |
+|-------|-------------------|-------------|
+| `bearer` | the token | `Authorization: Bearer <token>` |
+| `header` | the token | a header you name — `X-Api-Key`, `Xero-Tenant-Id` |
+| `query` | the token | a query parameter you name |
+| `basic` | `user:password` | `Authorization: Basic <base64>` |
+
+**Two are exchanged before use** — the stored secret buys a token that lives an hour.
+
+| Style | The stored secret | Also needs | Used by |
+|-------|-------------------|------------|---------|
+| `client_credentials` | `client_id:client_secret` | `token_url`, `scope` | Microsoft Graph, Salesforce, Zoom, Xero |
+| `google_service_account` | the JSON key file, whole | `scope`, optionally `subject` | Drive, Gmail, Calendar |
+
+### The correction this section records
+
+"Google and Microsoft need OAuth" was said in this repository for weeks, and it was only ever true
+of one thing: a **person** connecting their own account, which needs a browser, a redirect and a
+consent screen. An **organization** connecting its own data uses a grant with no human in it at all
+— which is a POST.
+
+```mermaid
+sequenceDiagram
+    participant C as Crawler
+    participant G as grants.py
+    participant T as Token endpoint
+    participant S as Source API
+    C->>G: token for connection X
+    alt cached and fresh
+        G-->>C: the cached token
+    else stale, or nothing cached
+        G->>T: client_credentials · or a signed JWT assertion
+        T-->>G: access_token, expires_in
+        Note over G: cached until 120s before expiry
+        G-->>C: the token
+    end
+    C->>S: request + Authorization
+    S-->>C: 401 → the cached token is dropped
 ```
 
-**The gap between catalog and live is the roadmap.** Tier-3 generic handling closes the top band
-cheaply; tier-1 adapter work moves things into the bottom one.
+Two details in that picture are load-bearing. The **120-second skew margin** exists because a token
+treated as valid until the instant it expires produces a request that leaves here fine and arrives
+expired — and that failure reads as a permissions problem, which sends whoever debugs it somewhere
+else entirely. And a **401 from the source evicts the cache**, because otherwise a credential that
+started being refused would go on being refused with the same dead token for up to an hour after
+somebody fixed it.
 
-## Shape drives machinery
+`subject` on a Google connection is **domain-wide delegation**: the assertion says "acting as this
+user", which is how one credential reads many mailboxes without any of their owners doing anything.
+It is never set by default, because an assertion that impersonates by default is one nobody chose.
 
-`record` needs nothing beyond the default path · `file` needs materialise and fan-out ·
-`stream` needs a stateful persistent connection · `crawl` needs schedule and watermark state ·
-`export` needs server-side rendering.
+---
 
-## Communication & messaging
+## What is in the catalog
 
-| Connector | Shape | Tier | Status | Notes |
-|-----------|-------|:----:|--------|-------|
-| **Slack** | stream + file | 1 | **live** | Events API today; Socket Mode is the stateful path |
-| **WhatsApp Business** | stream + file | 1 | adapter | Voice notes arrive as `opus`/`amr` |
-| **Telegram** | stream + file | 1 | adapter | Long-polling — persistent connection |
-| Discord | stream + file | 2 | adapter | Gateway socket, one per bot |
-| Microsoft Teams | stream + file | 2 | adapter | Also a meetings source |
-| Twilio | record | 2 | adapter | SMS/voice events |
-| Front | record | 3 | documented | Shared inbox |
+28 entries. 27 usable; one blocked, and listed anyway — hiding it would make the catalog look
+complete.
 
-## Email & calendar
+| Category | Entries |
+|----------|---------|
+| **Issues and projects** | Jira · GitHub · Linear · Asana |
+| **CRM** | HubSpot · Pipedrive · Attio · Salesforce · ~~Zoho CRM~~ |
+| **Documents and knowledge** | Notion · Confluence |
+| **Support** | Zendesk · Intercom · Freshdesk |
+| **Commerce** | Shopify · Stripe |
+| **People** | Greenhouse · BambooHR |
+| **Google** | Drive · Drive (folder tree) · Gmail · Calendar |
+| **Microsoft** | SharePoint · SharePoint (library tree) · OneDrive · OneDrive (drive tree) · Outlook · Teams |
 
-| Connector | Shape | Tier | Status | Notes |
-|-----------|-------|:----:|--------|-------|
-| **Gmail** | file + fan-out | 1 | **live** | `historyId` → messages → attachments; watch expires ~7 days |
-| **Outlook** | file + fan-out | 1 | documented | Same shape as Gmail |
-| **Google Calendar** | record | 2 | documented | **Underrated** — maps straight to canonical `Event`, no LLM |
-| Mailchimp / Mailgun / SendGrid | record | 3 | documented | Campaign and delivery events |
+**Zoho CRM is the one genuine OAuth case.** It issues a refresh token only through a one-time
+interactive authorization — there is no non-interactive grant to substitute. It stays blocked with
+that reason attached rather than silently absent.
 
-## Storage, documents & meetings
+### Listing versus walking
 
-| Connector | Shape | Tier | Status | Notes |
-|-----------|-------|:----:|--------|-------|
-| **Google Drive** | file + fan-out | 1 | **live** | Folder changes fan out deeply |
-| **Google Docs** | export | 1 | documented | **Export only** — no raw bytes exist |
-| **Notion** | export | 1 | adapter | Block tree, not a file |
-| Dropbox / Box / OneDrive | file + fan-out | 2 | documented | Same verbs as Drive |
-| AWS S3 / Azure Blob / GCS | file + crawl | 2 | documented | Bucket sync via the `tree` crawler, not upload |
-| Google Sheets | export | 3 | documented | Row-count caps matter |
-| **Zoom** | file + fan-out | 1 | configured | One recording → video, audio, transcript, chat |
-| Google Meet | file | 2 | adapter | Arrives via Drive |
-| Contentful / WordPress | record | 3 | documented | CMS content |
+Drive, SharePoint and OneDrive each appear twice, and the pair is not redundant.
 
-## Work tracking & development
+| | What it stores | Requests |
+|---|---|---|
+| **Listing** (`google_drive`) | one folder's file names, ids and links | one, paged |
+| **Tree** (`google_drive_tree`) | every document under the folder, contents included | one per folder, plus one per file |
 
-| Connector | Shape | Tier | Status |
-|-----------|-------|:----:|--------|
-| **Jira** | record + file | 1 | adapter |
-| **GitHub** | record + file | 1 | adapter |
-| Linear | record | 2 | adapter |
-| Asana | record | 2 | adapter |
-| ClickUp / Monday / Trello / Basecamp / Todoist | record | 3 | documented |
-| GitLab / Bitbucket | record + file | 3 | documented |
-| Vercel / Netlify | record | 3 | documented |
+Someone choosing between them is choosing between a **file index** and a **corpus**, which is worth
+two names. The tree strategy is documented in [crawlers.md](crawlers.md#tree).
 
-## CRM, support, finance, HR
+---
 
-| Connector | Shape | Tier | Status | Notes |
-|-----------|-------|:----:|--------|-------|
-| Salesforce / HubSpot | record | 2 | adapter | Map to canonical `Person` + `Organization` |
-| Pipedrive / Zoho CRM / Freshsales | record | 3 | documented | Same canonical targets |
-| Zendesk / Freshdesk / Help Scout | record + file | 3 | documented | Ticket + thread |
-| Stripe | record | 2 | adapter | Canonical `Transaction` |
-| PayPal / Square / QuickBooks / Xero / Brex / Plaid | record | 3 | documented | Facet-searchable once normalized |
-| Shopify / WooCommerce | record | 3 | documented | Orders, products |
-| BambooHR / Gusto / Rippling / Workday | record | 3 | documented | **Sensitive PII** — privacy defaults matter most here |
+## Adding an entry
 
-## Observability, reviews, social, data
+An entry is data. Adding one is a pull request against a tuple, and it needs no new code path:
 
-| Connector | Shape | Tier | Status | Notes |
-|-----------|-------|:----:|--------|-------|
-| Datadog / Sentry / PagerDuty / Opsgenie / Grafana | record | 2 | adapter | Payload usually complete — no fetch needed |
-| Yelp / G2 / Capterra / Trustpilot / TripAdvisor / Google Business / App Store | **crawl** | 2 | adapter | No webhooks — these are why the [crawler](crawlers.md) exists |
-| Twitter / Reddit / LinkedIn / Instagram / Facebook / YouTube | crawl + file | 3 | documented | Rate limits are the binding constraint |
-| BigQuery / Snowflake | query | 3 | documented | Cursor on a column — a `query` crawler |
-| Airtable | record | 3 | documented | |
+```python
+Connector(
+    key="acme_tickets", label="Acme", category="Support",
+    pulls="Tickets in a queue",
+    auth_style="bearer", auth_help="A personal token from Settings → API.",
+    scopes=(Scope("queue", "Queue ID", "eng-inbound"),),
+    template=_http(
+        "https://api.acme.com/v2/queues/{queue}/tickets",
+        items="tickets[*]", id_path="id", title="subject",
+        content="body", url_path="url", version="updated_at",
+        pagination={"type": "cursor", "cursor_path": "next",
+                    "cursor_param": "cursor"},
+    ),
+)
+```
 
-## Three catalog corrections
+The tests enforce the parts that matter: every entry must render into a config the crawler validator
+accepts, must declare a stable `id_path`, must leave no `{placeholder}` in a rendered URL, must
+declare how its credential is presented, and must not claim to be verified.
 
-**OpenAI, Anthropic and Pinecone are documented under `docs/apps/` but are not data connectors.**
-The first two are model providers; the third is a vector store. Listing them as integrations
-inflates the connector count and confuses the taxonomy.
+**Declare what only the operator knows; never guess it.** A guessed subdomain authenticates,
+returns a 404, and reads as a broken integration.
 
-**Google Calendar is documented but not deployed**, despite being one of the cheapest,
-highest-value sources available — `ics` maps to a canonical `Event` with no inference call at all.
+---
 
-**HR connectors carry the most sensitive payloads** in the catalog — compensation, performance,
-personal records. In a team-tenancy model their privacy defaults need deciding *before* they are
-enabled.
+## What a connector is not
+
+Some sources are genuinely a different shape, and the catalog does not pretend otherwise:
+
+- **Streams** (Slack Socket Mode, Telegram long-polling) need a persistent connection, not a
+  scheduled pull. Those arrive through the [webhook](../ingestion/write-api.md) path instead.
+- **Fan-out sources** (a Zoom recording becoming video, audio, transcript and chat) need one arrival
+  to produce several records.
+- **Warehouses** (BigQuery, Snowflake) are a cursor on a column — closer to a query than a crawl.
+
+These are on the [roadmap](../roadmap.md), not in the catalog. Listing them here would inflate the
+count, which is the failure mode this file was rewritten to remove.

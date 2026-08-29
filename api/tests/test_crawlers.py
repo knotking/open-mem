@@ -780,3 +780,41 @@ async def test_the_run_history_is_listed_with_its_counters(
 
     listed = await list_crawlers(pool, actor, tenant.project_id)
     assert listed[0]["dry_run_current"] is True
+
+
+async def test_a_401_drops_the_cached_token_for_that_connection(
+    pool, queue, blobs, settings, tenant, principal_for, server
+):
+    """An exchanged credential is cached until shortly before it expires. A
+    source that starts refusing — consent revoked, scope changed, the secret
+    rotated at the provider — would go on being refused with the same dead
+    token for up to an hour after somebody fixed it, and the fix would look
+    like it had not worked."""
+    import os
+
+    from memdog import connections, grants
+    from memdog.crypto import Envelope
+
+    actor = await principal_for(tenant.api_key)
+    envelope = Envelope(os.urandom(32))
+    connection = await connections.create(
+        pool, actor, envelope, project_id=tenant.project_id, provider="acme",
+        credential="tok", auth_style="bearer",
+    )
+    created = await create_crawler(
+        pool, actor, project_id=tenant.project_id,
+        config=http_config(server, request=HttpRequest(url=f"{server}/denied"),
+                           pagination=Pagination(type="none")),
+    )
+    await connections.attach(pool, actor, created["crawler_id"],
+                             connection["connection_id"])
+
+    grants._cache[connection["connection_id"]] = grants.Token("dead", 1e12)
+    worker = CrawlWorker(pool, queue, blobs, settings, envelope=envelope)
+    result = await worker.execute(
+        (await start_run(pool, actor, created["crawler_id"], mode="dry"))["run_id"])
+
+    assert result["status"] == "failed"
+    assert connection["connection_id"] not in grants._cache, (
+        "the refused token is still cached and the next run will reuse it"
+    )

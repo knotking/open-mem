@@ -10,7 +10,7 @@ push mechanism at all.
 Backfill and polling are **two schedules of the same thing**. A backfill is a crawl with
 full-history scope run once; a poll is a crawl with watermark scope run on an interval; a web
 crawl is the same machinery with link traversal as its discovery strategy. One configurable
-worker, several discovery strategies — the taxonomy shrinks from nine classes to eight.
+worker, four discovery strategies — the taxonomy shrinks from nine classes to eight.
 
 ## The crawler does not fetch, and does not enrich
 
@@ -36,19 +36,73 @@ Because crawlers write through the same contracts as every other producer, a cra
 record and a webhook-delivered one are indistinguishable downstream — and a crawler can run
 outside the cluster entirely.
 
-## Six discovery strategies
+## Four discovery strategies
+
+The design document listed six. The implementation has four, because three of them — enumerate,
+query and search — turned out to differ in **pagination shape and field names, not in kind**. All
+three are a templated request against a JSON API, so all three are `http`.
 
 | Strategy | How it enumerates | Example | Incremental by |
 |----------|-------------------|---------|----------------|
-| **enumerate** | Paginate a collection endpoint | Salesforce Opportunities, Jira issues | modified-since field |
-| **query** | Run a query on a schedule | Warehouse table, SOQL, saved search | cursor column |
+| **http** | A templated request with declared pagination | Jira issues, SOQL, a saved search, a review feed | watermark param, or content hash |
+| **feed** | Read an index someone already maintains | RSS, Atom, sitemap | entry id / pubdate |
 | **traverse** | Follow links from seeds | Website, wiki, docs site | etag / last-modified |
-| **tree** | Walk a hierarchy | Drive folder, S3 prefix, SFTP dir | path + mtime |
-| **feed** | Read an index or feed | RSS, sitemap, changelog | entry id / pubdate |
-| **search** | Repeat a query, collect results | Social search, review platforms | result id + seen set |
+| **tree** | Walk a folder hierarchy | Drive folder, SharePoint library, OneDrive | modified time |
 
-The pull-only connectors in the catalog — review platforms, app stores, warehouses — are all
-`search` or `query` crawlers. They stop needing bespoke code and become configuration.
+That collapse is the point. The pull-only connectors in the catalog — review platforms, app stores,
+warehouses — stop needing bespoke code and become configuration, because `http` already covers
+enumerate, query and search for most REST APIs.
+
+<a id="tree"></a>
+### tree — walking a document library
+
+Listing one folder is one request; a shared drive is a tree. `tree` is bounded the same way
+`traverse` is, by `max_depth` and by the run's item and wall-clock budget — a drive nobody has
+pruned in three years is exactly where an unbounded walk finds forty thousand files.
+
+Two APIs, closed: `google_drive` and `microsoft_graph`. They are named rather than templated
+because folder recursion is the one thing whose shape genuinely differs between them — Drive asks
+for children with a query (`'<id>' in parents`), Graph asks with a path (`/items/<id>/children`),
+and a folder is marked by a mime type in one and a facet in the other.
+
+```json
+{
+  "strategy": "tree",
+  "tree": {
+    "api": "google_drive",
+    "root": "1AbCdEf...",
+    "include_mime": ["application/pdf", "text/"]
+  },
+  "limits": { "max_depth": 4, "max_items": 5000 }
+}
+```
+
+`include_mime` is an allowlist of prefixes. Empty means every file, which is usually not what
+anyone wants of a shared drive.
+
+**It discovers references, not documents.** A listing returns a name, an id and a modified time;
+the bytes are a second request per file. Each file is emitted as a `Pending` ref naming the same
+connection, and the fetch worker resolves it — which puts that download where the byte cap, the
+blob store and the parse pipeline already are, rather than inside a discovery pass holding a run
+open.
+
+```mermaid
+flowchart LR
+    W["tree walk<br/>folders, breadth-first"] -->|"one row per file"| P["Pending ref<br/>provider · resource_id · connection"]
+    P --> F["fetch worker"]
+    F -->|"authorize()"| K["the same credential<br/>the walk used"]
+    F --> B[("blob store")]
+    B --> X["parse → chunk → embed"]
+```
+
+Google's own formats have no bytes to download — `?alt=media` on a Doc is a 403 — so Docs and
+Slides are **exported as text** and Sheets as CSV. That export format is the decision about what
+gets indexed. A Drive shortcut can make the tree a graph, so folders already visited are skipped;
+without that, a cycle walks until the budget runs out.
+
+Both APIs answer a download with a redirect to a pre-signed CDN URL, and the `Authorization` header
+is **dropped on any cross-host redirect** — forwarding it would hand an access token to a host that
+never needed one.
 
 ## Credentials
 
@@ -57,14 +111,21 @@ versioned and readable by anyone who can read a crawler; a credential in it woul
 clear, next to the `connections` table that exists to hold one enveloped.
 
 ```
-POST /api/v1/connections   {"project_id", "provider", "credential", "auth_style", "auth_name"}
+POST /api/v1/connections   {"project_id", "provider", "credential",
+                            "auth_style", "auth_name", "auth_config"}
 PATCH /api/v1/crawlers/{id}/connection   {"connection_id"}
 ```
 
-Four auth styles, closed: `bearer`, `header` (with a name), `query` (with a name), `basic`. APIs
-differ here far more than they differ in pagination, and the difference is small enough to be data.
-An open "template the header yourself" field would put the secret back where this took it out of —
-so **the credential is applied last and a config cannot override it**.
+Six auth styles, closed, in two kinds. Four are **presented as stored** — `bearer`, `header` (with
+a name), `query` (with a name), `basic`. Two are **exchanged before use**: `client_credentials` and
+`google_service_account` trade the stored secret for a token that lives an hour, and take their
+non-secret settings (token endpoint, scopes, an optional delegated subject) in `auth_config`, which
+is reviewable in full because it holds no secret by construction. See
+[connectors.md](connectors.md#credentials-presented-or-exchanged).
+
+APIs differ here far more than they differ in pagination, and the difference is small enough to be
+data. An open "template the header yourself" field would put the secret back where this took it out
+of — so **the credential is applied last and a config cannot override it**.
 
 `auth_style: header` and `query` refuse without an `auth_name`. Defaulting to `X-Api-Key` would send
 the secret to a header the source ignores, and the failure would read as a wrong credential rather
@@ -78,6 +139,11 @@ request.
 `connection_id` is null for them. A crawler that *does* name a connection and cannot decrypt it
 fails as a configuration error rather than reaching its source unauthenticated — a run that carried
 on would report the source's 401 and send whoever debugs it in the wrong direction.
+
+**A source's 401 drops the cached token.** An exchanged credential is held until shortly before it
+expires, so a source that starts refusing — consent revoked, a scope changed, the secret rotated at
+the provider — would go on being refused with the same dead token for up to an hour after somebody
+fixed it, and the fix would look like it had not worked.
 
 The connection cannot be deleted while a crawler points at it. Removing it would leave that crawler
 enabled, scheduled, and failing every tick with an authentication error: nothing errors loudly and
@@ -93,7 +159,7 @@ schemas — database-resident, versioned, read per run, no redeploy.
 | Field | Purpose |
 |-------|---------|
 | `source` | Connection reference, or `public` for unauthenticated web |
-| `strategy` | enumerate · query · traverse · tree · feed · search |
+| `strategy` | http · feed · traverse · tree |
 | `scope` | Object types, URL patterns, folder roots, filters — **what is in bounds** |
 | `schedule` | cron · interval · once · manual |
 | `incremental` | Watermark field, cursor, etag mode, or full-refresh |

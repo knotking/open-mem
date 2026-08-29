@@ -1179,11 +1179,19 @@ function CrawlersSection({ projectId }: { projectId: string }) {
   const [conns, setConns] = useState<Connection[]>([]);
   const [newConn, setNewConn] = useState({
     provider: "", credential: "", auth_style: "bearer", auth_name: "",
+    token_url: "", scope: "", subject: "",
   });
   const [apps, setApps] = useState<Connector[]>([]);
   const [chosenApp, setChosenApp] = useState<Connector | null>(null);
   const [appScope, setAppScope] = useState<Record<string, string>>({});
   const [appConn, setAppConn] = useState("");
+
+  // The two styles whose stored secret is traded for a token rather than sent.
+  // They need somewhere to trade it, which is the only reason the form changes
+  // shape at all.
+  const exchanged =
+    newConn.auth_style === "client_credentials" ||
+    newConn.auth_style === "google_service_account";
 
   const load = useCallback(async () => {
     try {
@@ -1430,8 +1438,17 @@ function CrawlersSection({ projectId }: { projectId: string }) {
             <option value="header">Custom header</option>
             <option value="query">Query parameter</option>
             <option value="basic">Basic (user:password)</option>
+            <option value="client_credentials">Client credentials (Microsoft, Salesforce)</option>
+            <option value="google_service_account">Google service account</option>
           </select>
         </div>
+        {exchanged && (
+          <p className="empty" style={{ marginTop: 8 }}>
+            {newConn.auth_style === "client_credentials"
+              ? "The app registration's own credential, as client_id:client_secret. It is traded for a token good for an hour — there is no consent screen and no browser step."
+              : "The service account's JSON key file, pasted whole. It signs an assertion that is traded for a token; a subject is domain-wide delegation, and means this credential acts as that person."}
+          </p>
+        )}
         <div className="row" style={{ marginTop: 8 }}>
           {(newConn.auth_style === "header" || newConn.auth_style === "query") && (
             <input
@@ -1442,27 +1459,91 @@ function CrawlersSection({ projectId }: { projectId: string }) {
               style={{ width: 200 }}
             />
           )}
-          <input
-            type="password"
-            value={newConn.credential}
-            onChange={(e) => setNewConn({ ...newConn, credential: e.target.value })}
-            placeholder="Credential — sent once, stored encrypted"
-            style={{ flex: 1 }}
-          />
+          {newConn.auth_style === "client_credentials" && (
+            <input
+              type="text"
+              value={newConn.token_url}
+              onChange={(e) => setNewConn({ ...newConn, token_url: e.target.value })}
+              placeholder="Token endpoint — https://login.microsoftonline.com/<tenant>/oauth2/v2.0/token"
+              style={{ flex: 1 }}
+            />
+          )}
+          {exchanged && (
+            <input
+              type="text"
+              value={newConn.scope}
+              onChange={(e) => setNewConn({ ...newConn, scope: e.target.value })}
+              placeholder={
+                newConn.auth_style === "client_credentials"
+                  ? "Scope — https://graph.microsoft.com/.default"
+                  : "Scope — https://www.googleapis.com/auth/drive.readonly"
+              }
+              style={{ flex: 1 }}
+            />
+          )}
+          {newConn.auth_style === "google_service_account" && (
+            <input
+              type="text"
+              value={newConn.subject}
+              onChange={(e) => setNewConn({ ...newConn, subject: e.target.value })}
+              placeholder="Act as (optional) — someone@acme.com"
+              style={{ width: 220 }}
+            />
+          )}
+        </div>
+        <div className="row" style={{ marginTop: 8 }}>
+          {newConn.auth_style === "google_service_account" ? (
+            <textarea
+              value={newConn.credential}
+              onChange={(e) => setNewConn({ ...newConn, credential: e.target.value })}
+              placeholder={'{ "type": "service_account", "client_email": …, "private_key": … }'}
+              rows={4}
+              style={{ flex: 1, fontFamily: "var(--mono)", fontSize: 12 }}
+            />
+          ) : (
+            <input
+              type="password"
+              value={newConn.credential}
+              onChange={(e) => setNewConn({ ...newConn, credential: e.target.value })}
+              placeholder={
+                newConn.auth_style === "client_credentials"
+                  ? "client_id:client_secret — sent once, stored encrypted"
+                  : "Credential — sent once, stored encrypted"
+              }
+              style={{ flex: 1 }}
+            />
+          )}
           <button
             onClick={() =>
               act("Connection registered", async () => {
+                // Only what this style actually needs. An empty token_url on a
+                // Google connection would be stored, read back by nobody, and
+                // read as configuration that had been supplied.
+                const authConfig: Record<string, string> = {};
+                if (newConn.auth_style === "client_credentials" && newConn.token_url.trim())
+                  authConfig.token_url = newConn.token_url.trim();
+                if (exchanged && newConn.scope.trim()) authConfig.scope = newConn.scope.trim();
+                if (newConn.auth_style === "google_service_account" && newConn.subject.trim())
+                  authConfig.subject = newConn.subject.trim();
                 await call("api/v1/connections", {
                   project_id: projectId,
                   provider: newConn.provider,
                   credential: newConn.credential,
                   auth_style: newConn.auth_style,
                   auth_name: newConn.auth_name || null,
+                  auth_config: authConfig,
                 });
-                setNewConn({ provider: "", credential: "", auth_style: "bearer", auth_name: "" });
+                setNewConn({ provider: "", credential: "", auth_style: "bearer",
+                             auth_name: "", token_url: "", scope: "", subject: "" });
               })
             }
-            disabled={busy || !newConn.provider.trim() || !newConn.credential.trim()}
+            disabled={
+              busy ||
+              !newConn.provider.trim() ||
+              !newConn.credential.trim() ||
+              (newConn.auth_style === "client_credentials" && !newConn.token_url.trim()) ||
+              (exchanged && !newConn.scope.trim())
+            }
           >
             Register
           </button>

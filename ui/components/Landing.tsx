@@ -19,6 +19,7 @@ type Capabilities = {
   prompts: number;
   webhook_providers: number;
   crawler_strategies: number;
+  connectors: number;
   embed_model: string;
   media_interpretation: boolean;
 };
@@ -451,6 +452,7 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
         { value: caps.data_types, label: "data types routed" },
         { value: caps.prompts, label: "extraction prompts" },
         { value: caps.webhook_providers, label: "webhook providers" },
+        { value: caps.connectors, label: "app connectors" },
       ]
     : [];
 

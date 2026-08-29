@@ -19,10 +19,12 @@ needs somebody's credential. `verified: False` says so rather than implying a
 test that never happened -- and the dry-run gate every crawler already passes
 through is where an entry stops being a guess.
 
-**A blocked connector is listed, not hidden.** Drive, Gmail, SharePoint and
-Salesforce are here with `requires: "oauth"`, because "we do not support Google"
-and "Google needs a consent flow nobody has built yet" are different sentences
-and only one of them is true. Hiding them would make the catalog look complete.
+**A blocked connector is listed, not hidden.** One entry still carries
+`requires: "oauth"` — Zoho, which issues a refresh token only through a one-time
+interactive authorization. Everything else authenticates without a person:
+Google through a service-account assertion, Microsoft and Salesforce through
+client credentials. "We do not support Google" and "Google needs a consent flow"
+were both said here and neither was true.
 
 **Scope fields are named, not guessed.** An entry declares what it needs from
 the operator. Defaulting a Jira site or a Notion database id would produce a
@@ -68,6 +70,19 @@ class Connector:
 
 OAUTH = "oauth"
 
+GRAPH_HELP = (
+    "An app registration with application permissions. The credential is "
+    "`client_id:client_secret`, and auth_config needs the token_url for your "
+    "tenant plus scope `https://graph.microsoft.com/.default`. No consent "
+    "screen and no per-user step."
+)
+
+GOOGLE_HELP = (
+    "A service-account key, stored whole as the JSON file. auth_config needs "
+    "the scopes it is for. No browser and no consent screen -- the assertion "
+    "is signed with the key."
+)
+
 # The note every OAuth-blocked entry carries. One sentence, one place, so the
 # reason cannot drift between them.
 OAUTH_NOTE = (
@@ -100,6 +115,14 @@ def _http(url: str, *, items: str, id_path: str, title: str | None = None,
     if pagination:
         config["pagination"] = pagination
     return config
+
+
+def _tree(api: str, root: str, *, include_mime: list[str] | None = None) -> dict:
+    """A folder recursion. The bytes of each file are fetched, not listed."""
+    tree: dict[str, Any] = {"api": api, "root": root}
+    if include_mime:
+        tree["include_mime"] = include_mime
+    return {"strategy": "tree", "tree": tree}
 
 
 CATALOG: tuple[Connector, ...] = (
@@ -220,13 +243,35 @@ CATALOG: tuple[Connector, ...] = (
     ),
     Connector(
         key="salesforce", label="Salesforce", category="CRM",
-        pulls="Any object, by SOQL", auth_style="bearer",
-        requires=OAUTH, notes=OAUTH_NOTE,
+        pulls="Any object, by SOQL",
+        auth_style="client_credentials",
+        auth_help="A connected app with the client-credentials flow enabled and "
+                  "a run-as user. The credential is `client_id:client_secret`, "
+                  "and auth_config needs your instance's token_url.",
+        scopes=(
+            Scope("instance", "Instance URL", "https://acme.my.salesforce.com"),
+            Scope("soql", "SOQL", "SELECT Id, Name, LastModifiedDate FROM Account"),
+        ),
+        template=_http(
+            "{instance}/services/data/v61.0/query",
+            query={"q": "{soql}"},
+            items="records[*]", id_path="Id", title="Name",
+            version="LastModifiedDate",
+            pagination={"type": "cursor", "cursor_path": "nextRecordsUrl",
+                        "cursor_param": "nextRecordsUrl",
+                        "stop_when": "done == `true`"},
+        ),
+        notes="Client credentials must be switched on for the connected app; "
+              "it is off by default.",
     ),
     Connector(
         key="zoho_crm", label="Zoho CRM", category="CRM",
         pulls="Modules and their records", auth_style="bearer",
-        requires=OAUTH, notes=OAUTH_NOTE,
+        requires=OAUTH,
+        notes="The one that genuinely needs a browser: Zoho issues a refresh "
+              "token only through a one-time interactive authorization, and "
+              "there is no grant that skips it. Everything else in this "
+              "catalog authenticates without a person.",
     ),
 
     # -------------------------------------------------------- docs and notes
@@ -370,46 +415,160 @@ CATALOG: tuple[Connector, ...] = (
         ),
     ),
 
-    # ------------------------------------------------------------ blocked: oauth
+    # --------------------------------------------- Google, by service account
     Connector(
         key="google_drive", label="Google Drive", category="Google",
-        pulls="Files in a folder", auth_style="bearer",
-        requires=OAUTH,
-        notes=OAUTH_NOTE + " Drive also needs a hierarchy walk and a fetcher "
-              "that exports Google-native formats — a file listing returns "
-              "names, not documents.",
+        pulls="Files in a folder",
+        auth_style="google_service_account", auth_help=GOOGLE_HELP,
+        scopes=(
+            Scope("folder", "Folder ID", "1AbCdEf...",
+                  "From the folder's URL. Share the folder with the service "
+                  "account's email or it returns nothing."),
+        ),
+        template=_http(
+            "https://www.googleapis.com/drive/v3/files",
+            query={"q": "'{folder}' in parents and trashed = false",
+                   "fields": "nextPageToken,files(id,name,mimeType,modifiedTime,webViewLink)",
+                   "pageSize": "100"},
+            items="files[*]", id_path="id", title="name",
+            url_path="webViewLink", version="modifiedTime",
+            pagination={"type": "cursor", "cursor_path": "nextPageToken",
+                        "cursor_param": "pageToken"},
+        ),
+        notes="Lists one folder and stores each file's metadata. For "
+              "subfolders and the documents themselves, use Google Drive "
+              "(folder tree).",
     ),
     Connector(
         key="gmail", label="Gmail", category="Google",
-        pulls="Messages matching a query", auth_style="bearer",
-        requires=OAUTH, notes=OAUTH_NOTE,
+        pulls="Messages matching a search",
+        auth_style="google_service_account",
+        auth_help=GOOGLE_HELP + " Reading a mailbox also needs domain-wide "
+                  "delegation and a `subject` in auth_config — the assertion "
+                  "says which user it is acting as.",
+        scopes=(
+            Scope("user", "Mailbox", "someone@acme.com"),
+            Scope("q", "Search", "newer_than:30d", "Gmail search syntax."),
+        ),
+        template=_http(
+            "https://gmail.googleapis.com/gmail/v1/users/{user}/messages",
+            query={"q": "{q}", "maxResults": "100"},
+            items="messages[*]", id_path="id",
+            pagination={"type": "cursor", "cursor_path": "nextPageToken",
+                        "cursor_param": "pageToken"},
+        ),
+        notes="Returns message ids. Bodies are a second request each and are "
+              "not templated here.",
     ),
     Connector(
         key="google_calendar", label="Google Calendar", category="Google",
-        pulls="Events", auth_style="bearer",
-        requires=OAUTH, notes=OAUTH_NOTE,
+        pulls="Events from a calendar",
+        auth_style="google_service_account", auth_help=GOOGLE_HELP,
+        scopes=(Scope("calendar", "Calendar ID", "someone@acme.com"),),
+        template=_http(
+            "https://www.googleapis.com/calendar/v3/calendars/{calendar}/events",
+            query={"maxResults": "250", "singleEvents": "true"},
+            items="items[*]", id_path="id", title="summary",
+            content="description", url_path="htmlLink", version="updated",
+            pagination={"type": "cursor", "cursor_path": "nextPageToken",
+                        "cursor_param": "pageToken"},
+        ),
+    ),
+
+    # ------------------------------------------------- the same, walked whole
+    #
+    # Separate entries rather than a flag on the ones above, because they are
+    # different in kind: a listing stores what a folder contains, and a tree
+    # stores what the documents say. Someone choosing between them is choosing
+    # between a file index and a corpus, and that is worth two names.
+    Connector(
+        key="google_drive_tree", label="Google Drive (folder tree)",
+        category="Google",
+        pulls="Every document under a folder, including subfolders",
+        auth_style="google_service_account", auth_help=GOOGLE_HELP,
+        scopes=(
+            Scope("folder", "Folder ID", "1AbCdEf...",
+                  "From the folder's URL. Share the folder with the service "
+                  "account's email or the walk returns nothing."),
+        ),
+        template=_tree("google_drive", "{folder}"),
+        notes="Docs, Sheets and Slides are exported as text; everything else "
+              "is downloaded as-is and parsed. Bounded by the crawler's depth "
+              "and item limits — a drive nobody has pruned is large.",
     ),
     Connector(
+        key="sharepoint_tree", label="SharePoint (library tree)",
+        category="Microsoft",
+        pulls="Every document in a site's library, including folders",
+        auth_style="client_credentials", auth_help=GRAPH_HELP,
+        scopes=(Scope("site", "Site ID", "acme.sharepoint.com,<guid>,<guid>",
+                      "From /sites/{hostname}:/sites/{name} in Graph."),),
+        template=_tree("microsoft_graph", "sites/{site}/drive"),
+    ),
+    Connector(
+        key="onedrive_tree", label="OneDrive (drive tree)", category="Microsoft",
+        pulls="Every file in a user's drive, including folders",
+        auth_style="client_credentials", auth_help=GRAPH_HELP,
+        scopes=(Scope("user", "User", "someone@acme.com"),),
+        template=_tree("microsoft_graph", "users/{user}/drive"),
+    ),
+
+    # ------------------------------------------ Microsoft, by app registration
+    Connector(
         key="sharepoint", label="SharePoint", category="Microsoft",
-        pulls="Documents in a site", auth_style="bearer",
-        requires=OAUTH, notes=OAUTH_NOTE,
+        pulls="Documents in a site's library",
+        auth_style="client_credentials", auth_help=GRAPH_HELP,
+        scopes=(Scope("site", "Site ID", "acme.sharepoint.com,<guid>,<guid>",
+                      "From /sites/{hostname}:/sites/{name} in Graph."),),
+        template=_http(
+            "https://graph.microsoft.com/v1.0/sites/{site}/drive/root/children",
+            items="value[*]", id_path="id", title="name",
+            url_path="webUrl", version="lastModifiedDateTime",
+        ),
+        notes="Lists the root of the library only. For the whole library and "
+              "the documents themselves, use SharePoint (library tree).",
     ),
     Connector(
         key="onedrive", label="OneDrive", category="Microsoft",
-        pulls="Files in a drive", auth_style="bearer",
-        requires=OAUTH, notes=OAUTH_NOTE,
+        pulls="Files in a user's drive",
+        auth_style="client_credentials", auth_help=GRAPH_HELP,
+        scopes=(Scope("user", "User", "someone@acme.com"),),
+        template=_http(
+            "https://graph.microsoft.com/v1.0/users/{user}/drive/root/children",
+            items="value[*]", id_path="id", title="name",
+            url_path="webUrl", version="lastModifiedDateTime",
+        ),
+        notes="Root only. For the whole drive, use OneDrive (drive tree).",
     ),
     Connector(
-        key="outlook", label="Outlook", category="Microsoft",
-        pulls="Mail and calendar", auth_style="bearer",
-        requires=OAUTH, notes=OAUTH_NOTE,
+        key="outlook", label="Outlook mail", category="Microsoft",
+        pulls="Messages from a mailbox",
+        auth_style="client_credentials", auth_help=GRAPH_HELP,
+        scopes=(Scope("user", "Mailbox", "someone@acme.com"),),
+        template=_http(
+            "https://graph.microsoft.com/v1.0/users/{user}/messages",
+            query={"$top": "50",
+                   "$select": "subject,bodyPreview,webLink,lastModifiedDateTime"},
+            items="value[*]", id_path="id", title="subject",
+            content="bodyPreview", url_path="webLink",
+            version="lastModifiedDateTime",
+        ),
     ),
     Connector(
         key="teams", label="Microsoft Teams", category="Microsoft",
-        pulls="Channel messages", auth_style="bearer",
-        requires=OAUTH,
-        notes=OAUTH_NOTE + " Teams also arrives as a webhook today — see "
-              "Inbound, which does not need this.",
+        pulls="Messages in a channel",
+        auth_style="client_credentials", auth_help=GRAPH_HELP,
+        scopes=(
+            Scope("team", "Team ID", "<guid>"),
+            Scope("channel", "Channel ID", "19:...@thread.tacv2"),
+        ),
+        template=_http(
+            "https://graph.microsoft.com/v1.0/teams/{team}/channels/{channel}/messages",
+            items="value[*]", id_path="id", content="body.content",
+            url_path="webUrl", version="lastModifiedDateTime",
+        ),
+        notes="Teams also arrives as a webhook today — see Inbound, which "
+              "needs none of this.",
     ),
 )
 

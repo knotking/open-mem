@@ -10,8 +10,9 @@ which model produced it, who is allowed to see it, and can you prove you deleted
 
 ```
 54 file formats   ·   24 data types   ·   18 extraction prompts
-9 webhook providers   ·   3 crawler strategies   ·   12 graph predicates
-8 MCP tools   ·   110 endpoints   ·   523 tests, against a real database, no mocks
+9 webhook providers   ·   4 crawler strategies   ·   28 app connectors
+12 graph predicates   ·   8 MCP tools   ·   110 endpoints
+569 tests, against a real database, no mocks
 ```
 
 The capability counts are read from the running build rather than written here — the sign-in page
@@ -111,11 +112,47 @@ a guarantee that stops at the database boundary is not one.
 | **Answers with evidence** | Every claim cites a passage, the passages ship with the answer, and an unsupported question is refused rather than filled in |
 | **A knowledge graph** | Entities resolved cautiously, typed edges carrying the records that assert them, plus co-mentions that need no model at all |
 | **Inbound webhooks** | 9 providers, each signing a different string over a different encoding |
-| **Crawlers** | Templated HTTP, feeds and bounded link traversal, with a mandatory dry run |
+| **Crawlers** | Templated HTTP, feeds, bounded link traversal and folder walks, with a mandatory dry run |
+| **28 app connectors** | Jira, GitHub, Notion, Salesforce, Drive, SharePoint and the rest — as catalog *data*, not per-source code. None is verified, and the catalog says so |
 | **Deletion that completes** | Four blast radii, async reclamation, and a certificate re-queried from every table that could hold a trace |
 | **Cost, metered** | A durable row per model call — including the ones that failed, because a call that generated three thousand tokens and then timed out consumed them. Quota is weighted by what a request authorises, not by the fact that it arrived |
 | **Residency, enforced** | A regulated data type is served only by a model that runs inside the deployment. Checked when a model is assigned, again when one is resolved, and again before bytes reach it |
 | **Per-org model choice** | An organization assigns its own extraction and answering models, per data type, without a redeploy. Embedding stays a deployment decision — two orgs on different embedding models write vectors from different spaces into one index |
+
+---
+
+## Pulling from an app
+
+A connector here is **not an adapter**. There is no per-source code and no plugin to write — an
+entry is a row of knowledge about one API (the endpoint, the pagination shape, the field mapping)
+that renders into a crawler config the ordinary validator accepts.
+
+```mermaid
+flowchart LR
+    CAT["catalog entry<br/><i>data, not code</i>"] --> CFG["crawler config"]
+    SCOPE["what only you know<br/><i>repo · folder · JQL</i>"] --> CFG
+    CONN["connection<br/><i>encrypted, never read back</i>"] --> CFG
+    CFG --> DRY{"dry run<br/>mandatory"}
+    DRY -->|"count looks right"| RUN["enabled"]
+    DRY -.->|"count looks wrong"| SCOPE
+    RUN --> WRITE["POST /api/v1/write"]
+```
+
+**The credential is applied last and a config cannot override it.** A config is stored, versioned
+and readable; a secret templated into one is a secret in the clear. Connections are envelope-
+encrypted and there is no endpoint that reads one back out — the listing reports whether one is
+held, never a prefix, because a prefix is enough to confirm a guess.
+
+Six credential styles, in two kinds. Four are presented as stored. Two are **exchanged**: a
+client-credentials grant and a Google service-account assertion trade the stored secret for a token
+good for an hour. That second kind is why *"Google and Microsoft need OAuth"* was wrong here for
+weeks — interactive OAuth is how a **person** connects their own account; an organization
+connecting its own data uses a grant with no human in it, which is a POST.
+
+A `tree` crawler walks a Drive folder or a SharePoint library depth-first-bounded, emitting each
+file as a reference rather than downloading it inline — so the bytes arrive through the same fetch
+worker, byte cap and parse pipeline as an upload. Details in
+[docs/ingestion/connectors.md](docs/ingestion/connectors.md).
 
 ---
 
@@ -196,8 +233,13 @@ Stated as plainly as the rest, because a README that only lists strengths is not
 - **Five schema columns are declared and wired to nothing** — the model-proposal inputs and some
   entity lifecycle fields. They are listed with reasons in `tests/test_wiring.py`, which fails if one
   is quietly added to that list, quietly removed from the schema, or quietly wired up
-- **No OAuth connections**, so Gmail, Drive and Calendar are unreachable — and with them the crawler
-  strategies that walk a folder or enumerate an object
+- **No interactive OAuth**, so a source that issues a refresh token only through a consent screen
+  cannot be connected. In the catalog that is exactly one entry, Zoho CRM. It is *not* the reason
+  Google and Microsoft were unreachable — that claim stood here for weeks and was wrong: an
+  organization connecting its own data uses a grant with no human in it, which is a POST
+- **Nothing in the connector catalog has been run against a live account.** Every entry reports
+  `verified: false`, because verifying one needs a credential. The mandatory dry run is where an
+  entry stops being a researched guess
 - **No path finding between two named entities**, and graph retrieval walks one hop — only
   neighbourhoods, not the chain that connects two things
 - **No point-in-time facts.** Edges have no validity interval, so *"who worked there in 2024"* is
