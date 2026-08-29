@@ -11,6 +11,17 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **`memory_links` works.** Declared with the memories migration and reached by
+  nothing — no function, no endpoint, no reader — so a memory could never be
+  said to `continue` another or be `derived_from` the conversations it
+  compressed. `GET/POST/DELETE /api/v1/memories/{id}/links` now do, and reads
+  return **both directions separately**, because "what is derived from this?"
+  and "what is this derived from?" are different questions and merging them
+  loses the direction that is the whole claim.
+- Links carry **`created_by`** (`explicit` / `routed` / `agent`) and a
+  `confidence` for the derived ones. A person restating what an agent guessed
+  promotes the link; an inference never overwrites a statement. An explicit link
+  refuses a confidence outright — a statement is not 80% true.
 - **A crawler can authenticate.** The templated `http` strategy already covered
   enumerate, query and search for most REST APIs; it could reach only *public*
   ones, because a crawler had nowhere to keep a secret and the only place to put
@@ -376,6 +387,24 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   Supermemory's latency, Letta's working context.
 
 ### Fixed
+- **An enrichment failure was retried or discarded depending on the record's
+  id.** The check was `"429" in str(exc)` — a substring search over the
+  exception message. ULIDs are base32, so roughly one record in a few hundred
+  carries those three characters, and `data_01M1785DBZKP726EV0429YK0H0` was
+  enough to make a defect look like a provider quota and be deferred forever.
+  Classification is now by exception type and HTTP status; a `400` is no longer
+  retried because it happens to mention a number.
+- **`allow_public_sharing` is gone.** It shipped in the first migration carrying
+  FR-ACC-4 and was read by nothing — the rule is enforced by the
+  `public_sharing` setting, which also carries the precedence chain, the lock
+  semantics and an audited write. An admin who found the column and set it true
+  had turned on nothing.
+- **Model spend is attributable to the run that produced the record.**
+  `usage_events.run_id` existed from the day the meter shipped and nothing
+  populated it: a crawl run knows its own id when it writes, but the record had
+  nowhere to carry it, so by the time enrichment spent money the connection was
+  gone — and a dry run's estimate could never be checked against an actual.
+
 - **The graph arm read `entity_edges` directly instead of going through
   `GraphStore`.** It passed every behavioural test — including both about
   disclosure — while making the seam a lie: swapping the store would have moved
@@ -630,6 +659,14 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 - **New dependency**: `jmespath`. `pip install -e .` before deploying.
 
 ### Migrations
+- `0029_memory_links.sql` — `created_by`, `confidence` and `created_at` on
+  `memory_links`, plus the reverse index.
+- `0028_item_run.sql` — `data_items.run_id`. Set by `write_items` as an
+  argument, never as a field on the request: attribution anybody can assert is
+  attribution that cannot be reconciled against an estimate.
+- `0027_drop_allow_public_sharing.sql` — drops the column. **If a deployment
+  ever set it, check the `public_sharing` setting**, because setting it did
+  nothing.
 - `0026_crawler_connections.sql` — `crawlers.connection_id` and the
   `auth_style` / `auth_name` a connection presents its credential with. The
   foreign key is **`ON DELETE RESTRICT`**: removing a connection out from under

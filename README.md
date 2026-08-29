@@ -11,11 +11,11 @@ which model produced it, who is allowed to see it, and can you prove you deleted
 ```
 54 file formats   ·   24 data types   ·   18 extraction prompts
 9 webhook providers   ·   3 crawler strategies   ·   12 graph predicates
-344 tests, against a real database, no mocks
+8 MCP tools   ·   110 endpoints   ·   523 tests, against a real database, no mocks
 ```
 
-Every number above is counted from the build at request time, not written into this file. The
-sign-in page reads them from `GET /api/v1/capabilities`.
+The capability counts are read from the running build rather than written here — the sign-in page
+gets them from `GET /api/v1/capabilities`, so a format that stops working stops being claimed.
 
 ---
 
@@ -62,10 +62,15 @@ re-embeddable rather than quietly mixed in.
 
 ## The shape
 
-```
-producers ──▶ POST /api/v1/write ──▶ stored ┄▶ searchable ┄▶ enriched
-                                       │
-                                       └┄▶ parse → embed → enrich → entities → edges
+```mermaid
+flowchart LR
+    WH[webhook] --> WRITE
+    CR[crawler] --> WRITE
+    UP[upload] --> WRITE
+    SDK[SDK · MCP] --> WRITE
+    WRITE["POST /api/v1/write"] ==> STORED[stored]
+    STORED -. parse .-> SEARCHABLE[searchable]
+    SEARCHABLE -. embed · summarise · entities · edges .-> ENRICHED[enriched]
 ```
 
 **Solid is synchronous, dashed is not.** The write commits before it returns; everything after it
@@ -74,6 +79,25 @@ model call, and why the pipeline being down delays enrichment without losing dat
 
 Those three states are visible on every read, so *"I uploaded it and search cannot find it"* is a
 state you can look at rather than a bug report.
+
+### One store, not three
+
+```mermaid
+flowchart TB
+    subgraph PG["PostgreSQL · one database"]
+        direction LR
+        ROWS[(records · ACL · audit)]
+        VEC[(pgvector<br/>embeddings)]
+        FTS[(tsvector<br/>lexical index)]
+        GRAPH[(entities · typed edges)]
+    end
+    PG --- NOTE["the traversal and the access rule<br/>are the same query"]
+```
+
+There is no vector database, no search cluster and no graph database. That is the central bet, and
+it buys two things a second store cannot: a path through a record you may not read is never
+returned at all, and the erasure certificate can re-query **every** table that could hold a trace —
+a guarantee that stops at the database boundary is not one.
 
 ---
 
@@ -89,6 +113,35 @@ state you can look at rather than a bug report.
 | **Inbound webhooks** | 9 providers, each signing a different string over a different encoding |
 | **Crawlers** | Templated HTTP, feeds and bounded link traversal, with a mandatory dry run |
 | **Deletion that completes** | Four blast radii, async reclamation, and a certificate re-queried from every table that could hold a trace |
+| **Cost, metered** | A durable row per model call — including the ones that failed, because a call that generated three thousand tokens and then timed out consumed them. Quota is weighted by what a request authorises, not by the fact that it arrived |
+| **Residency, enforced** | A regulated data type is served only by a model that runs inside the deployment. Checked when a model is assigned, again when one is resolved, and again before bytes reach it |
+| **Per-org model choice** | An organization assigns its own extraction and answering models, per data type, without a redeploy. Embedding stays a deployment decision — two orgs on different embedding models write vectors from different spaces into one index |
+
+---
+
+## How a question is answered
+
+```mermaid
+flowchart LR
+    Q([question]) --> VEC[vector]
+    Q --> LEX[lexical]
+    Q --> GPH[graph]
+    VEC --> RRF{{reciprocal<br/>rank fusion}}
+    LEX --> RRF
+    GPH --> RRF
+    RRF --> HITS[ranked passages]
+    HITS --> ANS[["answer, every sentence cited"]]
+    HITS --> EXC[/"excluded, and why"/]
+```
+
+Three arms, chosen per request rather than picked from a menu of preset modes. **Each applies the
+access rule itself**, so fusion never sees a row the caller could not have retrieved directly — and
+the graph arm reaches records that contain none of the question's words, because something else
+asserted a relationship to an entity it names.
+
+The `excluded` branch is the part that is unusual. Ranked results are ordinary; reporting the
+records that were *considered and dropped* — below the threshold, or not searchable yet — is what
+turns *"it is missing something I know is in there"* from an impression into a diagnosis.
 
 ---
 
@@ -173,8 +226,8 @@ rather than believing.
 
 | Path | What is in it |
 |------|---------------|
-| [`api/`](api/README.md) | The service. 52 modules, 97 endpoints, 54 tables across 25 migrations |
-| [`ui/`](ui/README.md) | The console. Sign-in, ingestion, search, chat, entities, graph, governance |
+| [`api/`](api/README.md) | The service. 56 modules, 110 endpoints, 55 tables across 29 migrations |
+| [`ui/`](ui/README.md) | The console. Sign-in, ingestion, search, chat, entities, graph, crawlers, credentials, governance, MCP |
 | [`docs/`](docs/README.md) | The design, in eleven parts — requirements speak in roles, products appear only in the technology documents |
 | [`docs/graph.md`](docs/graph.md) | Why the graph is not a graph database, and what it costs |
 | [`TBD.md`](TBD.md) | Twelve decisions designed but not decided, ordered by how expensive each becomes if made late |
@@ -190,6 +243,18 @@ users to org owner; a reconcile job that re-embedded with the old model and conc
 stale; a rate limit that consumed a retry budget so a re-embed reported success having embedded
 almost nothing.
 
+The most recent one is the clearest. An enrichment failure was classified by searching its message
+for `"429"` — so whether a defect was retried forever or recorded correctly depended on whether the
+record's random identifier happened to contain those three characters. It surfaced as a test that
+failed once and passed on every re-run.
+
 None of those had an error to notice. That is most of why this system reports its trace, its
 provenance and its exclusions — not because auditors ask for it, but because it is the only way to
 see the bugs that do not announce themselves.
+
+It is also why several tests now check the **wiring** rather than the behaviour: every setting in
+the register must be read somewhere, every public function referenced, every schema column named,
+every metric registered. Each exemption carries its reason and fails the moment the thing it
+excuses is either wired up or removed. Those guards found seven more on their first run — including
+a webhook signature verifier the request path had stopped calling, with its tests still pointed at
+it. A passing test over dead code is worse than no test.
