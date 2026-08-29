@@ -584,3 +584,26 @@ select {
 /* An edge reads as a statement, so the arrow is set apart from the names it
    joins rather than blending into them. */
 .edge-arrow { color: var(--accent); font-weight: 600; padding: 0 2px; }
+
+/* Comparison table. Wide by nature, so it scrolls inside its own container
+   rather than pushing the page sideways. */
+.compare { border-collapse: collapse; width: 100%; min-width: 620px; font-size: 14px; }
+.compare th, .compare td {
+  text-align: left;
+  padding: 12px 16px 12px 0;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+  line-height: 1.52;
+}
+.compare th {
+  font-size: 11px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 620;
+  white-space: nowrap;
+}
+.compare td:first-child { color: var(--ink); font-weight: 560; white-space: nowrap; padding-right: 24px; }
+.compare td:nth-child(2) { color: var(--muted); }
+.compare td:last-child { color: var(--muted); }
+.compare td strong { color: var(--ink); font-weight: 560; }

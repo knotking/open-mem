@@ -117,6 +117,55 @@ const PILLARS = [
   },
 ];
 
+function GraphFigure() {
+  return (
+    <figure className="pipeline">
+      <svg viewBox="0 0 700 168" role="img"
+           aria-label="Entities connected by typed edges, each edge naming the records that assert it"
+           className="pipeline-svg">
+        <defs>
+          <marker id="etip" viewBox="0 0 10 10" refX="9" refY="5"
+                  markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" fill="currentColor" />
+          </marker>
+        </defs>
+
+        <circle cx="86" cy="58" r="27" fill="var(--accent-soft)" stroke="var(--accent)" strokeWidth="1.5" />
+        <text x="86" y="62" textAnchor="middle" fontSize="11" fill="var(--accent)" fontWeight="600">person</text>
+        <text x="86" y="102" textAnchor="middle" fontSize="11.5" fill="currentColor">Priya Raman</text>
+
+        <line x1="113" y1="58" x2="253" y2="58" stroke="currentColor" strokeWidth="1.2" markerEnd="url(#etip)" />
+        <text x="183" y="49" textAnchor="middle" fontSize="10" fill="currentColor" opacity=".72">works_for</text>
+        <text x="183" y="74" textAnchor="middle" fontSize="9.5" fill="currentColor" opacity=".5">3 records assert this</text>
+
+        <circle cx="282" cy="58" r="27" fill="none" stroke="currentColor" strokeWidth="1.3" />
+        <text x="282" y="62" textAnchor="middle" fontSize="9.5" fill="currentColor">org</text>
+        <text x="282" y="102" textAnchor="middle" fontSize="11.5" fill="currentColor">Northwind</text>
+
+        <line x1="309" y1="58" x2="449" y2="58" stroke="currentColor" strokeWidth="1.2" markerEnd="url(#etip)" />
+        <text x="379" y="49" textAnchor="middle" fontSize="10" fill="currentColor" opacity=".72">located_in</text>
+        <text x="379" y="74" textAnchor="middle" fontSize="9.5" fill="currentColor" opacity=".5">1 record</text>
+
+        <circle cx="478" cy="58" r="27" fill="none" stroke="currentColor" strokeWidth="1.3" />
+        <text x="478" y="62" textAnchor="middle" fontSize="9" fill="currentColor">place</text>
+        <text x="478" y="102" textAnchor="middle" fontSize="11.5" fill="currentColor">Lisbon</text>
+
+        <line x1="86" y1="131" x2="478" y2="131" stroke="currentColor" strokeWidth="1"
+              strokeDasharray="3 4" opacity=".55" />
+        <text x="282" y="150" textAnchor="middle" fontSize="10" fill="currentColor" opacity=".6">
+          two hops — reached through a relationship Priya was never named in
+        </text>
+      </svg>
+      <figcaption>
+        Entities resolve across name variants when they share a strong identifier, and every edge
+        carries the records that assert it. One document saying something is a claim; three saying
+        it independently is closer to a fact — so the count is reported rather than collapsed into a
+        line on a diagram.
+      </figcaption>
+    </figure>
+  );
+}
+
 function Pipeline() {
   return (
     <figure className="pipeline">
@@ -320,6 +369,49 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
       </section>
 
       <section className="steps">
+        <h2 className="section-title">It knows what connects to what</h2>
+        <p className="hero-lede" style={{ marginBottom: 22 }}>
+          Records name people, organizations and places. Those resolve into entities — cautiously,
+          joining on a shared email or an exact name and otherwise keeping them apart, because two
+          nodes you can merge later beat one node that fused two people and cannot be separated.
+        </p>
+      </section>
+
+      <GraphFigure />
+
+      <section className="steps">
+        <div className="steps-grid">
+          <article>
+            <span className="step-n">EDGES</span>
+            <h3>Claims, with their evidence</h3>
+            <p>
+              A relationship is something a document asserted, so it carries the records that say
+              so and a count of how many. An edge nobody can check is an assertion, and extracted
+              graphs are full of those.
+            </p>
+          </article>
+          <article>
+            <span className="step-n">FREE</span>
+            <h3>Connections that need no model</h3>
+            <p>
+              Two entities named in the same record are connected by that fact alone. It costs
+              nothing and works before any model has read for relationships — which is most of the
+              time, early on.
+            </p>
+          </article>
+          <article>
+            <span className="step-n">ACL</span>
+            <h3>Traversal stops where you cannot read</h3>
+            <p>
+              The access rule is inside the recursive query, not applied to its result. A path
+              through a record you cannot see is never returned — arriving at its far end would
+              disclose that the record exists.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section className="steps">
         <h2 className="section-title">What it holds itself to</h2>
         <div className="pillars-grid">
           {PILLARS.map((pillar) => (
@@ -329,6 +421,98 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
             </article>
           ))}
         </div>
+      </section>
+
+      <section className="steps">
+        <h2 className="section-title">Where this sits</h2>
+        <p className="hero-lede" style={{ marginBottom: 8 }}>
+          Agent memory is a crowded category — Mem0, Zep, Letta, Supermemory and a steady stream of
+          YC batches are all building it. They are mostly optimising for adoption, latency and how
+          fast an agent can start remembering.
+        </p>
+        <p className="hero-lede" style={{ marginBottom: 26 }}>
+          mem-dog optimises for a different question: <strong>can you prove what the system knew,
+          why it answered that, and that you actually deleted it?</strong> That is a worse trade if
+          you are shipping a chatbot this week, and the right one if the data is regulated, shared
+          across a team, or subject to erasure requests.
+        </p>
+
+        <div className="scroll">
+          <table className="compare">
+            <thead>
+              <tr>
+                <th>Dimension</th>
+                <th>Common approach</th>
+                <th>mem-dog</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Why did I get this result?</td>
+                <td>Ranked results</td>
+                <td><strong>Ranked results, plus what was considered and dropped — with the
+                reason.</strong> &ldquo;Missing something I know is there&rdquo; has several causes
+                and they need different fixes</td>
+              </tr>
+              <tr>
+                <td>Access control</td>
+                <td>Filter or namespace per user</td>
+                <td><strong>A predicate inside the retrieval query.</strong> Asking for ten and
+                hiding three is a different and worse thing than returning the right ten</td>
+              </tr>
+              <tr>
+                <td>Deletion</td>
+                <td>Delete the record</td>
+                <td><strong>Tombstone, async reclamation of chunks, vectors, blobs, artifacts,
+                mentions and edges — then a certificate re-queried from every table</strong></td>
+              </tr>
+              <tr>
+                <td>Provenance</td>
+                <td>Store the memory</td>
+                <td><strong>Every derived row records the model, the build that answered, and a
+                fingerprint of prompt + model + schema + parser.</strong> Nothing is mutated in
+                place</td>
+              </tr>
+              <tr>
+                <td>Readiness</td>
+                <td>Written or not</td>
+                <td><strong>stored → searchable → enriched, visible on every read.</strong>
+                &ldquo;I uploaded it and search cannot find it&rdquo; is a state, not a bug</td>
+              </tr>
+              <tr>
+                <td>Graph edges</td>
+                <td>Extracted relationships</td>
+                <td><strong>Every edge names the records asserting it, and how many.</strong> Plus
+                co-mentions, which need no model at all</td>
+              </tr>
+              <tr>
+                <td>Ingestion</td>
+                <td>Text and chat turns</td>
+                <td><strong>54 file formats</strong> — documents, spreadsheets, calendars, email,
+                archives, geospatial, code; audio and video transcribed, images described</td>
+              </tr>
+              <tr>
+                <td>Where it runs</td>
+                <td>Managed SaaS</td>
+                <td><strong>Your own cloud project.</strong> Postgres, object storage, serverless
+                — no data leaves your network</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3 style={{ marginTop: 30 }}>Where the others are ahead</h3>
+        <p className="hero-lede" style={{ marginBottom: 0 }}>
+          A comparison that only flatters itself is not worth reading.
+          <strong> Zep&rsquo;s temporal knowledge graph timestamps every fact</strong>, so it can
+          answer what was true in March; mem-dog models no validity interval and cannot.
+          <strong> Mem0&rsquo;s adoption dwarfs this</strong> — tens of thousands of stars and
+          hundreds of millions of API calls a quarter, against a system with none.
+          <strong> Supermemory is faster.</strong> <strong>Letta</strong> manages an agent&rsquo;s
+          working context, which mem-dog does not attempt at all. If you want a memory layer that
+          works this afternoon with a large community behind it, pick one of those. If you need to
+          answer an auditor, come back here.
+        </p>
       </section>
 
       <footer className="landfoot">
