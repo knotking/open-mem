@@ -47,17 +47,6 @@ CLIENT_ONLY_SETTINGS = {
 # stay true. Anything added to this list should be something a reader would
 # agree is deliberately unbuilt — not something that was easier to exempt.
 UNWIRED_COLUMNS = {
-    # The one worth closing first: a *second* mechanism for a control that
-    # already works. `sharing.py` gates on the `public_sharing` setting, so an
-    # admin who flips this column gets nothing — and a switch labelled "allow
-    # public sharing" that does not is the worst kind of dead code.
-    "allow_public_sharing": "superseded by the public_sharing setting",
-
-    # `memory_links` is declared and entirely unwired: nothing writes a link and
-    # nothing reads one. It is a Phase 1 line item on the roadmap.
-    "from_memory": "memory_links is declared and unwired end to end",
-    "to_memory": "memory_links is declared and unwired end to end",
-
     # Inputs to the ranked model proposal, which is Phase 6 UX. The tables were
     # shipped early on purpose so the surface has something to read when it
     # arrives; until then nothing consults them.
@@ -167,6 +156,13 @@ def test_every_column_the_schema_declares_is_mentioned_in_the_code():
             if match:
                 columns.add(match.group(1))
 
+    # A column a later migration dropped is not part of the schema, however
+    # convincingly it still reads in the CREATE TABLE that first declared it.
+    # Without this the guard describes the database as it was rather than as it
+    # is, and every drop would need an exemption to stay quiet.
+    dropped = set(re.findall(r"DROP COLUMN (?:IF EXISTS )?([a-z_]+)", ddl))
+    columns -= dropped
+
     assert len(columns) > 50, "the DDL parse found almost nothing — it has drifted"
     # Names that are structural rather than read by hand: every table has them
     # and they are touched by `now()` defaults and ordering, not by name.
@@ -178,6 +174,16 @@ def test_every_column_the_schema_declares_is_mentioned_in_the_code():
     assert not missing, (
         f"these columns exist and no Python names them: {sorted(missing)}"
     )
+
+
+def test_a_dropped_column_leaves_the_schema():
+    """`allow_public_sharing` is the case: declared in the first migration,
+    never read, and dropped once the setting that actually gates public sharing
+    was shown to be the only mechanism. The guard has to see the drop, or every
+    removal would need an exemption to stay quiet."""
+    ddl = "\n".join(p.read_text() for p in (SRC / "migrations").glob("*.sql"))
+    assert "allow_public_sharing" in ddl, "expected the drop migration to name it"
+    assert re.search(r"DROP COLUMN (?:IF EXISTS )?allow_public_sharing", ddl)
 
 
 def test_the_guards_would_fail_if_the_patterns_drifted():

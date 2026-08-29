@@ -321,3 +321,48 @@ async def test_a_clean_artifact_is_not_enriched_again(
     )
     await queue.close()
     assert swept.enrich == 0
+
+
+async def test_a_failure_is_classified_by_type_not_by_its_message(pool):
+    """The bug this replaced decided by searching the message for "429".
+
+    ULIDs are base32, so roughly one record in a few hundred carries those three
+    characters somewhere in its id — which meant an item's *name* decided
+    whether its failure was retried or recorded. It presented as a test that
+    failed once and passed on every re-run.
+    """
+    from memdog.multimodal import QuotaExhausted
+    from memdog.quota import BudgetExhausted
+    from memdog.workers import _is_capacity
+
+    # Genuinely "come back later".
+    assert _is_capacity(QuotaExhausted("out of quota"))
+    assert _is_capacity(BudgetExhausted("spent", scope="org"))
+
+    # A defect that merely mentions a number, including the shape that broke it:
+    # an ordinary error carrying a record id.
+    assert not _is_capacity(
+        ValueError("enrichment failed for data_01M1785DBZKP726EV0429YK0H0")
+    )
+    assert not _is_capacity(RuntimeError("expected 429 chunks, got 12"))
+    assert not _is_capacity(KeyError("429"))
+
+
+async def test_an_http_429_is_capacity_and_a_400_is_not(pool):
+    import httpx
+
+    from memdog.workers import _is_capacity
+
+    def failure(status: int) -> httpx.HTTPStatusError:
+        request = httpx.Request("GET", "https://example.test")
+        return httpx.HTTPStatusError(
+            "boom", request=request,
+            response=httpx.Response(status, request=request),
+        )
+
+    assert _is_capacity(failure(429))
+    assert _is_capacity(failure(503))
+    # A bad request will fail the same way every time. Retrying it forever is
+    # how a queue fills with work that can never succeed.
+    assert not _is_capacity(failure(400))
+    assert not _is_capacity(failure(404))

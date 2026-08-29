@@ -590,6 +590,7 @@ class CrawlWorker:
                     self.pool, self.queue, self.blobs, self.settings, principal,
                     WriteRequest(producer_id=crawler["producer_id"], items=chunk,
                                  options=WriteOptions(enrich=config.enrich)),
+                    run_id=run["run_id"],
                 )
                 for result, item in zip(response.results, chunk, strict=False):
                     if getattr(result, "status", "") in ("created", "updated"):

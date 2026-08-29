@@ -401,6 +401,164 @@ async def retype_memory(
             "applied": True}
 
 
+RELATIONS = ("part_of", "derived_from", "about", "continues", "supersedes")
+
+# Who says so. An explicit link is a claim a person will stand behind; a routed
+# or agent link is an inference. Kept apart for the same reason case membership
+# keeps asserted and inferred apart -- a guess that cannot be distinguished from
+# a statement quietly becomes one.
+ORIGINS = ("explicit", "routed", "agent")
+
+
+async def link(
+    pool: asyncpg.Pool,
+    principal,
+    *,
+    from_memory: str,
+    to_memory: str,
+    relation: str,
+    created_by: str = "explicit",
+    confidence: float | None = None,
+) -> dict:
+    """Relate two memories.
+
+    Both must be in the caller's org, checked in one statement rather than
+    fetched and compared: a memory id from another organization is "not found"
+    and not "not yours", because the second sentence confirms it exists.
+
+    A link is not symmetric and the direction is the claim. `derived_from`
+    pointing the wrong way says the conversations were derived from their
+    summary, which is not merely wrong but backwards in a way a reader believes.
+    """
+    from .audit import record_audit
+    from .auth import DATA_WRITE
+
+    principal.require(DATA_WRITE)
+    if relation not in RELATIONS:
+        raise MemoryError(f"relation must be one of {', '.join(RELATIONS)}")
+    if created_by not in ORIGINS:
+        raise MemoryError(f"created_by must be one of {', '.join(ORIGINS)}")
+    if from_memory == to_memory:
+        # Not a philosophical objection: a self-link makes every traversal
+        # cyclic and says nothing.
+        raise MemoryError("a memory cannot be linked to itself")
+    if created_by == "explicit" and confidence is not None:
+        # An explicit link is not 80% true. A number here would invite a reader
+        # to weigh a statement the way they weigh a guess.
+        raise MemoryError("confidence belongs to a derived link, not an explicit one")
+
+    found = await pool.fetchval(
+        "SELECT count(*) FROM memories WHERE memory_id = ANY($1::text[]) AND org_id = $2",
+        [from_memory, to_memory], principal.org_id,
+    )
+    if found != 2:
+        raise MemoryError("no such memory", status=404)
+
+    async with pool.acquire() as conn, conn.transaction():
+        await conn.execute(
+            """
+            INSERT INTO memory_links (from_memory, to_memory, relation,
+                                      created_by, confidence)
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (from_memory, to_memory, relation) DO UPDATE
+                -- A person restating what an agent guessed promotes it. The
+                -- reverse never happens: an inference does not overwrite a
+                -- statement somebody made.
+                SET created_by = CASE
+                        WHEN memory_links.created_by = 'explicit' THEN 'explicit'
+                        ELSE EXCLUDED.created_by END,
+                    -- Confidence follows the *resulting* row, not the incoming
+                    -- one. Keying it off EXCLUDED left an agent's number on a
+                    -- link that stayed explicit -- a statement wearing a guess's
+                    -- probability, which is the confusion this column exists to
+                    -- prevent.
+                    confidence = CASE
+                        WHEN memory_links.created_by = 'explicit'
+                          OR EXCLUDED.created_by = 'explicit' THEN NULL
+                        ELSE EXCLUDED.confidence END
+            """,
+            from_memory, to_memory, relation, created_by, confidence,
+        )
+        await record_audit(
+            conn, principal, action="memory.linked",
+            target_type="memory", target_id=from_memory,
+            detail={"to_memory": to_memory, "relation": relation,
+                    "created_by": created_by},
+        )
+    return {"from_memory": from_memory, "to_memory": to_memory,
+            "relation": relation, "created_by": created_by,
+            "confidence": confidence}
+
+
+async def unlink(
+    pool: asyncpg.Pool, principal, *,
+    from_memory: str, to_memory: str, relation: str,
+) -> dict:
+    from .audit import record_audit
+    from .auth import DATA_WRITE
+
+    principal.require(DATA_WRITE)
+    async with pool.acquire() as conn, conn.transaction():
+        removed = await conn.fetchval(
+            """
+            DELETE FROM memory_links l USING memories m
+            WHERE l.from_memory = $1 AND l.to_memory = $2 AND l.relation = $3
+              AND m.memory_id = l.from_memory AND m.org_id = $4
+            RETURNING l.from_memory
+            """,
+            from_memory, to_memory, relation, principal.org_id,
+        )
+        if removed is None:
+            raise MemoryError("no such link", status=404)
+        await record_audit(
+            conn, principal, action="memory.unlinked",
+            target_type="memory", target_id=from_memory,
+            detail={"to_memory": to_memory, "relation": relation},
+        )
+    return {"from_memory": from_memory, "to_memory": to_memory,
+            "relation": relation, "status": "removed"}
+
+
+async def links_for(pool: asyncpg.Pool, principal, memory_id: str) -> dict:
+    """Both directions, kept apart.
+
+    "What is derived from this?" and "what is this derived from?" are different
+    questions, and merging them into one list loses the direction -- which is
+    the entire content of the claim.
+    """
+    from .auth import DATA_READ
+
+    principal.require(DATA_READ)
+    owned = await pool.fetchval(
+        "SELECT 1 FROM memories WHERE memory_id = $1 AND org_id = $2",
+        memory_id, principal.org_id,
+    )
+    if not owned:
+        raise MemoryError("no such memory", status=404)
+
+    rows = await pool.fetch(
+        """
+        SELECT l.from_memory, l.to_memory, l.relation, l.created_by, l.confidence,
+               -- What to show: a memory has a key and an optional title,
+               -- and no `name`. Coalescing keeps the display honest when only
+               -- one of them was ever set.
+               coalesce(f.title, f.memory_key) AS from_name,
+               coalesce(t.title, t.memory_key) AS to_name
+        FROM memory_links l
+        JOIN memories f ON f.memory_id = l.from_memory
+        JOIN memories t ON t.memory_id = l.to_memory
+        WHERE l.from_memory = $1 OR l.to_memory = $1
+        ORDER BY l.created_at
+        """,
+        memory_id,
+    )
+    return {
+        "memory_id": memory_id,
+        "outgoing": [dict(r) for r in rows if r["from_memory"] == memory_id],
+        "incoming": [dict(r) for r in rows if r["to_memory"] == memory_id],
+    }
+
+
 async def list_types(pool: asyncpg.Pool, project_id: str) -> list[dict]:
     rows = await pool.fetch(
         """

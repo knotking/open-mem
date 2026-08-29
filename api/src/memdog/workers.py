@@ -129,7 +129,8 @@ class EmbedWorker:
     async def _embed_inner(self, data_id: str) -> None:
         row = await self._pool.fetchrow(
             """
-            SELECT indexable_text, deleted_at, ingested_at, org_id, project_id, owner_id
+            SELECT indexable_text, deleted_at, ingested_at, org_id, project_id,
+                   owner_id, run_id
             FROM data_items WHERE data_id = $1
             """,
             data_id,
@@ -151,7 +152,7 @@ class EmbedWorker:
         # metered, so the spend is visible even where it is not refusable.
         with usage.attributed(
             org_id=row["org_id"], project_id=row["project_id"],
-            user_id=row["owner_id"], data_id=data_id,
+            user_id=row["owner_id"], data_id=data_id, run_id=row["run_id"],
         ):
             vectors = await self._embedder.embed([c.text for c in chunks])
         if len(vectors) != len(chunks):
@@ -367,7 +368,7 @@ class EnrichWorker:
         row = await self._pool.fetchrow(
             """
             SELECT org_id, project_id, owner_id, indexable_text, data_type,
-                   access_level, shared_with, deleted_at, ingested_at
+                   access_level, shared_with, deleted_at, ingested_at, run_id
             FROM data_items WHERE data_id = $1
             """,
             data_id,
@@ -429,6 +430,10 @@ class EnrichWorker:
         attribution = usage.attributed(
             org_id=row["org_id"], project_id=row["project_id"],
             user_id=row["owner_id"], data_id=data_id,
+            # What closes FR-TOK-6, and with it the reconciliation a dry run's
+            # estimate needs: the spend lands on the run that produced the item
+            # rather than on nothing.
+            run_id=row["run_id"],
         )
         if prompt_override:
             import memdog.prompts as prompt_module
@@ -740,7 +745,7 @@ class ParseWorker:
         # the setting decorative -- it reported a value that had no effect, and
         # an org could not decline the expensive tier.
         owner = await self._pool.fetchrow(
-            "SELECT org_id, project_id, owner_id, data_type "
+            "SELECT org_id, project_id, owner_id, data_type, run_id "
             "FROM data_items WHERE data_id = $1",
             data_id,
         )
@@ -832,8 +837,8 @@ class ParseWorker:
                     user_id=owner_id,
                 )
                 with usage.attributed(
-                    org_id=org_id, project_id=project_id,
-                    user_id=owner_id, data_id=data_id,
+                    org_id=org_id, project_id=project_id, user_id=owner_id,
+                    data_id=data_id, run_id=owner["run_id"] if owner else None,
                 ):
                     result = await engine.interpret(
                         payload, mime=mime, modality=modality
@@ -888,6 +893,34 @@ class ParseWorker:
             status,
             detail,
         )
+
+
+def _is_capacity(exc: BaseException) -> bool:
+    """Is this the provider saying "not now", rather than something being wrong?
+
+    Type and status code only. The distinction matters because the two outcomes
+    are opposite: a busy provider means keep the work and come back, and a
+    defect means stop and say so. Deciding it by searching the message for a
+    number means any exception that happens to contain one is retried forever,
+    and any that does not is discarded.
+    """
+    import httpx
+
+    from .multimodal import QuotaExhausted
+    from .quota import BudgetExhausted, QuotaExceeded
+
+    if isinstance(exc, (QuotaExhausted, BudgetExhausted, QuotaExceeded)):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code in (429, 503)
+    # Raised by the inference and chat layers for provider unavailability, and
+    # matched by name for the same reason `queue` does: those modules should not
+    # have to import this one to be classifiable.
+    if exc.__class__.__name__ in {
+        "EmbeddingUnavailable", "AnswerRateLimited", "MultimodalUnavailable",
+    }:
+        return True
+    return getattr(exc, "status", None) in (429, 503)
 
 
 class EventWorker:
@@ -984,8 +1017,17 @@ class EventWorker:
 
             # A provider quota is a "come back later", not a defect. Treating
             # it as a failure walks a good request to `failed` within seconds.
-            if isinstance(exc, QuotaExhausted) or "429" in str(exc):
-                log.warning("deferring enrichment for %s: provider quota", data_id)
+            #
+            # Classified by type, never by looking for "429" in the message.
+            # That is what this did, and ULIDs are base32: roughly one record in
+            # a few hundred has those three characters somewhere in its id, so
+            # an item's *name* decided whether its failure was retried. The test
+            # that caught it failed on `data_01M1785DBZKP726EV0429YK0H0` and
+            # passed on every re-run, which is exactly how a bug keyed on
+            # randomness presents.
+            if _is_capacity(exc):
+                log.warning("deferring enrichment for %s: provider is busy (%s)",
+                            data_id, exc.__class__.__name__)
                 await mark_deferred(self._pool, event_id, repr(exc))
                 return
 

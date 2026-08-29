@@ -567,6 +567,43 @@ async def delete_memory_endpoint(
     )
 
 
+
+@app.get("/api/v1/memories/{memory_id}/links")
+async def get_memory_links(
+    request: Request, memory_id: str, actor: Principal = Depends(principal)
+) -> dict:
+    """Both directions, kept apart -- the direction is the claim."""
+    return await _control(memories_mod.links_for)(
+        request.app.state.pool, actor, memory_id
+    )
+
+
+@app.post("/api/v1/memories/{memory_id}/links")
+async def post_memory_link(
+    request: Request, memory_id: str, body: dict,
+    actor: Principal = Depends(principal),
+) -> dict:
+    return await _control(memories_mod.link)(
+        request.app.state.pool, actor,
+        from_memory=memory_id,
+        to_memory=body.get("to_memory", ""),
+        relation=body.get("relation", ""),
+        created_by=body.get("created_by", "explicit"),
+        confidence=body.get("confidence"),
+    )
+
+
+@app.delete("/api/v1/memories/{memory_id}/links")
+async def delete_memory_link(
+    request: Request, memory_id: str, to_memory: str, relation: str,
+    actor: Principal = Depends(principal),
+) -> dict:
+    return await _control(memories_mod.unlink)(
+        request.app.state.pool, actor,
+        from_memory=memory_id, to_memory=to_memory, relation=relation,
+    )
+
+
 @app.get("/api/v1/projects/{project_id}/memory-types")
 async def get_memory_types(
     request: Request, project_id: str, actor: Principal = Depends(principal)

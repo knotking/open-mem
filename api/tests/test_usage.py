@@ -218,3 +218,68 @@ async def test_purge_drops_raw_events_and_keeps_the_rollup(metered, tenant):
         "SELECT credits FROM usage_spend WHERE scope = 'org' AND scope_id = $1",
         tenant.org_id,
     ) == 5
+
+
+async def test_spend_is_attributed_to_the_run_that_produced_the_record(
+    metered, tenant, queue, blobs, settings
+):
+    """What FR-TOK-6 asks for, and what makes FR-TOK-7 possible.
+
+    `usage_events.run_id` existed from the day the meter shipped and nothing
+    populated it — not for want of the value, since a crawl run knows its own id
+    when it writes, but because the record had nowhere to carry it. By the time
+    enrichment spent money the connection was gone, so a dry run's estimate
+    could never be checked against what the run actually cost.
+    """
+    from memdog.auth import ApiKeyVerifier
+    from memdog.contracts import Inline, WriteItem, WriteOptions, WriteRequest
+    from memdog.write import write_items
+
+    principal = await ApiKeyVerifier(metered).verify(tenant.api_key)
+    written = await write_items(
+        metered, queue, blobs, settings, principal,
+        WriteRequest(
+            producer_id=tenant.producer_id,
+            items=[WriteItem(external_id="from-a-run",
+                             content=Inline(text="Discovered by a crawl."))],
+            options=WriteOptions(enrich=False),
+        ),
+        None,
+        run_id="crun_the_one_that_found_it",
+    )
+    data_id = written.results[0].data_id
+
+    assert await metered.fetchval(
+        "SELECT run_id FROM data_items WHERE data_id = $1", data_id
+    ) == "crun_the_one_that_found_it"
+
+    # And the meter picks it up from the row, which is the half that matters.
+    row = await metered.fetchrow(
+        "SELECT org_id, project_id, owner_id, run_id FROM data_items WHERE data_id = $1",
+        data_id,
+    )
+    with usage.attributed(
+        org_id=row["org_id"], project_id=row["project_id"],
+        user_id=row["owner_id"], data_id=data_id, run_id=row["run_id"],
+    ):
+        async with usage.meter("extract", "gemini", model_id="g"):
+            usage.observe(tokens_in=1000, tokens_out=500)
+
+    event = (await _events(metered))[0]
+    assert event["run_id"] == "crun_the_one_that_found_it"
+    assert event["data_id"] == data_id
+
+
+async def test_a_caller_cannot_claim_a_run(metered, tenant, queue, blobs, settings):
+    """Attribution is asserted by the code that knows it, not by whoever is
+    calling. A field on the write request would let any client attach its spend
+    to somebody else's run — and the column exists so an estimate can be checked
+    against an actual, which a claimable field would make meaningless."""
+    import inspect
+
+    from memdog.contracts import WriteItem, WriteRequest
+    from memdog.write import write_items
+
+    assert "run_id" in inspect.signature(write_items).parameters
+    assert "run_id" not in WriteItem.model_fields
+    assert "run_id" not in WriteRequest.model_fields

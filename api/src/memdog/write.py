@@ -162,12 +162,23 @@ async def write_items(
     principal: Principal,
     request: WriteRequest,
     idempotency_key: str | None = None,
+    run_id: str | None = None,
 ) -> WriteResponse:
+    """`run_id` is an argument rather than a field on the request.
+
+    Attribution has to be asserted by the code that knows it -- the crawl worker
+    writing its own run -- and not by whoever is calling. A field on the write
+    body would let any client claim to be part of a run, and the whole point of
+    the column is that a dry run's estimate can be checked against what the run
+    actually cost.
+    """
     with span("write", producer_id=request.producer_id, items=len(request.items)):
-        return await _write(pool, queue, blobs, settings, principal, request, idempotency_key)
+        return await _write(pool, queue, blobs, settings, principal, request,
+                            idempotency_key, run_id)
 
 
-async def _write(pool, queue, blobs, settings, principal, request, idempotency_key):
+async def _write(pool, queue, blobs, settings, principal, request,
+                 idempotency_key, run_id=None):
     async with pool.acquire() as conn:
         producer = await _admit(conn, queue, settings, principal, request)
 
@@ -228,7 +239,7 @@ async def _write(pool, queue, blobs, settings, principal, request, idempotency_k
                         data_id, created, downloaded, has_text, memories, case_ids, events
                     ) = await _write_one(
                         conn, blobs, principal, producer, item, request.options,
-                        enrich,
+                        enrich, run_id,
                     )
                 results.append(
                     WriteResult(
@@ -289,6 +300,7 @@ async def _write_one(
     item: WriteItem,
     options: "WriteOptions",
     enrich: bool,
+    run_id: str | None = None,
 ) -> tuple[str, bool, bool, bool, list[str], list[str], list[str]]:
     content = item.content
     data_id = new_id("data")
@@ -359,9 +371,9 @@ async def _write_one(
             data_id, org_id, project_id, producer_id, connection_id, owner_id,
             external_id, access_level, shared_with, content_text, storage_ref,
             pending_ref, mime_type, source_type, data_type, classified_by_layer,
-            size_bytes, checksum, event_time, state, identifiers, tags)
+            size_bytes, checksum, event_time, state, identifiers, tags, run_id)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-                $16, $17, $18, $19, 'stored', $20, $21)
+                $16, $17, $18, $19, 'stored', $20, $21, $22)
         ON CONFLICT (project_id, producer_id, external_id) DO UPDATE SET
             content_text = EXCLUDED.content_text,
             storage_ref = EXCLUDED.storage_ref,
@@ -377,6 +389,8 @@ async def _write_one(
             shared_with = EXCLUDED.shared_with,
             identifiers = EXCLUDED.identifiers,
             tags = EXCLUDED.tags,
+            -- A rewrite belongs to the run that rewrote it.
+            run_id = EXCLUDED.run_id,
             state = 'stored',
             updated_at = now()
         RETURNING data_id, (xmax = 0) AS created
@@ -408,6 +422,7 @@ async def _write_one(
         event_time,
         item.identifiers,
         item.tags,
+        run_id,
     )
     data_id, created = row["data_id"], row["created"]
 

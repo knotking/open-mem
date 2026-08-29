@@ -140,13 +140,9 @@ Stated as plainly as the rest, because a README that only lists strengths is not
 - **No rating, invoicing or rollups.** Spend is metered and budgeted in cost-weighted credits, and
   credits are not currency — turning them into a bill needs a rate card, hourly rollups and
   reconciliation against provider invoices, none of which exist
-- **Model spend is not attributable to a crawl run or a reprocess job.** `usage_events` has the
-  column; nothing populates it, because a stored item carries no reference to the run that fetched
-  it. So a dry-run's estimate still cannot be checked against what the run actually cost
-- **Eight schema columns are declared and wired to nothing** — `memory_links` end to end, the
-  model-proposal inputs, and an `allow_public_sharing` flag superseded by the setting that actually
-  gates it. They are listed with reasons in `tests/test_wiring.py`, which fails if one is quietly
-  added to that list or quietly removed from the schema
+- **Five schema columns are declared and wired to nothing** — the model-proposal inputs and some
+  entity lifecycle fields. They are listed with reasons in `tests/test_wiring.py`, which fails if one
+  is quietly added to that list, quietly removed from the schema, or quietly wired up
 - **No OAuth connections**, so Gmail, Drive and Calendar are unreachable — and with them the crawler
   strategies that walk a folder or enumerate an object
 - **No path finding between two named entities**, and graph retrieval walks one hop — only

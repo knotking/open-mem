@@ -9,6 +9,7 @@ from __future__ import annotations
 import pytest
 
 from memdog.contracts import Inline, MemoryRef, WriteItem, WriteRequest, WriteOptions
+from memdog import memories
 from memdog.memories import effective_expiry, ensure_shipped_types
 from memdog.retrieval import item_memories, list_memories, memory_members
 from memdog.write import write_items
@@ -470,3 +471,132 @@ async def test_the_default_memory_cannot_be_deleted(
     with pytest.raises(MemoryError) as exc:
         await delete_memory(pool, actor, queue, memory_id)
     assert exc.value.status == 409
+
+
+# --- links -------------------------------------------------------------------
+
+
+async def _two_memories(pool, tenant):
+    from memdog.auth import ApiKeyVerifier
+
+    principal = await ApiKeyVerifier(pool).verify(tenant.api_key)
+    a = await memories.create_memory(
+        pool, principal, project_id=tenant.project_id, type_name="default",
+        memory_key="today")
+    b = await memories.create_memory(
+        pool, principal, project_id=tenant.project_id, type_name="default",
+        memory_key="yesterday")
+    return principal, a["memory_id"], b["memory_id"]
+
+
+async def test_a_link_is_directional_and_readable_both_ways(pool, tenant):
+    """`memory_links` was declared in the first memories migration and reached
+    by nothing — no function, no endpoint, no reader. A memory could never be
+    said to continue another, which is most of what the relations exist for."""
+    principal, today, yesterday = await _two_memories(pool, tenant)
+
+    await memories.link(pool, principal, from_memory=today,
+                        to_memory=yesterday, relation="continues")
+
+    forward = await memories.links_for(pool, principal, today)
+    assert [l["relation"] for l in forward["outgoing"]] == ["continues"]
+    assert forward["incoming"] == []
+
+    # The same link from the other end, and the direction is preserved: today
+    # continues yesterday, never the reverse.
+    backward = await memories.links_for(pool, principal, yesterday)
+    assert backward["outgoing"] == []
+    assert [l["from_memory"] for l in backward["incoming"]] == [today]
+
+
+async def test_an_inference_never_overwrites_a_statement(pool, tenant):
+    """The distinction case membership already draws, for the same reason: a
+    guess that cannot be told from a claim quietly becomes one."""
+    principal, summary, source = await _two_memories(pool, tenant)
+
+    await memories.link(pool, principal, from_memory=summary, to_memory=source,
+                        relation="derived_from", created_by="explicit")
+    # An agent re-asserting it must not demote what a person stated.
+    await memories.link(pool, principal, from_memory=summary, to_memory=source,
+                        relation="derived_from", created_by="agent",
+                        confidence=0.6)
+
+    links = (await memories.links_for(pool, principal, summary))["outgoing"]
+    assert links[0]["created_by"] == "explicit"
+    assert links[0]["confidence"] is None
+
+
+async def test_a_person_promotes_what_an_agent_guessed(pool, tenant):
+    principal, summary, source = await _two_memories(pool, tenant)
+
+    await memories.link(pool, principal, from_memory=summary, to_memory=source,
+                        relation="derived_from", created_by="agent", confidence=0.6)
+    await memories.link(pool, principal, from_memory=summary, to_memory=source,
+                        relation="derived_from", created_by="explicit")
+
+    links = (await memories.links_for(pool, principal, summary))["outgoing"]
+    assert links[0]["created_by"] == "explicit"
+    # The confidence goes with the guess it belonged to.
+    assert links[0]["confidence"] is None
+
+
+async def test_an_explicit_link_refuses_a_confidence(pool, tenant):
+    """A statement is not 80% true, and a number here would invite a reader to
+    weigh it the way they weigh a guess."""
+    principal, a, b = await _two_memories(pool, tenant)
+    with pytest.raises(memories.MemoryError):
+        await memories.link(pool, principal, from_memory=a, to_memory=b,
+                            relation="about", created_by="explicit", confidence=0.9)
+
+
+async def test_a_memory_cannot_be_linked_to_itself(pool, tenant):
+    principal, a, _ = await _two_memories(pool, tenant)
+    with pytest.raises(memories.MemoryError):
+        await memories.link(pool, principal, from_memory=a, to_memory=a,
+                            relation="part_of")
+
+
+async def test_an_unknown_relation_is_refused(pool, tenant):
+    principal, a, b = await _two_memories(pool, tenant)
+    with pytest.raises(memories.MemoryError):
+        await memories.link(pool, principal, from_memory=a, to_memory=b,
+                            relation="reminds_me_of")
+
+
+async def test_linking_across_organizations_is_not_found(pool, tenant, other_tenant):
+    """"Not found" rather than "not yours": the second sentence confirms it
+    exists."""
+    from memdog.auth import ApiKeyVerifier
+
+    principal, mine, _ = await _two_memories(pool, tenant)
+    theirs_principal = await ApiKeyVerifier(pool).verify(other_tenant.api_key)
+    theirs = await memories.create_memory(
+        pool, theirs_principal, project_id=other_tenant.project_id,
+        type_name="default", memory_key="not-yours")
+
+    with pytest.raises(memories.MemoryError) as exc:
+        await memories.link(pool, principal, from_memory=mine,
+                            to_memory=theirs["memory_id"], relation="about")
+    assert exc.value.status == 404
+
+
+async def test_unlinking(pool, tenant):
+    principal, a, b = await _two_memories(pool, tenant)
+    await memories.link(pool, principal, from_memory=a, to_memory=b, relation="about")
+    await memories.unlink(pool, principal, from_memory=a, to_memory=b, relation="about")
+    assert (await memories.links_for(pool, principal, a))["outgoing"] == []
+
+    with pytest.raises(memories.MemoryError):
+        await memories.unlink(pool, principal, from_memory=a, to_memory=b,
+                              relation="about")
+
+
+async def test_a_link_is_audited(pool, tenant):
+    principal, a, b = await _two_memories(pool, tenant)
+    await memories.link(pool, principal, from_memory=a, to_memory=b,
+                        relation="supersedes")
+    row = await pool.fetchrow(
+        "SELECT action, detail FROM audit_events WHERE action = 'memory.linked'"
+    )
+    assert row["detail"]["relation"] == "supersedes"
+    assert row["detail"]["to_memory"] == b

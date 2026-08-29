@@ -1,0 +1,25 @@
+-- Remove the second switch for public sharing.
+--
+-- `organizations.allow_public_sharing` shipped in the first migration carrying
+-- FR-ACC-4: public sharing is off at org level until an admin enables it. The
+-- rule is enforced -- `sharing.py` refuses unless the `public_sharing` setting
+-- says otherwise -- but it is enforced by the *setting*, and nothing has ever
+-- read this column.
+--
+-- Two mechanisms for one control is worse than either alone. An admin who finds
+-- this column and sets it true has turned on nothing, and a reviewer who finds
+-- it has to work out which of the two is real. That it is a boolean called
+-- exactly what the control is called makes it more convincing, not less.
+--
+-- The setting is the one to keep, and not only because it is the one that
+-- works: it carries the precedence chain, the lock semantics and the audited
+-- write that a bare column cannot. `public_sharing` is settable at platform and
+-- org scope and lockable, so "no project may ever share publicly" is a
+-- statement an organization can make and a project cannot undo.
+--
+-- Dropping rather than wiring: a column with no reader and no writer holds no
+-- state worth migrating. Any deployment that set it was already not getting the
+-- behaviour, so there is nothing to carry across -- but an operator who set it
+-- believing otherwise should check the setting now.
+
+ALTER TABLE organizations DROP COLUMN IF EXISTS allow_public_sharing;
