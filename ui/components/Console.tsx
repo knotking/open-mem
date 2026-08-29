@@ -1071,11 +1071,21 @@ function EntitiesSection({
 
 /* ---------------------------------------------------------- 4. crawlers */
 
+type Connection = {
+  connection_id: string;
+  provider: string;
+  scope: string;
+  auth_style: string;
+  auth_name: string | null;
+  has_credential: boolean;
+};
+
 type Crawler = {
   crawler_id: string;
   name: string;
   strategy: string;
   enabled: boolean;
+  connection_id?: string | null;
   config_version: number;
   dry_run_version: number | null;
   dry_run_current: boolean;
@@ -1156,12 +1166,19 @@ function CrawlersSection({ projectId }: { projectId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [detail, setDetail] = useState<RunDetail | null>(null);
+  const [conns, setConns] = useState<Connection[]>([]);
+  const [newConn, setNewConn] = useState({
+    provider: "", credential: "", auth_style: "bearer", auth_name: "",
+  });
 
   const load = useCallback(async () => {
     try {
-      const page = await call<{ crawlers: Crawler[] }>(
-        `api/v1/projects/${projectId}/crawlers`,
-      );
+      const [page, connections] = await Promise.all([
+        call<{ crawlers: Crawler[] }>(`api/v1/projects/${projectId}/crawlers`),
+        call<{ connections: Connection[] }>(
+          `api/v1/connections?project_id=${projectId}`, undefined, "GET"),
+      ]);
+      setConns(connections.connections);
       setCrawlers(page.crawlers);
     } catch (e) {
       setError((e as Error).message);
@@ -1268,6 +1285,88 @@ function CrawlersSection({ projectId }: { projectId: string }) {
       </section>
 
       <section className="panel">
+        <h2>Credentials</h2>
+        <p className="empty">
+          A crawler reaches an authenticated source through a connection, never through its
+          config — a config is stored, versioned and readable, so a token in one is a token in
+          the clear. Registered here, it is encrypted at rest and never shown again.
+        </p>
+        <div className="row" style={{ marginTop: 10 }}>
+          <input
+            type="text"
+            value={newConn.provider}
+            onChange={(e) => setNewConn({ ...newConn, provider: e.target.value })}
+            placeholder="Provider — jira, notion, github…"
+            style={{ flex: 1 }}
+          />
+          <select
+            value={newConn.auth_style}
+            onChange={(e) => setNewConn({ ...newConn, auth_style: e.target.value })}
+          >
+            <option value="bearer">Bearer token</option>
+            <option value="header">Custom header</option>
+            <option value="query">Query parameter</option>
+            <option value="basic">Basic (user:password)</option>
+          </select>
+        </div>
+        <div className="row" style={{ marginTop: 8 }}>
+          {(newConn.auth_style === "header" || newConn.auth_style === "query") && (
+            <input
+              type="text"
+              value={newConn.auth_name}
+              onChange={(e) => setNewConn({ ...newConn, auth_name: e.target.value })}
+              placeholder={newConn.auth_style === "header" ? "X-Api-Key" : "api_key"}
+              style={{ width: 200 }}
+            />
+          )}
+          <input
+            type="password"
+            value={newConn.credential}
+            onChange={(e) => setNewConn({ ...newConn, credential: e.target.value })}
+            placeholder="Credential — sent once, stored encrypted"
+            style={{ flex: 1 }}
+          />
+          <button
+            onClick={() =>
+              act("Connection registered", async () => {
+                await call("api/v1/connections", {
+                  project_id: projectId,
+                  provider: newConn.provider,
+                  credential: newConn.credential,
+                  auth_style: newConn.auth_style,
+                  auth_name: newConn.auth_name || null,
+                });
+                setNewConn({ provider: "", credential: "", auth_style: "bearer", auth_name: "" });
+              })
+            }
+            disabled={busy || !newConn.provider.trim() || !newConn.credential.trim()}
+          >
+            Register
+          </button>
+        </div>
+        {conns.length === 0 ? (
+          <p className="empty" style={{ marginTop: 12 }}>
+            None yet. Public sources — sitemaps, RSS — need none of this.
+          </p>
+        ) : (
+          <div style={{ marginTop: 12 }}>
+            {conns.map((c) => (
+              <div className="hit" key={c.connection_id}>
+                <div className="meta">
+                  <span className="chip on">{c.provider}</span>
+                  <span className="chip">{c.auth_style}{c.auth_name ? `: ${c.auth_name}` : ""}</span>
+                  <span className={`chip ${c.has_credential ? "enriched" : "stored"}`}>
+                    {c.has_credential ? "credential held" : "no credential"}
+                  </span>
+                  <span className="chip">{c.scope}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section className="panel">
         <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
           <h2 style={{ margin: 0 }}>Configured</h2>
           <button
@@ -1317,6 +1416,9 @@ function CrawlersSection({ projectId }: { projectId: string }) {
                 {crawler.last_status && (
                   <span className="chip">last run {crawler.last_status}</span>
                 )}
+                {crawler.connection_id && (
+                  <span className="chip on">authenticated</span>
+                )}
                 {crawler.emitted !== null && (
                   <span className="chip">
                     {crawler.emitted} written · {crawler.skipped} unchanged
@@ -1336,6 +1438,29 @@ function CrawlersSection({ projectId }: { projectId: string }) {
                     <span className={fresh.warn ? "chip warnchip" : "chip"}>{fresh.label}</span>
                   );
                 })()}
+              </div>
+              <div className="row" style={{ marginTop: 8 }}>
+                <span className="muted" style={{ fontSize: 12.5 }}>Credential</span>
+                <select
+                  value={crawler.connection_id ?? ""}
+                  onChange={(e) =>
+                    act("Crawler credential updated", async () => {
+                      await call(
+                        `api/v1/crawlers/${crawler.crawler_id}/connection`,
+                        { connection_id: e.target.value || null },
+                        "PATCH",
+                      );
+                    })
+                  }
+                  disabled={busy}
+                >
+                  <option value="">None — public source</option>
+                  {conns.map((c) => (
+                    <option key={c.connection_id} value={c.connection_id}>
+                      {c.provider} ({c.auth_style})
+                    </option>
+                  ))}
+                </select>
               </div>
               <div className="text">{crawler.name}</div>
               <div className="row" style={{ marginTop: 8 }}>

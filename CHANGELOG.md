@@ -11,6 +11,24 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **A crawler can authenticate.** The templated `http` strategy already covered
+  enumerate, query and search for most REST APIs; it could reach only *public*
+  ones, because a crawler had nowhere to keep a secret and the only place to put
+  a token was its config, in the clear. `POST /api/v1/connections` registers an
+  enveloped credential and `PATCH /api/v1/crawlers/{id}/connection` points a
+  crawler at it — which is the distance between three public feeds and any API
+  with a token.
+- **Four auth styles, closed**: `bearer`, `header` and `query` (each with a
+  name), and `basic`. APIs differ here far more than they differ in pagination,
+  and small enough to be data. The credential is applied **last**, so a config
+  cannot override it — a templatable `Authorization` would be somewhere to put a
+  secret in the clear again. `header` and `query` refuse without an `auth_name`
+  rather than guessing `X-Api-Key`, since a secret sent to a header the source
+  ignores fails as a wrong *credential* instead of a wrong *configuration*.
+- A credential is written and **never read back**. `GET /api/v1/connections`
+  reports whether one is held, never a prefix — a prefix is enough to confirm a
+  guess. Having no connection is not a degraded case: a sitemap needs nobody's
+  permission.
 - **The console can ask for the graph arm.** Search gains a segmented control
   over the arms — it reads like tabs and behaves like a set, because `match` is
   a list and the graph arm earns its keep by being *fused* with the others. It
@@ -612,6 +630,12 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 - **New dependency**: `jmespath`. `pip install -e .` before deploying.
 
 ### Migrations
+- `0026_crawler_connections.sql` — `crawlers.connection_id` and the
+  `auth_style` / `auth_name` a connection presents its credential with. The
+  foreign key is **`ON DELETE RESTRICT`**: removing a connection out from under
+  a running crawler would leave it enabled, scheduled, and failing every tick
+  with an authentication error — nothing errors loudly and the data simply
+  stops arriving.
 - `0025_hosting.sql` — `model_cards.hosting`, defaulting to `remote`, with the
   two shipped local engines corrected by name. **Review your model cards after
   deploying**: any card an operator registered is now declared remote, so a
