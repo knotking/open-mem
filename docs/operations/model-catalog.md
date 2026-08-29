@@ -384,8 +384,45 @@ than raised — the item is stored and readable, it simply has no transcript.
 Retroactively invalidating what a deployment is already running takes a service down to enforce a
 control it did not know it was breaking.
 
+### Assignments now reach the work
+
+An assignment used to govern **image interpretation and nothing else**: `resolve_model` was called
+from one place, and extraction, answering and embedding each used whatever an environment variable
+built at boot. The seams were polymorphic and the *selection* was not, so "users can configure the
+system" was true of one purpose out of four.
+
+`engines.EngineRegistry` closes that for the generation purposes. Given an org it resolves the
+assignment, reads the `engines` row it names — provider, base URL, and the credential that was
+encrypted there and never read by anything — and builds a client, cached on
+`(engine_id, model_id, kind)`. Two orgs on the same model share one client, and an org assigned a
+different engine can never be handed it.
+
+Four rules it follows:
+
+- **The deployment default is not a failure case.** An org that assigned nothing gets the same
+  object it would have got before, not a reconstruction of it.
+- **A refusal is loud; a gap is quiet.** A disabled engine or a provider with no implementation
+  falls back to the default and logs. A candidacy refusal — a regulated type on a remote model, a
+  provider the allow-list excludes — is raised, because falling back there would route the content
+  the rule exists to protect.
+- **Answering follows the extraction assignment** rather than gaining a purpose of its own. Chat was
+  already tied to the extraction engine's configuration so that an org makes one
+  `allowed_providers` decision rather than two; this makes that coupling per-org instead of
+  per-deployment, and does not loosen it.
+- **An assigned extractor gets its own `generator_version`.** Artifacts join `generators` for
+  staleness, so an artifact produced by an org's model must not claim the deployment's fingerprint.
+
+**Embedding is deliberately excluded.** Two orgs extracting with different models produce artifacts
+that each record which model made them, and that is recoverable. Two orgs *embedding* with different
+models write vectors from different spaces into one index, and the only signal is that ranking
+quietly gets worse. `assign()` already refuses an embedding assignment narrower than `*`; making the
+engine per-request would route around the reason for that rule. It stays a deployment decision until
+there is a per-org index to go with it.
+
 Not built: the ranked proposal with its exclusions shown, and the hardware-feasibility inputs it
-would rank on. Those are the Phase 6 surface.
+would rank on. Those are the Phase 6 surface. Retrieval is also still a closed set — `match` is an
+enum and the arms are written into `_retrieve`, where the design calls for
+[composable primitives](../retrieval/indexes.md#composable-retrieval) over four axes.
 
 > **The vocabulary above does not match this document.** The shipped
 > `data_type_profiles.sensitivity` admits `standard | restricted | regulated`, where this document

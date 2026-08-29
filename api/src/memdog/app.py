@@ -44,6 +44,7 @@ from .crypto import Envelope
 from .db import create_pool, migrate
 from .firebase import CompositeVerifier, FirebaseVerifier
 from .deletion import DELETE_TOPIC, DeleteWorker, request_deletion, unpurged_tombstones
+from .engines import EngineRegistry
 from .inference import build_embedder
 from .queue import InProcessQueue
 from .reprocess import REPROCESS_TOPIC, ReprocessWorker, request_reprocess
@@ -161,6 +162,13 @@ async def lifespan(app: FastAPI):
         "extraction": enrich_worker.generator_version,
     }
     app.state.envelope = Envelope.from_settings(settings)
+    # What turns `model_assignments` from a table into a control. The engines
+    # above stay the deployment's default; this is how an org's own choice is
+    # resolved per request, when it made one.
+    app.state.engines = EngineRegistry(
+        settings, app.state.envelope, extractor=extractor, answerer=answerer
+    )
+    enrich_worker.attach_registry(app.state.engines)
     # One seam, two credential shapes. A browser signs in and presents an
     # identity token; a script presents an API key. Both land on the same
     # Principal, so there is one authorization path rather than two.
@@ -1965,7 +1973,12 @@ async def ask_endpoint(
             return await ask(
                 request.app.state.pool,
                 request.app.state.embedder,
-                request.app.state.answerer,
+                # Resolved for the caller's org rather than the process. An org
+                # that assigned nothing gets the deployment's answerer, which is
+                # the same object it would have been handed before.
+                await request.app.state.engines.answerer_for(
+                    request.app.state.pool, org_id=actor.org_id
+                ),
                 actor,
                 body,
                 embed_generator=request.app.state.current_generators["embedding"],

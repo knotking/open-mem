@@ -216,10 +216,15 @@ class EnrichWorker:
     content of everything it read.
     """
 
-    def __init__(self, pool: asyncpg.Pool, extractor: Extractor, settings: Settings) -> None:
+    def __init__(self, pool: asyncpg.Pool, extractor: Extractor, settings: Settings,
+                 registry=None) -> None:
         self._pool = pool
         self._extractor = extractor
         self._settings = settings
+        # Resolves an org's assigned engine. Absent -- in tests and in the
+        # reconcile sweep -- every item runs on the deployment's extractor,
+        # which is what happened before assignments were consulted at all.
+        self._registry = registry
         self.generator_version = generator_version(
             purpose=EXTRACT_PURPOSE,
             model_id=extractor.model_id,
@@ -232,6 +237,11 @@ class EnrichWorker:
 
     def register(self, queue: Queue, topic: str = ENRICH_TOPIC) -> None:
         queue.subscribe(topic, self.handle)
+
+    def attach_registry(self, registry) -> None:
+        """Given after construction because the registry needs this worker's own
+        extractor as its default, and cannot exist before it does."""
+        self._registry = registry
 
     async def ensure_generator(self) -> None:
         await self._pool.execute(
@@ -251,7 +261,27 @@ class EnrichWorker:
         with continue_trace("enrich.message", message.headers, data_id=data_id):
             await self._enrich(data_id)
 
-    async def _permitted_extractor(self, data_type: str | None):
+    async def _register_generator(self, extractor) -> str:
+        """A fingerprint for an extractor the deployment did not boot with.
+
+        Artifacts reference `generators`, and staleness is a join against it --
+        so an org's assigned model needs its own row before it writes anything,
+        or the artifact would claim to have come from the deployment's model.
+        """
+        version = generator_version(
+            purpose=EXTRACT_PURPOSE, model_id=extractor.model_id,
+            spec={"envelope": "core-v1"},
+        )
+        await self._pool.execute(
+            """
+            INSERT INTO generators (generator_version, purpose, model_id, spec)
+            VALUES ($1, $2, $3, $4) ON CONFLICT (generator_version) DO NOTHING
+            """,
+            version, EXTRACT_PURPOSE, extractor.model_id, {"envelope": "core-v1"},
+        )
+        return version
+
+    async def _permitted_extractor(self, data_type: str | None, org_id: str | None = None):
         """The extractor this data type may use, and the generator that names it.
 
         Returns `(extractor, generator_version, refusal)`. A refusal is a
@@ -267,18 +297,33 @@ class EnrichWorker:
         from . import models as models_mod
         from .extraction import candidate_models, restrict
 
+        # Which engine this org chose, before asking whether it may be used.
+        # Order matters: the candidacy rules have to judge the model that would
+        # actually run, not the one the deployment happens to boot with.
+        extractor = self._extractor
+        generator = self.generator_version
+        if self._registry is not None and org_id:
+            try:
+                assigned = await self._registry.extractor_for(
+                    self._pool, org_id=org_id, data_type=data_type or "*"
+                )
+            except models_mod.ModelError as exc:
+                return None, None, str(exc)
+            if assigned is not self._extractor:
+                extractor, generator = assigned, await self._register_generator(assigned)
+
         sensitivity = await models_mod.sensitivity_of(self._pool, data_type)
         if sensitivity != "regulated":
-            return self._extractor, self.generator_version, None
+            return extractor, generator, None
 
         allowed = await models_mod.local_models(
-            self._pool, candidate_models(self._extractor)
+            self._pool, candidate_models(extractor)
         )
         key = frozenset(allowed)
         if key in self._restricted:
             return (*self._restricted[key], None)
 
-        narrowed = restrict(self._extractor, allowed)
+        narrowed = restrict(extractor, allowed)
         if narrowed is None:
             return None, None, (
                 f"{data_type} is regulated and no configured extraction engine "
@@ -340,7 +385,7 @@ class EnrichWorker:
         # so the record still gets a title and a summary. It simply never
         # reaches an engine that would have received its text.
         extractor, generator, refusal = await self._permitted_extractor(
-            row["data_type"]
+            row["data_type"], row["org_id"]
         )
         if refusal is not None:
             async with self._pool.acquire() as conn, conn.transaction():

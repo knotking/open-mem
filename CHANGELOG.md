@@ -11,6 +11,15 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **The console can ask for the graph arm.** Search gains a segmented control
+  over the arms — it reads like tabs and behaves like a set, because `match` is
+  a list and the graph arm earns its keep by being *fused* with the others. It
+  refuses to go all-off, since a search with no arms is an error rather than a
+  narrower search.
+- **The seeds are shown above the results they explain**, and clicking one opens
+  that entity. The Entities panel gains **Search from here**, which returns to
+  Search with the name filled in and the graph arm switched on — that being the
+  question it is asking.
 - **The graph is a retrieval arm.** `match: ["vector", "lexical", "graph"]` on
   `/retrieve` and `/ask` adds a third arm, fused by the same reciprocal rank
   fusion as the other two and reported in `matched_by` as `gph`. It returns what
@@ -349,6 +358,17 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   Supermemory's latency, Letta's working context.
 
 ### Fixed
+- **A graph-only search whose query named no entity returned a `500`.** With no
+  seeds the arm built no SQL, so the "at least one match mode is required" guard
+  fired on a perfectly ordinary question. Finding nothing to start from is an
+  empty result — and the search still runs through the query row and the audit,
+  because a search that found nothing is still a search that happened.
+- **The arm chips were hardcoded to vector and lexical** in both the console and
+  the sandbox, so a graph-matched result would have rendered with every chip
+  dark — a hit that appears to have matched nothing at all. They now show the
+  arms the last search actually ran, and distinguish *not asked for* from *asked
+  for and did not match*.
+
 - **Raw usage rows were never purged.** `purge_events` was implemented and
   tested and called by nothing, so the table grew without limit while the
   retention story read as done. It now runs on the reconcile sweep, bounded by
