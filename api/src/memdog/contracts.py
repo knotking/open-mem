@@ -184,7 +184,13 @@ class RetrieveRequest(BaseModel):
 
     query: str
     filter: RetrieveFilter
-    match: list[Literal["vector", "lexical"]] = Field(default_factory=lambda: ["vector", "lexical"])
+    # `graph` is an axis, not a default. It answers "what else is connected to
+    # this?", which is a different question from "what matches this?" -- and it
+    # is only as good as the entity layer underneath it, so asking for it is a
+    # decision rather than something that happens to everyone.
+    match: list[Literal["vector", "lexical", "graph"]] = Field(
+        default_factory=lambda: ["vector", "lexical"]
+    )
     rank: Literal["rrf", "none"] = "rrf"
     limit: int = Field(default=20, ge=1, le=200)
 
@@ -214,6 +220,22 @@ class Excluded(BaseModel):
     state: str | None = None
 
 
+class GraphSeed(BaseModel):
+    """An entity the query named, and how it was recognised.
+
+    Reported because a result that arrived only through the graph is otherwise
+    unexplainable: it does not contain the words that were searched for, and
+    without the seed the reader cannot tell whether the connection was the one
+    they meant. An empty list is also an answer -- it says the graph arm found
+    nothing to start from, rather than that it found nothing connected.
+    """
+
+    entity_id: str
+    display_name: str
+    type: str
+    matched_on: Literal["name", "identifier"]
+
+
 class Corpus(BaseModel):
     """What the question was actually answered over (FR-SBX-7)."""
 
@@ -229,7 +251,9 @@ class AskRequest(BaseModel):
 
     question: str
     filter: RetrieveFilter
-    match: list[Literal["vector", "lexical"]] = Field(default_factory=lambda: ["vector", "lexical"])
+    match: list[Literal["vector", "lexical", "graph"]] = Field(
+        default_factory=lambda: ["vector", "lexical"]
+    )
     # How many passages the model is shown. Small on purpose: the point of
     # citations is that a person can check them.
     passages: int = Field(default=8, ge=1, le=20)
@@ -262,6 +286,8 @@ class AskResponse(BaseModel):
     considered: int = 0
     corpus: Corpus | None = None
     excluded: list[Excluded] = Field(default_factory=list)
+    # What the graph arm started from. Empty when it was not asked for.
+    graph_seeds: list[GraphSeed] = Field(default_factory=list)
     model_id: str
     served_by_model: str | None = None
     generator_version: str | None = None
@@ -274,6 +300,7 @@ class AskResponse(BaseModel):
     latency_ms: int = 0
 
 
+
 class RetrieveResponse(BaseModel):
     query_id: str
     results: list[Citation]
@@ -281,6 +308,8 @@ class RetrieveResponse(BaseModel):
     generator_version: str | None = None
     corpus: Corpus | None = None
     excluded: list[Excluded] = Field(default_factory=list)
+    # What the graph arm started from. Empty when it was not asked for.
+    graph_seeds: list[GraphSeed] = Field(default_factory=list)
     # ACL exclusions are deliberately absent and cannot be added: reporting
     # "3 records were hidden from you" discloses their existence, which is the
     # thing the ACL is for. The predicate runs inside the query, so the count

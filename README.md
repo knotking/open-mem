@@ -126,9 +126,10 @@ Stated as plainly as the rest, because a README that only lists strengths is not
   added to that list or quietly removed from the schema
 - **No OAuth connections**, so Gmail, Drive and Calendar are unreachable — and with them the crawler
   strategies that walk a folder or enumerate an object
+- **No path finding between two named entities**, and graph retrieval walks one hop — only
+  neighbourhoods, not the chain that connects two things
 - **No point-in-time facts.** Edges have no validity interval, so *"who worked there in 2024"* is
   unanswerable. [Zep](https://www.getzep.com) does this natively and this does not
-- **The graph is browsable, not yet an input to retrieval or chat**
 - **No users.** This is a prototype. [Mem0](https://mem0.ai) processes more API calls in a quarter
   than this has served in its life
 

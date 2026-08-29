@@ -17,7 +17,14 @@ import asyncpg
 from .acl import visibility_params, visibility_sql
 from .audit import record_access, record_access_many
 from .auth import DATA_READ, Principal
-from .contracts import Citation, Corpus, Excluded, RetrieveRequest, RetrieveResponse
+from .contracts import (
+    Citation,
+    Corpus,
+    Excluded,
+    GraphSeed,
+    RetrieveRequest,
+    RetrieveResponse,
+)
 from .db import vector_literal
 from .ids import new_id
 from .telemetry import span
@@ -64,6 +71,57 @@ async def get_item(
         data_id=data_id,
     )
     return dict(row)
+
+
+# An entity name shorter than this matches too much to be evidence of anything:
+# "AI", "Q3" and a two-letter surname would each seed an expansion over half the
+# corpus.
+MIN_SEED_NAME = 3
+
+
+async def graph_seeds(
+    pool: asyncpg.Pool, principal: Principal, *, project_id: str, query: str
+) -> list[GraphSeed]:
+    """Entities the query names, resolved the way a mention is resolved.
+
+    Matching reuses `entities.normalize` on both sides rather than doing its own
+    casefolding, so the query and the stored name cannot drift apart -- a
+    resolver that normalised differently from the writer would silently stop
+    matching its own data.
+
+    **An entity is visible only through a record that mentions it and that the
+    caller can read.** Resolving against the entity table alone would confirm
+    that a name exists in this project to someone who cannot see any record
+    containing it, which is the same disclosure the traversal is careful about.
+    """
+    from .entities import normalize
+
+    normalized = normalize(query)
+    if not normalized:
+        return []
+    org_id, user_id, principals = visibility_params(principal)
+    rows = await pool.fetch(
+        f"""
+        SELECT e.entity_id, e.display_name, e.type
+        FROM entities e
+        WHERE e.project_id = $1
+          AND length(e.normalized_name) >= {MIN_SEED_NAME}
+          AND position(e.normalized_name IN $2) > 0
+          AND EXISTS (
+              SELECT 1 FROM entity_mentions m
+              JOIN data_items d ON d.data_id = m.data_id
+              WHERE m.entity_id = e.entity_id AND {visibility_sql("d", 3, 4, 5)}
+          )
+        ORDER BY length(e.normalized_name) DESC
+        LIMIT 8
+        """,
+        project_id, normalized, org_id, user_id, principals,
+    )
+    return [
+        GraphSeed(entity_id=r["entity_id"], display_name=r["display_name"],
+                  type=r["type"], matched_on="name")
+        for r in rows
+    ]
 
 
 async def retrieve(
@@ -152,6 +210,77 @@ async def _retrieve(
                 LIMIT {arm_limit_p}
             )"""
         )
+    seeds: list[GraphSeed] = []
+    if "graph" in request.match:
+        seeds = await graph_seeds(
+            pool, principal, project_id=request.filter.project_id, query=request.query
+        )
+    if seeds:
+        seed_p = bind([s.entity_id for s in seeds])
+        # One hop, and the ACL is *inside* the traversal rather than applied to
+        # its result. Filtering afterwards leaks structure: if a path runs
+        # through a record the caller cannot read, returning its endpoints tells
+        # them that record exists, which is precisely what its ACL forbids. So
+        # an edge is only traversable when its own evidence is readable.
+        #
+        # The arm returns each record's opening chunk. It is claiming the
+        # *record* is connected -- it has no view about which passage answers
+        # the question, and picking one by relevance would be the other arms'
+        # job done worse.
+        arms.append(
+            f"""
+            gph AS (
+                WITH reachable AS (
+                    SELECT unnest({seed_p}::text[]) AS entity_id, 0 AS hops
+                    UNION
+                    SELECT CASE WHEN g.subject_id = ANY({seed_p}::text[])
+                                THEN g.object_id ELSE g.subject_id END, 1
+                    FROM entity_edges g
+                    JOIN data_items sd ON sd.data_id = g.source_data_id
+                    WHERE (g.subject_id = ANY({seed_p}::text[])
+                           OR g.object_id = ANY({seed_p}::text[]))
+                      AND {visibility_sql("sd", int(org_p[1:]), int(user_p[1:]),
+                                          int(principals_p[1:]))}
+                ),
+                touched AS (
+                    -- MIN(hops) because a record can mention both a seed and a
+                    -- neighbour, and it is the closest connection that should
+                    -- rank it.
+                    SELECT m.data_id, MIN(r.hops) AS hops, count(*) AS mentions
+                    FROM entity_mentions m
+                    JOIN reachable r ON r.entity_id = m.entity_id
+                    GROUP BY m.data_id
+                ),
+                opening AS (
+                    -- One chunk per record, chosen by position and not by
+                    -- relevance. `DISTINCT ON` has to order by the key it
+                    -- distinguishes, so the ranking cannot happen here: a
+                    -- window function is computed before the distinct, and the
+                    -- ranks would come out full of gaps that RRF reads as
+                    -- weaker matches.
+                    SELECT DISTINCT ON (c.data_id)
+                           c.chunk_id, c.data_id, c.text, c.span_start, c.span_end,
+                           d.state, t.hops, t.mentions
+                    FROM touched t
+                    JOIN chunks c ON c.data_id = t.data_id
+                    JOIN data_items d ON d.data_id = t.data_id
+                    WHERE {filters}
+                    ORDER BY c.data_id, c.ordinal
+                )
+                SELECT chunk_id, data_id, text, span_start, span_end, state,
+                       row_number() OVER (
+                           ORDER BY hops, mentions DESC, data_id
+                       ) AS rank,
+                       -- A record naming the entity outranks one merely
+                       -- connected to it. Only consulted when `rank` is
+                       -- `none`; RRF reads the rank above.
+                       CASE WHEN hops = 0 THEN 1.0 ELSE 0.5 END AS score
+                FROM opening
+                ORDER BY hops, mentions DESC
+                LIMIT {arm_limit_p}
+            )"""
+        )
+
     if not arms:
         raise ValueError("at least one match mode is required")
 
@@ -302,6 +431,7 @@ async def _retrieve(
         generator_version=embed_generator,
         corpus=corpus,
         excluded=excluded,
+        graph_seeds=seeds,
     )
 
 
