@@ -39,6 +39,7 @@ from .contracts import (
 )
 from .events import emit, emit_audited
 from .ids import new_id
+from . import normalize
 from .cases import route_case
 from .memories import route_write
 from .workers import record_version
@@ -401,6 +402,26 @@ async def _write_one(
         # derived rows is what stops a stale vector outliving its source.
         await conn.execute("DELETE FROM chunks WHERE data_id = $1", data_id)
 
+    # The deterministic projection, before correlation rather than after it.
+    # Normalization is where `identifiers` comes from for a structured record --
+    # the writer sends a payload, not a list of keys -- so running it afterwards
+    # would correlate on the identifiers the caller happened to restate and miss
+    # the ones the schema exists to extract.
+    #
+    # No schema registered for this project means no projection and nothing
+    # written, which is the ordinary case.
+    identifiers = list(item.identifiers)
+    if content_text is not None:
+        projected = await normalize.project(
+            conn,
+            data_id=data_id,
+            project_id=producer.project_id,
+            text=content_text,
+            data_type=data_type,
+        )
+        if projected:
+            identifiers = projected["merged_identifiers"] or identifiers
+
     # Subject correlation, alongside lifecycle routing. An explicit `case` is
     # asserted; identifier matches are inferred and record what they matched on.
     case_ids = await route_case(
@@ -410,7 +431,7 @@ async def _write_one(
         data_id=data_id,
         case_type=item.case.case_type if item.case else None,
         external_id=item.case.external_id if item.case else None,
-        identifiers=item.identifiers,
+        identifiers=identifiers,
     )
 
     memories = await route_write(

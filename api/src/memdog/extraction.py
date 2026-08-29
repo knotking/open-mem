@@ -406,6 +406,19 @@ class ChainedExtractor:
         self._chain = chain
         self.model_id = chain.model_id
 
+    @property
+    def model_ids(self) -> list[str]:
+        """Every model this extractor might reach, not only the one it prefers.
+
+        A policy that inspected `model_id` alone would clear a chain whose
+        primary is local and whose fallback is not.
+        """
+        return [step.model_id for step in self._chain.steps]
+
+    def restricted_to(self, allowed: set[str]) -> "ChainedExtractor | None":
+        chain = self._chain.restricted(lambda step: step.model_id in allowed)
+        return ChainedExtractor(chain) if chain is not None else None
+
     async def extract(self, text: str, *, data_type: str) -> Envelope:
         served = await self._chain.run(text, data_type=data_type)
         envelope = served.result
@@ -416,6 +429,18 @@ class ChainedExtractor:
             # only in a log that has rotated by the time anyone asks.
             envelope.fields["fallback_reason"] = served.errors
         return envelope
+
+
+def candidate_models(extractor) -> list[str]:
+    """Every model an extractor might use. One, unless it is a chain."""
+    return list(getattr(extractor, "model_ids", None) or [extractor.model_id])
+
+
+def restrict(extractor, allowed: set[str]):
+    """Narrow an extractor to the models a policy permits, or `None`."""
+    if hasattr(extractor, "restricted_to"):
+        return extractor.restricted_to(allowed)
+    return extractor if extractor.model_id in allowed else None
 
 
 def build_extractor(settings) -> Extractor:

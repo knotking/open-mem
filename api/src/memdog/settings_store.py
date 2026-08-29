@@ -71,6 +71,17 @@ REGISTER: dict[str, Definition] = {
         "enrich_by_default", True, ("platform", "org", "project", "user"), False,
         "Whether writes enqueue enrichment unless told otherwise.",
     ),
+    "registration_mode": Definition(
+        # Closed by default, and that is the whole point. Shipping `open` and
+        # closing it later leaves everyone who signed up in between already
+        # inside, and closing it does not remove them -- so the expensive
+        # direction is the one taken first.
+        "registration_mode", "invite_only", ("platform", "org"), True,
+        "How a new person becomes a user. `invite_only` (default) admits only "
+        "addresses holding a live invite; `open` lets anyone who can "
+        "authenticate create an account, which still grants no membership; "
+        "`disabled` refuses account creation entirely.",
+    ),
     "budget_daily_credits": Definition(
         # Null means no ceiling. Settable per user as well as per project --
         # one person's sandbox must not be able to spend the team's month --

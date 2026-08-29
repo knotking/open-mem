@@ -39,11 +39,16 @@ TOPIC_FOR_EVENT: dict[str, str] = {
     "reprocess.requested": "reprocess",
 }
 
+# `enrichment.refused` is emitted when a sensitivity policy withholds the
+# expensive tier from a record. Nothing consumes it and nothing should -- it is
+# evidence that a control fired, and the question it answers ("why does this
+# clinical note have no summary?") is asked by a person, not by a worker.
+#
 # `entity.extraction.requested` now has one: entities are resolved inside the
 # enrichment transaction, so the event is consumed rather than logged for a
 # worker that does not exist. `graph.build.requested` remains unconsumed -- the
 # edge layer is not built, and pretending otherwise would make the log lie.
-NO_CONSUMER = {"graph.build.requested"}
+NO_CONSUMER = {"graph.build.requested", "enrichment.refused"}
 
 MAX_ATTEMPTS = 5
 

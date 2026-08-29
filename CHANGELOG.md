@@ -11,6 +11,81 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **Model cards declare `hosting`** (`local` or `remote`), which is what makes
+  the residency rule checkable. Deliberately not derived from `provider`:
+  provider is who made the model, hosting is where the bytes go, and Ollama is
+  the same adapter against a local process and against Ollama Cloud. A card that
+  does not say defaults to `remote`.
+- **`GET /api/v1/models` reports `violations`** — assignments that already exist
+  and would now be refused. Reported rather than voided, because retroactively
+  invalidating what a deployment is running takes a service down to enforce a
+  control it did not know it was breaking.
+- **Registration is closed by default, and an invite is how the second user
+  arrives.** `POST /api/v1/invites` issues one, `GET` lists them with their
+  state, `DELETE` revokes before redemption, and `POST /api/v1/invites/redeem`
+  — **unauthenticated**, because whoever is redeeming has no account yet —
+  exchanges the single-use token for an API key scoped to the invited role.
+- An invite is a bearer credential and is treated as one: hashed at rest, shown
+  once at creation, expiring in 7 days by default, revocable, and **bound to an
+  email address unless `transferable: true` is passed explicitly**. A link bound
+  to nobody is a link anyone can forward, so opting out of that is a decision
+  rather than a default.
+- **Invites are audited on creation and on redemption.** Who invited them and
+  who walked through the door are different questions, and a forwarded invite
+  answers only the second. Neither record contains the token.
+- Every redemption failure returns the same sentence. Expired, revoked, already
+  redeemed, wrong address, never existed — the distinctions are real and all of
+  them disclose whether an organization exists.
+- **`python -m memdog seed --demo` — a demo tenant, and the end-to-end check the
+  repo did not have.** Forty records about one Acme renewal, written through the
+  public write verb with a registered producer, enriched synchronously, in a few
+  seconds against the local engines. It is not a fixture: a seed that inserts
+  rows tests the seed, and diverges the moment the real path changes.
+- **The seed verifies itself and names the step that broke.** It asks the corpus
+  five saved questions and requires each to return the record that answers it,
+  requires a second member's search *not* to return the record written through a
+  personal connection, requires the access log to have rows after those reads,
+  and requires every embedding to record its model. Each is one clause of the
+  Phase 1 exit criterion, so a green seed is that criterion demonstrated rather
+  than asserted — and `tests/test_seed.py` runs it on every commit.
+- **`--reset` purges through the ordinary delete cascade** — the same
+  selector-delete an offboarding uses, narrowed by the `demo` tag because a
+  project id alone is deliberately not a selector. It also recovers a half-built
+  demo, since an interrupted seed leaves users behind with no org to hold them
+  and the alternative is a hand-written `DELETE` against a live database.
+- Demo credentials are **generated per deployment and printed once**. A known
+  demo user with a known password, present in every install, is a shipped
+  default credential.
+- The demo also **registers a normalization schema and writes two structured
+  payloads through it** — one that projects cleanly and one missing a required
+  field, which lands raw with a reason. A demo where everything worked teaches
+  an expectation the user's own corpus will not meet, and the gap then reads as
+  the product failing rather than as normal.
+- The demo ships **one domain rather than the six the design calls for**.
+  Clinical, legal, support, telemetry and personal each demonstrate a mechanism
+  sales cannot, and four of those mechanisms are only partly built — seeding a
+  domain to demonstrate something absent produces a demo that lies. The
+  deferrals are listed in [onboarding.md](docs/operations/onboarding.md) rather
+  than left to be discovered.
+- **Every model call is now metered, and what it cost is recorded rather than
+  counted.** One `usage_events` row per inference call, carrying who pays, which
+  engine actually answered, and input, output and cached tokens as three
+  separate numbers. The telemetry counters that existed before are in-process
+  and droppable under load, which is the right instrument for "is inference
+  working" and the wrong one for "who spent this".
+- **A call that failed is billed for what it generated.** A request that
+  produced three thousand tokens and then timed out consumed three thousand
+  tokens; counting only successes under-reports spend, and in the direction that
+  produces a surprise bill. Breaker-skipped engines are recorded too, because a
+  chain permanently serving from its fallback otherwise looks exactly like a
+  chain with no primary.
+- **`crossed_to_paid`** marks a fallback that moved a call from a free local
+  engine to a paid cloud one. It is its own flag rather than something inferred
+  from a non-zero fallback depth: money appearing where there was none is a
+  category change, not a degradation, and the two want different alerts.
+- **`GET /api/v1/usage`** — spend today against the ceiling that binds, and a
+  breakdown by purpose, engine and status. A spending control nobody can see is
+  a spending control nobody trusts.
 - **`POST /api/v1/ask` — reading the corpus by asking it.** Retrieval, then a
   model reading only the passages retrieval returned. Every factual sentence
   carries the bracketed number of the passage it came from, and the response
@@ -239,6 +314,46 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   Supermemory's latency, Letta's working context.
 
 ### Fixed
+- **A regulated data type could be assigned to a cloud model.**
+  `data_type_profiles.sensitivity` shipped with the catalog, carrying its own
+  comment that a clinical or legal type must not be routed to an unapproved
+  provider — and assignment validation selected the column beside `requires` and
+  used only `requires`. `clinical_note` ships as `regulated`; assigning it to a
+  cloud model succeeded.
+- **`allowed_providers` was never read.** The settings register describes it as
+  how "only our approved providers" is enforced rather than suggested; it
+  appeared in one comment and nothing else. It is now exhaustive once set —
+  an *empty* list still means "no list", because an empty list forbidding
+  everything would break every deployment that never set one.
+- Both rules are checked at **assignment** and again at **resolution**. An
+  assignment made before the rules existed would otherwise still route content,
+  and the deployment default was checked by nothing at all — so a regulated type
+  with no assignment went wherever the deployment happened to point.
+- **The parse worker checks the item's own sensitivity before handing bytes to a
+  model.** Resolution keys on the modality, and a clinical note that arrived as
+  a scan is a regulated record *and* an ordinary image — checking only the
+  modality sent it to a cloud vision model, because `image` is standard. A
+  refusal is recorded as `needs_model` with the reason; the record is still
+  stored and readable, it simply has no transcript.
+
+- **A registered normalization schema was never applied.** `POST /api/v1/schemas`
+  stored one and `normalize.project()` knew how to run it, but nothing on the
+  write path called it — so `normalized_records` stayed empty and `identifiers`
+  was only ever what the writer restated, which for a structured record is
+  nothing: the sender posts a payload, not a list of keys. It now runs on the
+  write path where there is text, and after parse where the text arrives as
+  bytes.
+- **The projection runs before correlation, not after.** The identifier a case
+  joins on lives inside the payload, so projecting second would correlate on
+  nothing — the ordering the previous code would have had, if anything had
+  called it.
+- **Projected identifiers are merged onto the item rather than assigned.** One
+  the writer supplied is a fact they know and the schema does not, so a schema
+  extracting a single field no longer silently drops the rest.
+- `normalize.project()` takes a connection rather than a pool, so it shares the
+  caller's transaction. `normalized_records` references `data_items`: on its own
+  connection a projection either raced the insert it describes or survived a
+  write that rolled back.
 - **Self-hosting was presented as a differentiator**, which
   `docs/competition/README.md` had already researched and rejected: Onyx is
   MIT-licensed, air-gapped and SOC 2 Type II with 40+ connectors, Khoj runs
@@ -268,7 +383,58 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   attempts and are not bounded the same way.
 - `.claude/skills/changelog` and this file.
 
+- A model rate limit surfaced as a `502` carrying the upstream provider URL. It
+  is now a `429` with `Retry-After` — the same shape admission control already
+  uses for a deep queue — and other upstream failures no longer echo the
+  outbound request back to the caller.
+- `/api/v1/runs/{run_id}` already existed for deletion and reprocess runs, so
+  the crawler route registered at the same path was silently shadowed and every
+  crawl-run lookup returned 404. Crawl runs now live at `/api/v1/crawl-runs/`.
+- Two tables were minting the `run_` id prefix, so an id could no longer say
+  which thing it identified. Crawl runs are `crun_`.
+- A link crawl stored stylesheets as records: `text/css` passes a bare `text/`
+  prefix check, so every page's stylesheet was fetched and kept, spending the
+  crawl budget on assets. Asset URLs are now skipped before the fetch and the
+  accepted content types are documents only.
 ### Changed
+- **A new identity no longer becomes a `users` row just for authenticating.**
+  `registration_mode` is enforced where the account would be created, not only
+  where membership is granted: `disabled` refuses outright, `invite_only`
+  admits an address that is already a user or holds a live invite, and `open`
+  behaves as before. Existing users and existing members are unaffected; what
+  changes is who can newly appear.
+- **`python -m memdog bootstrap` refuses once any user exists**, with a message
+  saying so and pointing at invites. It creates the first admin and only the
+  first — an exception that can be taken twice is an unauthenticated
+  account-creation endpoint wearing an operations script's clothes. The
+  library function is deliberately not guarded, because the seed and the test
+  fixtures use it and both carry their own guards.
+- **New setting `registration_mode`** (platform and org scope, lockable,
+  default `invite_only`). A deployment that wants self-service must now say so.
+- **Quota is cost-weighted rather than counted.** A hundred vector searches and
+  a hundred generations are the same number to a request limiter and three
+  orders of magnitude apart in what they cost, so a limiter built on request
+  count either throttles the cheap calls or admits the expensive ones. `/write`,
+  `/retrieve`, `/ask` and the public `/webhooks/{producer_id}` are now charged in
+  credits weighted by the work they authorise, and refuse with `429` and
+  `Retry-After`. The webhook endpoint had no limit at all before.
+- **The budget is checked before generation, not on arrival.** Retrieval is not
+  where the money is, and refusing a cheap search to protect an expensive stage
+  throttles the wrong thing — and does it after the search has already been
+  paid for.
+- **A budget refusal defers work instead of discarding it.** `BudgetExhausted`
+  is classed with provider rate limits: the message is not faulty and will
+  succeed unchanged once the window rolls, so enrichment stays queued and the
+  item keeps its state rather than being dead-lettered.
+- **New settings**, all lockable. **`budget_daily_credits`** — daily model
+  spend, settable at platform, org, project and user scope, defaulting to no
+  ceiling. **Every level binds and the tightest one wins**, so a project cannot
+  raise the ceiling its organization set and a user cannot lift their own;
+  ordinary most-specific-wins precedence would let exactly the party being
+  limited do so. **`rate_limit_credits_per_minute`** (default 6000) and
+  **`max_concurrent_requests`** (default 8), per credential — `0` disables
+  either. An existing deployment behaves as it did until a ceiling is set,
+  except that the burst limit now applies where there was previously none.
 - Subscription handshakes that carry nothing to verify are answered before
   authentication, declared per adapter rather than assumed. Microsoft Graph
   sends its validation request with an empty body and no `clientState`; without
@@ -292,22 +458,17 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   than removing it — the items still point at that producer for provenance.
 - **New dependency**: `jmespath`. `pip install -e .` before deploying.
 
-### Fixed
-- A model rate limit surfaced as a `502` carrying the upstream provider URL. It
-  is now a `429` with `Retry-After` — the same shape admission control already
-  uses for a deep queue — and other upstream failures no longer echo the
-  outbound request back to the caller.
-- `/api/v1/runs/{run_id}` already existed for deletion and reprocess runs, so
-  the crawler route registered at the same path was silently shadowed and every
-  crawl-run lookup returned 404. Crawl runs now live at `/api/v1/crawl-runs/`.
-- Two tables were minting the `run_` id prefix, so an id could no longer say
-  which thing it identified. Crawl runs are `crun_`.
-- A link crawl stored stylesheets as records: `text/css` passes a bare `text/`
-  prefix check, so every page's stylesheet was fetched and kept, spending the
-  crawl budget on assets. Asset URLs are now skipped before the fetch and the
-  accepted content types are documents only.
-
 ### Migrations
+- `0025_hosting.sql` — `model_cards.hosting`, defaulting to `remote`, with the
+  two shipped local engines corrected by name. **Review your model cards after
+  deploying**: any card an operator registered is now declared remote, so a
+  locally-hosted model needs saying so before it can serve a regulated type.
+- `0024_invites.sql` — the `invites` table. Run before deploying; the registration
+  check reads it on every first-time sign-in.
+- `0023_usage.sql` — `usage_events` (raw, short retention) and `usage_spend`
+  (the daily rollup enforcement reads, so a budget check is one indexed row
+  rather than an aggregate over a table that grows with ingest). Run before
+  deploying; the API writes to both on every model call.
 - `0022_edges.sql` — `entity_edges`.
 - `0021_entities.sql` — `entities`, `entity_mentions`, `entity_merges`.
 - `0019_answers.sql` — adds `queries.answer_access_level` and extends the

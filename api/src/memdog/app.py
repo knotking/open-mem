@@ -77,7 +77,9 @@ from .workers import (
     ParseWorker,
     verify_index_dimension,
 )
+from . import invites as invites_mod
 from . import quota, usage
+from .invites import InviteError
 from .quota import BudgetExhausted, QuotaExceeded
 from .write import EMBED_TOPIC, AdmissionError, write_items
 
@@ -716,6 +718,98 @@ def _control(handler):
 @app.get("/api/v1/projects")
 async def get_projects(request: Request, actor: Principal = Depends(principal)) -> dict:
     return {"projects": await _control(control.list_projects)(request.app.state.pool, actor)}
+
+
+
+@app.post("/api/v1/invites")
+async def post_invite(
+    request: Request, body: dict, actor: Principal = Depends(principal)
+) -> dict:
+    """Issue an invite. The token comes back once and is never recoverable."""
+    try:
+        created = await invites_mod.create(
+            request.app.state.pool, actor,
+            email=body.get("email"),
+            role=body.get("role", "member"),
+            expires_in_days=body.get("expires_in_days"),
+            transferable=bool(body.get("transferable")),
+        )
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    except InviteError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    return {
+        "invite_id": created.invite_id,
+        "prefix": created.prefix,
+        # Shown once, like an API key, because that is what it is.
+        "token": created.token,
+        "role": created.role,
+        "email": created.email,
+        "expires_at": created.expires_at.isoformat(),
+    }
+
+
+@app.get("/api/v1/invites")
+async def get_invites(request: Request, actor: Principal = Depends(principal)) -> dict:
+    try:
+        return {"invites": await invites_mod.listing(request.app.state.pool, actor)}
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.delete("/api/v1/invites/{invite_id}")
+async def delete_invite(
+    request: Request, invite_id: str, actor: Principal = Depends(principal)
+) -> dict:
+    try:
+        return await invites_mod.revoke(request.app.state.pool, actor, invite_id)
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    except InviteError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/invites/redeem")
+async def redeem_invite(request: Request, body: dict) -> dict:
+    """Unauthenticated by necessity: whoever is redeeming has no account yet.
+
+    That is the situation an invite exists for, and the invite is the credential
+    that covers it.
+
+    Rate limited on the **peer address**, not on anything in the request. Keying
+    on the presented token would hand the bucket to the guesser -- vary the
+    prefix, get a fresh allowance, and the limiter limits nothing. The peer is
+    the one identifier a caller cannot choose. Behind a proxy that address is
+    the proxy's, which makes this a shared ceiling on redemption rather than a
+    per-client one; `X-Forwarded-For` is deliberately not trusted, since a
+    header the client writes is a bucket the client picks.
+
+    The token itself is 32 bytes of entropy, so this is defence in depth rather
+    than the thing standing between an attacker and an org.
+    """
+    token = (body.get("token") or "").strip()
+    peer = request.client.host if request.client else "unknown"
+    try:
+        await request.app.state.limiter.charge_key(f"redeem:{peer}", 100)
+    except QuotaExceeded as exc:
+        raise HTTPException(
+            status_code=exc.status, detail=str(exc),
+            headers={"Retry-After": str(exc.retry_after)},
+        ) from exc
+    try:
+        redeemed = await invites_mod.redeem(
+            request.app.state.pool, token=token, email=body.get("email")
+        )
+    except InviteError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    return {
+        "user_id": redeemed.user_id,
+        "org_id": redeemed.org_id,
+        "role": redeemed.role,
+        # The durable credential the single-use one is exchanged for. Also
+        # shown once.
+        "api_key": redeemed.api_key,
+    }
 
 
 @app.post("/api/v1/projects")

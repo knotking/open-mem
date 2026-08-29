@@ -103,7 +103,7 @@ describe a *corpus*, and a corpus belongs to a project.
 |---------|--------|---------|-------|
 | Key capability defaults | **O** 🔒 | **nothing checked** | See below |
 | Key max lifetime | **O** 🔒 | 90 days | |
-| **`registration_mode`** | **O** PL 🔒 | **`invite_only`** | `open` and `disabled` also available |
+| **`registration_mode`** | **O** PL 🔒 | **`invite_only`** | `open` and `disabled` also available. Enforced where a new identity would become a `users` row, so `disabled` refuses account creation rather than only membership |
 | Invite expiry | **O** 🔒 | 7 days | Single-use, revocable, audited on create *and* redeem |
 | Invite email binding | **O** 🔒 | **on** | An unscoped link is transferable by design |
 | Auth providers | **PL** O | per variant | |

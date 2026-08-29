@@ -106,6 +106,11 @@ class FirebaseVerifier:
             uid,
         )
         if row is None:
+            # The registration gate. Anyone who can authenticate used to get a
+            # `users` row here -- harmless in that membership is what grants
+            # capability, and still an account-creation side effect nobody asked
+            # for in a system holding other people's records.
+            await self._admit(email)
             user_id = await self._link_or_create(uid, email)
         else:
             user_id = row["user_id"]
@@ -144,6 +149,35 @@ class FirebaseVerifier:
             org_id=membership["org_id"],
             capabilities=frozenset(capabilities),
             groups=frozenset(r["group_id"] for r in groups),
+        )
+
+    async def _admit(self, email: str | None) -> None:
+        """May this identity become a user at all?
+
+        `open` admits anyone who can authenticate; they still hold no
+        membership, so they can still do nothing until invited. `disabled`
+        refuses outright. `invite_only` -- the default -- admits an address that
+        holds a live invite, and an address that is already a user, which is the
+        admin who added a member directly.
+
+        The refusal is the same sentence either way. "You were not invited" and
+        "this deployment is closed" are both true and neither is worth telling a
+        stranger precisely.
+        """
+        from . import invites
+
+        mode = await invites.registration_mode(self._pool)
+        if mode == "open":
+            return
+        if mode != "disabled":
+            known = email and await self._pool.fetchval(
+                "SELECT 1 FROM users WHERE lower(email) = lower($1)", email
+            )
+            if known or await invites.pending_for_email(self._pool, email):
+                return
+        raise AuthError(
+            "this deployment does not accept new accounts without an invitation",
+            status=403,
         )
 
     async def _link_or_create(self, uid: str, email: str | None) -> str:

@@ -30,6 +30,18 @@ uv venv --python 3.12 .venv && uv pip install -e ".[dev]"
 .venv/bin/uvicorn memdog.app:app --port 8200
 ```
 
+For something to look at rather than an empty database:
+
+```bash
+.venv/bin/python -m memdog seed --demo      # 42 records, one worked sales renewal
+```
+
+The seed goes in through the public write API with a registered producer, then asks the corpus five
+questions and checks it answers them, checks a second member cannot read the private record, and
+checks the audit log recorded the reads. **A failing seed names the step that broke** — which is the
+point of it running the real path rather than inserting rows. `--reset` purges the demo through the
+ordinary delete cascade and seeds again.
+
 ```bash
 cd ui && npm install && npm run build
 MEMDOG_API_URL=http://localhost:8200 MEMDOG_API_KEY=... \
@@ -137,7 +149,7 @@ rather than believing.
 
 | Path | What is in it |
 |------|---------------|
-| [`api/`](api/README.md) | The service. 50 modules, 93 endpoints, 53 tables across 23 migrations |
+| [`api/`](api/README.md) | The service. 52 modules, 97 endpoints, 54 tables across 25 migrations |
 | [`ui/`](ui/README.md) | The console. Sign-in, ingestion, search, chat, entities, graph, governance |
 | [`docs/`](docs/README.md) | The design, in eleven parts — requirements speak in roles, products appear only in the technology documents |
 | [`docs/graph.md`](docs/graph.md) | Why the graph is not a graph database, and what it costs |

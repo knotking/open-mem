@@ -131,6 +131,26 @@ class Chain:
         not necessarily what answered -- that is `Served.step`."""
         return self.steps[0].model_id
 
+    def restricted(self, keep) -> "Chain | None":
+        """The same chain with only the steps `keep` accepts.
+
+        Used where a policy decides an engine may not see the content at all --
+        regulated data and a remotely-hosted model. Narrowing the chain rather
+        than refusing the work is what keeps the floor reachable: a clinical note
+        still gets an envelope from the local extractor, it just never reaches a
+        provider that would have received the text.
+
+        `None` when nothing survives, because a chain with no steps is not a
+        degraded chain, it is a decision not to run.
+        """
+        steps = [step for step in self.steps if keep(step)]
+        if not steps:
+            return None
+        # A fresh breaker: this is a different set of engines, and inheriting
+        # failures recorded against steps that are no longer in the chain would
+        # open a circuit on evidence about somebody else.
+        return Chain(self.purpose, steps)
+
     async def run(self, *args, **kwargs) -> Served:
         with span("inference.chain", purpose=self.purpose, steps=len(self.steps)):
             return await self._run(*args, **kwargs)

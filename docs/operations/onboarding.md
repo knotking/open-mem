@@ -191,6 +191,95 @@ incomplete and the demo has just found the bug.
 
 ---
 
+## What is built
+
+`python -m memdog seed --demo` ships the **sales domain**, forty-two records about one Acme renewal,
+enriched synchronously, in a few seconds against local engines. `--reset` purges and re-seeds.
+
+It registers a **normalization schema** and writes two structured payloads through it — one that
+projects cleanly and one missing a required field, which lands raw with a reason. That second record
+is deliberate: a demo where everything worked teaches an expectation the user's own corpus will not
+meet, and the gap then reads as the product failing rather than as normal.
+
+**It runs the real path.** The corpus goes in through `POST /api/v1/write` with a registered
+producer, the case is created through `PUT /api/v1/cases`, the questions are asked through
+`POST /api/v1/retrieve`, and the reset is `POST /api/v1/deletions` — the ordinary selector-delete,
+narrowed by the `demo` tag because a project id alone is deliberately not a selector.
+
+**And it verifies itself**, clause by clause against the Phase 1 exit criterion:
+
+| Clause | How the seed checks it |
+|--------|------------------------|
+| written into a project owned by an org | the write returns `207` with no failed items |
+| with an access level | a second member's search does **not** return the record written through a personal connection |
+| found by scoped search, and cited | five saved questions each name the record that answers them |
+| the read is audited | the access log has rows after those searches — the *read* half, not the write half |
+| recording which model embedded it | no embedding row is missing `model_id` or `generator_version` |
+
+A failing seed raises with the step that broke rather than a stack trace. Both of the defects found
+while writing it were of that shape: a question that had stopped finding its record, and the read
+audit asserted against the wrong half of the trail.
+
+`tests/test_seed.py` runs the whole thing on every commit, so the exit criterion is a gate rather
+than something someone remembers to check.
+
+### And registration is closed
+
+`registration_mode` ships as a setting at platform and org scope, defaulting to `invite_only`, and
+it is enforced **where a new identity would become a `users` row** rather than only where membership
+is granted. Under `open` anyone who can authenticate gets an account and still no membership; under
+`disabled` account creation is refused outright; under the default an address is admitted if it is
+already a user or holds a live invite.
+
+| Endpoint | |
+|----------|--|
+| `POST /api/v1/invites` | Admin only. Email-bound unless `transferable: true` is passed explicitly. Token returned once |
+| `GET /api/v1/invites` | Outstanding invites with `pending` / `redeemed` / `expired` / `revoked`. Never a token |
+| `DELETE /api/v1/invites/{id}` | Revoke before redemption. An id from another org gets the same 404 an invented one does |
+| `POST /api/v1/invites/redeem` | **Unauthenticated** — the redeemer has no account yet, and the invite is the credential that covers it. Returns an API key scoped to the invited role |
+
+Three properties are worth naming because the obvious implementation misses each:
+
+**Single-use survives a race.** The update that marks an invite redeemed is conditional and happens
+*before* the account is provisioned. The other order has both racers reach `INSERT INTO users` with
+the same address, and the loser dies on a unique constraint — a 500 where the honest answer is that
+the invite was already used.
+
+**Every failure is the same sentence.** Expired, revoked, already redeemed, wrong address, never
+existed. The distinctions are real and all of them are disclosure, which is what turns the endpoint
+into an org-enumeration oracle.
+
+**The limiter is keyed on the peer address, not on the token.** Keying on anything the caller
+supplies hands them the bucket: vary the prefix, get a fresh allowance. `X-Forwarded-For` is
+deliberately not trusted, since a header the client writes is a bucket the client picks — which
+makes this a shared ceiling behind a proxy rather than a per-client one.
+
+**Bootstrap is one-time.** `python -m memdog bootstrap` refuses once any user exists and says so,
+because an exception that can be taken twice is an unauthenticated account-creation endpoint
+wearing an operations script's clothes. The library function it calls is not guarded — the seed and
+the test fixtures use it, and both have their own guards.
+
+### Three things are still created directly
+
+An **organization**, a **connection** and a **second member's credential** have no endpoint behind
+them: orgs and admin-issued keys because the control plane's admin half is a later slice,
+connections because they are what an OAuth flow produces and that is not built. They are the
+bootstrap, not the data path, and they are marked at the point of use.
+
+The reset has the mirror of this. Records go through the cascade, but the **org row is deleted
+directly** because `DELETE /organizations/{id}?purge=true` does not exist — and **users are removed
+by name**, because a user does not cascade from an organization and should not: a person is not
+owned by an org.
+
+### Not built, and why
+
+| Deferred | Reason |
+|----------|--------|
+| **`seed --demo --full`** — the other five domains | Clinical, legal, support, telemetry and personal each demonstrate a mechanism the sales domain cannot, but four of those mechanisms — `sensitivity: phi` candidacy, legal hold, the question index, connection-scope ACLs — are only partly built. Seeding a domain to demonstrate something absent produces a demo that lies |
+| **The item still enriching** | Approximated by three usage exports written with `enrich: false`, which leaves the staircase at two heights in a steady state. A genuinely mid-flight item needs the seed to return before the queue drains, and a seed that returns before it is ready cannot verify itself |
+
+---
+
 ## Registration is invite-only
 
 ```
