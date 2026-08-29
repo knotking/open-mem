@@ -95,6 +95,14 @@ class Settings:
         default_factory=lambda: int(_env("MAX_UPLOAD_BYTES", str(512 * 1024 * 1024)))
     )
     max_queue_depth: int = field(default_factory=lambda: int(_env("MAX_QUEUE_DEPTH", "10000")))
+    # Raw usage rows are one per inference call, so at ingest rates they are
+    # millions. They exist to settle a dispute or debug a spike and are only
+    # wanted while that window is open; the daily rollup is what reporting reads
+    # and is kept. 0 disables the purge for a deployment that ships them
+    # elsewhere first.
+    usage_retention_days: int = field(
+        default_factory=lambda: int(_env("USAGE_RETENTION_DAYS", "90"))
+    )
 
     chunk_chars: int = field(default_factory=lambda: int(_env("CHUNK_CHARS", "1200")))
     chunk_overlap: int = field(default_factory=lambda: int(_env("CHUNK_OVERLAP", "150")))

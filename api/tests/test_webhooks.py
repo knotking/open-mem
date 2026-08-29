@@ -16,7 +16,7 @@ import pytest
 
 from memdog.crypto import Envelope
 from memdog.retrieval import get_item
-from memdog.webhooks import WebhookError, map_payload, receive, verify_signature
+from memdog.webhooks import WebhookError, map_payload, receive
 
 pytestmark = pytest.mark.asyncio
 
@@ -127,13 +127,35 @@ async def test_an_unsigned_delivery_is_refused_when_signing_is_required(
 
 
 async def test_signature_comparison_tolerates_provider_prefixes():
+    """Against the implementation the request path actually reaches.
+
+    This previously exercised a copy in `webhooks.py` that nothing called: the
+    live check moved to `providers.verify` when signing became per-provider, and
+    the old one stayed behind with the tests still pointed at it. A passing test
+    over dead code is worse than no test, because it reports on a scheme the
+    service does not use.
+    """
+    from memdog import providers
+
     body = b"payload"
     digest = hmac.new(b"k", body, hashlib.sha256).hexdigest()
+    github = providers.get("github")
+    request = providers.Request(raw_body=body, headers={}, url="", query={})
+
     # GitHub sends `sha256=<hex>`; Slack sends `v0=<hex>`.
-    assert verify_signature(raw_body=body, provided=f"sha256={digest}",
-                            secrets=[b"k"], timestamp=None)
-    assert not verify_signature(raw_body=body, provided="sha256=deadbeef",
-                                secrets=[b"k"], timestamp=None)
+    assert providers.verify(
+        github,
+        request=providers.Request(raw_body=body, url="", query={},
+                                  headers={"x-hub-signature-256": f"sha256={digest}"}),
+        secrets=[b"k"],
+    )
+    assert not providers.verify(
+        github,
+        request=providers.Request(raw_body=body, url="", query={},
+                                  headers={"x-hub-signature-256": "sha256=deadbeef"}),
+        secrets=[b"k"],
+    )
+    assert not providers.verify(github, request=request, secrets=[b"k"])
 
 
 # ---------------------------------------------------------- other methods

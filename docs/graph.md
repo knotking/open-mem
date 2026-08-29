@@ -222,15 +222,50 @@ When no relationships have been extracted the panel says so and points at the
 co-mentions, rather than showing an empty graph and implying there is nothing
 there.
 
+## As a retrieval arm
+
+`match: ["vector", "lexical", "graph"]` adds a third arm, fused by the same
+reciprocal rank fusion as the other two and reported in `matched_by` as `gph`.
+
+What it contributes is the thing neither other arm can: a record that does not
+contain the words searched for and is reachable only across a relationship some
+other document asserted. A search for *"Priya Raman"* returns the quarterly
+revenue note, because a different record said Priya works for Northwind and the
+note mentions Northwind.
+
+Four properties make it defensible rather than magic:
+
+**The access rule is inside the traversal.** An edge is only traversable when
+the record that asserts it is readable. Walking first and filtering after would
+still surface the far endpoint — and the existence of a connection is itself
+what the unreadable record's ACL protects.
+
+**An entity is a seed only through a record the caller can read.** Resolving
+against the entity table alone would confirm that a name exists in this project
+to somebody who can see no record containing it.
+
+**The seeds are reported.** `graph_seeds` names the entities the query
+resolved to and how. A graph-only result contains none of the query's words, so
+without the seed a reader cannot tell whether the connection was the one they
+meant. An empty list says the arm found nothing to *start* from, which is a
+different answer from finding nothing connected.
+
+**It is an axis, not a default.** It answers a different question from the one
+the other arms answer, and it is only as good as the entity layer beneath it —
+with extraction degraded to the local heuristic there are no entities, so there
+is nothing to seed and the arm correctly returns nothing.
+
+One hop, and the arm returns each connected record's opening chunk: it is
+claiming the *record* is connected and has no view about which passage answers
+the question. Choosing a passage by relevance would be the other arms' job done
+worse.
+
 ## What is not built
 
 - **No temporal validity.** `valid_from` / `valid_to` are not modelled, so "who
   worked there in 2024" is unanswerable. This is the bitemporal layer, and it is
   worth building only if someone actually asks point-in-time questions.
 - **No path finding between two named entities.** Only neighbourhoods.
-- **Graph is not used in retrieval or chat.** It is browsable, not yet an input
-  to an answer. This is the step that would change what the product does, and it
-  is deliberately after the layer being populated and trusted.
 - **Edge quality is bounded by extraction quality.** With the extractor degraded
   to the local heuristic there are no entities and therefore no edges — a graph
   built on a weak extractor is a graph nobody should trust.

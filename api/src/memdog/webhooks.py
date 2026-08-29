@@ -87,40 +87,6 @@ def _dig(payload: Any, path: str) -> Any:
     return current
 
 
-def verify_signature(
-    *,
-    raw_body: bytes,
-    provided: str | None,
-    secrets: list[bytes],
-    timestamp: str | None,
-    scheme: str = "hmac-sha256",
-) -> bool:
-    """Constant-time HMAC over the **raw bytes**, inside a time window.
-
-    Several secrets are accepted so a rotation has an overlap window; without
-    one, rotating a key is an outage for every delivery in flight.
-    """
-    if not provided or not secrets:
-        return False
-
-    if timestamp is not None:
-        try:
-            age = abs(time.time() - float(timestamp))
-        except ValueError:
-            return False
-        if age > SIGNATURE_WINDOW_SECONDS:
-            # Verifiable but stale: a captured request replayed later.
-            return False
-
-    signed = raw_body if timestamp is None else f"{timestamp}.".encode() + raw_body
-    candidate = provided.split("=")[-1].strip()
-    for secret in secrets:
-        expected = hmac.new(secret, signed, hashlib.sha256).hexdigest()
-        if hmac.compare_digest(expected, candidate):
-            return True
-    return False
-
-
 def map_payload(payload: Any, mapping: dict) -> list[WriteItem]:
     """Turn a provider payload into items.
 

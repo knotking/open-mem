@@ -479,6 +479,10 @@ async def _ask(
         considered=len(passages),
         corpus=found.corpus,
         excluded=found.excluded,
+        # Carried through from retrieval. An answer resting on a passage the
+        # graph supplied cites a record that does not contain the question's
+        # words, and the seed is the only thing that explains why it is there.
+        graph_seeds=found.graph_seeds,
         model_id=answerer.model_id,
         served_by_model=generated.model_version or answerer.model_id,
         generator_version=generated.generator_version or answerer.generator_version,

@@ -11,6 +11,16 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **Three wiring guards** in `tests/test_wiring.py`: every settings key is read
+  somewhere, every public function is referenced somewhere, every schema column
+  is named somewhere. Six defects in one week shared the shape of something that
+  existed, was documented, was correct, and was reached by no code path — none of
+  which errored. The guards found seven more on their first run.
+- Eight schema columns are now **documented as unwired rather than silently so**
+  — `memory_links` end to end, the model-proposal inputs, and an
+  `allow_public_sharing` flag superseded by the setting that actually gates
+  sharing. A parametrised test expires each exemption: wire one up, or drop it
+  from the schema, and the list is required to change with it.
 - **Model cards declare `hosting`** (`local` or `remote`), which is what makes
   the residency rule checkable. Deliberately not derived from `provider`:
   provider is who made the model, hosting is where the bytes go, and Ollama is
@@ -314,6 +324,48 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   Supermemory's latency, Letta's working context.
 
 ### Fixed
+- **Raw usage rows were never purged.** `purge_events` was implemented and
+  tested and called by nothing, so the table grew without limit while the
+  retention story read as done. It now runs on the reconcile sweep, bounded by
+  the new **`USAGE_RETENTION_DAYS`** environment variable (default 90; `0`
+  disables it for a deployment that ships rows elsewhere first). The daily
+  rollup is untouched.
+- **`enrich_by_default` was a switch wired to nothing.** The register declared
+  it `True`; the write contract hardcoded `False`; nothing read the setting. A
+  project that turned it on got silence. The register now says `False` — which
+  is what actually shipped, rather than switching every deployment's spending on
+  to match a document — and `enrich` on a write accepts **`null`**, meaning
+  "ask the project". An explicit `true` or `false` still wins.
+- **A webhook signature verifier the request path had stopped calling**, with
+  three tests still pointed at it. Signing moved per-provider and the old copy
+  stayed behind; the live check is `providers.verify`, which those assertions
+  now run against. A passing test over dead code is worse than no test, because
+  it reports on a scheme the service does not use.
+
+- **A regulated record was still summarised by whatever the deployment
+  configured.** The candidacy rules below gated model *assignment* and the image
+  path; enrichment consulted none of them, and enrichment is where the whole
+  corpus goes. A `clinical_note` was sent to the deployment's extractor — a
+  cloud provider in the shipped configuration.
+- A regulated record now **narrows the extraction chain to its locally-hosted
+  steps** rather than being refused. The floor is a local extractor, so the
+  record still gets a title and a summary and simply never reaches an engine
+  that would have received its text — the same reasoning the chain already uses
+  for availability, applied to legality. Where no step survives, the record is
+  left unenriched and an `enrichment.refused` event says why.
+- The narrowed extractor carries **its own `generator_version`**. Reusing the
+  primary's would attribute a locally-produced envelope to the model that was
+  refused, which is the staleness-invisibility defect a fallback artifact
+  carrying the primary's fingerprint already caused once.
+- **Six metrics were emitted and never registered, so every measurement was
+  dropped.** `record()` returns quietly for a name it does not know — right at
+  the call site, wrong across a release, because a counter that silently goes
+  nowhere is indistinguishable from one that is genuinely always zero, and
+  always-zero is what an operator reads as *good*. The four `usage.*` counters
+  shipped with the meter, `enrich_refused` shipped with this change, and
+  `entity_mentions` had been dark for longer. A test now walks every `record()`
+  call in the package and fails on any name the registry does not carry.
+
 - **A regulated data type could be assigned to a cloud model.**
   `data_type_profiles.sensitivity` shipped with the catalog, carrying its own
   comment that a clinical or legal type must not be routed to an unapproved
@@ -396,6 +448,12 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   prefix check, so every page's stylesheet was fetched and kept, spending the
   crawl budget on assets. Asset URLs are now skipped before the fetch and the
   accepted content types are documents only.
+### Removed
+- Four unreachable functions: a crawler scheduling helper superseded by inline
+  logic in `crawling.py`, an id utility, an accessor added with the meter and
+  never used, and the webhook verifier above. The dangerous one is always the
+  duplicate — it is the copy someone fixes by mistake.
+
 ### Changed
 - **A new identity no longer becomes a `users` row just for authenticating.**
   `registration_mode` is enforced where the account would be created, not only
