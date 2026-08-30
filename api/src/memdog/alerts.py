@@ -39,9 +39,11 @@ from .telemetry import span
 # purpose: an open vocabulary degrades into unqueryable free text, and the value
 # of a typed condition is being able to ask which alerts watch a field.
 SURFACES: dict[str, frozenset[str]] = {
-    "fact.asserted":   frozenset({"predicate", "basis", "subject_type", "object_type"}),
-    "fact.superseded": frozenset({"predicate", "basis", "subject_type", "object_type"}),
-    "fact.retracted":  frozenset({"predicate", "basis"}),
+    "fact.asserted":   frozenset({"predicate", "basis", "subject_type", "object_type",
+                                  "subject_name", "object_name"}),
+    "fact.superseded": frozenset({"predicate", "basis", "subject_type", "object_type",
+                                  "subject_name", "object_name", "replaced_by_name"}),
+    "fact.retracted":  frozenset({"predicate", "basis", "subject_name", "object_name"}),
     "data.revised":    frozenset({"source", "data_type", "producer_id"}),
     "memory.member_added": frozenset({"memory_type", "added_by"}),
     "memory.retyped":  frozenset({"from_type", "to_type"}),

@@ -12,6 +12,7 @@ side channel around every other access check in the system.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -945,3 +946,36 @@ async def test_unseen_counts_only_what_this_alert_watches(pool, tenant, principa
     listed = await alerts_mod.list_alerts(pool, actor, tenant.project_id)
     mine = next(a for a in listed if a["alert_id"] == alert["alert_id"])
     assert mine["behind"] == 0, "nothing it watches has happened"
+
+
+async def test_a_transition_carries_names_not_only_identifiers(
+    pool, tenant, principal_for
+):
+    """An alert described in words is shown the payload and nothing else.
+
+    Judging "a person has moved to a city in Spain" against
+    `object_id: ent_01M18Z…` is impossible, and a model asked to do it correctly
+    declines every time — which reads as the feature not working. Found by
+    running it against a real model; no stubbed judge could have caught it,
+    because a stub never looks at the payload.
+    """
+    actor = await principal_for(tenant.api_key)
+    await _ingest(pool, tenant, "a", "Lisbon", event_time=NOW() - timedelta(days=9))
+    await _ingest(pool, tenant, "b", "Berlin", event_time=NOW())
+
+    row = await pool.fetchrow(
+        "SELECT payload FROM domain_events WHERE event_type = 'fact.superseded' LIMIT 1")
+    payload = row["payload"] if isinstance(row["payload"], dict) else json.loads(row["payload"])
+    assert payload["subject_name"] == "Priya Raman"
+    assert payload["object_name"] == "Lisbon", "the value that stopped being true"
+
+
+async def test_a_name_can_be_selected_on(pool, tenant, principal_for):
+    """Which makes "anything about this person" a rule rather than a model call."""
+    actor = await principal_for(tenant.api_key)
+    alert = await _alert(pool, actor, tenant,
+                         where={"subject_name": {"op": "contains", "value": ["priya"]}})
+    await _approve(pool, actor, alert["alert_id"])
+    await _ingest(pool, tenant, "a", "Lisbon", event_time=NOW() - timedelta(days=9))
+    await _ingest(pool, tenant, "b", "Berlin", event_time=NOW())
+    assert (await evaluate_gap(pool, alert["alert_id"], trigger="tick"))["matches"] == 1

@@ -229,12 +229,17 @@ export type ObservedEvent = {
 export function describeEvent(surface: string, p: Record<string, unknown>): string {
   const s = (k: string) => (p[k] == null ? "?" : String(p[k]));
   switch (surface) {
+    // Names, now that transitions carry them. "Priya Raman located_in Lisbon"
+    // is an event; "person · located_in → location" is a schema.
     case "fact.asserted":
-      return `${s("subject_type")} · ${s("predicate")} → ${s("object_type")}`;
+      return `${s("subject_name")} ${s("predicate")} ${s("object_name")}`;
     case "fact.superseded":
-      return `${s("predicate")} replaced — the previous value no longer holds`;
+      return p.replaced_by_name
+        ? `${s("subject_name")} ${s("predicate")} ${s("object_name")} → now ${s("replaced_by_name")}`
+        : `${s("subject_name")} ${s("predicate")} ${s("object_name")} — no longer true`;
     case "fact.retracted":
-      return `${s("predicate")} withdrawn${p.reason ? ` — ${s("reason")}` : ""}`;
+      return `${s("subject_name")} ${s("predicate")} ${s("object_name")} withdrawn${
+        p.reason ? ` — ${s("reason")}` : ""}`;
     case "data.revised":
       return `revision ${s("from_revision")} → ${s("revision")} via ${s("source")}`;
     case "acl.changed":

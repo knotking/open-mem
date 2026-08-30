@@ -463,6 +463,13 @@ async def _upsert_fact(
             project_id, subject_id, predicate, valid_from, fact_id,
         )
         for old_fact in closed:
+            # The closed fact's OWN endpoints, not the new one's. `types` above
+            # describes the claim that just opened, and spreading it here made
+            # the superseded event say object_name=Berlin where Lisbon had
+            # ended -- with the object_id still pointing at Lisbon. Invisible
+            # while only types were carried, because both are locations.
+            closed_types = await _endpoint_types(
+                conn, old_fact["subject_id"], old_fact["object_id"])
             await _emit_transition(
                 conn, "fact.superseded", org_id=org_id, project_id=project_id,
                 payload={"fact_id": old_fact["fact_id"],
@@ -470,24 +477,45 @@ async def _upsert_fact(
                          "predicate": old_fact["predicate"],
                          "object_id": old_fact["object_id"],
                          "basis": old_fact["basis"],
-                         "superseded_by": fact_id, **types},
+                         # What replaced it, named, so a reader does not have to
+                         # resolve an id to learn where the person went.
+                         "superseded_by": fact_id,
+                         "replaced_by_name": types.get("object_name"),
+                         **closed_types},
             )
     return fact_id
 
 
 async def _endpoint_types(conn, subject_id: str, object_id: str) -> dict:
-    """Entity types, denormalised onto the transition.
+    """Entity types **and names**, denormalised onto the transition.
 
     A selector asking for "any person's location changing" has to be answerable
     without a join, because the alert evaluator reads the event log and nothing
     else -- and by the time it looks, the entity may have been merged away.
+
+    The names are here for a reason a live test found and no unit test could.
+    An alert described in words is shown this payload and nothing else, so
+    "a person has moved to a city in Spain" was being judged against
+    `object_id: ent_01M18Z…` -- and the model correctly declined every time,
+    because an identifier is not evidence of anything. A reader of the console
+    had the same problem: types are not names.
     """
     rows = await conn.fetch(
-        "SELECT entity_id, type FROM entities WHERE entity_id = ANY($1::text[])",
+        "SELECT entity_id, type, display_name FROM entities "
+        "WHERE entity_id = ANY($1::text[])",
         [subject_id, object_id],
     )
-    by_id = {r["entity_id"]: r["type"] for r in rows}
-    return {"subject_type": by_id.get(subject_id), "object_type": by_id.get(object_id)}
+    by_id = {r["entity_id"]: r for r in rows}
+    subject, obj = by_id.get(subject_id), by_id.get(object_id)
+    return {
+        "subject_type": subject["type"] if subject else None,
+        "object_type": obj["type"] if obj else None,
+        # Denormalised on purpose. A merge later can make these disagree with
+        # the entity, and that is correct: the transition records what was
+        # asserted at the time, not what the graph says about it now.
+        "subject_name": subject["display_name"] if subject else None,
+        "object_name": obj["display_name"] if obj else None,
+    }
 
 
 async def _emit_transition(conn, event_type: str, *, org_id: str,
