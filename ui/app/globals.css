@@ -808,10 +808,16 @@ html { scroll-behavior: smooth; }
 
 .statgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
             gap: 10px; margin-bottom: 16px; }
-.stattile { appearance: none; text-align: left; font: inherit; cursor: pointer;
+/* A tile is a number. It is only a control when it is a button, so the pointer
+   and the hover belong to the button and not to the class -- a plain figure
+   that highlights under the cursor is promising something it will not do. */
+.stattile { appearance: none; text-align: left; font: inherit;
             background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
-            padding: 12px 14px; display: flex; flex-direction: column; gap: 2px; }
-.stattile:hover { border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
+            padding: 12px 14px; display: flex; flex-direction: column; gap: 2px;
+            color: inherit; }
+button.stattile { cursor: pointer; }
+button.stattile:hover { border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
+button.stattile:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .stattile.on { border-color: var(--accent); background: var(--accent-soft); }
 .stattile .n { font-family: var(--mono); font-size: 24px; line-height: 1.1;
                font-variant-numeric: tabular-nums; }

@@ -3391,12 +3391,15 @@ function ReadSearch({
 /* ------------------------------------------------------------- 4. audit */
 
 /**
- * Audit — two logs, grouped before they are listed.
+ * Audit — numbers first, then pick, then rows.
  *
- * It used to print a hundred writes and a hundred reads flat, which is the
- * shape that makes an audit log unusable: everything is present and nothing is
- * findable. Counts by action come first and double as filters, one tab is
- * shown at a time, and a row opens its own detail rather than carrying it.
+ * An audit log is scanned, not read, and printing two hundred entries answers
+ * no question anybody arrived with. Nobody opens this to look at row 147; they
+ * open it asking *how much happened*, *what kind*, *by whom*, and only then
+ * *show me those*.
+ *
+ * So the shape is summary → selection → detail. The table appears when an
+ * action is chosen, which is also the moment it becomes small enough to read.
  */
 function Audit({ projectId }: { projectId: string }) {
   const PAGE = 25;
@@ -3416,23 +3419,34 @@ function Audit({ projectId }: { projectId: string }) {
   }, [projectId]);
 
   useEffect(() => { void load(); }, [load]);
-  useEffect(() => { setShown(PAGE); setOpen(null); }, [tab, action]);
+  useEffect(() => { setShown(PAGE); setOpen(null); setAction(null); }, [tab]);
 
-  const rows: { id: string; action: string; at: string;
-                target?: string | null; detail?: Record<string, unknown> }[] =
+  type Row = { id: string; action: string; at: string; who: string | null;
+               target: string | null; detail?: Record<string, unknown> };
+
+  const rows: Row[] =
     !trail ? []
     : tab === "writes"
-      ? trail.writes.map((w) => ({ id: w.id, action: w.action, at: w.at,
-                                   target: w.target_id, detail: w.detail }))
-      : trail.reads.map((r) => ({ id: r.id, action: r.action, at: r.at,
-                                  target: r.data_id }));
+      ? trail.writes.map((w) => ({
+          id: w.id, action: w.action, at: w.at, target: w.target_id,
+          who: w.actor_user_id ?? w.actor_key_id, detail: w.detail }))
+      : trail.reads.map((r) => ({
+          id: r.id, action: r.action, at: r.at, target: r.data_id,
+          who: r.user_id ?? r.key_id }));
 
-  const counts = rows.reduce<Record<string, number>>((acc, r) => {
-    acc[r.action] = (acc[r.action] ?? 0) + 1;
+  const byAction = rows.reduce<Record<string, { n: number; last: string }>>((acc, r) => {
+    const seen = acc[r.action];
+    acc[r.action] = { n: (seen?.n ?? 0) + 1,
+                      last: !seen || r.at > seen.last ? r.at : seen.last };
     return acc;
   }, {});
 
-  const filtered = action ? rows.filter((r) => r.action === action) : rows;
+  const people = new Set(rows.map((r) => r.who).filter(Boolean));
+  const targets = new Set(rows.map((r) => r.target).filter(Boolean));
+  const times = rows.map((r) => r.at).sort();
+  const since = times[0];
+
+  const filtered = action ? rows.filter((r) => r.action === action) : [];
   const page = filtered.slice(0, shown);
 
   return (
@@ -3447,11 +3461,11 @@ function Audit({ projectId }: { projectId: string }) {
 
       <div className="subtabs">
         <button className={`subtab ${tab === "writes" ? "on" : ""}`}
-                onClick={() => { setTab("writes"); setAction(null); }}>
+                onClick={() => setTab("writes")}>
           Writes <span className="count">{trail?.writes.length ?? 0}</span>
         </button>
         <button className={`subtab ${tab === "reads" ? "on" : ""}`}
-                onClick={() => { setTab("reads"); setAction(null); }}>
+                onClick={() => setTab("reads")}>
           Reads <span className="count">{trail?.reads.length ?? 0}</span>
         </button>
       </div>
@@ -3464,82 +3478,117 @@ function Audit({ projectId }: { projectId: string }) {
         </p>
       ) : (
         <>
-          <div className="toolbar">
-            <label>Action
-              <select value={action ?? ""}
-                      onChange={(e) => setAction(e.target.value || null)}>
-                <option value="">
-                  every action ({rows.length})
-                </option>
-                {Object.entries(counts)
-                  .sort((a, b) => b[1] - a[1])
-                  .map(([name, n]) => (
-                    <option key={name} value={name}>{name} ({n})</option>
-                  ))}
-              </select>
-            </label>
-            <span className="grow" />
-            {action && (
-              <button className="backlink" onClick={() => setAction(null)}>
-                Clear filter
-              </button>
-            )}
+          {/* ---- 1. how much, of what kind, by whom ---- */}
+          <div className="statgrid">
+            <div className="stattile">
+              <span className="n">{rows.length}</span>
+              <span className="k">{tab === "writes" ? "writes" : "reads"} recorded</span>
+            </div>
+            <div className="stattile">
+              <span className="n">{Object.keys(byAction).length}</span>
+              <span className="k">kinds of action</span>
+            </div>
+            <div className="stattile">
+              <span className="n">{people.size}</span>
+              <span className="k">{people.size === 1 ? "actor" : "actors"}</span>
+            </div>
+            <div className="stattile">
+              <span className="n">{targets.size}</span>
+              <span className="k">records touched</span>
+            </div>
           </div>
+          {since && (
+            <p className="hint">
+              The most recent {rows.length}, back to{" "}
+              {new Date(since).toLocaleString()}. Older entries are kept and not
+              shown here.
+            </p>
+          )}
 
+          {/* ---- 2. pick one ---- */}
           <section className="panel">
-            <h2>
-              {filtered.length} {action ? <>× <code>{action}</code></> : "entries"}
-              {page.length < filtered.length ? ` — showing ${page.length}` : ""}
-            </h2>
-            {/* A table, because an audit log is read by scanning down a column.
-                Everything is on the row -- nothing is behind a click except the
-                free-form detail, which is the only part that has no column. */}
+            <h2>By action</h2>
             <table className="kv">
               <thead>
-                <tr><th>When</th><th>Action</th><th>Target</th><th /></tr>
+                <tr><th>Action</th><th className="num">Entries</th><th>Last</th><th /></tr>
               </thead>
               <tbody>
-                {page.map((r) => {
-                  const detailed = r.detail && Object.keys(r.detail).length > 0;
-                  return (
-                    <Fragment key={r.id}>
-                      <tr>
-                        <td>{new Date(r.at).toLocaleString()}</td>
-                        <td><code>{r.action}</code></td>
-                        <td><code>{r.target ?? "—"}</code></td>
-                        <td>
-                          {detailed ? (
-                            <button className="backlink"
-                                    onClick={() => setOpen(open === r.id ? null : r.id)}>
-                              {open === r.id ? "hide" : "detail"}
-                            </button>
-                          ) : (
-                            /* Said rather than left blank: nothing further was
-                               recorded, which is different from hidden. */
-                            <span className="empty">—</span>
-                          )}
-                        </td>
-                      </tr>
-                      {open === r.id && detailed && (
-                        <tr>
-                          <td colSpan={4}>
-                            <pre className="excerpt">
-                              {JSON.stringify(r.detail, null, 2)}
-                            </pre>
-                          </td>
-                        </tr>
-                      )}
-                    </Fragment>
-                  );
-                })}
+                {Object.entries(byAction)
+                  .sort((a, b) => b[1].n - a[1].n)
+                  .map(([name, v]) => (
+                    <tr key={name}>
+                      <td><code>{name}</code></td>
+                      <td className="num">{v.n}</td>
+                      <td>{new Date(v.last).toLocaleString()}</td>
+                      <td>
+                        <button className="backlink"
+                                onClick={() => {
+                                  setAction(action === name ? null : name);
+                                  setShown(PAGE); setOpen(null);
+                                }}>
+                          {action === name ? "hide" : "show"}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
               </tbody>
             </table>
-            {page.length < filtered.length && (
-              <button onClick={() => setShown(shown + PAGE)}>
-                Show {Math.min(PAGE, filtered.length - page.length)} more
-              </button>
-            )}
           </section>
+
+          {/* ---- 3. and only then the rows ---- */}
+          {action && (
+            <section className="panel">
+              <h2>
+                {filtered.length} × <code>{action}</code>
+                {page.length < filtered.length ? ` — showing ${page.length}` : ""}
+              </h2>
+              <table className="kv">
+                <thead>
+                  <tr><th>When</th><th>Who</th><th>Target</th><th /></tr>
+                </thead>
+                <tbody>
+                  {page.map((r) => {
+                    const detailed = r.detail && Object.keys(r.detail).length > 0;
+                    return (
+                      <Fragment key={r.id}>
+                        <tr>
+                          <td>{new Date(r.at).toLocaleString()}</td>
+                          <td><code>{r.who ?? "—"}</code></td>
+                          <td><code>{r.target ?? "—"}</code></td>
+                          <td>
+                            {detailed ? (
+                              <button className="backlink"
+                                      onClick={() => setOpen(open === r.id ? null : r.id)}>
+                                {open === r.id ? "hide" : "detail"}
+                              </button>
+                            ) : (
+                              /* Said rather than left blank: nothing further was
+                                 recorded, which is not the same as hidden. */
+                              <span className="empty">—</span>
+                            )}
+                          </td>
+                        </tr>
+                        {open === r.id && detailed && (
+                          <tr>
+                            <td colSpan={4}>
+                              <pre className="excerpt">
+                                {JSON.stringify(r.detail, null, 2)}
+                              </pre>
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
+              {page.length < filtered.length && (
+                <button onClick={() => setShown(shown + PAGE)}>
+                  Show {Math.min(PAGE, filtered.length - page.length)} more
+                </button>
+              )}
+            </section>
+          )}
         </>
       )}
     </>
