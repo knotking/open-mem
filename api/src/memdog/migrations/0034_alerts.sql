@@ -66,10 +66,6 @@ CREATE TABLE alert_runs (
     candidates      int NOT NULL DEFAULT 0,
     matches         int NOT NULL DEFAULT 0,
     deferred        int NOT NULL DEFAULT 0,
-    -- One call per run in `llm` mode, zero in `rule` mode. Shown next to the
-    -- switch that causes it, because cost belongs beside the control rather
-    -- than in a bill next month.
-    model_calls     int NOT NULL DEFAULT 0,
     error           text,
     started_at      timestamptz NOT NULL DEFAULT now(),
     finished_at     timestamptz

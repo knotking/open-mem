@@ -67,6 +67,17 @@ was stale, and quietly repaired the corpus back toward the state it was supposed
 to be leaving.** Anything that reads `current_generators` has to agree with the
 service about what "current" means. Never deploy a job by hand.
 
+- **A deploy succeeds and one endpoint 500s with `column "…" does not exist`.**
+  Found 2026-08-30. **A migration is immutable once applied.** `schema_migrations`
+  records the version and the runner skips anything already there, so *editing*
+  an applied migration reaches only databases that have never seen it. The trap
+  is that it is invisible locally: the suite drops the schema and re-migrates
+  every run, so it always reads the edited file and passes, while production
+  applied the original months or minutes ago and never looked again. **Never
+  edit a migration that has been deployed — add the next number**, with
+  `IF NOT EXISTS` so a database created from the edited version converges rather
+  than failing.
+
 **Database migrations need no step.** `app.py` runs `migrate()` on startup, so
 a new `api/src/memdog/migrations/*.sql` applies itself the first time the new
 revision serves. It follows that a migration that fails takes the revision down
