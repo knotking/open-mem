@@ -10,7 +10,7 @@
  * accountable.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 
 import Capture, { humanBytes } from "./Capture";
 import ThemeToggle from "./ThemeToggle";
@@ -3430,45 +3430,76 @@ function Audit({ projectId }: { projectId: string }) {
         </p>
       ) : (
         <>
-          <section className="panel">
-            <h2>By action</h2>
-            <div className="row">
-              {Object.entries(counts)
-                .sort((a, b) => b[1] - a[1])
-                .map(([name, n]) => (
-                  <button key={name}
-                          className={`chip ${action === name ? "on" : ""}`}
-                          onClick={() => setAction(action === name ? null : name)}>
-                    {name} <span className="empty">{n}</span>
-                  </button>
-                ))}
-            </div>
-          </section>
+          <div className="toolbar">
+            <label>Action
+              <select value={action ?? ""}
+                      onChange={(e) => setAction(e.target.value || null)}>
+                <option value="">
+                  every action ({rows.length})
+                </option>
+                {Object.entries(counts)
+                  .sort((a, b) => b[1] - a[1])
+                  .map(([name, n]) => (
+                    <option key={name} value={name}>{name} ({n})</option>
+                  ))}
+              </select>
+            </label>
+            <span className="grow" />
+            {action && (
+              <button className="backlink" onClick={() => setAction(null)}>
+                Clear filter
+              </button>
+            )}
+          </div>
 
           <section className="panel">
             <h2>
               {filtered.length} {action ? <>× <code>{action}</code></> : "entries"}
               {page.length < filtered.length ? ` — showing ${page.length}` : ""}
             </h2>
-            <div className="excluded">
-              {page.map((r) => (
-                <div key={r.id}>
-                  <button className="memrow"
-                          onClick={() => setOpen(open === r.id ? null : r.id)}>
-                    <span className="chip on">{r.action}</span>
-                    <code>{r.target ?? "—"}</code>
-                    <span className="empty far">{new Date(r.at).toLocaleString()}</span>
-                  </button>
-                  {open === r.id && (
-                    <pre className="excerpt">
-                      {r.detail && Object.keys(r.detail).length
-                        ? JSON.stringify(r.detail, null, 2)
-                        : "No further detail was recorded for this entry."}
-                    </pre>
-                  )}
-                </div>
-              ))}
-            </div>
+            {/* A table, because an audit log is read by scanning down a column.
+                Everything is on the row -- nothing is behind a click except the
+                free-form detail, which is the only part that has no column. */}
+            <table className="kv">
+              <thead>
+                <tr><th>When</th><th>Action</th><th>Target</th><th /></tr>
+              </thead>
+              <tbody>
+                {page.map((r) => {
+                  const detailed = r.detail && Object.keys(r.detail).length > 0;
+                  return (
+                    <Fragment key={r.id}>
+                      <tr>
+                        <td>{new Date(r.at).toLocaleString()}</td>
+                        <td><code>{r.action}</code></td>
+                        <td><code>{r.target ?? "—"}</code></td>
+                        <td>
+                          {detailed ? (
+                            <button className="backlink"
+                                    onClick={() => setOpen(open === r.id ? null : r.id)}>
+                              {open === r.id ? "hide" : "detail"}
+                            </button>
+                          ) : (
+                            /* Said rather than left blank: nothing further was
+                               recorded, which is different from hidden. */
+                            <span className="empty">—</span>
+                          )}
+                        </td>
+                      </tr>
+                      {open === r.id && detailed && (
+                        <tr>
+                          <td colSpan={4}>
+                            <pre className="excerpt">
+                              {JSON.stringify(r.detail, null, 2)}
+                            </pre>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
             {page.length < filtered.length && (
               <button onClick={() => setShown(shown + PAGE)}>
                 Show {Math.min(PAGE, filtered.length - page.length)} more

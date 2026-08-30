@@ -131,14 +131,35 @@ browser to say nothing at all.
 ## Rows are buttons, and buttons here are painted
 
 `globals.css` styles the bare `button` element as the primary action — accent
-background, light text, 9px padding. So a clickable row marked only `.memrow`
-rendered as a solid green pill with its chips floating on top, which was
-reported as *"empty circles"*.
+background, **light text**, 9px padding. Any class put on a button has to answer
+that rule on **every property it touches**, not just the one that looked wrong
+first:
 
-`.memrow` resets that now, so a row can stay a `<button>` and be reachable by
-keyboard rather than becoming a `<div>` with an `onClick` that nothing can
-focus. The general rule: **an element-level base style applies to your component
-too**, and the ones for `button`, `input` and `select` are the ones that bite.
+- `.memrow` set `cursor`, `padding` and `radius`, so a clickable row rendered as
+  a solid green pill — reported as *"empty circles"*.
+- `.chip` then overrode `background` but **not `color`**, so as a button its
+  label was light on light and simply invisible. A chip reading
+  `write.created 12` showed only the `12`, and the column looked like bare
+  numbers.
+
+Both are fixed at the class rather than by reverting to `<div onClick>`, which
+is not reachable by keyboard. **Check `color`, `background`, `font` and `padding`
+whenever a class lands on a `button`, `input` or `select`.**
+
+## Clicking is not a way to show data
+
+If a value has a column, put it in the column. A row that reveals its content
+only when clicked makes the reader work for something a table would have shown —
+and a screen full of those reads as a screen full of nothing.
+
+Reserve disclosure for what genuinely has no column: free-form JSON, a long
+body, a stack trace. And **say when there is nothing to reveal** rather than
+offering a control that opens an empty box — *nothing was recorded* and *hidden*
+are different facts.
+
+Filtering is the same rule. A row of clickable chips looks like data until you
+discover it is a control; a labelled `select` says what it is before it is
+touched.
 
 ## Navigation is part of the feature
 
