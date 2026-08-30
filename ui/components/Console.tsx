@@ -1315,10 +1315,10 @@ function AlertEditor({
               changed definition and a page at three in the morning.
             </p>
           )}
-          <div className="tabs">
-            <button className={`tab ${detailTab === "definition" ? "on" : ""}`}
+          <div className="subtabs">
+            <button className={`subtab ${detailTab === "definition" ? "on" : ""}`}
                     onClick={() => onTab("definition")}>Definition</button>
-            <button className={`tab ${detailTab === "firings" ? "on" : ""}`}
+            <button className={`subtab ${detailTab === "firings" ? "on" : ""}`}
                     onClick={() => onTab("firings")}>
               Firing history <span className="count">{events.length}</span>
             </button>
@@ -1740,16 +1740,16 @@ function AlertsSection({ projectId }: { projectId: string }) {
     <section className="stack">
       <h1>Alerts</h1>
 
-      <div className="tabs">
-        <button className={`tab ${tab === "alerts" ? "on" : ""}`}
+      <div className="subtabs">
+        <button className={`subtab ${tab === "alerts" ? "on" : ""}`}
                 onClick={() => { setTab("alerts"); setSelected(null); }}>
           Alerts <span className="count">{alerts.length}</span>
         </button>
-        <button className={`tab ${tab === "activity" ? "on" : ""}`}
+        <button className={`subtab ${tab === "activity" ? "on" : ""}`}
                 onClick={() => setTab("activity")}>
           Activity <span className="count">{events.length}</span>
         </button>
-        <button className={`tab ${tab === "endpoints" ? "on" : ""}`}
+        <button className={`subtab ${tab === "endpoints" ? "on" : ""}`}
                 onClick={() => setTab("endpoints")}>
           Endpoints <span className="count">{subs.length}</span>
         </button>

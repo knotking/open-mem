@@ -20,6 +20,7 @@ type Capabilities = {
   webhook_providers: number;
   crawler_strategies: number;
   connectors: number;
+  alert_surfaces: number;
   embed_model: string;
   media_interpretation: boolean;
 };
@@ -27,6 +28,7 @@ type Capabilities = {
 const TABS = [
   { id: "flow", label: "How it works" },
   { id: "graph", label: "Graph" },
+  { id: "alerts", label: "Alerts" },
   { id: "compare", label: "Comparison" },
   { id: "principles", label: "Principles" },
 ];
@@ -465,6 +467,7 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
         { value: caps.prompts, label: "extraction prompts" },
         { value: caps.webhook_providers, label: "webhook providers" },
         { value: caps.connectors, label: "app connectors" },
+        { value: caps.alert_surfaces, label: "kinds of change you can watch" },
       ]
     : [];
 
