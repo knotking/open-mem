@@ -11,8 +11,8 @@ which model produced it, who is allowed to see it, and can you prove you deleted
 ```
 54 file formats   ·   24 data types   ·   18 extraction prompts
 9 webhook providers   ·   4 crawler strategies   ·   37 app connectors
-12 graph predicates   ·   8 MCP tools   ·   110 endpoints
-569 tests, against a real database, no mocks
+12 graph predicates   ·   8 MCP tools   ·   112 endpoints
+596 tests, against a real database, no mocks
 ```
 
 The capability counts are read from the running build rather than written here — the sign-in page
@@ -59,6 +59,14 @@ store all have offline implementations, and they are registered models rather th
 rows carry a `model_id`, so the day a real engine is assigned the old ones are identifiable and
 re-embeddable rather than quietly mixed in.
 
+### Then do something with it
+
+**[docs/usage.md](docs/usage.md)** is six scenarios against a running system, each with the sequence
+that actually happens: write and ask, pull from an app, receive a webhook, build the graph, backfill
+a crawl that ran cold, and erase with proof. Every request in it was issued against a live
+deployment rather than transcribed from the source, and it ends with a table for the commonest
+report — *it returned nothing* — which is almost always the next section.
+
 ---
 
 ## The shape
@@ -70,16 +78,22 @@ flowchart LR
     UP[upload] --> WRITE
     SDK[SDK · MCP] --> WRITE
     WRITE["POST /api/v1/write"] ==> STORED[stored]
-    STORED -. parse .-> SEARCHABLE[searchable]
-    SEARCHABLE -. embed · summarise · entities · edges .-> ENRICHED[enriched]
+    STORED -. "embed — only if enrich was asked for" .-> SEARCHABLE[searchable]
+    SEARCHABLE -. "summarise · entities · edges" .-> ENRICHED[enriched]
 ```
 
 **Solid is synchronous, dashed is not.** The write commits before it returns; everything after it
 happens behind the request. That asymmetry is why ingest latency is a database write rather than a
 model call, and why the pipeline being down delays enrichment without losing data.
 
-Those three states are visible on every read, so *"I uploaded it and search cannot find it"* is a
-state you can look at rather than a bug report.
+**Both dashes are also optional.** Enrichment is opt-in per write, and off by default for crawlers —
+a crawler can discover fifty thousand records unattended, and enriching them is a model call per
+chunk on data nobody has asked a question about yet. The cost of that default is worth stating
+plainly: a `stored` item is durable, correct and **invisible to search**, because both retrieval
+arms read the chunk table and chunks are written by the embed step.
+
+Which is why those three states are visible on every read. *"I uploaded it and search cannot find
+it"* is a number you can look at rather than a bug report.
 
 ### One store, not three
 
@@ -176,10 +190,6 @@ access rule itself**, so fusion never sees a row the caller could not have retri
 the graph arm reaches records that contain none of the question's words, because something else
 asserted a relationship to an entity it names.
 
-The `excluded` branch is the part that is unusual. Ranked results are ordinary; reporting the
-records that were *considered and dropped* — below the threshold, or not searchable yet — is what
-turns *"it is missing something I know is in there"* from an impression into a diagnosis.
-
 ---
 
 ## The four commitments
@@ -187,8 +197,9 @@ turns *"it is missing something I know is in there"* from an impression into a d
 Everything above is a feature. These are the reasons to choose it.
 
 **Retrieval reports what it excluded, and why.** Ranked results are ordinary. Returning the records
-that were *considered and dropped* — below the threshold, or not searchable yet — is not.
-*"Missing something I know is in there"* has several causes and they need different fixes.
+that were *considered and dropped* — below the threshold, or not searchable yet — is not. It turns
+*"it is missing something I know is in there"* from an impression into a diagnosis, and those causes
+need different fixes.
 
 **The access rule is a predicate inside the query.** Never a filter over results. Asking for ten and
 hiding three is a different and worse thing than returning the right ten — and it leaks: reporting
@@ -240,6 +251,9 @@ Stated as plainly as the rest, because a README that only lists strengths is not
 - **Nothing in the connector catalog has been run against a live account.** Every entry reports
   `verified: false`, because verifying one needs a credential. The mandatory dry run is where an
   entry stops being a researched guess
+- **No deterministic foreign-key edges.** A CRM is already a graph and `Contact.AccountId` is a
+  certain fact, but the only path into `entity_edges` is a model extracting a relationship from
+  text — so an exact edge gets re-derived as a probabilistic one
 - **No path finding between two named entities**, and graph retrieval walks one hop — only
   neighbourhoods, not the chain that connects two things
 - **No point-in-time facts.** Edges have no validity interval, so *"who worked there in 2024"* is
@@ -268,8 +282,9 @@ rather than believing.
 
 | Path | What is in it |
 |------|---------------|
-| [`api/`](api/README.md) | The service. 56 modules, 110 endpoints, 55 tables across 29 migrations |
+| [`api/`](api/README.md) | The service. 58 modules, 112 endpoints, 55 tables across 32 migrations |
 | [`ui/`](ui/README.md) | The console. Sign-in, ingestion, search, chat, entities, graph, crawlers, credentials, governance, MCP |
+| [`docs/usage.md`](docs/usage.md) | Six scenarios against a running system, with the sequence each one actually follows |
 | [`docs/`](docs/README.md) | The design, in eleven parts — requirements speak in roles, products appear only in the technology documents |
 | [`docs/graph.md`](docs/graph.md) | Why the graph is not a graph database, and what it costs |
 | [`TBD.md`](TBD.md) | Twelve decisions designed but not decided, ordered by how expensive each becomes if made late |
@@ -285,10 +300,18 @@ users to org owner; a reconcile job that re-embedded with the old model and conc
 stale; a rate limit that consumed a retry budget so a re-embed reported success having embedded
 almost nothing.
 
-The most recent one is the clearest. An enrichment failure was classified by searching its message
-for `"429"` — so whether a defect was retried forever or recorded correctly depended on whether the
-record's random identifier happened to contain those three characters. It surfaced as a test that
-failed once and passed on every re-run.
+Two are worth spelling out, because they are the shape of the whole class.
+
+An enrichment failure was classified by searching its message for `"429"` — so whether a defect was
+retried forever or recorded correctly depended on whether the record's random identifier happened to
+contain those three characters. It surfaced as a test that failed once and passed on every re-run.
+
+And `metadata` on a write item was accepted and discarded. The field had been in the contract since
+the spine shipped, the write-api example put tags inside it, and nothing ever read it — there was no
+column. Every producer following the documented shape lost them, the crawler included. **Nothing
+errored.** The write succeeded, the item was durable and searchable, and only the provenance was
+gone. It was found by asking which crawler had pulled something and discovering the answer was
+unavailable.
 
 None of those had an error to notice. That is most of why this system reports its trace, its
 provenance and its exclusions — not because auditors ask for it, but because it is the only way to
