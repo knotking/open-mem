@@ -50,6 +50,13 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   repopulates it, since `external_id` upserts.
 
 ### Changed
+- **The README leads with evidence instead of claims.** Rewritten from a blank
+  page: it opens with a real `/retrieve` response from a running deployment —
+  `matched_by` per hit, the records considered and dropped with their reasons,
+  the corpus state counts, the generator fingerprint — then the same record id
+  fetched with two keys, 200 and 404. Both captured live, neither invented. The
+  features table is gone (a catalog is not a reason to choose something) and four
+  diagrams became two. 325 lines → 246.
 - **The README is rewritten against what the build reports.** Four counts had
   drifted in a file whose own second paragraph says they come from the running
   build; they now match `GET /api/v1/capabilities`. The `excluded` paragraph had
