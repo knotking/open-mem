@@ -728,3 +728,126 @@ async def test_a_signature_failure_is_counted_even_though_it_never_reaches_a_del
         )
     rejected = [labels for metric, labels in emitted if metric == "inbound_rejected"]
     assert rejected and rejected[0]["reason"] == "auth"
+
+
+# ------------------------------------------------------- through to retrieval
+
+
+async def test_a_delivered_webhook_is_stored_but_not_searchable_by_default(
+    pool, queue, blobs, settings, tenant, envelope, principal_for, embedder
+):
+    """The default nobody states, and the one most likely to surprise.
+
+    Enrichment is opt-in per integration — a chatty webhook that summarises
+    every message is an unbounded bill — and embedding rides on the same event.
+    So a delivery with default settings lands as a row and produces no chunks,
+    which means lexical and vector search cannot see it.
+
+    That is a defensible default and an expensive thing to discover from a
+    support ticket. Asserted here so it is a decision on the record rather than
+    a property of the wiring.
+    """
+    from memdog.contracts import RetrieveFilter, RetrieveRequest
+    from memdog.retrieval import retrieve
+
+    producer_id = await _webhook_producer(
+        pool, tenant, envelope,
+        mapping={"items_path": "message", "text_path": "body",
+                 "external_id_path": "id"},
+    )
+    body = json.dumps({"message": {
+        "id": "evt-quiet-1", "body": "Northwind confirmed the renewal."}}).encode()
+    ts = str(int(time.time()))
+    assert (await receive(
+        pool, queue, blobs, settings, envelope, producer_id=producer_id,
+        raw_body=body,
+        headers={"x-signature": _sign("shh-very-secret", body, ts),
+                 "x-signature-timestamp": ts},
+    )).status == "accepted"
+    await queue.drain()
+
+    row = await pool.fetchrow(
+        "SELECT data_id, content_text FROM data_items "
+        "WHERE project_id = $1 AND external_id = $2",
+        tenant.project_id, "evt-quiet-1",
+    )
+    assert row is not None, "accepted and stored nowhere"
+    # The mapping ran: the row holds the mapped field, not the envelope.
+    assert row["content_text"] == "Northwind confirmed the renewal."
+    assert await pool.fetchval(
+        "SELECT count(*) FROM chunks WHERE data_id = $1", row["data_id"]
+    ) == 0, "enrichment is off, so there is nothing to embed and nothing to find"
+
+    actor = await principal_for(tenant.api_key)
+    hits = await retrieve(
+        pool, embedder, actor,
+        RetrieveRequest(query="Northwind renewal", match=["lexical"],
+                        filter=RetrieveFilter(project_id=tenant.project_id)),
+    )
+    assert not [h for h in hits.results if h.data_id == row["data_id"]]
+
+
+async def test_a_webhook_with_enrichment_on_becomes_a_record_a_search_can_find(
+    pool, queue, blobs, settings, tenant, envelope, principal_for, embedder
+):
+    """Thirty tests above this line and none of them crossed the seam.
+
+    Each proves something true and local — the signature is over the raw bytes,
+    a replay is refused, rotation works, an unregistered provider is turned away
+    at the door. All of them stop at `result.status == "accepted"`, which is a
+    claim about the webhook module rather than about the platform.
+
+    The sentence that matters to somebody using this is longer: a provider posts
+    a payload and a search finds it, indistinguishable from an upload. That is
+    the premise of one write path, and it was asserted for the crawler, for the
+    SDK and for MCP — never for the producer that delivers the most.
+    """
+    from memdog.contracts import RetrieveFilter, RetrieveRequest
+    from memdog.retrieval import retrieve
+
+    producer_id = await _webhook_producer(
+        pool, tenant, envelope,
+        mapping={"items_path": "message", "text_path": "body",
+                 "external_id_path": "id"},
+        # Where an integration turns it on. This is the configuration a real
+        # deployment uses, and the one no test exercised.
+        defaults={"enrich": True},
+    )
+    body = json.dumps({"message": {
+        "id": "evt-quarterly-1",
+        "body": "Northwind confirmed the renewal for the second quarter.",
+    }}).encode()
+    ts = str(int(time.time()))
+
+    result = await receive(
+        pool, queue, blobs, settings, envelope, producer_id=producer_id,
+        raw_body=body,
+        headers={"x-signature": _sign("shh-very-secret", body, ts),
+                 "x-signature-timestamp": ts},
+    )
+    assert result.status == "accepted" and result.items == 1
+
+    # The write commits before it returns and everything after it is behind the
+    # request. That asymmetry is the design, and it is the reason a test which
+    # stops at "accepted" cannot see the rest of the sentence.
+    await queue.drain()
+
+    stored = await pool.fetchrow(
+        "SELECT data_id FROM data_items WHERE project_id = $1 AND external_id = $2",
+        tenant.project_id, "evt-quarterly-1",
+    )
+    assert stored is not None
+    assert await pool.fetchval(
+        "SELECT count(*) FROM chunks WHERE data_id = $1", stored["data_id"]
+    ) > 0, "enrichment was requested and produced nothing to search"
+
+    actor = await principal_for(tenant.api_key)
+    hits = await retrieve(
+        pool, embedder, actor,
+        RetrieveRequest(query="Northwind renewal", match=["lexical"],
+                        filter=RetrieveFilter(project_id=tenant.project_id)),
+    )
+    assert [h for h in hits.results if h.data_id == stored["data_id"]], (
+        "a delivered webhook is not retrievable, so the one-write-path claim "
+        "holds for every producer except the busiest one"
+    )

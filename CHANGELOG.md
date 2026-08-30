@@ -426,27 +426,38 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   Supermemory's latency, Letta's working context.
 
 ### Fixed
-- **The console could not reach the catalog it was built to show.** Three paths
+- **A permission failure is no longer a 500.** Ten handlers call
+  `actor.require()` in their own body and are not wrapped by `_control`, so a
+  credential lacking a capability escaped as `500 Internal Server Error` —
+  telling whoever looked that the server was broken when the truth was that
+  their key could not do this. An app-level handler now translates `AuthError`
+  from anywhere, registered once rather than fixed in ten places.
+- **A model card naming a provider with no engine builder** could be listed,
+  selected and assigned, then resolved to nothing and fell back to the
+  deployment default — no error, a plausible answer, and the chosen model never
+  ran. A guard now refuses any shipped card the engine layer cannot construct,
+  and a second refuses one declaring a capability that is not a purpose.
+- **The console could not reach three endpoints it was built to show.** They
   were missing from the UI proxy's allow-list — the browser's only route to the
   API — so `GET /api/v1/connectors`, `GET /api/v1/connections` and
-  `PATCH /api/v1/crawlers/{id}/connection` were all refused with a 403 the panel
-  had no way to report. The app catalog rendered as an empty category list and
-  the credentials list as no credentials, which is indistinguishable from a
-  catalog that is genuinely empty. Every endpoint and every panel already
-  existed; nothing connected them.
+  `PATCH /api/v1/crawlers/{id}/connection` were refused with a 403 the panel had
+  no way to report. The app catalog rendered as an empty category list, which is
+  indistinguishable from a catalog that is genuinely empty.
+- `GET /api/v1/projects/{id}/entities` was allow-listed **without a query
+  string**, so the panel worked until somebody applied a filter. That is the
+  harder version to notice, and `npm run check:proxy` now catches it: a guard
+  that walks every call site in the console and fails on any path the proxy
+  would refuse. Typecheck and build cannot see this, and did not, four times.
 - **The MCP panel was refused for the same reason.** Its path is now allowed for
-  `GET` only, under a separate list. `GET /api/v1/mcp` is a manifest that
-  discloses nothing; `POST` on the same path is a tool call, and the proxy
-  replaces the caller's credential with the console's own — falling back to the
-  service key when nobody is signed in. Allow-listing `POST` would publish an
-  unauthenticated MCP server over whatever that key can reach, so **the endpoint
-  the panel prints does not yet work for an external client**.
+  `GET` only. `GET /api/v1/mcp` is a manifest that discloses nothing; `POST` is
+  a tool call, and the proxy replaces the caller's credential with the console's
+  own — so allow-listing `POST` would publish an unauthenticated MCP server.
+  **The endpoint the panel prints therefore does not yet work for an external
+  client.**
 - **The crawler preset row offered three of the four strategies.** `tree` is now
-  there as *Drive folder*, with a lower depth and item cap than the default,
-  because a drive nobody has pruned is where an unbounded first run finds forty
-  thousand files. Each preset now carries its own input placeholder: the seed
-  for a folder walk is an id, and labelling it "Seed URL" is how somebody pastes
-  the wrong thing.
+  there as *Drive folder*, with a lower depth and item cap than the default.
+  Each preset carries its own input placeholder: the seed for a folder walk is
+  an id, and labelling it "Seed URL" is how somebody pastes the wrong thing.
 - **The console could not create either exchanged credential**, so the Google
   and Microsoft catalog entries were unreachable from the UI that listed them.
   The Credentials form now offers both styles, asks for the token endpoint and

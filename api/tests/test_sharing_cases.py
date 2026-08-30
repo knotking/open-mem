@@ -244,6 +244,42 @@ async def test_an_org_lock_stops_a_project_replacing_an_approved_prompt(
     assert effective["source"] == "org (locked)"
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason="agent_configs is written, resolved and read by nothing. "
+           "extraction.py calls for_data_type() and takes the shipped prompt, "
+           "so a saved override is stored, testable through its own /test "
+           "endpoint, displayed back by its own GET, and never applied. "
+           "Delete this marker when the enrichment path consults it.",
+)
+async def test_a_saved_prompt_override_actually_reaches_extraction():
+    """The assertion the two tests above do not make.
+
+    Both prove the *configuration* resolves correctly — the override wins, the
+    lock wins, artifacts go stale. Neither proves anything consumes it, and
+    that gap is exactly the shape of the feature: an endpoint to save a prompt,
+    an endpoint to test it against a sample, correct precedence logic, and no
+    reader. It looked covered because the tests were real.
+
+    Checked at the source rather than by running a model, because the defect is
+    a missing call and not a wrong output — the same reason `test_wiring.py`
+    exists.
+    """
+    import pathlib
+
+    package = pathlib.Path(__import__("memdog").__file__).parent
+    consumers = [
+        path.name
+        for path in package.glob("*.py")
+        if path.name not in ("agents.py", "app.py")
+        and "effective_config" in path.read_text()
+    ]
+    assert consumers, (
+        "no module outside agents.py and app.py reads effective_config, so a "
+        "saved prompt override cannot affect extraction"
+    )
+
+
 # ----------------------------------------------------------- normalization
 
 
