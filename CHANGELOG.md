@@ -50,6 +50,13 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   repopulates it, since `external_id` upserts.
 
 ### Added
+- **[docs/usage.md](docs/usage.md) — six scenarios against a running system.**
+  Write and ask, pull from an app, receive a webhook, build the graph, backfill a
+  crawl that ran with `enrich` off, and erase with a dry run first. Every request
+  in it was issued against a live deployment, which is how the `/ask` filter shape
+  and the deletion selector rules got in. Includes the readiness staircase and a
+  troubleshooting table for the commonest report — *it returned nothing* — which
+  is almost always items sitting in `stored`.
 - **`reprocess` selects on `run_id` and `tags`.** This is the point of the
   repair above. `enrich` is off by default on a crawler, so the intended
   sequence is crawl → read the dry run's count → enrich what it found; but
