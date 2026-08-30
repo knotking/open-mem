@@ -43,8 +43,15 @@ cd api && ./deploy/cloudrun.sh <tag>     # e.g. spine-13
 cd ui  && ./deploy.sh <tag>              # e.g. ui-4, only if the UI changed
 ```
 
-Tags are monotonic (`spine-N`, `ui-N`). Check what is deployed before picking
-one — the running service reports its own tag as `IMAGE_TAG`:
+**Tags are descriptive, not monotonic.** The registry holds both — `spine-1`
+through `spine-51` from the early days, then `spine-deletion-window`,
+`spine-item-metadata`, `spine-open-models`, `spine-workday-crm`. Recent practice
+is a short name for what the deploy contains, and it is the better convention:
+`spine-52` tells a person reading `IMAGE_TAG` on a running service nothing about
+what is on it.
+
+Check what is deployed before picking a tag — the running service reports its
+own as `IMAGE_TAG`, and the image tag is in the revision:
 
 ```bash
 gcloud run services describe memdog-api --project memdog-dev-506718 \
@@ -108,6 +115,24 @@ Each of these presents as a different bug than it is.
 - **The scheduled reconcile never fires, with no error on the scheduler job.**
   The Cloud Scheduler service agent needs `roles/iam.serviceAccountTokenCreator`
   on `memdog-api@…`, because Scheduler impersonates it to mint the OAuth token.
+- **`smoke.sh` ends in `FAIL: nothing retrievable`, and nothing is wrong.**
+  Found 2026-08-30. The items are written and durable; the retrieve response
+  says so — `"reason": "not_yet_enriched"`, `"state": "stored"` — and there is
+  **no error in the logs at all**, which is the tell. `smoke.sh` sends no
+  `options.enrich`, so the write falls back to the project's
+  `enrich_by_default`, and on `prj_01M12VFWRTE5YCWAQFFXQSEN2C` that is off.
+  Enrichment is optional by design, so the script asserts a step it never asked
+  for. Confirm the deployment is fine by enriching one item by hand:
+
+  ```bash
+  curl -X POST -H "X-API-Key: $KEY" -H 'content-type: application/json' \
+       -d '{"embed":true,"summarize":true}' "$URL/api/v1/data/<data_id>/enrich"
+  ```
+
+  It returns `{"status":"requested"}`; the item reaches `enriched` in about a
+  minute and is then retrievable. **`smoke.sh` needs the flag added** — until
+  then it fails on any project that has not opted into enrichment, which reads
+  as a broken deploy.
 
 ## Known drift
 
