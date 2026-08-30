@@ -72,6 +72,61 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   converges rather than failing.
 
 ### Added
+- **Compaction — fold a memory down without losing any of it.** A job is a
+  memory, an algorithm and a schedule: `POST /api/v1/compaction/jobs`. It
+  **archives** what it folds, so records leave the default view and stay
+  readable, searchable and citable via `?include_archived=true`. mem0
+  reconciles by overwriting; this cannot, because the temporal graph shipped on
+  the premise that a claim is *closed* rather than replaced — a compaction that
+  destroyed its inputs would make `as_of` lie about everything it touched.
+- **Two algorithms, and the cheap one is first.** `dedupe` archives members
+  byte-identical to a newer one and **needs no model** — most of what a corpus
+  accumulates is the same record written twice. `summarize` folds members into
+  one artifact and **refuses rather than degrading** when no extractor is
+  configured, naming `dedupe` as the alternative: a summary produced by a
+  fallback heuristic is a worse summary presented as the same thing.
+  `GET /api/v1/compaction/algorithms` serves the list with `needs_model`.
+- **Previewing is a gate, not a courtesy.** `POST /compaction/jobs/{id}/preview`
+  runs the live path with its writes withheld; scheduling is a **409** until
+  this version has been previewed, and editing what a job would do drops the
+  approval and stops it. A compaction nobody has looked at is one that empties a
+  memory quietly.
+- **Runs record what they cost and freed** — considered, archived, artifacts,
+  bytes before and after, and `model_calls` (always `0` for `dedupe`).
+- **`GET /api/v1/data/{id}/versions/{version_id}`** returns one revision with
+  its text **in full**. The listing previews at 400 characters on purpose, so
+  the whole text is a second request made only for the revision chosen — and it
+  **404s** for a caller who cannot read the item, because a revision of an
+  invisible record must not be confirmable.
+- **The console browses by drilling down** — a memory, a page of items, one
+  item, one revision — instead of loading fifty items with every revision
+  expanded. Audit groups by action with counts that double as filters, one log
+  at a time, detail on the row you open.
+
+### Changed
+- **Two guarantees on a compaction summary**, both invisible if broken. It takes
+  the ACL of its **most restrictive** source, or compaction becomes a way to
+  widen visibility by summarising. And it records **span offsets** per source,
+  so a citation opens at the sentence — without them every citation in a
+  compacted memory silently degrades to a document-level reference.
+- **Archival is a column, not a state.** An archived item is still `stored`,
+  `searchable` and `enriched`; it is merely not current. Folding the two
+  together would make "is this searchable" and "is this in the working set" one
+  question.
+
+### Migrations
+- **`0038_compaction.sql`** — `data_items.archived_at` and `archived_by`,
+  `compaction_jobs`, `compaction_runs`. Additive. Scheduled jobs ride the
+  existing minute sweep rather than adding a fourth Cloud Run job.
+
+### Not built
+- **TTL is still not enforced.** `memory_types.ttl_seconds` and `on_expiry` are
+  stored and `effective_expiry()` is computed, but nothing sweeps — a
+  `conversation` memory with a one-hour TTL is still there next year, and
+  `orphan_delete` and `archive` have never run. Compaction is explicit and
+  scheduled; expiry is a separate mechanism that does not exist yet.
+
+### Added
 - **Five more alert surfaces**, all deterministic: `data.revised`,
   `memory.member_added`, `memory.retyped`, `case.member_promoted` and
   **`acl.changed`**. The last could not have been done any other way — the

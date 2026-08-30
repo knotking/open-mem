@@ -520,6 +520,74 @@ you want after a prompt change). `tags` matches on **overlap**: any of these, no
 
 ---
 
+## Scenario 5b — Fold a memory down without losing it
+
+A memory that only grows stops being a working set. Compaction shrinks what
+retrieval returns by default; it does not shrink what exists.
+
+```bash
+# 1. A job is a memory, an algorithm and a schedule.
+JOB=$(curl -s -X POST "$BASE/api/v1/compaction/jobs" -H "X-API-Key: $KEY" \
+  -H "content-type: application/json" -d '{
+    "project_id": "'"$PRJ"'",
+    "name": "nightly de-duplication",
+    "memory_id": "'"$MEM"'",
+    "algorithm": "dedupe",
+    "schedule": {"type": "interval", "every_seconds": 86400}
+  }' | python3 -c 'import json,sys;print(json.load(sys.stdin)["job_id"])')
+
+# 2. See what it WOULD fold. Archives nothing.
+curl -s -X POST "$BASE/api/v1/compaction/jobs/$JOB/preview" -H "X-API-Key: $KEY" \
+  -H "content-type: application/json" -d '{}'
+# {"considered": 412, "archived": 91, "bytes_before": …, "samples": [ … ]}
+
+# 3. Only now can it be scheduled. Before a preview this is a 409.
+curl -s -X POST "$BASE/api/v1/compaction/jobs/$JOB/enabled" -H "X-API-Key: $KEY" \
+  -H "content-type: application/json" -d '{"enabled":true}'
+```
+
+### Nothing is deleted
+
+That is the part worth checking rather than believing:
+
+```bash
+curl -s -H "X-API-Key: $KEY" "$BASE/api/v1/projects/$PRJ/data" | ...            # 321
+curl -s -H "X-API-Key: $KEY" "$BASE/api/v1/projects/$PRJ/data?include_archived=true"  # 412
+```
+
+An archived record is out of the **default view**. It is still fetchable by id,
+still returned when asked for, and still citable. `mem0` reconciles by
+overwriting; this cannot, because the [temporal graph](graph.md) shipped on the
+premise that a claim is closed rather than replaced — and a compaction that
+destroyed its inputs would make `as_of` lie about everything it touched.
+
+### Which algorithm, and what it costs
+
+```bash
+curl -s -H "X-API-Key: $KEY" "$BASE/api/v1/compaction/algorithms"
+```
+
+| | Needs a model | |
+|---|---|---|
+| `dedupe` | no | byte-identical members, keeping the newest |
+| `summarize` | **yes** | one artifact recording every source, with span offsets |
+
+`summarize` **refuses rather than degrading** when no extractor is configured,
+and names `dedupe` as the alternative — a summary produced by a fallback
+heuristic is a worse summary presented as the same thing.
+
+`GET /api/v1/compaction/jobs/{id}/runs` reports what each run looked at,
+archived, freed and cost. `model_calls: 0` for every `dedupe` run, which is the
+point of running it first.
+
+> **Two guarantees that would be invisible if broken.** A summary takes the ACL
+> of its **most restrictive** source — otherwise compaction is a way to widen
+> visibility by summarising. And it records **span offsets** per source, so a
+> citation opens at the sentence; without them every citation in a compacted
+> memory quietly degrades to a document-level reference.
+
+---
+
 ## Scenario 6 — Erase something, and prove it
 
 **Visibility is transactional; reclamation is eventual.** `deleted_at` is when it became invisible,

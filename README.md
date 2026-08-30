@@ -11,7 +11,8 @@ you can prove completed.
 ```
 54 file formats · 24 data types · 18 extraction prompts · 9 webhook providers
 4 crawler strategies · 37 app connectors · 12 graph predicates · 8 MCP tools
-8 alert surfaces · 134 endpoints · 630 tests, against a real database, no mocks
+8 alert surfaces · 2 compaction algorithms · 144 endpoints
+658 tests, against a real database, no mocks
 ```
 
 Those counts are read from the running build, not written here. The sign-in page gets them from
@@ -139,6 +140,31 @@ See [`docs/alerts.md`](docs/alerts.md).
 
 ---
 
+## A working set that stops growing, and a record that does not
+
+Memory layers keep a corpus small by overwriting: a newer memory replaces an
+older one, and the old one is gone. That is a fair trade if nobody will ever ask
+what you used to believe. Here it would make the two clocks lie.
+
+**Compaction archives what it folds.** Archived records leave the default view
+and stay readable, searchable and citable when asked for — so the working set
+shrinks and the record does not.
+
+```
+POST /api/v1/compaction/jobs      { memory_id, algorithm, schedule }
+POST /api/v1/compaction/jobs/{id}/preview    # writes nothing
+```
+
+Two algorithms, and the cheap one is first: **de-duplication needs no model**,
+and most of what a corpus accumulates is the same record written twice.
+Summarising does need one and says so before you schedule it. A job is created
+stopped, and **scheduling is refused until you have previewed it** — a
+compaction nobody has looked at is one that empties a memory quietly.
+
+See [`docs/compaction.md`](docs/compaction.md).
+
+---
+
 ## Everything arrives the same way
 
 Webhook, crawler, upload, SDK, MCP — all through `POST /api/v1/write`. A crawled record and a
@@ -232,11 +258,12 @@ sections of this file.
 | Path | What is in it |
 |------|---------------|
 | [`docs/usage.md`](docs/usage.md) | Six scenarios against a running system — start here after `Run it` |
-| [`api/`](api/README.md) | The service. 60 modules, 134 endpoints, 61 tables across 35 migrations |
+| [`api/`](api/README.md) | The service. 62 modules, 144 endpoints, 63 tables across 38 migrations |
 | [`ui/`](ui/README.md) | The console. Ingestion, search, chat, entities, graph, crawlers, alerts, governance |
 | [`docs/`](docs/README.md) | The design, in eleven parts — requirements speak in roles, products appear only in the technology documents |
 | [`docs/graph.md`](docs/graph.md) | Why the graph is not a graph database, what it costs, and what was true when |
 | [`docs/alerts.md`](docs/alerts.md) | Declaring an event, the backtest gate, and signed outbound delivery |
+| [`docs/compaction.md`](docs/compaction.md) | Folding a memory down without losing it — and why archiving rather than overwriting |
 | [`TBD.md`](TBD.md) | Twelve decisions designed but not decided, ordered by how expensive each becomes if made late |
 | [`CHANGELOG.md`](CHANGELOG.md) | What changed and why, one entry per commit that altered behaviour |
 
