@@ -133,9 +133,30 @@ Each of these presents as a different bug than it is.
   A `Pending` item staying `stored` is **correct** — it waits on a fetch worker
   that does not exist, and it appears in `excluded` on a passing run.
 
+- **A rotated secret does not reach the running service, or reaches it but not
+  the jobs.** `--set-secrets NAME=secret:latest` resolves **at deploy time, not
+  at run time**, so adding a secret version changes nothing until a new revision
+  is created. Worse, the four deployments rotate independently: roll the service
+  alone and `memdog-reconcile` keeps the old value, so the reconciler silently
+  degrades while the service looks fine — the same drift the job-coupling rule
+  above exists to prevent. Rotate all four together:
+
+  ```bash
+  printf '%s' "$NEW" | gcloud secrets versions add <secret> --project memdog-dev-506718 --data-file=-
+  gcloud run services update memdog-api --region us-central1 \
+    --update-secrets GEMINI_API_KEY=gemini-api-key:latest --quiet
+  for J in memdog-reconcile memdog-crawl-tick memdog-seed; do
+    gcloud run jobs update $J --region us-central1 \
+      --update-secrets GEMINI_API_KEY=gemini-api-key:latest --quiet
+  done
+  ```
+
+  Verify by enriching one item and reading `fallback_depth` — `0` means the
+  model was actually reached. Never echo the secret; pipe it.
+
 - **Enrichment succeeds but produces nothing useful: no entities, no edges, no
-  graph.** Standing condition as of 2026-08-30. Look at the artifact's
-  `fields.fallback_depth` and `fallback_reason`:
+  graph.** Look at the artifact's `fields.fallback_depth` and
+  `fallback_reason`:
 
   ```bash
   curl -H "X-API-Key: $KEY" "$URL/api/v1/data/<data_id>/artifacts"
@@ -153,6 +174,22 @@ Each of these presents as a different bug than it is.
   Two reasons distinguish transient from standing: a single `429` may be a
   burst, but `circuit open` means the client has stopped trying and will keep
   falling back until the breaker resets.
+
+  **Ask the API which quota it means** — the answer names the tier outright, and
+  is the difference between "wait" and "pay":
+
+  ```bash
+  curl -s -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent" \
+    -H "x-goog-api-key: $KEY" -H 'content-type: application/json' \
+    -d '{"contents":[{"parts":[{"text":"hi"}]}]}'
+  # quotaId: GenerateRequestsPerDayPerProjectPerModel-FreeTier, limit: 20
+  ```
+
+  Twenty requests **per day** does not survive one seed run. Note the tier
+  follows the **key's own project**, not this one: `generativelanguage` is not
+  even enabled on `memdog-dev-506718`, so billing being enabled here proves
+  nothing. Find the key's project (`gen-lang-client-*` when AI Studio made it)
+  and check billing there.
 
 ## Known drift
 
