@@ -90,6 +90,13 @@ async def add_member(conn, memory_id: str, data_id: str, added_by: str) -> None:
         "SELECT org_id, project_id, type FROM memories WHERE memory_id = $1", memory_id)
     if memory is None:
         return
+    # Landing in the default memory is not a membership event. `default` is
+    # where an item with no memory and no matching routing rule goes -- it is
+    # the *absence* of a signal, and it happens on essentially every write, so
+    # announcing it would put an event and a queue message on the write path
+    # for nothing.
+    if memory["type"] == "default":
+        return
     from .alerts import emit_transition
 
     await emit_transition(

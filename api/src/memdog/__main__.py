@@ -158,11 +158,16 @@ async def _alert_tick(limit: int) -> None:
     import json as jsonlib
 
     from .alerts import tick
+    from .crypto import Envelope
 
     settings = load_settings()
     pool = await create_pool(settings)
     try:
-        result = await tick(pool, limit=limit)
+        # The envelope is what lets the sweep sign a delivery. Without it the
+        # tick would evaluate and then quietly deliver nothing, which is the
+        # failure that looks most like success.
+        result = await tick(pool, limit=limit,
+                            envelope=Envelope.from_settings(settings))
         print(jsonlib.dumps(result, default=str))
     finally:
         await pool.close()

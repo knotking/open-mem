@@ -30,6 +30,8 @@ import asyncpg
 from .acl import visibility_params
 from .auth import CONFIG_WRITE, DATA_READ, Principal
 from .ids import new_id
+import logging
+
 from .telemetry import span
 
 # What each surface is, and which fields its selector may name. Closed on
@@ -60,6 +62,9 @@ SUBJECT_OF: dict[str, str] = {
 # Editing any of these changes what matches, so it invalidates the backtest.
 # Renaming an alert does not.
 MATCHING_FIELDS = ("mode", "surface", "where_clause", "describe", "model_id")
+
+
+log = logging.getLogger(__name__)
 
 
 class AlertError(Exception):
@@ -348,6 +353,19 @@ async def evaluate_gap(
                         payload.get("memory_id"), payload.get("case_id"),
                         json.dumps(payload),
                     )
+                    # Queued with the record, so "recorded but never queued"
+                    # cannot happen. Whether it is *sent* is a separate status:
+                    # a subscriber being down must not roll back the record of
+                    # what happened.
+                    from .event_delivery import enqueue
+
+                    recorded_id = await pool.fetchval(
+                        "SELECT event_id FROM observed_events "
+                        " WHERE alert_id = $1 AND source_event_id = $2",
+                        alert_id, row["event_id"])
+                    if recorded_id:
+                        await enqueue(pool, recorded_id,
+                                      project_id=alert["project_id"], alert_id=alert_id)
 
             last = rows[-1]["sequence"] if rows else start
             if record:
@@ -390,7 +408,7 @@ async def backtest(
     return result
 
 
-async def tick(pool: asyncpg.Pool, *, limit: int = 20) -> dict:
+async def tick(pool: asyncpg.Pool, *, limit: int = 20, envelope=None) -> dict:
     """The floor. Evaluates every enabled alert whose watermark is behind.
 
     Not an optimisation: Cloud Run scales to zero and the queue is in-process,
@@ -408,9 +426,16 @@ async def tick(pool: asyncpg.Pool, *, limit: int = 20) -> dict:
         """,
         head, limit,
     )
-    return {"evaluated": [
-        await evaluate_gap(pool, r["alert_id"], trigger="tick") for r in behind
-    ]}
+    evaluated = [await evaluate_gap(pool, r["alert_id"], trigger="tick") for r in behind]
+
+    # Nothing else wakes on `next_attempt_at`. Without this a quiet project
+    # retries never, and a dead subscriber's backlog sits forever.
+    delivered = None
+    if envelope is not None:
+        from .event_delivery import deliver_owed
+
+        delivered = await deliver_owed(pool, envelope)
+    return {"evaluated": evaluated, "delivered": delivered}
 
 
 async def poll_events(
@@ -490,3 +515,74 @@ async def emit_transition(conn, event_type: str, *, org_id: str,
 
     await emit(conn, event_type=event_type, org_id=org_id, project_id=project_id,
                data_id=data_id, payload=payload)
+
+
+# -- the async consumer -----------------------------------------------------
+
+ALERT_TOPIC = "alerts"
+
+
+class AlertWorker:
+    """Wakes on a transition, then waits.
+
+    The waiting is the design. A consumer that evaluates one message at a time
+    is per-write evaluation with a queue in front of it -- N alerts by M writes,
+    and every write still paying for every alert. So a message says only
+    *something happened*; the worker coalesces for `debounce_seconds` and then
+    evaluates once over whatever accumulated.
+
+    A burst of ten thousand transitions from one crawl is a handful of windows.
+    Six revisions of one document inside a window are one candidate.
+
+    Nothing here is the record. The alert watermark in Postgres is, so a message
+    lost between publish and handler -- or a window lost with the instance that
+    was holding it, which Cloud Run's scale-to-zero makes routine -- costs
+    latency rather than an alert. `memdog-alert-tick` picks it up.
+    """
+
+    def __init__(self, pool: asyncpg.Pool, *, debounce_seconds: float = 5.0) -> None:
+        self._pool = pool
+        self._debounce = debounce_seconds
+        self._window: object | None = None
+
+    def register(self, queue, topic: str = ALERT_TOPIC) -> None:
+        queue.subscribe(topic, self.handle)
+
+    async def handle(self, message) -> None:
+        import asyncio
+
+        # The message is a doorbell, not work. Marking it consumed here is
+        # honest: the dispatch *was* handled. What remains outstanding is the
+        # evaluation, and the alert watermark is what records that -- so the
+        # reconciler must not keep re-dispatching a transition forever on the
+        # grounds that nothing acknowledged it.
+        event_id = getattr(message, "body", message)
+        if isinstance(event_id, dict):
+            event_id = event_id.get("event_id")
+        if event_id:
+            from .events import mark_consumed
+
+            await mark_consumed(self._pool, event_id)
+
+        # One window at a time. Every message arriving while one is open is
+        # absorbed by it, which is the whole point -- a task per message would
+        # be the thing this exists to avoid.
+        if self._window is not None and not self._window.done():
+            return
+        self._window = asyncio.create_task(self._evaluate_after_window())
+
+    async def _evaluate_after_window(self) -> None:
+        import asyncio
+
+        await asyncio.sleep(self._debounce)
+        try:
+            await tick(self._pool)
+        except Exception:  # noqa: BLE001
+            # The tick will find this work again -- the watermark did not move.
+            # Failing loudly here would only take the instance down with it.
+            log.exception("alert window failed; the sweep will re-derive it")
+
+    async def drain(self) -> None:
+        """Finish an open window. For tests and for a clean shutdown."""
+        if self._window is not None and not self._window.done():
+            await self._window

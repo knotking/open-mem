@@ -31,6 +31,7 @@ from .crawlers import CrawlerConfig, CrawlerError
 from . import crawling
 from . import entities as entities_mod
 from . import graph as graph_mod
+from .fetching import FetchError
 from .graph import GraphError
 from .entities import EntityError
 from . import account, agents, cases, connections, connectors, control, memories as memories_mod, models, normalize, sharing
@@ -127,6 +128,13 @@ async def lifespan(app: FastAPI):
         parse_worker=parse_worker, embed_worker=embed_worker,
         enrich_worker=enrich_worker, fetch_worker=fetch_worker,
     ).register(queue)
+    # Wakes on a transition and then waits. The waiting is the design: a
+    # consumer that evaluated one message at a time would be per-write
+    # evaluation with a queue in front of it.
+    from .alerts import AlertWorker
+
+    app.state.alert_worker = AlertWorker(pool)
+    app.state.alert_worker.register(queue)
 
     # The meter needs somewhere to write before the first model call, which
     # the workers above can make as soon as they are registered.
@@ -2297,6 +2305,92 @@ async def poll_events_endpoint(
         return await poll_events(
             request.app.state.pool, actor, since=since, alert_id=alert_id, limit=limit)
     except (AlertError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/event-subscriptions", status_code=201)
+async def create_subscription_endpoint(
+    request: Request, body: dict, actor: Principal = Depends(principal)
+) -> dict:
+    """Register an endpoint to be told at. The secret is returned **once**.
+
+    `https` only, and the URL is refused here *and* re-checked on every send —
+    a host that resolves to a public address today can resolve to a private one
+    tomorrow, and this service reaches Cloud SQL over the VPC.
+    """
+    from .event_delivery import DeliveryError, create_subscription
+
+    state = request.app.state
+    try:
+        return await create_subscription(
+            state.pool, actor, state.envelope,
+            project_id=body["project_id"], url=body["url"],
+            alert_id=body.get("alert_id"))
+    except KeyError as exc:
+        raise HTTPException(status_code=400, detail=f"missing {exc}") from exc
+    except (DeliveryError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    except FetchError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/projects/{project_id}/event-subscriptions")
+async def list_subscriptions_endpoint(
+    request: Request, project_id: str, actor: Principal = Depends(principal)
+) -> dict:
+    """Never includes the signing secret. It is shown once and rotated, not read."""
+    from .event_delivery import DeliveryError, list_subscriptions
+
+    try:
+        return {"subscriptions": await list_subscriptions(
+            request.app.state.pool, actor, project_id)}
+    except (DeliveryError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/event-subscriptions/{subscription_id}/rotate")
+async def rotate_subscription_endpoint(
+    request: Request, subscription_id: str, actor: Principal = Depends(principal)
+) -> dict:
+    """New secret; the previous one keeps verifying for the overlap window."""
+    from .event_delivery import DeliveryError, rotate_secret
+
+    state = request.app.state
+    try:
+        return await rotate_secret(state.pool, actor, state.envelope, subscription_id)
+    except (DeliveryError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/event-subscriptions/{subscription_id}/deliveries")
+async def subscription_deliveries_endpoint(
+    request: Request, subscription_id: str, limit: int = 50,
+    actor: Principal = Depends(principal)
+) -> dict:
+    """Attempts, statuses and last error — the "is my endpoint healthy" view."""
+    from .event_delivery import DeliveryError, deliveries_for
+
+    try:
+        return {"deliveries": await deliveries_for(
+            request.app.state.pool, actor, subscription_id, limit)}
+    except (DeliveryError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/event-subscriptions/{subscription_id}/replay")
+async def replay_deliveries_endpoint(
+    request: Request, subscription_id: str, actor: Principal = Depends(principal)
+) -> dict:
+    """Re-arm dead letters once the endpoint is fixed.
+
+    The rows were kept for exactly this: an hour of downtime is recoverable
+    rather than gone.
+    """
+    from .event_delivery import DeliveryError, replay_dead
+
+    try:
+        return await replay_dead(request.app.state.pool, actor, subscription_id)
+    except (DeliveryError, AuthError) as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
 
 

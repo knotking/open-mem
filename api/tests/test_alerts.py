@@ -417,3 +417,243 @@ async def test_events_about_a_memory_are_visible_to_its_owner_only(
     assert (await evaluate_gap(pool, alert["alert_id"], trigger="tick"))["matches"] == 1
     assert len((await poll_events(pool, actor, since=0))["events"]) == 1
     assert (await poll_events(pool, stranger, since=0))["events"] == []
+
+
+# -- the async consumer -----------------------------------------------------
+
+
+async def test_a_burst_becomes_one_evaluation_not_one_per_message(
+    pool, tenant, principal_for
+):
+    """The test that separates async from per-write-with-extra-latency.
+
+    Five hundred transitions inside one window must produce one evaluation.
+    Without the window this is the design the plan set out to avoid, wearing a
+    queue as a disguise.
+    """
+    from memdog.alerts import AlertWorker
+
+    actor = await principal_for(tenant.api_key)
+    alert = await _alert(pool, actor, tenant, where={"predicate": ["located_in"]})
+    await _approve(pool, actor, alert["alert_id"])
+
+    worker = AlertWorker(pool, debounce_seconds=0.05)
+    for _ in range(200):
+        await worker.handle({"event_id": "whatever"})
+    await worker.drain()
+
+    runs = await pool.fetchval(
+        "SELECT count(*) FROM alert_runs WHERE alert_id = $1 AND trigger = 'tick'",
+        alert["alert_id"])
+    assert runs <= 1, "two hundred messages must not become two hundred runs"
+
+
+async def test_a_window_that_fails_leaves_the_work_for_the_sweep(
+    pool, tenant, principal_for
+):
+    """The watermark did not move, so the tick finds it again.
+
+    Failing loudly in the consumer would take the instance down over work that
+    is already recoverable.
+    """
+    from memdog.alerts import AlertWorker
+
+    actor = await principal_for(tenant.api_key)
+    alert = await _alert(pool, actor, tenant, where={"predicate": ["located_in"]})
+    await _approve(pool, actor, alert["alert_id"])
+    await _ingest(pool, tenant, "a", "Lisbon", event_time=NOW() - timedelta(days=5))
+    await _ingest(pool, tenant, "b", "Berlin", event_time=NOW())
+
+    before = await pool.fetchval(
+        "SELECT watermark FROM alerts WHERE alert_id = $1", alert["alert_id"])
+
+    class Broken(AlertWorker):
+        async def _evaluate_after_window(self):
+            try:
+                raise RuntimeError("the window died")
+            except Exception:
+                pass
+
+    worker = Broken(pool, debounce_seconds=0.01)
+    await worker.handle({})
+    await worker.drain()
+
+    assert await pool.fetchval(
+        "SELECT watermark FROM alerts WHERE alert_id = $1", alert["alert_id"]) == before
+    assert (await tick(pool))["evaluated"][0]["matches"] == 1
+
+
+# -- outbound delivery ------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def envelope():
+    """Its own key, like test_connections. The suite sets no master key, and a
+    delivery that needs one is testing the deployment rather than the code."""
+    import os
+
+    from memdog.crypto import Envelope
+
+    return Envelope(os.urandom(32))
+
+
+async def _subscribe(pool, principal, envelope, tenant, url, alert_id=None):
+    from memdog.event_delivery import create_subscription
+
+    return await create_subscription(
+        pool, principal, envelope,
+        project_id=tenant.project_id, url=url, alert_id=alert_id)
+
+
+async def test_the_signing_secret_is_shown_once_and_never_listed(
+    pool, envelope, tenant, principal_for
+):
+    """A secret a `config:write` credential can fetch back is a secret shared
+    with everyone holding one."""
+    from memdog.event_delivery import list_subscriptions
+
+    actor = await principal_for(tenant.api_key)
+    created = await _subscribe(pool, actor, envelope, tenant, "https://example.com/hook")
+    assert created["signing_secret"].startswith("whsec_")
+
+    listed = await list_subscriptions(pool, actor, tenant.project_id)
+    assert listed and "signing_secret" not in listed[0]
+
+
+async def test_a_url_that_reaches_inside_is_refused(pool, envelope, tenant, principal_for):
+    """The control this deployment needs specifically.
+
+    Cloud SQL is at a private address reachable over the VPC and the metadata
+    server answers at 169.254.169.254. A subscription pointed at either is an
+    authenticated request from a trusted position.
+    """
+    from memdog.fetching import FetchError
+
+    actor = await principal_for(tenant.api_key)
+    for bad in ("https://10.100.0.3:5432/x",
+                "https://169.254.169.254/computeMetadata/v1/",
+                "https://127.0.0.1/hook"):
+        with pytest.raises(FetchError):
+            await _subscribe(pool, actor, envelope, tenant, bad)
+
+
+async def test_http_is_refused_because_the_payload_carries_record_state(
+    pool, envelope, tenant, principal_for
+):
+    from memdog.event_delivery import DeliveryError
+
+    actor = await principal_for(tenant.api_key)
+    with pytest.raises(DeliveryError):
+        await _subscribe(pool, actor, envelope, tenant, "http://example.test/hook")
+
+
+async def test_a_match_is_queued_for_delivery_with_the_record(
+    pool, envelope, tenant, principal_for
+):
+    """Recorded and queued in one transaction, so "recorded but never queued"
+    cannot happen."""
+    actor = await principal_for(tenant.api_key)
+    alert = await _alert(pool, actor, tenant, where={"predicate": ["located_in"]})
+    await _approve(pool, actor, alert["alert_id"])
+    await _subscribe(pool, actor, envelope, tenant, "https://example.com/hook")
+
+    await _ingest(pool, tenant, "a", "Lisbon", event_time=NOW() - timedelta(days=5))
+    await _ingest(pool, tenant, "b", "Berlin", event_time=NOW())
+    await evaluate_gap(pool, alert["alert_id"], trigger="tick")
+
+    assert await pool.fetchval(
+        "SELECT count(*) FROM event_deliveries WHERE status = 'pending'") == 1
+
+
+async def test_a_failed_delivery_is_retried_and_then_dead_lettered(
+    pool, envelope, tenant, principal_for
+):
+    """A subscriber down for an hour must be findable in one query, not
+    inferred from silence."""
+    from memdog.event_delivery import MAX_ATTEMPTS, deliver_owed
+
+    actor = await principal_for(tenant.api_key)
+    alert = await _alert(pool, actor, tenant, where={"predicate": ["located_in"]})
+    await _approve(pool, actor, alert["alert_id"])
+    await _subscribe(pool, actor, envelope, tenant, "https://example.com/hook")
+    await _ingest(pool, tenant, "a", "Lisbon", event_time=NOW() - timedelta(days=5))
+    await _ingest(pool, tenant, "b", "Berlin", event_time=NOW())
+    await evaluate_gap(pool, alert["alert_id"], trigger="tick")
+
+    # No real network from the suite: the transport is stubbed to fail the way
+    # an unreachable subscriber does.
+    import memdog.event_delivery as delivery_mod
+
+    class Unreachable:
+        def __init__(self, *a, **kw): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, *a, **kw):
+            raise ConnectionError("connection refused")
+
+    original, delivery_mod.httpx.AsyncClient = delivery_mod.httpx.AsyncClient, Unreachable
+    try:
+        for _ in range(MAX_ATTEMPTS):
+            await pool.execute("UPDATE event_deliveries SET next_attempt_at = now()")
+            await deliver_owed(pool, envelope)
+    finally:
+        delivery_mod.httpx.AsyncClient = original
+
+    row = await pool.fetchrow("SELECT status, attempts, last_error FROM event_deliveries")
+    assert row["status"] == "dead"
+    assert row["attempts"] == MAX_ATTEMPTS
+    assert row["last_error"]
+
+
+async def test_a_dead_letter_can_be_replayed_once_the_endpoint_is_fixed(
+    pool, envelope, tenant, principal_for
+):
+    from memdog.event_delivery import replay_dead
+
+    actor = await principal_for(tenant.api_key)
+    sub = await _subscribe(pool, actor, envelope, tenant, "https://example.com/hook")
+    alert = await _alert(pool, actor, tenant, where={"predicate": ["located_in"]})
+    await _approve(pool, actor, alert["alert_id"])
+    await _ingest(pool, tenant, "a", "Lisbon", event_time=NOW() - timedelta(days=5))
+    await _ingest(pool, tenant, "b", "Berlin", event_time=NOW())
+    await evaluate_gap(pool, alert["alert_id"], trigger="tick")
+    await pool.execute("UPDATE event_deliveries SET status = 'dead', attempts = 5")
+
+    result = await replay_dead(pool, actor, sub["subscription_id"])
+    assert "1" in str(result["re_armed"])
+    assert await pool.fetchval(
+        "SELECT status FROM event_deliveries") == "pending"
+
+
+async def test_rotation_keeps_the_previous_secret_for_the_overlap(
+    pool, envelope, tenant, principal_for
+):
+    """Rotating without an overlap is an outage for everything in flight."""
+    from memdog.event_delivery import rotate_secret
+
+    actor = await principal_for(tenant.api_key)
+    sub = await _subscribe(pool, actor, envelope, tenant, "https://example.com/hook")
+    rotated = await rotate_secret(
+        pool, actor, envelope, sub["subscription_id"])
+
+    assert rotated["signing_secret"] != sub["signing_secret"]
+    assert await pool.fetchval(
+        "SELECT previous_signing_secret_ct IS NOT NULL FROM event_subscriptions "
+        "WHERE subscription_id = $1", sub["subscription_id"])
+
+
+async def test_the_signature_verifies_the_way_the_inbound_path_expects(
+    pool, envelope, tenant, principal_for
+):
+    """Mirrors 0018's scheme exactly, so a subscriber verifies memdog's
+    deliveries the same way memdog asks providers to sign theirs."""
+    import hashlib
+    import hmac
+
+    from memdog.event_delivery import sign
+
+    secret = b"a-secret"
+    body = b'{"event":"fact.superseded"}'
+    ts = "1735689600"
+    expected = hmac.new(secret, f"{ts}.".encode() + body, hashlib.sha256).hexdigest()
+    assert sign(secret, ts, body) == expected
