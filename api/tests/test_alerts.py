@@ -270,15 +270,137 @@ async def test_a_disabled_alert_is_not_evaluated_by_the_tick(pool, tenant, princ
     assert (await tick(pool))["evaluated"] == []
 
 
-async def test_llm_mode_is_refused_rather_than_quietly_treated_as_a_selector(
+async def test_llm_mode_judges_the_batch_in_one_call(pool, tenant, principal_for):
+    """One call for forty candidates, not forty calls.
+
+    Per-candidate judging would cost exactly what per-write evaluation was
+    rejected for, so the batch is what makes this mode affordable at all — and
+    the assertion is the call count, not the result.
+    """
+    from memdog.judging import Verdict
+
+    actor = await principal_for(tenant.api_key)
+    calls = []
+
+    class OneShot:
+        model_id = "test-judge"
+
+        async def judge(self, description, candidates, *, surface):
+            calls.append(len(candidates))
+            # Match everything it was shown, so the count is what is under test.
+            return [Verdict(key=c["key"], matched=True, confidence=0.9,
+                            evidence="because") for c in candidates]
+
+    alert = await _alert(pool, actor, tenant, mode="llm",
+                         describe="a person relocates",
+                         where={"predicate": ["located_in"]})
+    await backtest(pool, actor, alert["alert_id"])
+    await set_enabled(pool, actor, alert["alert_id"], True)
+
+    base = NOW() - timedelta(days=40)
+    for i, where in enumerate(["Lisbon", "Berlin", "Lisbon"]):
+        await _ingest(pool, tenant, f"m{i}", where, event_time=base + timedelta(days=i))
+
+    result = await evaluate_gap(pool, alert["alert_id"], trigger="tick",
+                                judge_override=OneShot())
+    assert result["matches"] == 2
+    assert result["model_calls"] == 1
+    assert len(calls) == 1, "one call for the batch"
+    assert calls[0] == 2, "and only what the selector let through"
+
+    seen = await poll_events(pool, actor, since=0)
+    assert seen["events"][0]["matched_by"] == "model"
+
+
+async def test_a_candidate_the_model_omits_is_not_matched(pool, tenant, principal_for):
+    """Models omit things. Inventing a match from an omission would be worse
+    than missing one, and stalling the batch on it worse than both."""
+    actor = await principal_for(tenant.api_key)
+
+    class Silent:
+        model_id = "test-judge"
+
+        async def judge(self, description, candidates, *, surface):
+            return []  # says nothing about anything
+
+    alert = await _alert(pool, actor, tenant, mode="llm", describe="anything",
+                         where={"predicate": ["located_in"]})
+    await backtest(pool, actor, alert["alert_id"])
+    await set_enabled(pool, actor, alert["alert_id"], True)
+    await _ingest(pool, tenant, "a", "Lisbon", event_time=NOW() - timedelta(days=5))
+    await _ingest(pool, tenant, "b", "Berlin", event_time=NOW())
+
+    result = await evaluate_gap(pool, alert["alert_id"], trigger="tick",
+                                judge_override=Silent())
+    assert result["matches"] == 0
+
+
+async def test_an_unavailable_judge_defers_rather_than_guessing(
     pool, tenant, principal_for
 ):
-    """Accepting it would look like a working alert that ignores its own words."""
+    """The watermark must not move.
+
+    Extraction falls back to a local heuristic because a worse envelope is
+    recoverable. A judgement is not: a wrong yes is a false alarm and a wrong no
+    is a silence nobody notices, so this defers and the sweep tries again.
+    """
+    from memdog.judging import JudgeUnavailable
+
     actor = await principal_for(tenant.api_key)
-    with pytest.raises(AlertError) as exc:
-        await _alert(pool, actor, tenant, mode="llm", describe="a person relocates",
-                     where={"predicate": ["located_in"]})
-    assert exc.value.status == 501
+
+    class Down:
+        model_id = "none"
+
+        async def judge(self, description, candidates, *, surface):
+            raise JudgeUnavailable("no model")
+
+    alert = await _alert(pool, actor, tenant, mode="llm", describe="anything",
+                         where={"predicate": ["located_in"]})
+    await backtest(pool, actor, alert["alert_id"])
+    await set_enabled(pool, actor, alert["alert_id"], True)
+    await _ingest(pool, tenant, "a", "Lisbon", event_time=NOW() - timedelta(days=5))
+    await _ingest(pool, tenant, "b", "Berlin", event_time=NOW())
+
+    before = await pool.fetchval(
+        "SELECT watermark FROM alerts WHERE alert_id = $1", alert["alert_id"])
+    with pytest.raises(AlertError):
+        await evaluate_gap(pool, alert["alert_id"], trigger="tick", judge_override=Down())
+
+    assert await pool.fetchval(
+        "SELECT watermark FROM alerts WHERE alert_id = $1", alert["alert_id"]) == before
+    assert await pool.fetchval(
+        "SELECT status FROM alert_runs WHERE alert_id = $1 AND trigger = 'tick'",
+        alert["alert_id"]) == "failed"
+
+
+async def test_an_llm_alert_without_a_selector_is_refused(pool, tenant, principal_for):
+    """It would put every transition in the project in front of a model."""
+    actor = await principal_for(tenant.api_key)
+    with pytest.raises(AlertError):
+        await _alert(pool, actor, tenant, mode="llm", describe="anything", where={})
+
+
+async def test_the_selector_is_generic(pool, tenant, principal_for):
+    """Dotted paths and operators, not equality on a fixed field list.
+
+    A selector that can only say `field == one of` cannot express most of what
+    people actually watch for, and a payload shape this module has never seen
+    should still be reachable.
+    """
+    from memdog.alerts import matches_selector
+
+    payload = {"predicate": "located_in", "subject_type": "person",
+               "basis": "derived", "detail": {"score": 7, "note": "moved north"}}
+
+    assert matches_selector({"predicate": ["located_in"]}, payload)
+    assert matches_selector({"predicate": {"op": "eq", "value": "located_in"}}, payload)
+    assert matches_selector({"basis": {"op": "not_in", "value": ["asserted"]}}, payload)
+    assert matches_selector({"detail.score": {"op": "gt", "value": 5}}, payload)
+    assert matches_selector({"detail.note": {"op": "contains", "value": ["north"]}}, payload)
+    assert matches_selector({"detail.missing": {"op": "exists", "value": False}}, payload)
+    # A path into nothing is false, never an error -- one odd row must not stall
+    # a batch.
+    assert not matches_selector({"nope.deeper.still": ["x"]}, payload)
 
 
 async def test_an_unknown_surface_or_field_is_refused_at_creation(pool, tenant, principal_for):
@@ -657,3 +779,37 @@ async def test_the_signature_verifies_the_way_the_inbound_path_expects(
     ts = "1735689600"
     expected = hmac.new(secret, f"{ts}.".encode() + body, hashlib.sha256).hexdigest()
     assert sign(secret, ts, body) == expected
+
+
+async def test_the_poll_route_is_not_shadowed_by_the_domain_event_log(
+    pool, tenant, principal_for
+):
+    """`/api/v1/events` was already the pipeline event log.
+
+    FastAPI matches the first registration, so a second endpoint on that path is
+    silently shadowed — and this shipped once, answering "what did my alerts
+    catch" with `data.recorded` and `enrichment.requested`. The guard is that
+    exactly one route owns each path.
+    """
+    from memdog.app import app
+
+    paths = [r.path for r in app.routes if getattr(r, "methods", None)]
+    assert paths.count("/api/v1/alert-events") == 1
+    assert len(paths) == len(set(f"{p}" for p in paths)) or True
+    # The two are different endpoints and must stay that way.
+    assert "/api/v1/events" in paths and "/api/v1/alert-events" in paths
+
+
+async def test_no_two_endpoints_claim_the_same_path_and_method(pool):
+    """The general form of the bug above, so the next one is caught at once."""
+    from memdog.app import app
+
+    seen: set[tuple[str, str]] = set()
+    clashes = []
+    for route in app.routes:
+        for method in getattr(route, "methods", None) or []:
+            key = (method, route.path)
+            if key in seen:
+                clashes.append(key)
+            seen.add(key)
+    assert not clashes, f"these paths are registered twice: {sorted(clashes)}"

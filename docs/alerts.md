@@ -100,7 +100,7 @@ saved is one somebody switches off.
 ## Reading what fired
 
 ```bash
-GET /api/v1/events?since=<sequence>&alert_id=&limit=
+GET /api/v1/alert-events?since=<sequence>&alert_id=&limit=
 ```
 
 The cursor is a **sequence, not a timestamp**. Two events in the same
@@ -145,15 +145,67 @@ x-signature-timestamp: 1735689600
 x-signature: <hmac-sha256(secret, "1735689600." + body)>
 ```
 
+## Two modes
+
+**`rule`** is a selector and nothing else. No model, no cost, and it is what
+eight of the eight surfaces are served by.
+
+**`llm`** adds a description in words, judged **after** the selector has already
+narrowed the batch:
+
+```jsonc
+{ "mode": "llm",
+  "describe": "a customer signals they may leave",
+  "where": { "data_type": ["email"] } }
+```
+
+The selector stays **required** in this mode. Without one, every transition in
+the project would reach a model, and the cost is unbounded in exactly the way
+nobody notices until the bill.
+
+Judging happens in **one call per run** over the whole surviving batch. Per
+candidate would cost what per-write evaluation was rejected for, so the batch is
+what makes the mode affordable at all.
+
+Two refusals hold it together:
+
+- **An unavailable model defers; it never guesses.** Extraction falls back to a
+  local heuristic because a worse summary is recoverable and a missing one
+  stalls an item forever. A judgement is not like that — a wrong yes is a false
+  alarm and a wrong no is a silence nobody notices — so the run fails, the
+  watermark does not move, and the sweep tries again. The same choice embeddings
+  make, for the same reason.
+- **A candidate the model does not mention is not matched.** Models omit things.
+  Inventing a match from an omission would fabricate alerts; treating it as an
+  error would stall a batch on one bad row.
+
+## Conditions are generic
+
+A field name **or a dotted path**, with an operator. A payload shape this module
+has never seen is still reachable, so a surface added later needs no new
+vocabulary here:
+
+```jsonc
+{
+  "predicate":    ["located_in"],                       // implicitly "in"
+  "basis":        {"op": "not_in", "value": ["asserted"]},
+  "detail.score": {"op": "gt", "value": 5},
+  "detail.note":  {"op": "contains", "value": ["north"]},
+  "detail.tag":   {"op": "exists", "value": false}
+}
+```
+
+Operators: `in` · `not_in` · `eq` · `ne` · `contains` · `gt` · `lt` · `exists`.
+Every one is total against a missing value, so **a path into nothing is false,
+never an error** — one odd record must not stall a batch.
+
+The *root* of a path must be a field the surface emits; anything below it is
+free. An unknown root is almost always a typo, and a selector that silently
+never matches is the worst way to discover one.
+
 ## What is not built
 
-**`llm` mode is refused with a 501.** An alert described in words rather than a
-selector is designed — the schema and the surface vocabulary are in place — but
-judging a batch needs a seam that does not exist yet: the extractor returns a
-typed envelope and the answerer returns prose with citations, and neither is a
-per-candidate verdict. Accepting the mode meanwhile would look like a working
-alert that ignores its own description.
-
-Also absent, and poll-shaped rather than transition-shaped: aggregate alerts
-("sentiment turned negative"), source-health detection ("a crawler that found
-things finds nothing"), and the bitemporal diff endpoint.
+Aggregate alerts ("sentiment turned negative"), source-health detection ("a
+crawler that found things finds nothing"), and the bitemporal diff endpoint.
+All three are **poll-shaped rather than transition-shaped** — they need a
+scheduled evaluator over a query result, not a watermark over a log.

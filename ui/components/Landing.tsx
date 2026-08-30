@@ -638,10 +638,48 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
             <span className="step-n">ALERTS</span>
             <h3>Say what matters, and be told</h3>
             <p>
-              Describe an event — a location changing, a record becoming org-visible, a guess being
-              confirmed — and it is recorded when it happens, then polled or pushed to your
-              endpoint. Nothing runs until you have replayed it against history and seen what it
-              would have caught.
+              A location changing, a record becoming org-visible, a guess being confirmed. Recorded
+              when it happens, then polled or pushed to a signed endpoint — and nothing runs until
+              you have replayed it against history and read what it would have caught.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section className="steps" id="alerts">
+        <h2 className="section-title">Two ways to say what you are watching for</h2>
+        <p className="hero-lede" style={{ marginBottom: 22 }}>
+          Most of what people watch for is a rule, and a rule costs nothing to evaluate. What is
+          left over is a sentence, and that is judged — but only over what the rules already
+          narrowed down, in one call for the whole batch rather than one per event.
+        </p>
+        <div className="steps-grid">
+          <article>
+            <span className="step-n">RULES</span>
+            <h3>Conditions, over any shape</h3>
+            <p>
+              Compare a field or a dotted path into the event — is one of, contains, greater than,
+              is absent. A kind of event this console has never seen is still reachable, so the
+              vocabulary does not have to grow every time the system does.
+            </p>
+          </article>
+          <article>
+            <span className="step-n">WORDS</span>
+            <h3>And a sentence for the rest</h3>
+            <p>
+              <em>&ldquo;A customer signals they may leave.&rdquo;</em> The rules still run first
+              and decide what the model is even shown, which is why they are required. If no model
+              is available the run defers rather than guessing — a wrong yes is a false alarm and a
+              wrong no is a silence nobody notices.
+            </p>
+          </article>
+          <article>
+            <span className="step-n">NEVER</span>
+            <h3>Not once per write</h3>
+            <p>
+              Evaluation waits and batches, so ten thousand records arriving at once is a handful
+              of evaluations rather than ten thousand. What has been looked at is a mark in the
+              database, not a message in a queue, so nothing is lost when a machine goes away.
             </p>
           </article>
         </div>

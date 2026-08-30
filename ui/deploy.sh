@@ -14,6 +14,14 @@ IMAGE="${REGION}-docker.pkg.dev/${PROJECT}/memdog/memdog-sandbox:${TAG}"
 SA="memdog-api@${PROJECT}.iam.gserviceaccount.com"
 API_URL="${API_URL:-https://memdog-api-266276359448.us-central1.run.app}"
 
+# Checked before the build, not after it. `set -u` catches these either way, but
+# it catches them *at the deploy line* -- so the image builds, pushes, and then
+# the script dies having changed nothing, which reads as a successful deploy to
+# anyone watching an exit code rather than the log. That is exactly how a UI
+# release was reported as live twice while the old revision kept serving.
+: "${MEMDOG_PROJECT_ID:?set MEMDOG_PROJECT_ID (the project whose data the console shows)}"
+: "${MEMDOG_PRODUCER_ID:?set MEMDOG_PRODUCER_ID (the producer the console writes as)}"
+
 docker buildx build --platform linux/amd64 -t "$IMAGE" --push .
 
 gcloud run deploy "$SERVICE" \

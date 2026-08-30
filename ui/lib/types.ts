@@ -187,6 +187,19 @@ export type Alert = {
   batch_cap: number;
   matches_24h?: number;
   last_run_at?: string | null;
+  debounce_seconds: number;
+  overlap: string;
+  /** Transitions this alert has not looked at yet. Climbing means the sweep stopped. */
+  behind?: number;
+};
+
+/** What a backtest would have caught — the only way to judge a selector. */
+export type Backtest = {
+  candidates: number;
+  matches: number;
+  deferred: number;
+  sampled: number;
+  samples: { sequence: number; occurred_at: string; payload: Record<string, unknown> }[];
 };
 
 export type ObservedEvent = {
@@ -199,7 +212,41 @@ export type ObservedEvent = {
   payload: Record<string, unknown>;
   matched_by: "selector" | "model";
   occurred_at: string;
+  deliveries: number;
+  delivered: number;
+  undeliverable: number;
 };
+
+/**
+ * A transition payload as a sentence.
+ *
+ * The feed used to print `JSON.stringify(payload).slice(0, 120)`, which is a
+ * dump rather than an event — you could not tell at a glance what had happened,
+ * which is the only thing the screen is for.
+ */
+export function describeEvent(surface: string, p: Record<string, unknown>): string {
+  const s = (k: string) => (p[k] == null ? "?" : String(p[k]));
+  switch (surface) {
+    case "fact.asserted":
+      return `${s("subject_type")} · ${s("predicate")} → ${s("object_type")}`;
+    case "fact.superseded":
+      return `${s("predicate")} replaced — the previous value no longer holds`;
+    case "fact.retracted":
+      return `${s("predicate")} withdrawn${p.reason ? ` — ${s("reason")}` : ""}`;
+    case "data.revised":
+      return `revision ${s("from_revision")} → ${s("revision")} via ${s("source")}`;
+    case "acl.changed":
+      return `${s("from_level")} → ${s("to_level")}`;
+    case "memory.member_added":
+      return `added to a ${s("memory_type")} memory (${s("added_by")})`;
+    case "memory.retyped":
+      return `${s("from_type")} → ${s("to_type")}`;
+    case "case.member_promoted":
+      return `confirmed on a ${s("case_type")} case`;
+    default:
+      return Object.entries(p).map(([k, v]) => `${k}=${v}`).join(" · ");
+  }
+}
 
 export type AlertRun = {
   run_id: string;
@@ -209,6 +256,8 @@ export type AlertRun = {
   matches: number;
   /** Non-zero means a batch hit its cap. Never left implicit. */
   deferred: number;
+  /** One per run in llm mode, zero in rule mode. Cost beside the control. */
+  model_calls: number;
   started_at: string;
 };
 

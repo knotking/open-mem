@@ -2304,7 +2304,11 @@ async def delete_alert_endpoint(
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
 
 
-@app.get("/api/v1/events")
+# Not `/api/v1/events`: that path was already the domain event log, and FastAPI
+# matches the first registration -- so a second one there is silently shadowed,
+# which is how this shipped once and returned pipeline events to a caller asking
+# what its alerts had caught.
+@app.get("/api/v1/alert-events")
 async def poll_events_endpoint(
     request: Request, since: int = 0, alert_id: str | None = None,
     limit: int = 100, actor: Principal = Depends(principal)

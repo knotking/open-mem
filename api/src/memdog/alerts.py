@@ -29,6 +29,7 @@ import asyncpg
 
 from .acl import visibility_params
 from .auth import CONFIG_WRITE, DATA_READ, Principal
+from .config import load_settings
 from .ids import new_id
 import logging
 
@@ -61,6 +62,9 @@ SUBJECT_OF: dict[str, str] = {
 
 # Editing any of these changes what matches, so it invalidates the backtest.
 # Renaming an alert does not.
+# Enough to judge a selector by eye without turning the response into a dump.
+SAMPLE_LIMIT = 25
+
 MATCHING_FIELDS = ("mode", "surface", "where_clause", "describe", "model_id")
 
 
@@ -81,14 +85,23 @@ def validate(*, mode: str, surface: str, where_clause: dict, describe: str | Non
         raise AlertError("mode must be 'rule' or 'llm'")
     if not isinstance(where_clause, dict):
         raise AlertError("where must be an object of field -> allowed values")
-    unknown = sorted(set(where_clause) - SURFACES[surface])
-    if unknown:
-        raise AlertError(
-            f"{surface} has no field(s) {', '.join(unknown)}; "
-            f"allowed: {', '.join(sorted(SURFACES[surface]))}")
-    for field, allowed in where_clause.items():
-        if not isinstance(allowed, list) or not allowed:
-            raise AlertError(f"{field} must be a non-empty list of allowed values")
+    # A path is allowed if its *root* is a field this surface emits. Anything
+    # under it is free -- payload shapes evolve, and a selector that cannot
+    # reach a nested value is not generic. But an unknown root is almost always
+    # a typo, and silently never matching is the worst way to find that out.
+    known = SURFACES[surface]
+    for path, condition in where_clause.items():
+        root = path.split(".")[0]
+        if root not in known:
+            raise AlertError(
+                f"{surface} emits no {root!r}; it has: {', '.join(sorted(known))}")
+        op = condition.get("op", "in") if isinstance(condition, dict) else "in"
+        if op not in OPERATORS:
+            raise AlertError(
+                f"unknown operator {op!r}; use one of: {', '.join(sorted(OPERATORS))}")
+        arg = condition.get("value") if isinstance(condition, dict) else condition
+        if op not in ("exists", "changed") and (arg is None or arg == []):
+            raise AlertError(f"{path} needs a value to compare against")
     if mode == "llm":
         if not describe:
             raise AlertError("llm mode needs a description of the event")
@@ -98,21 +111,72 @@ def validate(*, mode: str, surface: str, where_clause: dict, describe: str | Non
             raise AlertError(
                 "llm mode needs a selector as well; without one every "
                 "transition in the project reaches the model")
-        # Designed, schema in place, evaluation not built. Refused outright
-        # rather than accepted and quietly evaluated as a selector, which would
-        # look like a working alert that ignores its own description.
-        raise AlertError("llm mode is not implemented yet", status=501)
+
+
+
+# The operators a condition may use. Deliberately small and total: every one is
+# decidable against a value that may be absent, so a missing field is `false`
+# rather than an error that stalls a batch on one odd row.
+OPERATORS = {
+    "in":        lambda v, arg: v in arg,
+    "not_in":    lambda v, arg: v not in arg,
+    "eq":        lambda v, arg: v == (arg[0] if isinstance(arg, list) else arg),
+    "ne":        lambda v, arg: v != (arg[0] if isinstance(arg, list) else arg),
+    "exists":    lambda v, arg: (v is not None) is bool(arg),
+    "contains":  lambda v, arg: any(str(a).lower() in str(v).lower() for a in arg),
+    "gt":        lambda v, arg: _num(v) is not None and _num(v) > _num(arg),
+    "lt":        lambda v, arg: _num(v) is not None and _num(v) < _num(arg),
+    "changed":   lambda v, arg: True,   # the surface already means "it changed"
+}
+
+
+def _num(value):
+    if isinstance(value, list):
+        value = value[0] if value else None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def dig(payload: dict, path: str):
+    """Follow a dotted path, tolerating anything missing.
+
+    Generic on purpose: a selector should be able to reach into a payload shape
+    this module has never seen, so a surface added later needs no code here.
+    `webhooks._dig` does the same for inbound mappings and for the same reason.
+    """
+    current = payload
+    for part in path.split("."):
+        if isinstance(current, dict):
+            current = current.get(part)
+        elif isinstance(current, list) and part.isdigit() and int(part) < len(current):
+            current = current[int(part)]
+        else:
+            return None
+    return current
 
 
 def matches_selector(where_clause: dict, payload: dict) -> bool:
     """Deterministic, and the whole of evaluation in `rule` mode.
 
+    Two shapes, because the short one is what people write:
+
+        {"predicate": ["located_in"]}                 -- implicitly `in`
+        {"predicate": {"op": "in", "value": [...]}}   -- any operator
+
     Applied in Python rather than SQL because the batch is already bounded by
     `batch_cap` and already in memory; pushing it down would buy nothing and
-    would make the selector vocabulary a second thing to keep in step.
+    would make the vocabulary a second thing to keep in step.
     """
-    for field, allowed in where_clause.items():
-        if payload.get(field) not in allowed:
+    for path, condition in where_clause.items():
+        value = dig(payload, path)
+        if isinstance(condition, dict):
+            op, arg = condition.get("op", "in"), condition.get("value")
+        else:
+            op, arg = "in", condition
+        check = OPERATORS.get(op)
+        if check is None or not check(value, arg):
             return False
     return True
 
@@ -223,7 +287,11 @@ async def list_alerts(pool: asyncpg.Pool, principal: Principal, project_id: str)
                (SELECT count(*) FROM observed_events o
                  WHERE o.alert_id = a.alert_id
                    AND o.occurred_at > now() - interval '24 hours') AS matches_24h,
-               (SELECT max(started_at) FROM alert_runs r WHERE r.alert_id = a.alert_id) AS last_run_at
+               (SELECT max(started_at) FROM alert_runs r WHERE r.alert_id = a.alert_id) AS last_run_at,
+               -- How much of the log this alert has not looked at yet. Zero is
+               -- caught up; a number that keeps climbing means the sweep is not
+               -- running, which otherwise looks identical to "nothing happened".
+               (SELECT coalesce(max(sequence), 0) FROM domain_events) - a.watermark AS behind
           FROM alerts a
          WHERE a.project_id = $1 AND a.org_id = $2 AND a.deleted_at IS NULL
          ORDER BY a.created_at DESC
@@ -297,7 +365,7 @@ def _public(row) -> dict:
 
 async def evaluate_gap(
     pool: asyncpg.Pool, alert_id: str, *, trigger: str, record: bool = True,
-    from_sequence: int | None = None,
+    from_sequence: int | None = None, judge_override=None,
 ) -> dict:
     """Evaluate everything this alert has not seen, up to `batch_cap`.
 
@@ -340,7 +408,8 @@ async def evaluate_gap(
             # rather than a guess that a full batch means more.
             rows = await pool.fetch(
                 """
-                SELECT event_id, sequence, payload, org_id, project_id, data_id
+                SELECT event_id, sequence, payload, org_id, project_id, data_id,
+                       occurred_at
                   FROM domain_events
                  WHERE sequence > $1 AND event_type = $2
                    AND org_id = $3 AND (project_id = $4 OR project_id IS NULL)
@@ -352,11 +421,57 @@ async def evaluate_gap(
             deferred = max(0, len(rows) - cap)
             rows = rows[:cap]
 
+            # The selector runs first in both modes. In `llm` mode it is the
+            # gate that decides what the model is even shown -- which is why a
+            # description without one is refused: it would put every transition
+            # in the project in front of a model.
             matched = []
             for row in rows:
                 payload = _loads(row["payload"])
                 if matches_selector(where, payload):
                     matched.append((row, payload))
+
+            model_calls = 0
+            if alert["mode"] == "llm" and matched:
+                from .judging import JudgeUnavailable, build_judge
+
+                judge = judge_override or build_judge(load_settings())
+                candidates = [
+                    {"key": str(r["sequence"]), **pl} for r, pl in matched
+                ]
+                try:
+                    # One call for the batch. Per candidate would cost what
+                    # per-write evaluation was rejected for.
+                    verdicts = await judge.judge(
+                        alert["describe"], candidates, surface=alert["surface"])
+                except JudgeUnavailable as exc:
+                    # Deferred, not guessed. The watermark stays put and the
+                    # sweep will try again -- the same choice embeddings make,
+                    # because a wrong verdict is a false alarm or a silence and
+                    # both look like the feature working.
+                    raise AlertError(f"judging deferred: {exc}", status=503) from exc
+                model_calls = 1
+                by_key = {v.key: v for v in verdicts}
+                judged = []
+                for r, pl in matched:
+                    # A candidate the model did not mention is not matched.
+                    # Inventing a match from an omission is worse than missing
+                    # one, and stalling the batch on it is worse than both.
+                    verdict = by_key.get(str(r["sequence"]))
+                    if verdict is not None and verdict.matched:
+                        judged.append((r, {**pl, "_confidence": verdict.confidence,
+                                           "_evidence": verdict.evidence}))
+                matched = judged
+
+            # A backtest that reports only a count cannot be judged. "Fourteen"
+            # is not calibration -- seeing *which* fourteen is, and it is the
+            # only way to tell a selector that works from one that matches
+            # everything.
+            samples = [
+                {"sequence": r["sequence"], "occurred_at": r["occurred_at"],
+                 "payload": pl}
+                for r, pl in matched[:SAMPLE_LIMIT]
+            ]
 
             if record:
                 for row, payload in matched:
@@ -364,9 +479,10 @@ async def evaluate_gap(
                         """
                         INSERT INTO observed_events (event_id, alert_id, config_version,
                             run_id, org_id, project_id, surface, source_event_id,
-                            data_id, fact_id, memory_id, case_id, payload, matched_by)
+                            data_id, fact_id, memory_id, case_id, payload,
+                            matched_by, confidence)
                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-                                $13::jsonb, 'selector')
+                                $13::jsonb, $14, $15)
                         ON CONFLICT (alert_id, source_event_id) DO NOTHING
                         """,
                         new_id("oev"), alert_id, alert["config_version"], run_id,
@@ -374,6 +490,8 @@ async def evaluate_gap(
                         row["event_id"], row["data_id"], payload.get("fact_id"),
                         payload.get("memory_id"), payload.get("case_id"),
                         json.dumps(payload),
+                        "model" if alert["mode"] == "llm" else "selector",
+                        payload.get("_confidence"),
                     )
                     # Queued with the record, so "recorded but never queued"
                     # cannot happen. Whether it is *sent* is a separate status:
@@ -400,10 +518,11 @@ async def evaluate_gap(
             await pool.execute(
                 """
                 UPDATE alert_runs SET status = 'completed', to_sequence = $2,
-                       candidates = $3, matches = $4, deferred = $5, finished_at = now()
+                       candidates = $3, matches = $4, deferred = $5,
+                       model_calls = $6, finished_at = now()
                  WHERE run_id = $1
                 """,
-                run_id, last, len(rows), len(matched), deferred,
+                run_id, last, len(rows), len(matched), deferred, model_calls,
             )
     except Exception as exc:
         await pool.execute(
@@ -413,7 +532,9 @@ async def evaluate_gap(
 
     return {"alert_id": alert_id, "run_id": run_id, "status": "completed",
             "candidates": len(rows), "matches": len(matched), "deferred": deferred,
-            "to_sequence": last, "recorded": record}
+            "to_sequence": last, "recorded": record, "samples": samples,
+            "sampled": len(samples), "window_from": start, "window_to": last,
+            "model_calls": model_calls}
 
 
 async def backtest(
@@ -497,7 +618,16 @@ async def poll_events(
         SELECT o.event_id, o.sequence, o.alert_id, o.config_version, o.surface,
                o.source_event_id, o.data_id, o.fact_id, o.memory_id, o.case_id,
                o.payload, o.matched_by, o.confidence, o.occurred_at,
-               a.name AS alert_name
+               a.name AS alert_name,
+               -- Whether anyone was actually told. A feed that shows a match
+               -- and hides that its delivery is dead is the half of the story
+               -- that matters least.
+               (SELECT count(*) FROM event_deliveries d
+                 WHERE d.event_id = o.event_id) AS deliveries,
+               (SELECT count(*) FROM event_deliveries d
+                 WHERE d.event_id = o.event_id AND d.status = 'delivered') AS delivered,
+               (SELECT count(*) FROM event_deliveries d
+                 WHERE d.event_id = o.event_id AND d.status = 'dead') AS undeliverable
           FROM observed_events o
           JOIN alerts a ON a.alert_id = o.alert_id
           LEFT JOIN entity_facts f ON f.fact_id = o.fact_id

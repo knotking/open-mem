@@ -360,6 +360,133 @@ SELECT Id, Name, Title, Account.Name, Account.Industry FROM Contact
 
 ---
 
+## Scenario 4b — Ask what was true then, not just what is true
+
+Every fact the graph holds carries two clocks, and they answer different questions.
+
+```bash
+E=ent_01M18Z3ZSEQ886JVKXKRHCS2G8
+
+# What is true now
+curl -H "X-API-Key: $KEY" "$BASE/api/v1/entities/$E/graph"
+
+# What was true in March
+curl -H "X-API-Key: $KEY" "$BASE/api/v1/entities/$E/graph?valid_at=2026-03-01T00:00:00Z"
+
+# What we BELIEVED in March -- which is not the same question
+curl -H "X-API-Key: $KEY" "$BASE/api/v1/entities/$E/graph?as_of=2026-03-01T00:00:00Z"
+```
+
+A document imported today about last year is visible at `valid_at=last year` and **invisible** at
+`as_of=last month`, because nobody had read it yet. An implementation with one timestamp answers
+one of those two wrongly, whichever it stored.
+
+`GET /api/v1/entities/{id}/history` shows every claim that has touched an entity, open and closed:
+
+```
+Miguel Santos - located_in -> Madrid | from 2026-08-30T12:00 | to —
+Miguel Santos - located_in -> Porto  | from 2026-08-30T09:15 | to 2026-08-30T12:00 | superseded_by fct_…
+```
+
+Nothing was overwritten. Porto was closed at the instant Madrid opened, so an earlier `as_of` still
+returns the graph exactly as it stood.
+
+> **Which claims supersede is declared, not inferred.** `located_in` and `reports_to` hold one open
+> value; everything else accumulates. `works_for` is deliberately multi-valued — marking it single
+> would quietly close every second job as though the person had left it, which is wrong in a way
+> that reads as correct. `GET /api/v1/graph/predicates` serves the list.
+>
+> Two claims that begin at the *same instant* are not resolved. They contradict, and
+> `GET /api/v1/graph/conflicts` says so rather than picking one.
+
+---
+
+## Scenario 4c — Be told when something changes
+
+Retrieval answers *what matches this question now*. An alert answers *tell me when this happens* —
+and the failure modes differ: a search that returns nothing is visible, and an alert that fires
+nothing is silence.
+
+```bash
+# 1. Say what you are watching for. It watches from now on, not backwards.
+ALERT=$(curl -s -X POST "$BASE/api/v1/alerts" -H "X-API-Key: $KEY" -H "content-type: application/json" -d '{
+  "project_id": "'"$PRJ"'",
+  "name": "a person relocates",
+  "surface": "fact.superseded",
+  "where": {
+    "predicate": ["located_in"],
+    "subject_type": {"op": "in", "value": ["person"]}
+  }
+}' | python3 -c 'import json,sys;print(json.load(sys.stdin)["alert_id"])')
+
+# 2. See what it WOULD have caught. Records nothing, sends nothing.
+curl -s -X POST "$BASE/api/v1/alerts/$ALERT/backtest" -H "X-API-Key: $KEY" -H "content-type: application/json" -d '{}'
+# {"candidates": 31, "matches": 4, "samples": [ … the four, so you can judge them ]}
+
+# 3. Only now will it start. Before a backtest this is a 409.
+curl -s -X POST "$BASE/api/v1/alerts/$ALERT/enabled" -H "X-API-Key: $KEY" -H "content-type: application/json" \
+     -d '{"enabled":true}'
+
+# 4. Read what fired.
+curl -s -H "X-API-Key: $KEY" "$BASE/api/v1/alert-events?since=0"
+```
+
+**A count is not calibration.** `matches: 4` tells you nothing about whether the conditions say what
+you meant — `samples` is there so you can read the four and find out. A selector that matches
+everything looks identical to one that works until you do.
+
+### Conditions are generic
+
+A field name or a dotted path, with an operator. A payload shape nothing has seen before is still
+reachable, so a new kind of event needs no new vocabulary:
+
+```jsonc
+{
+  "predicate":    ["located_in"],                      // implicitly "is one of"
+  "basis":        {"op": "not_in", "value": ["asserted"]},
+  "detail.score": {"op": "gt", "value": 5},
+  "detail.note":  {"op": "contains", "value": ["north"]}
+}
+```
+
+A path into nothing is **false, never an error** — one odd record must not stall a batch.
+
+### When a rule cannot say it, a sentence can
+
+```jsonc
+{ "mode": "llm",
+  "describe": "a customer signals they may leave",
+  "where": { "data_type": ["email"] } }
+```
+
+The conditions still run first and decide what the model is even shown, which is why they stay
+required: without them every transition in the project would reach a model. What survives is judged
+in **one call per run**, not one per event.
+
+**If no model is available the run defers rather than guessing.** Extraction falls back to a local
+heuristic because a worse summary is recoverable; a judgement is not — a wrong yes is a false alarm
+and a wrong no is a silence nobody notices. The watermark does not move and the sweep tries again.
+
+### Being pushed instead of polling
+
+```bash
+curl -s -X POST "$BASE/api/v1/event-subscriptions" -H "X-API-Key: $KEY" -H "content-type: application/json" \
+     -d '{"project_id":"'"$PRJ"'","url":"https://your.app/hooks/memdog"}'
+# {"signing_secret": "whsec_…", "note": "shown once; it cannot be retrieved later, only rotated"}
+```
+
+Signed HMAC-SHA256 over `{timestamp}.{body}` — the same scheme memdog asks providers to use inbound,
+so you verify one way. `https` only, and the address is re-checked on every send, because a host
+that resolved publicly yesterday can resolve to a private one today.
+
+> **Two things that surprise people.** Evaluation is **never per write** — it waits and batches, so
+> ten thousand records arriving at once is a handful of evaluations. And a fresh alert showing
+> nothing is *correct*: it starts at the head of the log, because one that fired a hundred times
+> about last month the moment you saved it is one you would turn straight back off. Use the
+> backtest to look backwards.
+
+---
+
 ## Scenario 5 — Backfill a crawl that ran cold
 
 You crawled with `enrich` off, looked at the count, and now want the corpus searchable. This is the

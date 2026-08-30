@@ -25,8 +25,10 @@ import {
   Memory,
   MemoryMember,
   MemoryType,
+  Backtest,
   ObservedEvent,
   Subscription,
+  describeEvent,
   isApproved,
   Stair,
   Trace,
@@ -1201,35 +1203,46 @@ const PRESETS: Record<string,
 };
 
 /**
- * Alerts — declare what is worth knowing about, and see what fired.
+ * Alerts — declare what is worth knowing about, then watch it fire.
  *
  * Its own group rather than under Data or Governance. The split those two
  * preserve is *how is my data arranged* against *who touched it and can I
  * prove it*, and an alert straddles them: watching a fact change is the first
- * question, watching an access level change is the second. "Tell me when" is a
- * third concern, so it gets a third heading.
+ * question, watching an access level change is the second.
  *
- * Three things this screen has to *enforce* rather than merely display, or the
- * guarantees behind them are only true in the database:
- *
- *  - an alert cannot be enabled until this wording has been backtested
- *  - editing what matches drops the approval, visibly
- *  - a run that deferred work says so, because silent truncation reads as
- *    "nothing else matched"
+ * The screen is built around the three moments that actually matter, in order:
+ * say what you want, **see what it would have caught**, then watch it catch it.
+ * The middle one is the part a count cannot do — "fourteen" is not calibration,
+ * and a selector that matches everything looks identical to one that works
+ * until you read what it matched.
  */
 function AlertsSection({ projectId }: { projectId: string }) {
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [surfaces, setSurfaces] = useState<Record<string, string[]>>({});
   const [events, setEvents] = useState<ObservedEvent[]>([]);
-  const [runs, setRuns] = useState<Record<string, AlertRun[]>>({});
   const [subs, setSubs] = useState<Subscription[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [secret, setSecret] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [draft, setDraft] = useState({
-    name: "", surface: "fact.superseded", field: "predicate", values: "located_in",
-  });
+
+  // Per-alert, because these are what you open when one alert is misbehaving.
+  const [openAlert, setOpenAlert] = useState<string | null>(null);
+  const [runs, setRuns] = useState<AlertRun[]>([]);
+  const [backtest, setBacktest] = useState<Record<string, Backtest>>({});
+
+  const [name, setName] = useState("");
+  const [surface, setSurface] = useState("fact.superseded");
+  // Several conditions, not one. A single row cannot express "any *person's*
+  // location changing", which is the first thing anyone wants to say.
+  const [conds, setConds] = useState<{ field: string; op: string; values: string }[]>([
+    { field: "predicate", op: "in", values: "located_in" },
+  ]);
+  const [mode, setMode] = useState<"rule" | "llm">("rule");
+  const [describe, setDescribe] = useState("");
+  const [advanced, setAdvanced] = useState(false);
+  const [debounce, setDebounce] = useState(5);
+  const [cap, setCap] = useState(500);
   const [subUrl, setSubUrl] = useState("https://");
 
   const load = useCallback(async () => {
@@ -1237,13 +1250,13 @@ function AlertsSection({ projectId }: { projectId: string }) {
       const [list, vocab, feed, subscriptions] = await Promise.all([
         call<{ alerts: Alert[] }>(`api/v1/projects/${projectId}/alerts`),
         call<{ surfaces: Record<string, string[]> }>("api/v1/alerts/surfaces"),
-        call<{ events: ObservedEvent[] }>("api/v1/events?since=0&limit=50"),
+        call<{ events: ObservedEvent[] }>("api/v1/alert-events?since=0&limit=100"),
         call<{ subscriptions: Subscription[] }>(
           `api/v1/projects/${projectId}/event-subscriptions`),
       ]);
       setAlerts(list.alerts);
       setSurfaces(vocab.surfaces);
-      setEvents(feed.events);
+      setEvents(feed.events.slice().reverse());
       setSubs(subscriptions.subscriptions);
     } catch (e) {
       setError((e as Error).message);
@@ -1265,155 +1278,353 @@ function AlertsSection({ projectId }: { projectId: string }) {
     }
   };
 
+  const fields = surfaces[surface] ?? [];
+  const unusedFields = fields.filter((f) => !conds.some((c) => c.field === f));
+
+  const where = () => {
+    const out: Record<string, unknown> = {};
+    for (const c of conds) {
+      const values = c.values.split(",").map((v) => v.trim()).filter(Boolean);
+      if (!c.field) continue;
+      if (c.op === "exists") out[c.field] = { op: "exists", value: true };
+      else if (c.op === "absent") out[c.field] = { op: "exists", value: false };
+      else if (values.length) out[c.field] = { op: c.op, value: values };
+    }
+    return out;
+  };
+
   const create = () =>
     act(() => call("api/v1/alerts", {
       project_id: projectId,
-      name: draft.name || `${draft.surface} watcher`,
-      surface: draft.surface,
-      where: draft.values.trim()
-        ? { [draft.field]: draft.values.split(",").map((v) => v.trim()).filter(Boolean) }
-        : {},
-    }), "Alert created. Backtest it before turning it on.");
+      name: name || `${surface} watcher`,
+      surface,
+      mode,
+      describe: mode === "llm" ? describe : undefined,
+      where: where(),
+      debounce_seconds: debounce,
+      batch_cap: cap,
+    }), "Created. Backtest it to see what it would have caught.");
 
-  const showRuns = async (alertId: string) => {
-    // Deliberately not loaded with the list: run history is what you open when
-    // an alert is behaving oddly, not something every row needs.
-    const page = await call<{ runs: AlertRun[] }>(
-      `api/v1/alerts/${alertId}/runs`).catch(() => ({ runs: [] as AlertRun[] }));
-    setRuns((prev) => ({ ...prev, [alertId]: page.runs }));
-  };
+  const runBacktest = (id: string) =>
+    act(async () => {
+      const result = await call<Backtest>(`api/v1/alerts/${id}/backtest`, {});
+      setBacktest((prev) => ({ ...prev, [id]: result }));
+      setOpenAlert(id);
+    });
 
-  const fields = surfaces[draft.surface] ?? [];
+  const openRuns = (id: string) =>
+    act(async () => {
+      const page = await call<{ runs: AlertRun[] }>(`api/v1/alerts/${id}/runs`);
+      setRuns(page.runs);
+      setOpenAlert(id);
+    });
+
+  const eventsFor = (id: string) => events.filter((e) => e.alert_id === id);
 
   return (
     <section className="stack">
       <h1>Alerts</h1>
       <p className="hint">
-        Declare an event worth knowing about. Matches are recorded once and read
-        two ways — polled below, or pushed to an endpoint you register.
+        Say what is worth knowing about. Matches are recorded once and read two
+        ways — the feed below, or pushed to an endpoint you register.
       </p>
       {error && <p className="error">{error}</p>}
       {note && <p className="note">{note}</p>}
 
+      {/* ---------- 1. say what you want ---------- */}
       <div className="card">
         <h2>New alert</h2>
         <p className="hint">
-          It starts watching from now, not from the beginning of the log — an
-          alert that fires a hundred times about last month the moment you save
-          it is one you would turn straight back off.
+          It watches from now on, not backwards — one that fired a hundred times
+          about last month the moment you saved it is one you would turn
+          straight back off. Use the backtest to see history instead.
         </p>
+
         <label>Name
-          <input value={draft.name} placeholder="a person relocates"
-                 onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
+          <input value={name} placeholder="a person relocates"
+                 onChange={(e) => setName(e.target.value)} />
         </label>
-        <label>When this happens
-          <select value={draft.surface}
-                  onChange={(e) => setDraft({
-                    ...draft, surface: e.target.value,
-                    field: (surfaces[e.target.value] ?? [])[0] ?? "",
-                  })}>
+
+        <label>When
+          <select value={surface} onChange={(e) => {
+            setSurface(e.target.value);
+            const first = (surfaces[e.target.value] ?? [])[0] ?? "";
+            setConds([{ field: first, op: "in", values: "" }]);
+          }}>
             {Object.keys(surfaces).map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
         </label>
-        <label>and
-          <select value={draft.field}
-                  onChange={(e) => setDraft({ ...draft, field: e.target.value })}>
-            {fields.map((f) => <option key={f} value={f}>{f}</option>)}
-          </select>
-        </label>
-        <label>is one of
-          <input value={draft.values} placeholder="located_in, reports_to"
-                 onChange={(e) => setDraft({ ...draft, values: e.target.value })} />
-        </label>
+
+        <h3>and all of these hold</h3>
+        <p className="hint">
+          A field name, or a dotted path into the event —{" "}
+          <code>detail.score</code> reaches a value this console has never seen,
+          so a new kind of event needs no change here.
+        </p>
+        {conds.map((c, i) => (
+          <div key={i} className="row">
+            <input value={c.field} list="alert-fields" placeholder="field or a.dotted.path"
+                   onChange={(e) => {
+                     const next = [...conds]; next[i] = { ...c, field: e.target.value };
+                     setConds(next);
+                   }} />
+            <select value={c.op} onChange={(e) => {
+              const next = [...conds]; next[i] = { ...c, op: e.target.value };
+              setConds(next);
+            }}>
+              <option value="in">is one of</option>
+              <option value="not_in">is not one of</option>
+              <option value="eq">equals</option>
+              <option value="ne">does not equal</option>
+              <option value="contains">contains</option>
+              <option value="gt">is greater than</option>
+              <option value="lt">is less than</option>
+              <option value="exists">is present</option>
+              <option value="absent">is absent</option>
+            </select>
+            {c.op !== "exists" && c.op !== "absent" && (
+              <input value={c.values} placeholder="one or more, comma separated"
+                     onChange={(e) => {
+                       const next = [...conds]; next[i] = { ...c, values: e.target.value };
+                       setConds(next);
+                     }} />
+            )}
+            <button disabled={conds.length === 1}
+                    onClick={() => setConds(conds.filter((_, j) => j !== i))}>
+              Remove
+            </button>
+          </div>
+        ))}
+        <datalist id="alert-fields">
+          {fields.map((f) => <option key={f} value={f} />)}
+        </datalist>
+        <button onClick={() => setConds([
+          ...conds, { field: unusedFields[0] ?? "", op: "in", values: "" }])}>
+          Add condition
+        </button>
+
+        <h3>How it decides</h3>
+        <div className="row">
+          <label>
+            <input type="radio" checked={mode === "rule"}
+                   onChange={() => setMode("rule")} />
+            {" "}Rules only — no model, no cost
+          </label>
+          <label>
+            <input type="radio" checked={mode === "llm"}
+                   onChange={() => setMode("llm")} />
+            {" "}Rules, then judge the rest in words
+          </label>
+        </div>
+        {mode === "llm" && (
+          <>
+            <label>Only alert me when
+              <textarea rows={3} value={describe}
+                        placeholder="a customer signals they may leave"
+                        onChange={(e) => setDescribe(e.target.value)} />
+            </label>
+            <p className="hint">
+              The conditions above still run first and decide what the model is
+              shown — which is why they are required in this mode. Everything
+              that survives them is judged in <strong>one call per run</strong>,
+              not one per event. If no model is available the run defers rather
+              than guessing, and the sweep tries again.
+            </p>
+          </>
+        )}
+
+        <p>
+          <button onClick={() => setAdvanced(!advanced)}>
+            {advanced ? "Hide" : "Show"} advanced
+          </button>
+        </p>
+        {advanced && (
+          <div className="stack">
+            <label>Coalesce for (seconds)
+              <input type="number" min={1} value={debounce}
+                     onChange={(e) => setDebounce(Number(e.target.value))} />
+            </label>
+            <p className="hint">
+              How long it waits after something happens before evaluating, so a
+              burst of a thousand writes is one evaluation rather than a thousand.
+            </p>
+            <label>Most transitions per run
+              <input type="number" min={1} value={cap}
+                     onChange={(e) => setCap(Number(e.target.value))} />
+            </label>
+            <p className="hint">
+              Anything over this is carried to the next run and reported as
+              deferred, never dropped quietly.
+            </p>
+          </div>
+        )}
         <button disabled={busy} onClick={() => void create()}>Create alert</button>
       </div>
 
+      {/* ---------- 2. the alerts, and what each is doing ---------- */}
       <div className="card">
         <h2>{alerts.length} alert{alerts.length === 1 ? "" : "s"}</h2>
-        <table className="kv">
-          <thead>
-            <tr><th>Name</th><th>Watches</th><th>State</th><th>24h</th><th /></tr>
-          </thead>
-          <tbody>
-            {alerts.map((a) => (
-              <tr key={a.alert_id}>
-                <td>{a.name}</td>
-                <td><code>{a.surface}</code></td>
-                <td>
-                  {a.enabled
-                    ? <span className="ok">on</span>
-                    : isApproved(a)
-                      ? <span>off</span>
-                      /* The state worth naming: edited since its last
-                         backtest, so it cannot be turned on. */
-                      : <span className="warn">needs a backtest</span>}
-                </td>
-                <td>{a.matches_24h ?? 0}</td>
-                <td>
-                  <button disabled={busy} onClick={() => void act(
-                    () => call(`api/v1/alerts/${a.alert_id}/backtest`, {}),
-                    "Backtested. Nothing was recorded and nothing was sent.")}>
-                    Backtest
-                  </button>
-                  <button disabled={busy || (!a.enabled && !isApproved(a))}
-                          onClick={() => void act(
-                            () => call(`api/v1/alerts/${a.alert_id}/enabled`,
-                                       { enabled: !a.enabled }))}>
-                    {a.enabled ? "Turn off" : "Turn on"}
-                  </button>
-                  <button disabled={busy} onClick={() => void showRuns(a.alert_id)}>
-                    Runs
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {Object.entries(runs).map(([alertId, list]) => (
-          <div key={alertId}>
-            <h3>Recent runs</h3>
-            <table className="kv">
-              <thead>
-                <tr><th>When</th><th>Trigger</th><th>Seen</th><th>Matched</th>
-                    <th>Deferred</th></tr>
-              </thead>
-              <tbody>
-                {list.map((r) => (
-                  <tr key={r.run_id}>
-                    <td>{new Date(r.started_at).toLocaleString()}</td>
-                    <td>{r.trigger}</td>
-                    <td>{r.candidates}</td>
-                    <td>{r.matches}</td>
-                    {/* Surfaced, not buried: a capped batch that said nothing
-                        would read as "nothing else matched". */}
-                    <td>{r.deferred > 0
-                      ? <span className="warn">{r.deferred} left for the next run</span>
-                      : "—"}</td>
-                  </tr>
+        {alerts.length === 0 && (
+          <p className="hint">None yet. Create one above.</p>
+        )}
+        {alerts.map((a) => {
+          const approved = isApproved(a);
+          const bt = backtest[a.alert_id];
+          const fired = eventsFor(a.alert_id);
+          const open = openAlert === a.alert_id;
+          return (
+            <div key={a.alert_id} className="card">
+              <h3>{a.name}</h3>
+              <p>
+                <code>{a.surface}</code>
+                {a.mode === "llm" && <> · <span className="ok">judged in words</span></>}
+                {Object.entries(a.where).map(([f, vs]) => (
+                  <span key={f}> · <code>{f} ∈ {vs.join(", ")}</code></span>
                 ))}
-              </tbody>
-            </table>
-          </div>
-        ))}
+              </p>
+              <p>
+                {a.enabled
+                  ? <span className="ok">running</span>
+                  : approved
+                    ? <span>ready, not running</span>
+                    : <span className="warn">edited since its last backtest</span>}
+                {" · "}{a.matches_24h ?? 0} in 24h
+                {typeof a.behind === "number" && a.behind > 0 && (
+                  /* Climbing rather than settling means the sweep has stopped,
+                     which otherwise looks exactly like "nothing happened". */
+                  <> · <span className="warn">{a.behind} transitions not yet seen</span></>
+                )}
+              </p>
+
+              <p>
+                <button disabled={busy} onClick={() => void runBacktest(a.alert_id)}>
+                  Backtest
+                </button>
+                <button disabled={busy || (!a.enabled && !approved)}
+                        title={!approved ? "Backtest this version first" : undefined}
+                        onClick={() => void act(() => call(
+                          `api/v1/alerts/${a.alert_id}/enabled`,
+                          { enabled: !a.enabled }))}>
+                  {a.enabled ? "Stop" : "Start"}
+                </button>
+                <button disabled={busy} onClick={() => void openRuns(a.alert_id)}>
+                  Firing history
+                </button>
+                <button disabled={busy} onClick={() => void act(
+                  () => call(`api/v1/alerts/${a.alert_id}`, undefined, "DELETE"))}>
+                  Delete
+                </button>
+              </p>
+
+              {bt && (
+                <div className="card">
+                  <h3>Backtest — nothing was recorded and nothing was sent</h3>
+                  <p>
+                    <strong>{bt.matches}</strong> of {bt.candidates} past{" "}
+                    <code>{a.surface}</code> transition
+                    {bt.candidates === 1 ? "" : "s"} would have fired this alert.
+                    {bt.deferred > 0 && ` ${bt.deferred} more were not examined.`}
+                  </p>
+                  {bt.matches === 0 && (
+                    <p className="hint">
+                      Nothing matched. Either it has not happened yet, or the
+                      conditions are narrower than you meant.
+                    </p>
+                  )}
+                  {bt.samples.length > 0 && (
+                    <table className="kv">
+                      <thead><tr><th>When</th><th>What would have fired</th></tr></thead>
+                      <tbody>
+                        {bt.samples.map((sm) => (
+                          <tr key={sm.sequence}>
+                            <td>{new Date(sm.occurred_at).toLocaleString()}</td>
+                            <td>{describeEvent(a.surface, sm.payload)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                  {bt.matches > bt.sampled && (
+                    <p className="hint">Showing the first {bt.sampled}.</p>
+                  )}
+                </div>
+              )}
+
+              {open && runs.length > 0 && (
+                <div className="card">
+                  <h3>Firing history</h3>
+                  <table className="kv">
+                    <thead>
+                      <tr><th>When</th><th>Ran because</th><th>Looked at</th>
+                          <th>Fired</th><th>Left over</th><th>Cost</th></tr>
+                    </thead>
+                    <tbody>
+                      {runs.map((r) => (
+                        <tr key={r.run_id}>
+                          <td>{new Date(r.started_at).toLocaleString()}</td>
+                          <td>{r.trigger === "tick" ? "the sweep"
+                             : r.trigger === "consumer" ? "something happened"
+                             : "backtest"}</td>
+                          <td>{r.candidates}</td>
+                          <td>{r.matches > 0 ? <strong>{r.matches}</strong> : "0"}</td>
+                          <td>{r.deferred > 0
+                            ? <span className="warn">{r.deferred}</span> : "—"}</td>
+                          <td>{r.model_calls > 0 ? `${r.model_calls} model call${
+                            r.model_calls === 1 ? "" : "s"}` : "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {fired.length > 0 && (
+                <div className="card">
+                  <h3>{fired.length} found</h3>
+                  <table className="kv">
+                    <thead><tr><th>When</th><th>What happened</th><th>Told</th></tr></thead>
+                    <tbody>
+                      {fired.slice(-10).reverse().map((e) => (
+                        <tr key={e.event_id}>
+                          <td>{new Date(e.occurred_at).toLocaleString()}</td>
+                          <td>{describeEvent(e.surface, e.payload)}</td>
+                          <td>
+                            {e.deliveries === 0 ? <span className="hint">no endpoint</span>
+                             : e.undeliverable > 0 ? <span className="warn">undeliverable</span>
+                             : e.delivered > 0 ? <span className="ok">sent</span>
+                             : "queued"}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
 
+      {/* ---------- 3. everything that has fired, across alerts ---------- */}
       <div className="card">
-        <h2>What fired</h2>
+        <h2>Everything that fired</h2>
         {events.length === 0
-          ? <p className="hint">Nothing yet. Alerts only report what happens after
-              they were created.</p>
+          ? <p className="hint">
+              Nothing yet. Alerts only report what happens after they were
+              created — backtest one to see what it would have caught before.
+            </p>
           : (
             <table className="kv">
               <thead>
-                <tr><th>When</th><th>Alert</th><th>Event</th><th>Detail</th></tr>
+                <tr><th>When</th><th>Alert</th><th>Event</th><th>What happened</th></tr>
               </thead>
               <tbody>
-                {events.map((e) => (
+                {events.slice(0, 50).map((e) => (
                   <tr key={e.event_id}>
                     <td>{new Date(e.occurred_at).toLocaleString()}</td>
                     <td>{e.alert_name}</td>
                     <td><code>{e.surface}</code></td>
-                    <td><code>{JSON.stringify(e.payload).slice(0, 120)}</code></td>
+                    <td>{describeEvent(e.surface, e.payload)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -1421,11 +1632,13 @@ function AlertsSection({ projectId }: { projectId: string }) {
           )}
       </div>
 
+      {/* ---------- 4. push ---------- */}
       <div className="card">
         <h2>Push to an endpoint</h2>
         <p className="hint">
-          HTTPS only, and the address is re-checked on every send. Deliveries are
-          signed the same way memdog asks providers to sign theirs.
+          HTTPS only, re-checked on every send. Signed the same way memdog asks
+          providers to sign theirs. Retried, then held as undeliverable rather
+          than dropped — and replayable once the endpoint is fixed.
         </p>
         <label>URL
           <input value={subUrl} onChange={(e) => setSubUrl(e.target.value)} />
@@ -1433,41 +1646,42 @@ function AlertsSection({ projectId }: { projectId: string }) {
         <button disabled={busy} onClick={() => void act(async () => {
           const created = await call<{ signing_secret: string }>(
             "api/v1/event-subscriptions", { project_id: projectId, url: subUrl });
-          // Shown once. There is deliberately no way to ask for it again.
           setSecret(created.signing_secret);
-        })}>Register endpoint</button>
+        })}>Register</button>
         {secret && (
           <p className="warn">
-            Signing secret — <strong>copy it now, it cannot be shown again</strong>:{" "}
+            Signing secret — <strong>copy it now; it cannot be shown again</strong>:{" "}
             <code>{secret}</code>
           </p>
         )}
-        <table className="kv">
-          <thead><tr><th>URL</th><th>Pending</th><th>Dead</th><th /></tr></thead>
-          <tbody>
-            {subs.map((s) => (
-              <tr key={s.subscription_id}>
-                <td><code>{s.url}</code></td>
-                <td>{s.pending}</td>
-                <td>{s.dead > 0 ? <span className="warn">{s.dead}</span> : "0"}</td>
-                <td>
-                  <button disabled={busy} onClick={() => void act(async () => {
-                    const rotated = await call<{ signing_secret: string }>(
-                      `api/v1/event-subscriptions/${s.subscription_id}/rotate`, {});
-                    setSecret(rotated.signing_secret);
-                  }, "Rotated. The previous secret still verifies for a short window.")}>
-                    Rotate
-                  </button>
-                  <button disabled={busy || s.dead === 0} onClick={() => void act(
-                    () => call(`api/v1/event-subscriptions/${s.subscription_id}/replay`, {}),
-                    "Dead letters re-armed.")}>
-                    Replay {s.dead > 0 ? `(${s.dead})` : ""}
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        {subs.length > 0 && (
+          <table className="kv">
+            <thead><tr><th>URL</th><th>Queued</th><th>Undeliverable</th><th /></tr></thead>
+            <tbody>
+              {subs.map((s) => (
+                <tr key={s.subscription_id}>
+                  <td><code>{s.url}</code></td>
+                  <td>{s.pending}</td>
+                  <td>{s.dead > 0 ? <span className="warn">{s.dead}</span> : "0"}</td>
+                  <td>
+                    <button disabled={busy} onClick={() => void act(async () => {
+                      const r = await call<{ signing_secret: string }>(
+                        `api/v1/event-subscriptions/${s.subscription_id}/rotate`, {});
+                      setSecret(r.signing_secret);
+                    }, "Rotated. The previous secret still verifies briefly.")}>
+                      Rotate
+                    </button>
+                    <button disabled={busy || s.dead === 0} onClick={() => void act(
+                      () => call(`api/v1/event-subscriptions/${s.subscription_id}/replay`, {}),
+                      "Re-armed.")}>
+                      Retry {s.dead > 0 ? `(${s.dead})` : ""}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
     </section>
   );
