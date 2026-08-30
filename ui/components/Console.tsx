@@ -59,17 +59,48 @@ type Section =
  * touched it and can I prove it*. Mixing them buries the compliance surface
  * inside a browsing surface.
  */
+/**
+ * Grouped by the question being asked, and ordered by when it is asked.
+ *
+ * The earlier arrangement grew rather than being designed: `Data` was doing
+ * four jobs at once — is it working, put it in, find it, and configure where it
+ * comes from — `Alerts` was a heading holding one item, ingestion was split
+ * between `Data` and `Admin`, and Compaction sat under `Organize` two groups
+ * away from Deletion despite being the other half of the same lifecycle.
+ *
+ * Two rules hold it together now. **One heading, one question** — if a group
+ * needs "and" to describe it, it is two groups. And **the order is the order
+ * somebody arrives in**: *is this working* is what people open the console
+ * with, so it is first rather than fifth inside something collapsed.
+ */
 const GROUPS: { title: string; items: { key: Section; label: string; hint: string }[] }[] = [
+  {
+    title: "Monitor",
+    items: [
+      { key: "overview", label: "Overview", hint: "is this working?" },
+      { key: "alerts", label: "Alerts", hint: "tell me when this happens" },
+    ],
+  },
+  {
+    // Inbound, crawlers and producers answer one question -- is data still
+    // arriving, and from where -- and used to sit in two different groups.
+    title: "Sources",
+    items: [
+      { key: "inbound", label: "Inbound", hint: "webhooks providers post to" },
+      { key: "crawlers", label: "Crawlers", hint: "pull what won't push" },
+      { key: "producers", label: "Producers", hint: "freshness and status" },
+    ],
+  },
   {
     title: "Data",
     items: [
-      { key: "overview", label: "Overview", hint: "is this working?" },
       { key: "add", label: "Add data", hint: "paste, upload or record" },
-      { key: "update", label: "Update data", hint: "re-write a key, see revisions" },
+      // "Browse", not "Update": after the drill-down this screen is mostly
+      // reading, and a label promising an edit makes people who want to look
+      // skip it. Search finds by query; this walks by container.
+      { key: "update", label: "Browse", hint: "by memory, down to one revision" },
       { key: "search", label: "Search", hint: "retrieve, with the trace" },
       { key: "ask", label: "Chat", hint: "ask your data, with citations" },
-      { key: "inbound", label: "Inbound", hint: "webhooks providers post to" },
-      { key: "crawlers", label: "Crawlers", hint: "pull what won't push" },
     ],
   },
   {
@@ -78,21 +109,25 @@ const GROUPS: { title: string; items: { key: Section; label: string; hint: strin
       { key: "memory", label: "Memories", hint: "lifecycle containers" },
       { key: "cases", label: "Cases", hint: "subjects and timelines" },
       { key: "entities", label: "Entities", hint: "who and what, with evidence" },
-      { key: "compaction", label: "Compaction", hint: "fold a memory down, keep it all" },
     ],
   },
   {
-    title: "Alerts",
+    // Both halves of the same question -- how does a corpus stop growing, and
+    // how does something leave for good. One folds and keeps; one erases and
+    // proves it.
+    title: "Lifecycle",
     items: [
-      { key: "alerts", label: "Alerts", hint: "tell me when this happens" },
+      { key: "compaction", label: "Compaction", hint: "fold a memory down, keep it all" },
+      { key: "deletion", label: "Deletion", hint: "dry-run, then erase" },
     ],
   },
   {
+    // Narrowed to proof. Deletion moved out: erasing is an operation you
+    // perform, and the certificate it produces is what belongs here.
     title: "Governance",
     items: [
       { key: "audit", label: "Audit", hint: "who read and wrote what" },
       { key: "sharing", label: "Sharing", hint: "what is public, and revoke" },
-      { key: "deletion", label: "Deletion", hint: "dry-run, then erase" },
     ],
   },
   {
@@ -109,7 +144,6 @@ const GROUPS: { title: string; items: { key: Section; label: string; hint: strin
     items: [
       { key: "projects", label: "Projects & members", hint: "org structure" },
       { key: "keys", label: "API keys", hint: "issue and revoke" },
-      { key: "producers", label: "Producers", hint: "freshness and status" },
       { key: "platform", label: "Platform", hint: "operational shape only" },
     ],
   },
@@ -962,7 +996,7 @@ function EntitiesSection({
 
   return (
     <>
-      <h1>Organize / entities</h1>
+      <h1>Entities</h1>
       <p className="lede">
         The people, organizations and things your records name. Resolution is
         deliberately cautious: it joins on a shared email or an exact name and
@@ -2458,7 +2492,7 @@ function CrawlersSection({ projectId }: { projectId: string }) {
 
   return (
     <>
-      <h1>Add / crawlers</h1>
+      <h1>Crawlers</h1>
       <p className="lede">
         Most data does not announce itself. A crawler discovers it and writes it through the same
         path everything else uses — so nothing downstream can tell a crawled record from a
@@ -3019,7 +3053,7 @@ function AskSection({ projectId }: { projectId: string }) {
 
   return (
     <>
-      <h1>Chat with your data</h1>
+      <h1>Chat</h1>
       <p className="lede">
         Ask a question and a model answers from your records — the same retrieval as search, with
         the passages read back to you. Every claim carries the number of the passage it came from,
@@ -3209,7 +3243,7 @@ function ReadSearch({
 
   return (
     <>
-      <h1>Read / search</h1>
+      <h1>Search</h1>
       <p className="lede">
         The trace is the output, not the answer. An answer is a lagging indicator of ingestion
         quality, filtered through a model that is good at sounding right regardless.
@@ -3593,7 +3627,7 @@ function MemorySection({ projectId }: { projectId: string }) {
 
   return (
     <>
-      <h1>Memory</h1>
+      <h1>Memories</h1>
       <p className="lede">
         A memory is a <strong>lifecycle</strong> container — how long does this matter? A case is a
         subject — what is this about? A conversation expires; a patient does not.
