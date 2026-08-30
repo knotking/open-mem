@@ -45,6 +45,29 @@ const ALLOWED = [
   /^api\/v1\/projects\/[A-Za-z0-9_]+\/memories$/,
   /^api\/v1\/memories\/[A-Za-z0-9_]+\/members$/,
   /^api\/v1\/data\/[A-Za-z0-9_]+\/versions$/,
+  // One revision, read whole. The listing above only previews.
+  /^api\/v1\/data\/[A-Za-z0-9_]+\/versions\/[A-Za-z0-9_]+$/,
+
+  // Alerts. Absent until now, which meant every call the Alerts screen made was
+  // refused here -- the screen rendered and never loaded anything, and that
+  // looked like a design problem rather than a routing one.
+  /^api\/v1\/alerts$/,
+  /^api\/v1\/alerts\/surfaces$/,
+  /^api\/v1\/alerts\/[A-Za-z0-9_]+$/,
+  /^api\/v1\/alerts\/[A-Za-z0-9_]+\/(backtest|enabled|runs)(\?.*)?$/,
+  /^api\/v1\/projects\/[A-Za-z0-9_]+\/alerts$/,
+  /^api\/v1\/alert-events(\?.*)?$/,
+  /^api\/v1\/event-subscriptions$/,
+  /^api\/v1\/event-subscriptions\/[A-Za-z0-9_]+$/,
+  /^api\/v1\/event-subscriptions\/[A-Za-z0-9_]+\/(rotate|replay|deliveries)(\?.*)?$/,
+  /^api\/v1\/projects\/[A-Za-z0-9_]+\/event-subscriptions$/,
+
+  // Compaction.
+  /^api\/v1\/compaction\/algorithms$/,
+  /^api\/v1\/compaction\/jobs$/,
+  /^api\/v1\/compaction\/jobs\/[A-Za-z0-9_]+$/,
+  /^api\/v1\/compaction\/jobs\/[A-Za-z0-9_]+\/(preview|run|enabled|runs)(\?.*)?$/,
+  /^api\/v1\/projects\/[A-Za-z0-9_]+\/compaction\/jobs$/,
   /^api\/v1\/data\/[A-Za-z0-9_]+\/memories$/,
   /^api\/v1\/audit(\?.*)?$/,
   /^api\/v1\/events(\?.*)?$/,

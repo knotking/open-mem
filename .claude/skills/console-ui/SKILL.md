@@ -112,6 +112,34 @@ touched.
 The same applies to token names. Adding `--bad` is safe because nothing else
 defines it; redefining `--accent` would repaint every screen at once.
 
+## The proxy has an allow-list, and it fails silently
+
+The console never calls the API directly — every request goes through
+`/api/proxy/[...path]`, which matches the path against an explicit list and
+refuses anything absent from it.
+
+**A missing entry does not look like a routing problem.** The Alerts screen
+shipped, deployed and rendered while every request it made was refused, which
+read as a design failure. Compaction then did the same thing, and the report
+both times was *"I can't see it"*.
+
+`npm run build` now runs `scripts/check-proxy-paths.mjs`, which extracts every
+`call(...)` site and tests it against the real list. **If you add an endpoint to
+a screen, that check is what tells you the proxy needs it** — do not wait for a
+browser to say nothing at all.
+
+## Rows are buttons, and buttons here are painted
+
+`globals.css` styles the bare `button` element as the primary action — accent
+background, light text, 9px padding. So a clickable row marked only `.memrow`
+rendered as a solid green pill with its chips floating on top, which was
+reported as *"empty circles"*.
+
+`.memrow` resets that now, so a row can stay a `<button>` and be reachable by
+keyboard rather than becoming a `<div>` with an `onClick` that nothing can
+focus. The general rule: **an element-level base style applies to your component
+too**, and the ones for `button`, `input` and `select` are the ones that bite.
+
 ## Navigation is part of the feature
 
 A screen nobody can find is not shipped. The sidebar groups were a

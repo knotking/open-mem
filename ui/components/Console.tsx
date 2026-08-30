@@ -756,7 +756,7 @@ function UpdateData({
                   <button className="memrow" key={r.data_id} onClick={() => void open(r.data_id)}>
                     <span>{r.external_id ?? r.data_id}</span>
                     <span className={`chip ${r.state}`}>{r.state}</span>
-                    <span className="empty">{r.data_type}</span>
+                    <span className="empty far">{r.data_type}</span>
                   </button>
                 ))}
               </div>
@@ -820,7 +820,7 @@ function UpdateData({
                   <span>#{v.revision} · {v.source}</span>
                   <span className="empty">{v.model_id ?? "no model"}</span>
                   <span className="empty">{v.content_chars} chars</span>
-                  <span className="empty">{new Date(v.created_at).toLocaleString()}</span>
+                  <span className="empty far">{new Date(v.created_at).toLocaleString()}</span>
                 </button>
               ))}
             </div>
@@ -3457,7 +3457,7 @@ function Audit({ projectId }: { projectId: string }) {
                           onClick={() => setOpen(open === r.id ? null : r.id)}>
                     <span className="chip on">{r.action}</span>
                     <code>{r.target ?? "—"}</code>
-                    <span className="empty">{new Date(r.at).toLocaleString()}</span>
+                    <span className="empty far">{new Date(r.at).toLocaleString()}</span>
                   </button>
                   {open === r.id && (
                     <pre className="excerpt">
