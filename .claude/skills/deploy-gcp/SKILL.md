@@ -28,8 +28,8 @@ reachable as `pagarwal@buildgeek.ai`.
 | Raw bytes | GCS `gs://memdog-spine-raw-dev` | |
 | Images | Artifact Registry `memdog` | `us-central1-docker.pkg.dev/memdog-dev-506718/memdog` |
 | Identity | `memdog-api@memdog-dev-506718.iam.gserviceaccount.com` | both services and all jobs |
-| Jobs | `memdog-reconcile`, `memdog-crawl-tick`, `memdog-seed`, `memdog-bootstrap` | |
-| Schedule | `memdog-reconcile-tick` | every 10 min → `memdog-reconcile` |
+| Jobs | `memdog-reconcile`, `memdog-crawl-tick`, `memdog-alert-tick`, `memdog-seed`, `memdog-bootstrap` | |
+| Schedules | `memdog-reconcile-tick` every 10 min → `memdog-reconcile`; `memdog-alert-sweep` every 1 min → `memdog-alert-tick` | |
 | Secrets | `memdog-db-password`, `memdog-master-key`, `memdog-demo-key`, `memdog-web-api-key`, `gemini-api-key` | |
 
 **There is no GKE, no Kubernetes and no Supabase.** If a doc or an old memory
@@ -58,8 +58,9 @@ gcloud run services describe memdog-api --project memdog-dev-506718 \
   --region us-central1 --format='value(spec.template.spec.containers[0].image)'
 ```
 
-Deploying the API also redeploys `memdog-reconcile`, `memdog-crawl-tick` and
-`memdog-seed` onto the same image and the same environment. That coupling is
+Deploying the API also redeploys `memdog-reconcile`, `memdog-crawl-tick`,
+`memdog-alert-tick` and `memdog-seed` onto the same image and the same
+environment. That coupling is
 deliberate and load-bearing: **the reconciler once drifted twenty tags behind
 and lost `EMBED_ENGINE`, so it re-embedded with the old model, concluded nothing
 was stale, and quietly repaired the corpus back toward the state it was supposed

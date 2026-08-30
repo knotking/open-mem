@@ -2159,6 +2159,147 @@ async def retract_fact_endpoint(
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
 
 
+@app.get("/api/v1/alerts/surfaces")
+async def alert_surfaces_endpoint(actor: Principal = Depends(principal)) -> dict:
+    """The closed vocabulary, served rather than documented twice.
+
+    A console building a condition form needs to know which fields a surface
+    accepts, and hardcoding that list in the UI is how it drifts from the one
+    the server validates against.
+    """
+    from .alerts import SURFACES
+
+    return {"surfaces": {k: sorted(v) for k, v in SURFACES.items()}}
+
+
+@app.post("/api/v1/alerts", status_code=201)
+async def create_alert_endpoint(
+    request: Request, body: dict, actor: Principal = Depends(principal)
+) -> dict:
+    """Declare an event worth knowing about.
+
+    Starts watching from **now**, never from the beginning of the log: an alert
+    that fires a hundred notifications about last month the moment it is saved
+    is an alert someone switches off.
+    """
+    from .alerts import AlertError, create_alert
+
+    try:
+        return await create_alert(
+            request.app.state.pool, actor,
+            project_id=body["project_id"], name=body["name"],
+            surface=body["surface"], mode=body.get("mode", "rule"),
+            where=body.get("where"), describe=body.get("describe"),
+            model_id=body.get("model_id"),
+            debounce_seconds=int(body.get("debounce_seconds", 5)),
+            batch_cap=int(body.get("batch_cap", 500)),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=400, detail=f"missing {exc}") from exc
+    except (AlertError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/projects/{project_id}/alerts")
+async def list_alerts_endpoint(
+    request: Request, project_id: str, actor: Principal = Depends(principal)
+) -> dict:
+    from .alerts import AlertError, list_alerts
+
+    try:
+        return {"alerts": await list_alerts(request.app.state.pool, actor, project_id)}
+    except (AlertError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.patch("/api/v1/alerts/{alert_id}")
+async def update_alert_endpoint(
+    request: Request, alert_id: str, body: dict,
+    actor: Principal = Depends(principal)
+) -> dict:
+    """Editing what matches bumps the version, and un-approves the alert.
+
+    It is also disabled by the same edit. Leaving it on would keep firing a
+    question nobody has looked at since it changed.
+    """
+    from .alerts import AlertError, update_alert
+
+    try:
+        return await update_alert(request.app.state.pool, actor, alert_id, body)
+    except (AlertError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/alerts/{alert_id}/enabled")
+async def set_alert_enabled_endpoint(
+    request: Request, alert_id: str, body: dict,
+    actor: Principal = Depends(principal)
+) -> dict:
+    """409 until this version has been backtested. The dry-run gate, renamed."""
+    from .alerts import AlertError, set_enabled
+
+    try:
+        return await set_enabled(
+            request.app.state.pool, actor, alert_id, bool(body.get("enabled", True)))
+    except (AlertError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/alerts/{alert_id}/backtest")
+async def backtest_alert_endpoint(
+    request: Request, alert_id: str, body: dict | None = None,
+    actor: Principal = Depends(principal)
+) -> dict:
+    """Run history through the live path. Records nothing, delivers nothing.
+
+    What it reports is what a live run would do, because it *is* the live run
+    with its writes withheld — the crawler's dry-run discipline.
+    """
+    from .alerts import AlertError, backtest
+
+    try:
+        return await backtest(
+            request.app.state.pool, actor, alert_id,
+            int((body or {}).get("since_sequence", 0)))
+    except (AlertError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.delete("/api/v1/alerts/{alert_id}")
+async def delete_alert_endpoint(
+    request: Request, alert_id: str, actor: Principal = Depends(principal)
+) -> dict:
+    from .alerts import AlertError, delete_alert
+
+    try:
+        return await delete_alert(request.app.state.pool, actor, alert_id)
+    except (AlertError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/events")
+async def poll_events_endpoint(
+    request: Request, since: int = 0, alert_id: str | None = None,
+    limit: int = 100, actor: Principal = Depends(principal)
+) -> dict:
+    """What fired, from a cursor.
+
+    Ordered by `sequence` rather than time: two events in the same millisecond
+    would otherwise come back in whichever order the planner liked, and a poller
+    that re-read from a timestamp would skip one of them.
+
+    Visibility is the subject's, resolved here against the caller's rights now —
+    never a copy taken when the alert matched.
+    """
+    from .alerts import AlertError, poll_events
+
+    try:
+        return await poll_events(
+            request.app.state.pool, actor, since=since, alert_id=alert_id, limit=limit)
+    except (AlertError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
 @app.post("/api/v1/entities/merge")
 async def merge_entities_endpoint(
     request: Request, body: dict, actor: Principal = Depends(principal)
