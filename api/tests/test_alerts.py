@@ -924,3 +924,24 @@ async def test_changing_the_scope_drops_the_approval(pool, tenant, principal_for
     edited = await update_alert(pool, actor, alert["alert_id"],
                                 {"scope": {"producer_id": tenant.producer_id}})
     assert edited["enabled"] is False and edited["backtested_version"] is None
+
+
+async def test_unseen_counts_only_what_this_alert_watches(pool, tenant, principal_for):
+    """The first version counted the whole event log.
+
+    Writes and enrichment flow constantly, so every alert showed a permanent
+    backlog and the number that was supposed to mean *the sweep has stopped*
+    meant nothing at all.
+    """
+    actor = await principal_for(tenant.api_key)
+    alert = await _alert(pool, actor, tenant, surface="fact.retracted",
+                         where={"predicate": ["located_in"]})
+    await _approve(pool, actor, alert["alert_id"])
+
+    # Plenty of traffic, none of it this alert's kind.
+    await _ingest(pool, tenant, "a", "Lisbon", event_time=NOW() - timedelta(days=5))
+    await _ingest(pool, tenant, "b", "Berlin", event_time=NOW())
+
+    listed = await alerts_mod.list_alerts(pool, actor, tenant.project_id)
+    mine = next(a for a in listed if a["alert_id"] == alert["alert_id"])
+    assert mine["behind"] == 0, "nothing it watches has happened"

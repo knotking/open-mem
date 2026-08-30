@@ -373,10 +373,15 @@ async def list_alerts(pool: asyncpg.Pool, principal: Principal, project_id: str)
                  WHERE o.alert_id = a.alert_id
                    AND o.occurred_at > now() - interval '24 hours') AS matches_24h,
                (SELECT max(started_at) FROM alert_runs r WHERE r.alert_id = a.alert_id) AS last_run_at,
-               -- How much of the log this alert has not looked at yet. Zero is
-               -- caught up; a number that keeps climbing means the sweep is not
-               -- running, which otherwise looks identical to "nothing happened".
-               (SELECT coalesce(max(sequence), 0) FROM domain_events) - a.watermark AS behind
+               -- Transitions **of this alert's own kind** that it has not looked
+               -- at. Counting the whole log instead was the first attempt and
+               -- was useless: writes and enrichment flow constantly, so every
+               -- alert showed a permanent backlog, and the number that was meant
+               -- to say "the sweep has stopped" said nothing.
+               (SELECT count(*) FROM domain_events e
+                 WHERE e.sequence > a.watermark AND e.event_type = a.surface
+                   AND e.org_id = a.org_id
+                   AND (e.project_id = a.project_id OR e.project_id IS NULL)) AS behind
           FROM alerts a
          WHERE a.project_id = $1 AND a.org_id = $2 AND a.deleted_at IS NULL
          ORDER BY a.created_at DESC
