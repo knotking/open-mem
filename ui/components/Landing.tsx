@@ -172,10 +172,22 @@ const MATRIX: { row: string; note?: string; cells: [Mark, string][] }[] = [
     ],
   },
   {
-    row: "Point-in-time facts",
-    note: "The sharpest divider in the category, and the one place mem-dog is plainly behind.",
+    row: "Tell me when it changes",
+    note: "Retrieval answers a question; this says something happened. Different failure modes — a search returning nothing is visible, an alert firing nothing is silence.",
     cells: [
-      ["no", "No validity interval modelled"],
+      ["yes", "Rules or a description, replayed before it runs"],
+      ["scope", "Not the model"],
+      ["scope", "Not the model"],
+      ["scope", "Not the model"],
+      ["scope", "Not emphasised"],
+      ["scope", "Not emphasised"],
+    ],
+  },
+  {
+    row: "Point-in-time facts",
+    note: "Two clocks, not one: when a thing was true, and when we learned it.",
+    cells: [
+      ["yes", "Bi-temporal, in Postgres"],
       ["part", "Timestamps, no past state"],
       ["yes", "Bi-temporal validity windows"],
       ["scope", "Not the model"],
@@ -735,8 +747,9 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
         <h3 style={{ marginTop: 30 }}>Where the others are ahead</h3>
         <p className="hero-lede" style={{ marginBottom: 0 }}>
           A comparison that only flatters itself is not worth reading.
-          <strong> Zep&rsquo;s temporal knowledge graph timestamps every fact</strong>, so it can
-          answer what was true in March; mem-dog models no validity interval and cannot.
+          <strong> Zep is further along on graph reasoning</strong> — multi-hop traversal over time
+          is its whole design, where mem-dog stops at filtering a neighbourhood by when a claim
+          held.
           <strong> Mem0&rsquo;s adoption dwarfs this</strong> — tens of thousands of stars and
           hundreds of millions of API calls a quarter, against a system with none.
           <strong> Supermemory is faster.</strong> <strong>Letta</strong> manages an agent&rsquo;s
