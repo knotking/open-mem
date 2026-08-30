@@ -11,6 +11,67 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **Alerts can be described in words, not only as a selector.** `mode: "llm"`
+  judges what the conditions let through — **one call per run over the whole
+  batch**, never one per event, which is what makes it affordable at all. The
+  conditions stay **required** in this mode: without them every transition in
+  the project would reach a model. If no model is available the run **defers
+  rather than guessing** — extraction falls back to a heuristic because a worse
+  summary is recoverable, but a wrong verdict is a false alarm or a silence
+  nobody notices. A candidate the model does not mention is **not matched**.
+- **Conditions are generic.** A field name *or a dotted path* into the event,
+  with `in` · `not_in` · `eq` · `ne` · `contains` · `gt` · `lt` · `exists`. A
+  payload shape nothing has seen before is reachable, so a new kind of event
+  needs no new vocabulary — and a path into nothing is **false, never an
+  error**, because one odd record must not stall a batch.
+- **An alert can be scoped** to one memory, case, producer or entity. Separate
+  from the conditions on purpose: those ask about the event, a scope asks
+  whether the subject is yours at all — and a transition does not know which
+  memory its item is in, so it is a join. Applied after the selector and before
+  any model, one query per scope key over the batch.
+- **The backtest returns what it would have caught**, not just how many. A count
+  is not calibration: a selector that matches everything looks identical to one
+  that works until you read what it matched.
+- **The console's Alerts screen is a monitoring surface.** Three tabs — the
+  definitions, what they caught, where events get sent. Counts by state double
+  as filters, every row leads with a state dot and a strip of its last twenty
+  runs, and the unseen count is on the row: for an alert, *stopped* and *nothing
+  to say* otherwise produce identical silence. Create and edit are one form, so
+  the two cannot drift into disagreeing about what an alert can be.
+- **`GET /api/v1/alerts/surfaces`** also serves the operator and scope
+  vocabularies, so a console never holds a second copy that can drift from what
+  the server validates.
+
+### Changed
+- **The sign-in page no longer claims mem-dog cannot answer what was true in
+  March.** That was honest when written and became false the day the temporal
+  graph shipped. The concession to Zep is narrowed to what still holds —
+  multi-hop traversal over time — and an alerting row is added to the
+  comparison, an axis it did not have.
+
+### Fixed
+- **A duplicate alert name was a `500` with an empty body.** Names are unique
+  per project so a feed cannot confuse two alerts; reusing one is an ordinary
+  mistake and is now a `409` that says so.
+- **An alert's "unseen" count included the whole event log** — every write and
+  every enrichment request, traffic no alert watches — so each one showed a
+  permanent backlog and the number meant to say *the sweep has stopped* said
+  nothing. It counts transitions of the alert's own kind now.
+- **`alert_runs.model_calls` did not exist in any already-migrated database.**
+  It was added by editing `0034` after `0034` had been applied, and
+  `schema_migrations` records the version, so the edit reached nothing —
+  production answered every backtest with `column "model_calls" does not exist`.
+  **A migration is immutable once applied**, and this cannot fail locally: the
+  suite drops the schema and re-migrates every run, so it always reads the
+  edited file and passes.
+
+### Migrations
+- **`0036_alert_scope.sql`** — `alerts.scope jsonb`. Additive.
+- **`0037_alert_run_cost.sql`** — `alert_runs.model_calls`, with
+  `IF NOT EXISTS` so a database created from the briefly-edited `0034`
+  converges rather than failing.
+
+### Added
 - **Five more alert surfaces**, all deterministic: `data.revised`,
   `memory.member_added`, `memory.retyped`, `case.member_promoted` and
   **`acl.changed`**. The last could not have been done any other way — the
