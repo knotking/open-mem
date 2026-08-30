@@ -194,41 +194,6 @@ sections of this file.
 
 ---
 
-## The thing that surprised us
-
-Nearly every defect found while building this was **silent**. The request succeeded, the response
-looked right, and the result was quietly wrong.
-
-A proxy that failed *open* and promoted signed-in users to org owner. A reconcile job that
-re-embedded with the old model and concluded nothing was stale. A rate limit that consumed a retry
-budget, so a re-embed reported success having embedded almost nothing.
-
-Two are worth spelling out, because they are the shape of the whole class.
-
-An enrichment failure was classified by searching its message for `"429"` — so whether a defect was
-retried forever or recorded correctly depended on whether the record's random identifier happened to
-contain those three characters. It presented as a test that failed once and passed on every re-run.
-
-And `metadata` on a write item was accepted and thrown away. The field had been in the contract
-since the spine shipped, the documented example put tags inside it, and nothing ever read it — there
-was no column. Every producer following the docs lost them, the crawler included. **Nothing
-errored.** The write succeeded, the item was durable and searchable, and only the provenance was
-gone. It was found by asking which crawler had pulled something and discovering the answer was
-unavailable.
-
-None of those had an error to notice. That is most of why this system reports its trace, its
-provenance and its exclusions — not because auditors ask for it, but because it is the only way to
-see the bugs that do not announce themselves.
-
-It is also why several tests check the **wiring** rather than the behaviour: every setting read
-somewhere, every public function referenced, every schema column named, every metric registered.
-Each exemption carries its reason and fails the moment the thing it excuses is either wired up or
-removed. Those guards found seven more on their first run — including a webhook signature verifier
-the request path had stopped calling, with its tests still pointed at it. **A passing test over dead
-code is worse than no test.**
-
----
-
 ## Map
 
 | Path | What is in it |
