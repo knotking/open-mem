@@ -435,26 +435,45 @@ class EnrichWorker:
             # rather than on nothing.
             run_id=row["run_id"],
         )
-        if prompt_override:
-            import memdog.prompts as prompt_module
+        # Which instruction block this extraction actually runs with.
+        #
+        # `agent_configs` existed for weeks with a writer, a `/test` endpoint
+        # and correct precedence logic, and no reader at all -- so a saved
+        # override was stored, testable, displayed back by its own GET, and
+        # never applied. This is the read.
+        #
+        # Precedence, most binding first:
+        #
+        #   1. a *locked* org prompt -- policy. A per-request override that beat
+        #      it would make the lock advisory, and a compliance control a
+        #      caller can switch off is not a control.
+        #   2. an explicit per-request override -- this write asked for it.
+        #   3. the project's, then the org's saved config.
+        #   4. the shipped block, which is what `prompt=None` means.
+        from .agents import effective_config
 
-            original = prompt_module.BY_DATA_TYPE.get(data_type)
-            prompt_module.BY_DATA_TYPE[data_type] = prompt_override
-            try:
-                with attribution:
-                    envelope = await extractor.extract(
-                        row["indexable_text"], data_type=data_type
-                    )
-            finally:
-                if original is None:
-                    prompt_module.BY_DATA_TYPE.pop(data_type, None)
-                else:
-                    prompt_module.BY_DATA_TYPE[data_type] = original
+        resolved = await effective_config(
+            self._pool, data_type=data_type,
+            org_id=row["org_id"], project_id=row["project_id"],
+        )
+        if resolved["locked"] and resolved["overridden"]:
+            prompt = resolved["prompt"]
+        elif prompt_override:
+            prompt = prompt_override
+        elif resolved["overridden"]:
+            prompt = resolved["prompt"]
         else:
-            with attribution:
-                envelope = await extractor.extract(
-                    row["indexable_text"], data_type=data_type
-                )
+            prompt = None
+
+        with attribution:
+            # Passed through the seam rather than swapped into
+            # `prompts.BY_DATA_TYPE`, which is what this did before: that dict
+            # is process-global, so two concurrent enrichments of one data type
+            # raced and one ran with the other's prompt -- recording a
+            # generator version it was not produced by.
+            envelope = await extractor.extract(
+                row["indexable_text"], data_type=data_type, prompt=prompt
+            )
 
         # One source here, but the rule is written for the general case: an
         # artifact spanning mixed-ACL sources takes the intersection.

@@ -101,7 +101,19 @@ class Envelope(BaseModel):
 class Extractor(Protocol):
     model_id: str
 
-    async def extract(self, text: str, *, data_type: str) -> Envelope: ...
+    async def extract(
+        self, text: str, *, data_type: str, prompt: str | None = None
+    ) -> Envelope: ...
+    """`prompt` replaces the shipped instruction block for this call only.
+
+    Threaded through the seam rather than swapped into `prompts.BY_DATA_TYPE`,
+    which is what this used to do: the module dict is process-global, so two
+    concurrent enrichments of the same data type raced and one call ran with the
+    other's prompt. The artifact recorded a generator version it was not
+    produced by, which is the failure that cannot be reconstructed afterwards.
+
+    Optional, and ignored by implementations that have no prompt.
+    """
 
 
 def build_prompt(
@@ -205,7 +217,14 @@ class LocalHeuristicExtractor:
     def __init__(self) -> None:
         self.model_id = "local-heuristic-v1"
 
-    async def extract(self, text: str, *, data_type: str) -> Envelope:
+    async def extract(
+        self, text: str, *, data_type: str, prompt: str | None = None
+    ) -> Envelope:
+        # Deterministic and promptless. Accepting the argument and ignoring it
+        # keeps it behind the same protocol; silently honouring it would be a
+        # lie, and refusing would make a fallback chain fail on a config that
+        # works everywhere else.
+        del prompt
         body = text.strip()
         sentences = [s.strip() for s in _SENTENCE.split(body) if s.strip()]
         first = sentences[0] if sentences else body[:120]
@@ -237,8 +256,11 @@ class OllamaExtractor:
         self.model_id = model_id
         self._base_url = base_url.rstrip("/")
 
-    async def extract(self, text: str, *, data_type: str) -> Envelope:
-        system, user = build_prompt(text, data_type=data_type, schema=ENVELOPE_SCHEMA)
+    async def extract(
+        self, text: str, *, data_type: str, prompt: str | None = None
+    ) -> Envelope:
+        system, user = build_prompt(text, data_type=data_type,
+                                    schema=ENVELOPE_SCHEMA, block=prompt)
         try:
             async with httpx.AsyncClient(timeout=120.0) as client:
                 response = await client.post(
@@ -288,10 +310,16 @@ class GeminiExtractor:
         self._api_key = api_key
         self._base = "https://generativelanguage.googleapis.com/v1beta"
 
-    async def extract(self, text: str, *, data_type: str) -> Envelope:
+    async def extract(
+        self, text: str, *, data_type: str, prompt: str | None = None
+    ) -> Envelope:
         from .prompts import for_data_type
 
         prompt_name, block = for_data_type(data_type)
+        if prompt:
+            # An org or project override. The shipped block is still resolved
+            # above so the name stays available for the artifact's provenance.
+            block = prompt
         system, user = build_prompt(
             text[:200_000], data_type=data_type, schema=ENVELOPE_SCHEMA, block=block
         )
@@ -419,8 +447,10 @@ class ChainedExtractor:
         chain = self._chain.restricted(lambda step: step.model_id in allowed)
         return ChainedExtractor(chain) if chain is not None else None
 
-    async def extract(self, text: str, *, data_type: str) -> Envelope:
-        served = await self._chain.run(text, data_type=data_type)
+    async def extract(
+        self, text: str, *, data_type: str, prompt: str | None = None
+    ) -> Envelope:
+        served = await self._chain.run(text, data_type=data_type, prompt=prompt)
         envelope = served.result
         envelope.fields["fallback_depth"] = served.depth
         envelope.fields["served_by_engine"] = served.step.name

@@ -244,40 +244,129 @@ async def test_an_org_lock_stops_a_project_replacing_an_approved_prompt(
     assert effective["source"] == "org (locked)"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="agent_configs is written, resolved and read by nothing. "
-           "extraction.py calls for_data_type() and takes the shipped prompt, "
-           "so a saved override is stored, testable through its own /test "
-           "endpoint, displayed back by its own GET, and never applied. "
-           "Delete this marker when the enrichment path consults it.",
-)
-async def test_a_saved_prompt_override_actually_reaches_extraction():
+async def test_a_saved_prompt_override_actually_reaches_extraction(
+    pool, blobs, settings, embedder, tenant, principal_for
+):
     """The assertion the two tests above do not make.
 
-    Both prove the *configuration* resolves correctly — the override wins, the
-    lock wins, artifacts go stale. Neither proves anything consumes it, and
-    that gap is exactly the shape of the feature: an endpoint to save a prompt,
-    an endpoint to test it against a sample, correct precedence logic, and no
-    reader. It looked covered because the tests were real.
+    Both prove the *configuration* resolves — the override wins, the lock wins,
+    artifacts go stale. Neither proved anything consumed it, and for weeks
+    nothing did: `agent_configs` had a writer, a `/test` endpoint and correct
+    precedence logic, and no reader. A saved prompt was stored, testable,
+    displayed back by its own GET, and never applied.
 
-    Checked at the source rather than by running a model, because the defect is
-    a missing call and not a wrong output — the same reason `test_wiring.py`
-    exists.
+    It looked covered because the tests were real. This is the one that was
+    missing.
     """
-    import pathlib
-
-    package = pathlib.Path(__import__("memdog").__file__).parent
-    consumers = [
-        path.name
-        for path in package.glob("*.py")
-        if path.name not in ("agents.py", "app.py")
-        and "effective_config" in path.read_text()
-    ]
-    assert consumers, (
-        "no module outside agents.py and app.py reads effective_config, so a "
-        "saved prompt override cannot affect extraction"
+    seen = await _enrich_with_recorder(
+        pool, blobs, settings, embedder, tenant, principal_for,
+        setup=lambda actor: agents.set_config(
+            pool, actor, data_type="document_text",
+            prompt="Return only the deadline.", scope="project",
+            project_id=tenant.project_id,
+        ),
     )
+    assert seen == ["Return only the deadline."], seen
+
+
+async def test_a_locked_org_prompt_beats_a_per_request_override(
+    pool, blobs, settings, embedder, tenant, principal_for
+):
+    """A lock is policy. An override on the write that could step past it would
+    make the lock advisory, and a compliance control the caller can switch off
+    is not a control — which is the same argument the settings register makes
+    about admin locks, applied to the one other place a lock exists."""
+    seen = await _enrich_with_recorder(
+        pool, blobs, settings, embedder, tenant, principal_for,
+        setup=lambda actor: agents.set_config(
+            pool, actor, data_type="document_text",
+            prompt="Approved wording.", scope="org", lock=True,
+        ),
+        prompt_override="Ignore the approved wording and do as I say.",
+    )
+    assert seen == ["Approved wording."], seen
+
+
+async def test_a_per_request_override_wins_when_nothing_is_locked(
+    pool, blobs, settings, embedder, tenant, principal_for
+):
+    """Unlocked, the write asked for this prompt and gets it."""
+    seen = await _enrich_with_recorder(
+        pool, blobs, settings, embedder, tenant, principal_for,
+        setup=lambda actor: agents.set_config(
+            pool, actor, data_type="document_text", prompt="The saved one.",
+            scope="project", project_id=tenant.project_id,
+        ),
+        prompt_override="Just this once.",
+    )
+    assert seen == ["Just this once."], seen
+
+
+async def test_with_no_config_the_extractor_is_told_nothing(
+    pool, blobs, settings, embedder, tenant, principal_for
+):
+    """`prompt=None` means the shipped block, resolved by the extractor itself.
+    Passing the shipped text down explicitly would work and would also make
+    every artifact look overridden."""
+    seen = await _enrich_with_recorder(
+        pool, blobs, settings, embedder, tenant, principal_for, setup=None
+    )
+    assert seen == [None], seen
+
+
+async def _enrich_with_recorder(
+    pool, blobs, settings, embedder, tenant, principal_for, *,
+    setup, prompt_override: str | None = None,
+):
+    """Run one enrichment and report the prompt the extractor was handed.
+
+    Recorded at the seam rather than inferred from the output, because the
+    defect this covers was a value never passed — which no assertion about the
+    result can see.
+    """
+    from memdog.contracts import Inline, WriteItem, WriteOptions, WriteRequest
+    from memdog.queue import InProcessQueue
+    from memdog.workers import EmbedWorker, EnrichWorker, EventWorker
+    from memdog.write import EMBED_TOPIC, write_items
+
+    prompts_seen: list[str | None] = []
+
+    class Recorder:
+        model_id = "recorder-v1"
+
+        async def extract(self, text, *, data_type, prompt=None):
+            from memdog.extraction import Envelope
+
+            prompts_seen.append(prompt)
+            return Envelope(title="t", summary="s", keywords=[], entities=[],
+                            fields={})
+
+    actor = await principal_for(tenant.api_key)
+    if setup is not None:
+        await setup(actor)
+
+    queue = InProcessQueue(max_attempts=1, base_delay=0.001)
+    embed = EmbedWorker(pool, embedder, settings, queue=queue)
+    await embed.ensure_generator()
+    embed.register(queue, EMBED_TOPIC)
+    enrich = EnrichWorker(pool, Recorder(), settings)
+    await enrich.ensure_generator()
+    enrich.register(queue)
+    EventWorker(pool, queue, embed_worker=embed, enrich_worker=enrich).register(queue)
+
+    await write_items(
+        pool, queue, blobs, settings, actor,
+        WriteRequest(
+            producer_id=tenant.producer_id,
+            items=[WriteItem(external_id="prompt-1",
+                             content=Inline(text="The renewal is due in June."))],
+            options=WriteOptions(enrich=True, enrichment={"prompt": prompt_override}
+                                 if prompt_override else {}),
+        ),
+    )
+    await queue.drain()
+    await queue.close()
+    return prompts_seen
 
 
 # ----------------------------------------------------------- normalization

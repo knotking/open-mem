@@ -79,25 +79,46 @@ const ALLOWED = [
   /^api\/v1\/crawlers\/[\w-]+\/connection$/,
 ];
 
-// Reachable by GET and by nothing else.
+// Reachable by GET, with no credential of any kind.
 //
 // `api/v1/mcp` is one path serving two things. GET is a manifest — the
 // transport and the tool names, disclosing nothing about anyone's data, which
-// is why the API leaves it unauthenticated. POST on the same path is a tool
-// call.
-//
-// This proxy does not forward the caller's headers: it replaces them with the
-// console's own credential, falling back to the service key when nobody is
-// signed in. An MCP client carries no browser session, so putting POST in the
-// list above would publish an unauthenticated MCP server over whatever that
-// key can reach — every tool, to anyone who can resolve this origin.
+// is why the API leaves it unauthenticated too.
 const GET_ONLY = [
+  /^api\/v1\/mcp$/,
+];
+
+// Paths that must carry the *caller's* credential and never the console's.
+//
+// POST on `api/v1/mcp` is a tool call. Everywhere else this proxy replaces the
+// caller's headers with the console's own, falling back to the service key when
+// nobody is signed in — which is right for a browser panel and catastrophic
+// here: an MCP client has no browser session, so a plain allow-list entry would
+// publish an unauthenticated MCP server over whatever that key can reach.
+//
+// So these forward the key the client sent and nothing else. A request without
+// one is refused rather than downgraded, because the downgrade is exactly the
+// hole: it would answer, with the platform's own access, and look like it
+// worked.
+const CALLER_CREDENTIAL = [
   /^api\/v1\/mcp$/,
 ];
 
 function allowed(path: string, method: string): boolean {
   if (method === "GET" && GET_ONLY.some((pattern) => pattern.test(path))) return true;
+  if (method === "POST" && CALLER_CREDENTIAL.some((pattern) => pattern.test(path))) {
+    return true;
+  }
   return ALLOWED.some((pattern) => pattern.test(path));
+}
+
+/** The API key an MCP client sent, from either header the API itself accepts. */
+function callerKey(request: Request): string | null {
+  const bearer = request.headers.get("authorization") ?? "";
+  const match = /^Bearer\s+(.+)$/i.exec(bearer.trim());
+  if (match) return match[1].trim() || null;
+  const direct = request.headers.get("x-api-key");
+  return direct?.trim() || null;
 }
 
 // The allow-list is matched against path *plus* query string, so any endpoint
@@ -116,6 +137,40 @@ async function forward(request: Request, path: string[], method: string) {
     method === "POST" || method === "PUT" || method === "PATCH"
       ? await request.text()
       : undefined;
+
+  // A tool call stands on the caller's own key, exactly as the webhook route
+  // stands on the producer's inbound auth. `skipAppCredential` is the existing
+  // seam for that and is why this needs no new mechanism.
+  const standalone =
+    method === "POST" && CALLER_CREDENTIAL.some((pattern) => pattern.test(joined));
+  if (standalone) {
+    const key = callerKey(request);
+    if (!key) {
+      return Response.json(
+        { detail: "this endpoint needs your own API key, sent as Authorization: Bearer <key>" },
+        { status: 401 },
+      );
+    }
+    try {
+      const upstreamStandalone = await apiFetch(`/${joined}`, {
+        method,
+        body,
+        skipAppCredential: true,
+        headers: { "X-API-Key": key, "content-type": "application/json" },
+      });
+      const text = await upstreamStandalone.text();
+      return new Response(text, {
+        status: upstreamStandalone.status,
+        headers: {
+          "content-type":
+            upstreamStandalone.headers.get("content-type") ?? "application/json",
+        },
+      });
+    } catch {
+      return Response.json({ detail: "upstream unavailable" }, { status: 502 });
+    }
+  }
+
   let upstream: Response;
   try {
     upstream = await apiFetch(`/${joined}`, { method, body });
