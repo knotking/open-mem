@@ -68,6 +68,9 @@ export type Version = {
   created_at: string;
 };
 
+/** One revision read whole. The listing only previews; this is the ask. */
+export type FullVersion = Version & { content_text: string | null };
+
 export type Item = {
   data_id: string;
   state: string;

@@ -26,6 +26,7 @@ import {
   MemoryMember,
   MemoryType,
   Backtest,
+  FullVersion,
   ObservedEvent,
   Subscription,
   describeEvent,
@@ -538,6 +539,18 @@ function AddData({
 
 /* ------------------------------------------------------------ 2. update */
 
+/**
+ * Browse and update — four levels, one at a time.
+ *
+ * It used to load fifty items with every revision expanded, which answers a
+ * question nobody asked: *show me everything*. What people actually do is
+ * narrow, then look, then look closer. So the screen is a path —
+ * **scope → page of items → one item → one revision** — and each step shows only
+ * what is needed to choose the next.
+ *
+ * The scope is a memory rather than a filter box because that is the container
+ * people already think in, and it is the one axis the corpus is organised on.
+ */
 function UpdateData({
   projectId,
   producerId,
@@ -547,69 +560,116 @@ function UpdateData({
   producerId: string;
   onChange: () => Promise<void>;
 }) {
+  const PAGE = 15;
+
+  const [memories, setMemories] = useState<Memory[]>([]);
+  const [scope, setScope] = useState<string>("");          // "" = everything
+  const [stateFilter, setStateFilter] = useState<string>("");
   const [rows, setRows] = useState<Item[]>([]);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [more, setMore] = useState(false);
+
   const [selected, setSelected] = useState<Item | null>(null);
   const [versions, setVersions] = useState<Version[]>([]);
+  const [showing, setShowing] = useState<FullVersion | null>(null);
+  const [loadingVersion, setLoadingVersion] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [editing, setEditing] = useState(false);
+
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [showing, setShowing] = useState<Version | null>(null);
 
-  const load = useCallback(async () => {
+  useEffect(() => {
+    void call<{ memories: Memory[] }>(`api/v1/projects/${projectId}/memories`)
+      .then((r) => setMemories(r.memories))
+      .catch(() => setMemories([]));
+  }, [projectId]);
+
+  const loadPage = useCallback(async (append: boolean) => {
+    setError(null);
     try {
-      const page = await call<{ items: Item[] }>(`api/v1/projects/${projectId}/data?limit=50`);
-      setRows(page.items);
+      if (scope) {
+        // A memory's members are its own listing; there is no cursor on it, so
+        // the page size is applied here rather than pretended at.
+        const page = await call<{ members: MemoryMember[] }>(
+          `api/v1/memories/${scope}/members`);
+        const ids = page.members.map((m) => m.data_id);
+        const items = await Promise.all(
+          ids.slice(0, PAGE).map((id) => call<Item>(`api/v1/data/${id}`).catch(() => null)));
+        setRows(items.filter(Boolean) as Item[]);
+        setMore(false);
+        setCursor(null);
+        return;
+      }
+      const qs = new URLSearchParams({ limit: String(PAGE) });
+      if (append && cursor) qs.set("before", cursor);
+      if (stateFilter) qs.set("state", stateFilter);
+      const page = await call<{ items: Item[] }>(
+        `api/v1/projects/${projectId}/data?${qs.toString()}`);
+      const next = append ? [...rows, ...page.items] : page.items;
+      setRows(next);
+      setCursor(page.items.length ? page.items[page.items.length - 1].data_id : null);
+      // A full page means there is probably another; an empty or short one is
+      // the end. Said plainly rather than left for a button that does nothing.
+      setMore(page.items.length === PAGE);
     } catch (e) {
       setError((e as Error).message);
     }
-  }, [projectId]);
+  }, [projectId, scope, stateFilter, cursor, rows]);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    setSelected(null); setShowing(null); setCursor(null);
+    void loadPage(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, scope, stateFilter]);
 
   async function open(dataId: string) {
-    setError(null);
-    setNote(null);
-    setShowing(null);
+    setError(null); setNote(null); setShowing(null); setEditing(false);
     try {
       const item = await call<Item>(`api/v1/data/${dataId}`);
       setSelected(item);
       setDraft(item.content_text ?? item.extracted_text ?? "");
-      setVersions((await call<{ versions: Version[] }>(`api/v1/data/${dataId}/versions`)).versions);
+      setVersions((await call<{ versions: Version[] }>(
+        `api/v1/data/${dataId}/versions`)).versions);
     } catch (e) {
       setError((e as Error).message);
     }
   }
 
+  async function openVersion(v: Version) {
+    if (showing?.version_id === v.version_id) { setShowing(null); return; }
+    setLoadingVersion(v.version_id); setError(null);
+    try {
+      // A second request on purpose: the listing previews at 400 characters, so
+      // the full text is fetched only for the revision actually chosen.
+      setShowing(await call<FullVersion>(
+        `api/v1/data/${selected!.data_id}/versions/${v.version_id}`));
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoadingVersion(null);
+    }
+  }
+
   async function save() {
     if (!selected) return;
-    setBusy(true);
-    setError(null);
+    setBusy(true); setError(null);
     try {
       // The same write endpoint: an external_id that already exists updates in
       // place. There is no separate update path to drift from the write path.
       const response = await call<{ results: { data_id: string; status: string }[] }>(
         "api/v1/write",
-        {
-          producer_id: producerId,
-          items: [
-            {
-              external_id: selected.external_id,
-              content: { kind: "inline", text: draft },
-            },
-          ],
-        },
+        { producer_id: producerId,
+          items: [{ external_id: selected.external_id,
+                    content: { kind: "inline", text: draft } }] },
       );
       const first = response.results[0];
-      setNote(
-        first.status === "updated"
-          ? "Saved as a new revision. The previous text is still readable below."
-          : "That key did not exist, so this created a new item.",
-      );
+      setNote(first.status === "updated"
+        ? "Saved as a new revision. The previous text is still readable below."
+        : "That key did not exist, so this created a new item.");
+      setEditing(false);
       await open(first.data_id);
-      await load();
       await onChange();
     } catch (e) {
       setError((e as Error).message);
@@ -618,106 +678,157 @@ function UpdateData({
     }
   }
 
-  const dirty = selected !== null && draft !== (selected.content_text ?? selected.extracted_text ?? "");
+  const scopeName = scope
+    ? memories.find((m) => m.memory_id === scope)
+    : null;
 
   return (
     <>
-      <h1>Update data</h1>
+      <h1>Browse and update</h1>
       <p className="lede">
-        There is no update endpoint. A write whose <code>external_id</code> already exists updates
-        that item — the caller&rsquo;s natural key is what dedupes within a source, so re-crawling
-        the same record updates rather than duplicates. Every save appends a revision; nothing is
-        mutated in place.
+        Narrow to a memory, open an item, then open a revision. Each step shows
+        only what you need to choose the next one.
       </p>
       {error && <p className="err">{error}</p>}
+      {note && <p className="note">{note}</p>}
 
+      {/* ---- 1. scope ---- */}
       <section className="panel">
-        <h2>Items in this project</h2>
-        {rows.length === 0 ? (
-          <p className="empty">Nothing written yet.</p>
-        ) : (
-          <div className="excluded">
-            {rows.map((r) => (
-              <div
-                className={`item memrow${selected?.data_id === r.data_id ? " chosen" : ""}`}
-                key={r.data_id}
-                onClick={() => void open(r.data_id)}
-              >
-                <span className={`chip ${r.state}`}>{r.state}</span>
-                <code>{r.external_id ?? r.data_id}</code>
-                <span className="empty">{r.data_type ?? r.mime_type ?? "—"}</span>
-                <span className="chip">r{String((r as unknown as { revisions: number }).revisions)}</span>
-                <span className="empty preview">
-                  {(r as unknown as { preview: string | null }).preview ?? ""}
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
+        <h2>Where to look</h2>
+        <div className="row">
+          <label>Memory
+            <select value={scope} onChange={(e) => setScope(e.target.value)}>
+              <option value="">everything in this project</option>
+              {memories.map((m) => (
+                <option key={m.memory_id} value={m.memory_id}>
+                  {m.title || m.memory_key || m.memory_id} · {m.type} ({m.members})
+                </option>
+              ))}
+            </select>
+          </label>
+          {!scope && (
+            <label>Readiness
+              <select value={stateFilter} onChange={(e) => setStateFilter(e.target.value)}>
+                <option value="">any</option>
+                <option value="stored">stored — not searchable yet</option>
+                <option value="searchable">searchable</option>
+                <option value="enriched">enriched</option>
+              </select>
+            </label>
+          )}
+        </div>
       </section>
 
-      {selected && (
+      {/* ---- 2. a page of items ---- */}
+      {!selected && (
         <section className="panel">
-          <h2>{selected.external_id ?? selected.data_id}</h2>
-          <ItemDetail item={selected} versions={[]} />
-
-          {selected.content_text !== null || selected.extracted_text !== null ? (
-            <>
-              <h3>Edit</h3>
-              {selected.content_text === null && (
-                <div className="notice">
-                  <strong>This text was extracted, not written.</strong> Saving stores it as
-                  caller-supplied content, which means a later re-parse will no longer replace it.
-                </div>
-              )}
-              <textarea value={draft} onChange={(e) => setDraft(e.target.value)} />
-              <div className="row end" style={{ marginTop: 10 }}>
-                <button onClick={save} disabled={busy || !dirty}>
-                  {busy ? "Saving…" : dirty ? "Save as new revision" : "No changes"}
-                </button>
-              </div>
-              {note && <p className="empty">{note}</p>}
-            </>
-          ) : (
+          <h2>
+            {rows.length} item{rows.length === 1 ? "" : "s"}
+            {scopeName ? ` in ${scopeName.title || scopeName.memory_key}` : ""}
+            {more ? " so far" : ""}
+          </h2>
+          {rows.length === 0 ? (
             <p className="empty">
-              This item has no text yet — it is {selected.parse_status ?? "awaiting processing"}.
+              {scope ? "This memory has nothing in it yet."
+               : stateFilter ? `Nothing is ${stateFilter}.`
+               : "This project has no data yet — add some first."}
             </p>
-          )}
-
-          <h3>Revisions</h3>
-          <div className="excluded">
-            {versions.map((v) => (
-              <div
-                className={`item memrow${showing?.version_id === v.version_id ? " chosen" : ""}`}
-                key={v.version_id}
-                onClick={() => setShowing(showing?.version_id === v.version_id ? null : v)}
-              >
-                <span className="chip on">r{v.revision}</span>
-                <span className="chip">{v.source}</span>
-                <span className="empty">{v.content_chars} chars</span>
-                {v.model_id && <span className="chip">{v.model_id}</span>}
-                <span className="empty">{new Date(v.created_at).toLocaleString()}</span>
+          ) : (
+            <>
+              <div className="excluded">
+                {rows.map((r) => (
+                  <button className="memrow" key={r.data_id} onClick={() => void open(r.data_id)}>
+                    <span>{r.external_id ?? r.data_id}</span>
+                    <span className={`chip ${r.state}`}>{r.state}</span>
+                    <span className="empty">{r.data_type}</span>
+                  </button>
+                ))}
               </div>
-            ))}
-          </div>
-          {showing && (
-            <div className="hit" style={{ marginTop: 10 }}>
-              <div className="meta">
-                <span className="chip on">revision {showing.revision}</span>
-                <span className="chip">{showing.source}</span>
-              </div>
-              <div className="text">{showing.preview ?? "(no text in this revision)"}</div>
-            </div>
+              {more && (
+                <button disabled={busy} onClick={() => void loadPage(true)}>
+                  Load {PAGE} more
+                </button>
+              )}
+            </>
           )}
-          <p className="empty">
-            Click a revision to read it. &ldquo;Why does this say something different than last
-            week?&rdquo; is answerable because the old text is still here.
-          </p>
         </section>
+      )}
+
+      {/* ---- 3. one item ---- */}
+      {selected && (
+        <>
+          <button className="backlink" onClick={() => { setSelected(null); setShowing(null); }}>
+            ← Back to the list
+          </button>
+          <section className="panel">
+            <h2>{selected.external_id ?? selected.data_id}</h2>
+            <ItemDetail item={selected} versions={versions} />
+            <StoredMedia item={selected} />
+
+            {!editing ? (
+              <>
+                <h3>Current text</h3>
+                <pre className="excerpt">
+                  {selected.content_text ?? selected.extracted_text ?? "—"}
+                </pre>
+                <button onClick={() => setEditing(true)}>Edit</button>
+              </>
+            ) : (
+              <>
+                <h3>Edit</h3>
+                <p className="hint">
+                  Saving writes a new revision through the same write endpoint —
+                  the previous text stays readable below.
+                </p>
+                <textarea rows={10} value={draft}
+                          onChange={(e) => setDraft(e.target.value)} />
+                <div className="row">
+                  <button disabled={busy} onClick={() => void save()}>Save as a revision</button>
+                  <button disabled={busy} onClick={() => setEditing(false)}>Cancel</button>
+                </div>
+              </>
+            )}
+          </section>
+
+          {/* ---- 4. one revision ---- */}
+          <section className="panel">
+            <h2>{versions.length} revision{versions.length === 1 ? "" : "s"}</h2>
+            <p className="hint">
+              An item&rsquo;s text is produced by a pipeline, and the pipeline
+              changes. Open one to read exactly what it said.
+            </p>
+            <div className="excluded">
+              {versions.map((v) => (
+                <button className="memrow" key={v.version_id}
+                        onClick={() => void openVersion(v)}>
+                  <span>#{v.revision} · {v.source}</span>
+                  <span className="empty">{v.model_id ?? "no model"}</span>
+                  <span className="empty">{v.content_chars} chars</span>
+                  <span className="empty">{new Date(v.created_at).toLocaleString()}</span>
+                </button>
+              ))}
+            </div>
+            {loadingVersion && <p className="hint">Reading revision…</p>}
+            {showing && (
+              <>
+                <h3>Revision {showing.revision} — {showing.source}</h3>
+                <p className="hint">
+                  {showing.model_id ? `Produced by ${showing.model_id}. ` : ""}
+                  This is the whole text as that revision stored it, not the
+                  preview.
+                </p>
+                <pre className="excerpt">
+                  {showing.content_text ?? "(this revision stored no text)"}
+                </pre>
+              </>
+            )}
+          </section>
+        </>
       )}
     </>
   );
 }
+
 
 /* --------------------------------------------------------- 3. entities */
 
@@ -2971,21 +3082,50 @@ function ReadSearch({
 
 /* ------------------------------------------------------------- 4. audit */
 
+/**
+ * Audit — two logs, grouped before they are listed.
+ *
+ * It used to print a hundred writes and a hundred reads flat, which is the
+ * shape that makes an audit log unusable: everything is present and nothing is
+ * findable. Counts by action come first and double as filters, one tab is
+ * shown at a time, and a row opens its own detail rather than carrying it.
+ */
 function Audit({ projectId }: { projectId: string }) {
+  const PAGE = 25;
   const [trail, setTrail] = useState<AuditTrail | null>(null);
+  const [tab, setTab] = useState<"writes" | "reads">("writes");
+  const [action, setAction] = useState<string | null>(null);
+  const [shown, setShown] = useState(PAGE);
+  const [open, setOpen] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
-      setTrail(await call<AuditTrail>(`api/v1/audit?project_id=${projectId}&limit=100`));
+      setTrail(await call<AuditTrail>(`api/v1/audit?project_id=${projectId}&limit=200`));
     } catch (e) {
       setError((e as Error).message);
     }
   }, [projectId]);
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { setShown(PAGE); setOpen(null); }, [tab, action]);
+
+  const rows: { id: string; action: string; at: string;
+                target?: string | null; detail?: Record<string, unknown> }[] =
+    !trail ? []
+    : tab === "writes"
+      ? trail.writes.map((w) => ({ id: w.id, action: w.action, at: w.at,
+                                   target: w.target_id, detail: w.detail }))
+      : trail.reads.map((r) => ({ id: r.id, action: r.action, at: r.at,
+                                  target: r.data_id }));
+
+  const counts = rows.reduce<Record<string, number>>((acc, r) => {
+    acc[r.action] = (acc[r.action] ?? 0) + 1;
+    return acc;
+  }, {});
+
+  const filtered = action ? rows.filter((r) => r.action === action) : rows;
+  const page = filtered.slice(0, shown);
 
   return (
     <>
@@ -2997,52 +3137,75 @@ function Audit({ projectId }: { projectId: string }) {
       </p>
       {error && <p className="err">{error}</p>}
 
-      <section className="panel">
-        <h2>Writes — everything that is not a read</h2>
-        {!trail || trail.writes.length === 0 ? (
-          <p className="empty">Nothing yet.</p>
-        ) : (
-          <div className="excluded">
-            {trail.writes.map((w) => (
-              <div className="item" key={w.id}>
-                <span className="chip on">{w.action}</span>
-                <code>{w.target_id ?? "—"}</code>
-                {typeof w.detail?.access_level === "string" && (
-                  <span className="chip">{w.detail.access_level}</span>
-                )}
-                <span className="empty">{new Date(w.at).toLocaleTimeString()}</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
+      <div className="subtabs">
+        <button className={`subtab ${tab === "writes" ? "on" : ""}`}
+                onClick={() => { setTab("writes"); setAction(null); }}>
+          Writes <span className="count">{trail?.writes.length ?? 0}</span>
+        </button>
+        <button className={`subtab ${tab === "reads" ? "on" : ""}`}
+                onClick={() => { setTab("reads"); setAction(null); }}>
+          Reads <span className="count">{trail?.reads.length ?? 0}</span>
+        </button>
+      </div>
 
-      <section className="panel">
-        <h2>Reads — append-only access log</h2>
-        {!trail || trail.reads.length === 0 ? (
-          <p className="empty">Nothing yet.</p>
-        ) : (
-          <div className="excluded">
-            {trail.reads.map((r) => (
-              <div className="item" key={r.id}>
-                <span className="chip">{r.action}</span>
-                <code>{r.data_id ?? r.query_id ?? "—"}</code>
-                <span className="empty">{new Date(r.at).toLocaleTimeString()}</span>
-              </div>
-            ))}
-          </div>
-        )}
+      {rows.length === 0 ? (
         <p className="empty">
-          Every retrieval writes one row per cited record, so &ldquo;who read this?&rdquo; has an
-          answer that survives the record itself being deleted.
+          {tab === "writes"
+            ? "Nothing has been written in this project yet."
+            : "Nothing has been read yet — reads are logged the moment somebody looks."}
         </p>
-      </section>
+      ) : (
+        <>
+          <section className="panel">
+            <h2>By action</h2>
+            <div className="row">
+              {Object.entries(counts)
+                .sort((a, b) => b[1] - a[1])
+                .map(([name, n]) => (
+                  <button key={name}
+                          className={`chip ${action === name ? "on" : ""}`}
+                          onClick={() => setAction(action === name ? null : name)}>
+                    {name} <span className="empty">{n}</span>
+                  </button>
+                ))}
+            </div>
+          </section>
+
+          <section className="panel">
+            <h2>
+              {filtered.length} {action ? <>× <code>{action}</code></> : "entries"}
+              {page.length < filtered.length ? ` — showing ${page.length}` : ""}
+            </h2>
+            <div className="excluded">
+              {page.map((r) => (
+                <div key={r.id}>
+                  <button className="memrow"
+                          onClick={() => setOpen(open === r.id ? null : r.id)}>
+                    <span className="chip on">{r.action}</span>
+                    <code>{r.target ?? "—"}</code>
+                    <span className="empty">{new Date(r.at).toLocaleString()}</span>
+                  </button>
+                  {open === r.id && (
+                    <pre className="excerpt">
+                      {r.detail && Object.keys(r.detail).length
+                        ? JSON.stringify(r.detail, null, 2)
+                        : "No further detail was recorded for this entry."}
+                    </pre>
+                  )}
+                </div>
+              ))}
+            </div>
+            {page.length < filtered.length && (
+              <button onClick={() => setShown(shown + PAGE)}>
+                Show {Math.min(PAGE, filtered.length - page.length)} more
+              </button>
+            )}
+          </section>
+        </>
+      )}
     </>
   );
 }
-
-/* ------------------------------------------------------------ 5. memory */
-
 function MemorySection({ projectId }: { projectId: string }) {
   const [memories, setMemories] = useState<Memory[]>([]);
   const [types, setTypes] = useState<MemoryType[]>([]);

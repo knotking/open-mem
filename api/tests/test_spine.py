@@ -10,6 +10,7 @@ Every assertion below is one clause of that sentence.
 from __future__ import annotations
 
 import pytest
+from memdog.ids import new_id
 
 from memdog.contracts import (
     WriteOptions,
@@ -282,3 +283,63 @@ async def test_explicit_data_type_short_circuits_at_layer_one(
     item = await get_item(pool, actor, response.results[0].data_id)
     assert item["data_type"] == "clinical_note"
     assert item["classified_by_layer"] == 1
+
+
+async def test_a_revision_reads_in_full_only_when_it_is_asked_for(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """The listing previews; one revision reads whole.
+
+    Forty revisions of a long document is a response nobody wants, and most
+    callers are choosing which to read rather than reading all of them. So the
+    full text is a second request, and it carries its own access record because
+    unlike the listing it discloses content.
+    """
+    from memdog.retrieval import get_versions, one_version
+    from memdog.workers import record_version
+
+    owner = await principal_for(tenant.api_key)
+    long_text = "x" * 900
+    data_id = new_id("data")
+    await pool.execute(
+        """
+        INSERT INTO data_items (data_id, org_id, project_id, owner_id, producer_id,
+            external_id, state, access_level, content_text, event_time)
+        VALUES ($1, $2, $3, $4, $5, 'versioned', 'stored', 'org', 'seed', now())
+        """,
+        data_id, tenant.org_id, tenant.project_id, tenant.user_id, tenant.producer_id,
+    )
+    async with pool.acquire() as conn:
+        await record_version(conn, data_id, source="write", content_text=long_text)
+
+    listed = await get_versions(pool, owner, data_id)
+    assert len(listed[0]["preview"]) == 400, "the listing is a preview, not the text"
+
+    full = await one_version(pool, owner, data_id, listed[0]["version_id"])
+    assert full["content_text"] == long_text
+
+
+async def test_a_second_tenant_cannot_read_a_revision(
+    pool, tenant, other_tenant, principal_for
+):
+    """404, not 403 — a revision of a record you cannot read must not be
+    confirmable."""
+    from memdog.retrieval import get_versions, one_version
+    from memdog.workers import record_version
+
+    owner = await principal_for(tenant.api_key)
+    stranger = await principal_for(other_tenant.api_key)
+    data_id = new_id("data")
+    await pool.execute(
+        """
+        INSERT INTO data_items (data_id, org_id, project_id, owner_id, producer_id,
+            external_id, state, access_level, content_text, event_time)
+        VALUES ($1, $2, $3, $4, $5, 'private-versioned', 'stored', 'private', 'secret', now())
+        """,
+        data_id, tenant.org_id, tenant.project_id, tenant.user_id, tenant.producer_id,
+    )
+    async with pool.acquire() as conn:
+        await record_version(conn, data_id, source="write", content_text="secret text")
+
+    listed = await get_versions(pool, owner, data_id)
+    assert await one_version(pool, stranger, data_id, listed[0]["version_id"]) == {}

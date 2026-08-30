@@ -623,6 +623,41 @@ async def get_versions(
     return [dict(r) for r in rows]
 
 
+async def one_version(
+    pool: asyncpg.Pool, principal: Principal, data_id: str, version_id: str
+) -> dict:
+    """One revision, with its text in full.
+
+    The listing above returns a 400-character preview on purpose -- forty
+    revisions of a long document is a response nobody wants and most callers are
+    choosing which one to read, not reading them all. So the full text is a
+    second request, made only for the one that was chosen.
+
+    Its own access record for the same reason: this discloses content, and the
+    listing does not.
+    """
+    visible = visibility_sql("d", 2, 3, 4)
+    org_id, user_id, principals = visibility_params(principal)
+    row = await pool.fetchrow(
+        f"""
+        SELECT v.version_id, v.revision, v.source, v.content_text, v.content_chars,
+               v.checksum, v.mime_type, v.model_id, v.model_version,
+               v.generator_version, v.tokens, v.detail, v.created_at
+          FROM data_versions v
+          JOIN data_items d ON d.data_id = v.data_id
+         WHERE v.data_id = $1 AND v.version_id = $5 AND {visible}
+        """,
+        data_id, org_id, user_id, principals, version_id,
+    )
+    if row is None:
+        # Indistinguishable from "does not exist", which is the point: a
+        # revision of a record you cannot read must not be confirmable. The
+        # endpoint turns this into a 404; this module does not own HTTP.
+        return {}
+    await record_access(pool, principal, action="version.read", data_id=data_id)
+    return dict(row)
+
+
 async def list_memories(pool: asyncpg.Pool, principal: Principal, project_id: str) -> list[dict]:
     """Memories in a project, with live member counts.
 

@@ -477,6 +477,26 @@ async def read_versions(
         raise HTTPException(status_code=404, detail="not found") from exc
 
 
+@app.get("/api/v1/data/{data_id}/versions/{version_id}")
+async def one_version_endpoint(
+    request: Request, data_id: str, version_id: str,
+    actor: Principal = Depends(principal)
+) -> dict:
+    """One revision, with its text in full.
+
+    The listing returns a 400-character preview on purpose — forty revisions of
+    a long document is a response nobody wants, and most callers are choosing
+    which one to read rather than reading all of them. This is the one they
+    chose, and it carries its own access record because it discloses content.
+    """
+    from .retrieval import one_version
+
+    row = await one_version(request.app.state.pool, actor, data_id, version_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="revision not found")
+    return row
+
+
 @app.get("/api/v1/projects/{project_id}/data")
 async def get_project_data(
     request: Request,
