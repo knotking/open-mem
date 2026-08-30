@@ -1142,15 +1142,18 @@ type RunDetail = RunResult & {
   errors: { external_id: string | null; reason: string }[];
 };
 
-const PRESETS: Record<string, { label: string; blurb: string; build: (v: string) => object }> = {
+const PRESETS: Record<string,
+  { label: string; blurb: string; placeholder: string; build: (v: string) => object }> = {
   feed: {
     label: "Feed",
+    placeholder: "Feed URL — https://example.com/rss.xml",
     blurb: "An RSS, Atom or sitemap index someone else already maintains.",
     build: (v) => ({ name: "Feed", strategy: "feed", seeds: [v],
                      incremental: "watermark" }),
   },
   traverse: {
     label: "Website",
+    placeholder: "Seed page — https://docs.example.com/",
     blurb: "Follow links from a seed page, inside an allowlist, honouring robots.txt.",
     build: (v) => {
       let host = "";
@@ -1161,9 +1164,26 @@ const PRESETS: Record<string, { label: string; blurb: string; build: (v: string)
   },
   http: {
     label: "JSON API",
+    placeholder: "Endpoint — https://api.example.com/v1/items",
     blurb: "A templated request with declared pagination — no adapter needed.",
     build: (v) => ({ name: "API", strategy: "http", request: { method: "GET", url: v },
                      extract: { items_path: "@" } }),
+  },
+  tree: {
+    label: "Drive folder",
+    placeholder: "Folder ID — 1AbCdEf… (from the folder's URL)",
+    blurb:
+      "Walk a Google Drive folder and everything under it. Needs a service-account " +
+      "credential below. For SharePoint or OneDrive, use the app catalog.",
+    build: (v) => ({
+      name: "Drive", strategy: "tree",
+      tree: { api: "google_drive", root: v },
+      // Shallower and smaller than the default: a drive nobody has pruned is
+      // where an unbounded first run finds forty thousand files, and the dry
+      // run is meant to tell you that before the live one does.
+      limits: { max_depth: 3, max_items: 200 },
+      incremental: "watermark",
+    }),
   },
 };
 
@@ -1284,7 +1304,7 @@ function CrawlersSection({ projectId }: { projectId: string }) {
             type="text"
             value={seed}
             onChange={(e) => setSeed(e.target.value)}
-            placeholder="Seed URL"
+            placeholder={PRESETS[kind].placeholder}
             style={{ flex: 1 }}
           />
           <button onClick={create} disabled={busy || !seed.trim()}>

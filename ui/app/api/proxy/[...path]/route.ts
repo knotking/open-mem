@@ -69,9 +69,34 @@ const ALLOWED = [
   /^api\/v1\/producers\/[A-Za-z0-9_]+\/test-delivery$/,
   /^api\/v1\/producers\/[A-Za-z0-9_]+\/deliveries(\?.*)?$/,
   /^api\/v1\/platform\/health$/,
+  // The connector catalog and the credentials it is created against. Missing
+  // these is why the "Pull from an app" panel rendered an empty category list:
+  // the endpoints existed, the panel existed, and the browser's only route to
+  // the API refused the request — so `apps` stayed empty and the failure looked
+  // like a catalog with nothing in it.
+  /^api\/v1\/connectors$/,
+  /^api\/v1\/connections(\?.*)?$/,
+  /^api\/v1\/crawlers\/[\w-]+\/connection$/,
 ];
 
-function allowed(path: string): boolean {
+// Reachable by GET and by nothing else.
+//
+// `api/v1/mcp` is one path serving two things. GET is a manifest — the
+// transport and the tool names, disclosing nothing about anyone's data, which
+// is why the API leaves it unauthenticated. POST on the same path is a tool
+// call.
+//
+// This proxy does not forward the caller's headers: it replaces them with the
+// console's own credential, falling back to the service key when nobody is
+// signed in. An MCP client carries no browser session, so putting POST in the
+// list above would publish an unauthenticated MCP server over whatever that
+// key can reach — every tool, to anyone who can resolve this origin.
+const GET_ONLY = [
+  /^api\/v1\/mcp$/,
+];
+
+function allowed(path: string, method: string): boolean {
+  if (method === "GET" && GET_ONLY.some((pattern) => pattern.test(path))) return true;
   return ALLOWED.some((pattern) => pattern.test(path));
 }
 
@@ -82,7 +107,7 @@ function allowed(path: string): boolean {
 
 async function forward(request: Request, path: string[], method: string) {
   const joined = path.join("/") + (new URL(request.url).search || "");
-  if (!allowed(joined)) {
+  if (!allowed(joined, method)) {
     // An open proxy in front of an authenticated API hands the browser every
     // endpoint the server can reach, including ones this UI never uses.
     return Response.json({ detail: "path not permitted" }, { status: 403 });

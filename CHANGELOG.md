@@ -11,6 +11,45 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **Google and Microsoft, without a person in the loop.** "They need OAuth"
+  stood here for weeks and was only ever true of a *person* connecting their own
+  account. An organization connecting its own data uses a grant with no human
+  step at all, which is a POST. Two exchanged auth styles now do it:
+  **`client_credentials`** (Microsoft Graph, Salesforce, Zoom, Xero) posts
+  `client_id:client_secret` to a token endpoint, and
+  **`google_service_account`** signs a JWT assertion with the key file. Both
+  take their non-secret settings — token endpoint, scopes, an optional delegated
+  `subject` — in the new **`auth_config`** on `POST /api/v1/connections`, which
+  is reviewable in full because it holds no secret by construction.
+- `subject` on a Google connection is **domain-wide delegation** — the assertion
+  says which user it is acting as, which is how one credential reads many
+  mailboxes. It is never set by default: an assertion that impersonates by
+  default is one nobody chose.
+- **A fourth crawl strategy, `tree`.** Listing one folder is one request; a
+  document library is a tree. It walks Google Drive or Microsoft Graph
+  breadth-first, bounded by `max_depth` and the run's budget, skipping folders
+  already visited so a Drive shortcut cannot turn the tree into a cycle.
+  `include_mime` is an allowlist of prefixes; empty means every file, which is
+  usually not what anyone wants of a shared drive.
+- A tree walk **emits references, not documents**: each file becomes a `Pending`
+  ref naming the same connection, and the fetch worker resolves it. That puts
+  the download where the byte cap, the blob store and the parse pipeline already
+  are, rather than inside a discovery pass holding a run open.
+- **The fetcher understands `google_drive` and `microsoft_graph`.** Google's own
+  formats have no bytes to serve — `?alt=media` on a Doc is a 403 — so Docs and
+  Slides are exported as text and Sheets as CSV; that export format is the
+  decision about what gets indexed. A Google thing with no export (a form, a
+  shortcut) says which it is rather than returning the source's 403.
+- Three catalog entries for walking rather than listing: **Google Drive (folder
+  tree)**, **SharePoint (library tree)**, **OneDrive (drive tree)**. The pair is
+  not redundant — a listing stores what a folder contains, a tree stores what
+  the documents say, and choosing between them is choosing between a file index
+  and a corpus. 28 entries, 27 usable; **Zoho CRM is the only genuine OAuth
+  case** and stays listed with that reason attached.
+- `GET /api/v1/capabilities` reports **`connectors`** and
+  **`connectors_available`**. Both, because the difference is the honest part: a
+  count that silently dropped the blocked entry would read as complete coverage.
+
 - **`memory_links` works.** Declared with the memories migration and reached by
   nothing — no function, no endpoint, no reader — so a memory could never be
   said to `continue` another or be `derived_from` the conversations it
@@ -387,6 +426,33 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   Supermemory's latency, Letta's working context.
 
 ### Fixed
+- **The console could not create either exchanged credential**, so the Google
+  and Microsoft catalog entries were unreachable from the UI that listed them.
+  The Credentials form now offers both styles, asks for the token endpoint and
+  scopes they need, takes a service-account key file as a paste-in block rather
+  than a password field, and sends `auth_config`.
+- **A source's 401 now drops the cached token.** An exchanged credential is held
+  until shortly before it expires, so a source that started refusing — consent
+  revoked, a scope changed, the secret rotated at the provider — went on being
+  refused with the same dead token for up to an hour after somebody fixed it,
+  and the fix looked like it had not worked.
+- **A download no longer forwards its credential across a redirect.** Both Drive
+  and Graph answer a download with a 302 to a pre-signed CDN URL, and the
+  `Authorization` header followed it — handing an access token to a host that
+  never needed one, which is the ordinary way a token ends up in somebody else's
+  logs. It is stripped on any cross-host hop.
+- A resource id is **pattern-checked before it is put in a URL**. It arrives
+  from a listing and goes straight into a request path, so a slash or a
+  dot-segment in it is a path traversal against an API — and works exactly as
+  well as one against a filesystem.
+- A token endpoint answers a bad secret with a body that quotes back what it was
+  sent. **That body never reaches an exception or a log**, which is otherwise
+  the ordinary way a credential ends up somewhere durable.
+- **The strategy taxonomy in the docs said six; the implementation has four.**
+  `enumerate`, `query` and `search` differ in pagination shape and field names,
+  not in kind, and all three are `http`. `docs/ingestion/crawlers.md` and the
+  README now say four.
+
 - **An enrichment failure was retried or discarded depending on the record's
   id.** The check was `"429" in str(exc)` — a substring search over the
   exception message. ULIDs are base32, so roughly one record in a few hundred
@@ -659,6 +725,13 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 - **New dependency**: `jmespath`. `pip install -e .` before deploying.
 
 ### Migrations
+- `0031_tree_strategy.sql` — adds `tree` to the `crawlers.strategy` CHECK. Run
+  before deploying; a `tree` crawler cannot be stored without it.
+- `0030_token_exchange.sql` — adds `client_credentials` and
+  `google_service_account` to the `connections.auth_style` CHECK, and
+  **`connections.auth_config jsonb`**. Run before deploying. Existing
+  connections are unaffected: `auth_config` defaults to empty and the four
+  presented styles do not read it.
 - `0029_memory_links.sql` — `created_by`, `confidence` and `created_at` on
   `memory_links`, plus the reverse index.
 - `0028_item_run.sql` — `data_items.run_id`. Set by `write_items` as an
