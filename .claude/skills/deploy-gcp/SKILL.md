@@ -116,23 +116,43 @@ Each of these presents as a different bug than it is.
   The Cloud Scheduler service agent needs `roles/iam.serviceAccountTokenCreator`
   on `memdog-api@…`, because Scheduler impersonates it to mint the OAuth token.
 - **`smoke.sh` ends in `FAIL: nothing retrievable`, and nothing is wrong.**
-  Found 2026-08-30. The items are written and durable; the retrieve response
-  says so — `"reason": "not_yet_enriched"`, `"state": "stored"` — and there is
-  **no error in the logs at all**, which is the tell. `smoke.sh` sends no
-  `options.enrich`, so the write falls back to the project's
-  `enrich_by_default`, and on `prj_01M12VFWRTE5YCWAQFFXQSEN2C` that is off.
-  Enrichment is optional by design, so the script asserts a step it never asked
-  for. Confirm the deployment is fine by enriching one item by hand:
+  Fixed 2026-08-30 by sending `options.enrich`; kept here because the symptom
+  will recur wherever the flag is missing. The items are written and durable,
+  the response says `"reason": "not_yet_enriched"`, and there is **no error in
+  the logs at all** — that silence is the tell. Enrichment is optional by
+  design, so a write that does not ask for it lands in `stored` and stays
+  there; a script that then asserts retrievability is asserting a step it never
+  requested. Enrich one item by hand to confirm a deployment is healthy:
 
   ```bash
   curl -X POST -H "X-API-Key: $KEY" -H 'content-type: application/json' \
        -d '{"embed":true,"summarize":true}' "$URL/api/v1/data/<data_id>/enrich"
   ```
 
-  It returns `{"status":"requested"}`; the item reaches `enriched` in about a
-  minute and is then retrievable. **`smoke.sh` needs the flag added** — until
-  then it fails on any project that has not opted into enrichment, which reads
-  as a broken deploy.
+  It returns `{"status":"requested"}` and reaches `enriched` in about a minute.
+  A `Pending` item staying `stored` is **correct** — it waits on a fetch worker
+  that does not exist, and it appears in `excluded` on a passing run.
+
+- **Enrichment succeeds but produces nothing useful: no entities, no edges, no
+  graph.** Standing condition as of 2026-08-30. Look at the artifact's
+  `fields.fallback_depth` and `fallback_reason`:
+
+  ```bash
+  curl -H "X-API-Key: $KEY" "$URL/api/v1/data/<data_id>/artifacts"
+  # depth=1  reason=["gemini: 429 Too Many Requests"]  → quota
+  # depth=1  reason=["gemini: circuit open"]           → breaker tripped after repeated 429s
+  ```
+
+  `gemini-api-key` is against an exhausted quota, so extraction falls back to
+  the local heuristic. `docs/graph.md` already names the consequence: *"with the
+  extractor degraded to the local heuristic there are no entities and therefore
+  no edges."* **The whole graph feature is dark while this holds**, and it looks
+  like a broken graph rather than a billing problem. Lexical retrieval still
+  works, which is why a smoke test passes through it.
+
+  Two reasons distinguish transient from standing: a single `429` may be a
+  burst, but `circuit open` means the client has stopped trying and will keep
+  falling back until the breaker resets.
 
 ## Known drift
 
