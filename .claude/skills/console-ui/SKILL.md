@@ -91,6 +91,27 @@ runs — and match it:
   `/graph/predicates` exist so a list is never hardcoded twice and cannot drift
   from what the server validates.
 
+## The cascade does not report collisions
+
+`globals.css` is one stylesheet shared by the console and the sign-in page, and
+**two components using the same class name is not an error anything surfaces**.
+The later rule simply wins, and the damage lands somewhere you were not looking.
+
+That has happened once: the console's tab strip was given `.tabs`, which the
+landing header's nav already owned. The nav lost its `gap` and `margin-right`
+and gained a border, and it read as a design problem on a page nobody had
+touched.
+
+- **Grep for a class name before defining it.** `grep -n "^\.name" app/globals.css`
+  is two seconds and is the whole check.
+- **Prefer a name that says where it belongs** — `subtab`, not `tab`. Generic
+  words are the ones already taken.
+- **Suspect a collision when a page you did not edit changes.** That is the
+  signature: the breakage is never in the component you were working on.
+
+The same applies to token names. Adding `--bad` is safe because nothing else
+defines it; redefining `--accent` would repaint every screen at once.
+
 ## Write like a person, not like the schema
 
 The console says *"tell me when this happens"*, not *"transition subscription
