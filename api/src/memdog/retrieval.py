@@ -779,6 +779,7 @@ async def list_items(
     limit: int = 50,
     before: str | None = None,
     state: str | None = None,
+    include_archived: bool = False,
 ) -> dict:
     """Browse a project's items, newest first.
 
@@ -795,15 +796,21 @@ async def list_items(
                d.size_bytes, d.event_time, d.ingested_at, d.access_level,
                d.parse_status, d.is_downloaded, d.storage_ref IS NOT NULL AS has_bytes,
                left(coalesce(d.content_text, d.extracted_text), 180) AS preview,
+               d.archived_at,
                (SELECT count(*) FROM data_versions v WHERE v.data_id = d.data_id) AS revisions
         FROM data_items d
         WHERE d.project_id = $1 AND {predicate}
           AND ($5::text IS NULL OR d.data_id < $5)
           AND ($6::text IS NULL OR d.state = $6)
+          -- Compaction moves records out of the working set rather than
+          -- deleting them, so they are excluded here and returned when asked
+          -- for. That is the whole user-visible effect of compaction.
+          AND ($8::boolean OR d.archived_at IS NULL)
         ORDER BY d.data_id DESC
         LIMIT $7
         """,
         project_id, org_id, user_id, principals, before, state, min(limit, 200),
+        include_archived,
     )
     items = [dict(r) for r in rows]
     return {

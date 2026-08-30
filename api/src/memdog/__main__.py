@@ -158,7 +158,9 @@ async def _alert_tick(limit: int) -> None:
     import json as jsonlib
 
     from .alerts import tick
+    from .compaction import tick as compaction_tick
     from .crypto import Envelope
+    from .extraction import build_extractor
 
     settings = load_settings()
     pool = await create_pool(settings)
@@ -168,6 +170,11 @@ async def _alert_tick(limit: int) -> None:
         # failure that looks most like success.
         result = await tick(pool, limit=limit,
                             envelope=Envelope.from_settings(settings))
+        # Compaction jobs ride the same sweep rather than adding a fourth job.
+        # They are due at most daily, so a per-minute pass costs one indexed
+        # lookup that usually returns nothing.
+        result["compaction"] = await compaction_tick(
+            pool, extractor=build_extractor(settings))
         print(jsonlib.dumps(result, default=str))
     finally:
         await pool.close()

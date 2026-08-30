@@ -22,7 +22,7 @@ is the same material as one continuous page.
 | **IV · Ingestion** | Every producer that uses the write path, and how far it bends | [workers](ingestion/workers.md) · [extraction prompts](ingestion/extraction-prompts.md) · [custom workers](ingestion/custom-workers.md) · [customization](ingestion/write-customization.md) · [sources](ingestion/sources.md) · [connectors](ingestion/connectors.md) · [formats](ingestion/formats.md) · [uploads](ingestion/uploads.md) · [crawlers](ingestion/crawlers.md) · [bulk](operations/bulk-operations.md) |
 | **V · Reads** | Finding it again, and proving the answer came from somewhere | [indexes](retrieval/indexes.md) · [quality](retrieval/quality.md) · [sandbox](ui-sandbox.md) |
 | **V·b · Being told** | The pull surface answers a question; this one tells you when something happened | [alerts](alerts.md) |
-| **VI · Lifecycle** | How a record changes, goes stale, and goes away | [versioning](retrieval/versioning.md) · [deletion](operations/deletion.md) |
+| **VI · Lifecycle** | How a record changes, goes stale, is folded down, and goes away | [versioning](retrieval/versioning.md) · [compaction](compaction.md) · [deletion](operations/deletion.md) |
 | **VII · Models** | Choosing what runs, on which data, and what it costs | [model catalog](operations/model-catalog.md) · [model routing](operations/model-routing.md) · [multilingual](multilingual.md) |
 | **VIII · Security and privacy** | Who can see what, and what we can prove afterwards | [tenancy](security/tenancy.md) · [access model](security/access-model.md) · [auth](security/auth.md) · [privacy foundations](security/privacy-foundations.md) · [compliance](security/compliance.md) · [audit](security/audit.md) · [activity memory](activity-memory.md) |
 | **IX · The console** | One application, three audiences, six tensions | [ui design](ui-design.md) |
@@ -44,6 +44,7 @@ is the same material as one continuous page.
 | [use-cases-catalog.md](use-cases-catalog.md) | All twelve published use cases with their implementation paths and honest status |
 | [design-principles.md](design-principles.md) | The central bet, cross-cutting invariants, capability ownership |
 | [alerts.md](alerts.md) | Declare an event, be told when it happens — surfaces, the backtest gate, polling and signed delivery |
+| [compaction.md](compaction.md) | Folding a memory down without losing it — algorithms, the preview gate, and what a run frees |
 | [memories.md](memories.md) | Typed lifecycle containers — configurable types, TTL, expiry policy, data mapping |
 | [cases.md](cases.md) | Correlating information around a subject — patient timelines, legal matters, asset histories |
 | [multilingual.md](multilingual.md) | Language detection, lexical config, and the embedder choice that decides cross-lingual retrieval |

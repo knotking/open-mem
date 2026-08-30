@@ -25,11 +25,15 @@ import {
   Memory,
   MemoryMember,
   MemoryType,
+  Algorithm,
   Backtest,
+  CompactionJob,
+  CompactionRun,
   FullVersion,
   ObservedEvent,
   Subscription,
   describeEvent,
+  humanChars,
   isApproved,
   Stair,
   Trace,
@@ -41,7 +45,7 @@ import {
 type Section =
   | "overview"
   | "add" | "update" | "search" | "ask" | "inbound" | "crawlers" | "mcp"
-  | "memory" | "cases" | "entities"
+  | "memory" | "cases" | "entities" | "compaction"
   | "alerts"
   | "audit" | "sharing" | "deletion"
   | "settings" | "models" | "prompts"
@@ -74,6 +78,7 @@ const GROUPS: { title: string; items: { key: Section; label: string; hint: strin
       { key: "memory", label: "Memories", hint: "lifecycle containers" },
       { key: "cases", label: "Cases", hint: "subjects and timelines" },
       { key: "entities", label: "Entities", hint: "who and what, with evidence" },
+      { key: "compaction", label: "Compaction", hint: "fold a memory down, keep it all" },
     ],
   },
   {
@@ -236,6 +241,7 @@ export default function Console({
         {section === "memory" && <MemorySection projectId={projectId} />}
         {section === "cases" && <CasesSection projectId={projectId} />}
         {section === "alerts" && <AlertsSection projectId={projectId} />}
+        {section === "compaction" && <CompactionSection projectId={projectId} />}
         {section === "entities" && (
           <EntitiesSection
             projectId={projectId}
@@ -1708,6 +1714,264 @@ function AlertEditor({
         </>
       )}
     </div>
+  );
+}
+
+
+/**
+ * Compaction — schedule a memory to be folded down, and watch what it freed.
+ *
+ * The screen has one job beyond configuring a job: making it obvious that
+ * **nothing is deleted**. A person about to schedule something that removes
+ * records from their working set needs that stated where they are looking, not
+ * in a document — so the preview is a gate rather than a courtesy, and every
+ * run reports what it archived rather than what it removed.
+ */
+function CompactionSection({ projectId }: { projectId: string }) {
+  const [jobs, setJobs] = useState<CompactionJob[]>([]);
+  const [algorithms, setAlgorithms] = useState<Record<string, Algorithm>>({});
+  const [memories, setMemories] = useState<Memory[]>([]);
+  const [runs, setRuns] = useState<Record<string, CompactionRun[]>>({});
+  const [preview, setPreview] = useState<Record<string, CompactionRun & {
+    samples?: { external_id: string; chars: number }[]; note?: string }>>({});
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [composing, setComposing] = useState(false);
+  const [open, setOpen] = useState<string | null>(null);
+
+  const [name, setName] = useState("");
+  const [memoryId, setMemoryId] = useState("");
+  const [algorithm, setAlgorithm] = useState("dedupe");
+  const [every, setEvery] = useState(86400);
+  const [scheduled, setScheduled] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const [list, algos, mem] = await Promise.all([
+        call<{ jobs: CompactionJob[] }>(`api/v1/projects/${projectId}/compaction/jobs`),
+        call<{ algorithms: Record<string, Algorithm> }>("api/v1/compaction/algorithms"),
+        call<{ memories: Memory[] }>(`api/v1/projects/${projectId}/memories`),
+      ]);
+      setJobs(list.jobs);
+      setAlgorithms(algos.algorithms);
+      setMemories(mem.memories);
+      if (!memoryId && mem.memories.length) setMemoryId(mem.memories[0].memory_id);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, [projectId, memoryId]);
+
+  useEffect(() => { void load(); }, [load]);
+
+  const act = async (fn: () => Promise<unknown>, message?: string) => {
+    setBusy(true); setError(null); setNote(null);
+    try { await fn(); if (message) setNote(message); await load(); }
+    catch (e) { setError((e as Error).message); }
+    finally { setBusy(false); }
+  };
+
+  const approved = (j: CompactionJob) => j.dry_run_version === j.config_version;
+  const chosen = algorithms[algorithm];
+
+  return (
+    <section className="stack">
+      <h1>Compaction</h1>
+      <p className="lede">
+        Fold a memory down so the working set stops growing. <strong>Nothing is
+        deleted</strong> — members are archived, which takes them out of the
+        default view and leaves them readable and searchable when asked for.
+      </p>
+      {error && <p className="err">{error}</p>}
+      {note && <p className="note">{note}</p>}
+
+      <div className="toolbar">
+        <span className="grow" />
+        <button onClick={() => setComposing(!composing)}>
+          {composing ? "Cancel" : "New compaction"}
+        </button>
+      </div>
+
+      {composing && (
+        <div className="card">
+          <h2>New compaction</h2>
+          <label>Name
+            <input value={name} placeholder="nightly de-duplication"
+                   onChange={(e) => setName(e.target.value)} />
+          </label>
+          <label>Memory
+            <select value={memoryId} onChange={(e) => setMemoryId(e.target.value)}>
+              {memories.map((m) => (
+                <option key={m.memory_id} value={m.memory_id}>
+                  {m.title || m.memory_key || m.memory_id} · {m.type} ({m.members})
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>How
+            <select value={algorithm} onChange={(e) => setAlgorithm(e.target.value)}>
+              {Object.entries(algorithms).map(([k, a]) => (
+                <option key={k} value={k}>{a.label}</option>
+              ))}
+            </select>
+          </label>
+          {chosen && (
+            <p className="hint">
+              {chosen.describe}{" "}
+              {chosen.needs_model
+                ? <strong>Needs a model, so it costs one call per run.</strong>
+                : <strong>Needs no model.</strong>}
+            </p>
+          )}
+          <label>
+            <input type="checkbox" checked={scheduled}
+                   onChange={(e) => setScheduled(e.target.checked)} />
+            {" "}Run it on a schedule
+          </label>
+          {scheduled && (
+            <label>Every
+              <select value={every} onChange={(e) => setEvery(Number(e.target.value))}>
+                <option value={3600}>hour</option>
+                <option value={86400}>day</option>
+                <option value={604800}>week</option>
+              </select>
+            </label>
+          )}
+          <p className="hint">
+            It is created stopped either way. A compaction nobody has previewed
+            is one that empties a memory quietly, so scheduling is refused until
+            you have seen what it would do.
+          </p>
+          <button disabled={busy || !memoryId} onClick={() => void act(async () => {
+            await call("api/v1/compaction/jobs", {
+              project_id: projectId, name: name || "compaction",
+              memory_id: memoryId, algorithm,
+              schedule: scheduled
+                ? { type: "interval", every_seconds: every }
+                : { type: "manual" },
+            });
+            setComposing(false); setName("");
+          }, "Created. Preview it to see what it would fold away.")}>
+            Create
+          </button>
+        </div>
+      )}
+
+      {jobs.length === 0 ? (
+        <div className="card">
+          <h2>Nothing is being compacted</h2>
+          <p className="hint">
+            A memory that only grows eventually stops being a working set. A
+            compaction folds it down without losing anything — start with
+            de-duplication, which costs nothing and is usually most of it.
+          </p>
+        </div>
+      ) : jobs.map((j) => {
+        const pv = preview[j.job_id];
+        const list = runs[j.job_id] ?? [];
+        return (
+          <div className="card" key={j.job_id}>
+            <h2>{j.name}</h2>
+            <p>
+              <code>{algorithms[j.algorithm]?.label ?? j.algorithm}</code> ·{" "}
+              {j.memory_title || j.memory_key} ({j.members} member
+              {j.members === 1 ? "" : "s"}) ·{" "}
+              {j.schedule.type === "interval"
+                ? `every ${Math.round((j.schedule.every_seconds ?? 0) / 3600)}h`
+                : "when you run it"}
+            </p>
+            <p>
+              {j.enabled ? <span className="ok">scheduled</span>
+                : approved(j) ? <span>ready, not scheduled</span>
+                : <span className="warn">needs a preview</span>}
+              {j.archived_total > 0 && <> · {j.archived_total} archived so far</>}
+              {j.last_run_at && <> · last ran {new Date(j.last_run_at).toLocaleString()}</>}
+            </p>
+            <p>
+              <button disabled={busy} onClick={() => void act(async () => {
+                const r = await call<CompactionRun>(
+                  `api/v1/compaction/jobs/${j.job_id}/preview`, {});
+                setPreview((prev) => ({ ...prev, [j.job_id]: r }));
+              })}>Preview</button>
+              <button disabled={busy} onClick={() => void act(
+                () => call(`api/v1/compaction/jobs/${j.job_id}/run`, {}),
+                "Run finished. Members were archived, not deleted.")}>Run now</button>
+              <button disabled={busy || (!j.enabled && !approved(j))}
+                      title={!approved(j) ? "Preview this version first" : undefined}
+                      onClick={() => void act(() => call(
+                        `api/v1/compaction/jobs/${j.job_id}/enabled`,
+                        { enabled: !j.enabled }))}>
+                {j.enabled ? "Unschedule" : "Schedule"}
+              </button>
+              <button disabled={busy} onClick={() => void act(async () => {
+                const page = await call<{ runs: CompactionRun[] }>(
+                  `api/v1/compaction/jobs/${j.job_id}/runs`);
+                setRuns((prev) => ({ ...prev, [j.job_id]: page.runs }));
+                setOpen(open === j.job_id ? null : j.job_id);
+              })}>History</button>
+              <button disabled={busy} onClick={() => void act(
+                () => call(`api/v1/compaction/jobs/${j.job_id}`, undefined, "DELETE"))}>
+                Delete
+              </button>
+            </p>
+
+            {pv && (
+              <div className="card">
+                <h3>Preview — nothing was archived</h3>
+                <p>
+                  Would fold <strong>{pv.archived}</strong> of {pv.considered} member
+                  {pv.considered === 1 ? "" : "s"}, freeing{" "}
+                  {humanChars(pv.bytes_before - pv.bytes_after)} from the working set.
+                </p>
+                {pv.note && <p className="hint">{pv.note}</p>}
+                {pv.samples && pv.samples.length > 0 && (
+                  <table className="kv">
+                    <thead><tr><th>Would archive</th><th>Size</th></tr></thead>
+                    <tbody>
+                      {pv.samples.map((sm) => (
+                        <tr key={sm.external_id}>
+                          <td><code>{sm.external_id}</code></td>
+                          <td>{humanChars(sm.chars)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            )}
+
+            {open === j.job_id && (
+              <div className="card">
+                <h3>Every run</h3>
+                {list.length === 0 ? <p className="hint">It has not run yet.</p> : (
+                  <table className="kv">
+                    <thead>
+                      <tr><th>When</th><th>Kind</th><th>Looked at</th><th>Archived</th>
+                          <th>Freed</th><th>Cost</th></tr>
+                    </thead>
+                    <tbody>
+                      {list.map((r) => (
+                        <tr key={r.run_id}>
+                          <td>{new Date(r.started_at).toLocaleString()}</td>
+                          <td>{r.mode === "dry" ? "preview"
+                             : r.trigger === "schedule" ? "scheduled" : "run now"}</td>
+                          <td>{r.considered}</td>
+                          <td>{r.archived}</td>
+                          <td>{humanChars(r.bytes_before - r.bytes_after)}</td>
+                          <td>{r.model_calls > 0
+                            ? `${r.model_calls} model call${r.model_calls === 1 ? "" : "s"}`
+                            : "free"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </section>
   );
 }
 

@@ -505,6 +505,7 @@ async def get_project_data(
     limit: int = 50,
     before: str | None = None,
     state: str | None = None,
+    include_archived: bool = False,
 ) -> dict:
     """Browse what is actually in a project.
 
@@ -515,6 +516,7 @@ async def get_project_data(
         return await list_items(
             request.app.state.pool, actor, project_id,
             limit=limit, before=before, state=state,
+            include_archived=include_archived,
         )
     except AuthError as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
@@ -2189,6 +2191,141 @@ async def retract_fact_endpoint(
         return await retract_fact(
             request.app.state.pool, actor, fact_id, (body or {}).get("reason"))
     except (GraphError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/compaction/algorithms")
+async def compaction_algorithms_endpoint(actor: Principal = Depends(principal)) -> dict:
+    """What a job can be set to do, served rather than hardcoded in a console.
+
+    `needs_model` is on each one because it decides whether a job can run at all
+    on a deployment with no extractor configured — and that is better answered
+    before somebody schedules it than by a failed run at three in the morning.
+    """
+    from .compaction import ALGORITHMS
+
+    return {"algorithms": ALGORITHMS}
+
+
+@app.post("/api/v1/compaction/jobs", status_code=201)
+async def create_compaction_job_endpoint(
+    request: Request, body: dict, actor: Principal = Depends(principal)
+) -> dict:
+    """Schedule a compaction: one memory, one algorithm.
+
+    Created stopped. Compaction moves records out of the working set, so it has
+    to be previewed before it can be scheduled — see `/preview`.
+    """
+    from .compaction import CompactionError, create_job
+
+    try:
+        return await create_job(
+            request.app.state.pool, actor,
+            project_id=body["project_id"], name=body["name"],
+            memory_id=body["memory_id"], algorithm=body["algorithm"],
+            options=body.get("options"), schedule=body.get("schedule"))
+    except KeyError as exc:
+        raise HTTPException(status_code=400, detail=f"missing {exc}") from exc
+    except (CompactionError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/projects/{project_id}/compaction/jobs")
+async def list_compaction_jobs_endpoint(
+    request: Request, project_id: str, actor: Principal = Depends(principal)
+) -> dict:
+    from .compaction import CompactionError, list_jobs
+
+    try:
+        return {"jobs": await list_jobs(request.app.state.pool, actor, project_id)}
+    except (CompactionError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.patch("/api/v1/compaction/jobs/{job_id}")
+async def update_compaction_job_endpoint(
+    request: Request, job_id: str, body: dict, actor: Principal = Depends(principal)
+) -> dict:
+    """Editing what it would do drops the preview and stops the job."""
+    from .compaction import CompactionError, update_job
+
+    try:
+        return await update_job(request.app.state.pool, actor, job_id, body)
+    except (CompactionError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/compaction/jobs/{job_id}/preview")
+async def preview_compaction_endpoint(
+    request: Request, job_id: str, actor: Principal = Depends(principal)
+) -> dict:
+    """What a live run would archive, having archived nothing.
+
+    The same code path with its writes withheld, so what it reports is what
+    would actually happen — and it is what unlocks scheduling.
+    """
+    from .compaction import CompactionError, run
+
+    state = request.app.state
+    try:
+        return await run(state.pool, actor, job_id=job_id, mode="dry",
+                         trigger="manual", extractor=state.extractor)
+    except (CompactionError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/compaction/jobs/{job_id}/run")
+async def run_compaction_endpoint(
+    request: Request, job_id: str, actor: Principal = Depends(principal)
+) -> dict:
+    """Run it now. Members are archived, never deleted."""
+    from .compaction import CompactionError, run
+
+    state = request.app.state
+    try:
+        return await run(state.pool, actor, job_id=job_id, mode="live",
+                         trigger="manual", extractor=state.extractor)
+    except (CompactionError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/compaction/jobs/{job_id}/enabled")
+async def enable_compaction_endpoint(
+    request: Request, job_id: str, body: dict, actor: Principal = Depends(principal)
+) -> dict:
+    """409 until this version has been previewed."""
+    from .compaction import CompactionError, set_enabled
+
+    try:
+        return await set_enabled(
+            request.app.state.pool, actor, job_id, bool(body.get("enabled", True)))
+    except (CompactionError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/compaction/jobs/{job_id}/runs")
+async def compaction_runs_endpoint(
+    request: Request, job_id: str, limit: int = 20,
+    actor: Principal = Depends(principal)
+) -> dict:
+    """Every run, with what it looked at, folded away and cost."""
+    from .compaction import CompactionError, runs_for
+
+    try:
+        return {"runs": await runs_for(request.app.state.pool, actor, job_id, limit)}
+    except (CompactionError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.delete("/api/v1/compaction/jobs/{job_id}")
+async def delete_compaction_job_endpoint(
+    request: Request, job_id: str, actor: Principal = Depends(principal)
+) -> dict:
+    from .compaction import CompactionError, delete_job
+
+    try:
+        return await delete_job(request.app.state.pool, actor, job_id)
+    except (CompactionError, AuthError) as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
 
 

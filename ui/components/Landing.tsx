@@ -29,6 +29,7 @@ const TABS = [
   { id: "flow", label: "How it works" },
   { id: "graph", label: "Graph" },
   { id: "alerts", label: "Alerts" },
+  { id: "compaction", label: "Compaction" },
   { id: "compare", label: "Comparison" },
   { id: "principles", label: "Principles" },
 ];
@@ -695,6 +696,44 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
               Evaluation waits and batches, so ten thousand records arriving at once is a handful
               of evaluations rather than ten thousand. What has been looked at is a mark in the
               database, not a message in a queue, so nothing is lost when a machine goes away.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section className="steps" id="compaction">
+        <h2 className="section-title">And a working set that stops growing</h2>
+        <p className="hero-lede" style={{ marginBottom: 22 }}>
+          Memory layers usually keep the corpus small by overwriting: a newer memory replaces an
+          older one and the old one is gone. That is a reasonable trade if nobody will ever ask
+          what you used to believe. Here it would make the two clocks lie.
+        </p>
+        <div className="steps-grid">
+          <article>
+            <span className="step-n">KEEP</span>
+            <h3>Folding is not deleting</h3>
+            <p>
+              Compaction archives what it folds. Archived records leave the default view and stay
+              readable, searchable and citable when asked for — so the working set shrinks and the
+              record does not.
+            </p>
+          </article>
+          <article>
+            <span className="step-n">FREE</span>
+            <h3>The cheap half first</h3>
+            <p>
+              Most of what a corpus accumulates is the same record written twice — a re-crawl, a
+              re-import. Noticing that needs no model. Summarising does, and it says so before you
+              schedule it rather than after the bill.
+            </p>
+          </article>
+          <article>
+            <span className="step-n">SEE</span>
+            <h3>Previewed before it is scheduled</h3>
+            <p>
+              A run reports what it would fold and archives nothing, through the same path a live
+              one takes. Scheduling is refused until you have looked — a compaction nobody has
+              seen is one that empties a memory quietly.
             </p>
           </article>
         </div>

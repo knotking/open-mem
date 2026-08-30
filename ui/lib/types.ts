@@ -285,3 +285,53 @@ export type Subscription = {
 export function isApproved(alert: Alert): boolean {
   return alert.backtested_version === alert.config_version;
 }
+
+
+/** A scheduled compaction: one memory, one algorithm. */
+export type CompactionJob = {
+  job_id: string;
+  name: string;
+  memory_id: string;
+  memory_title: string | null;
+  memory_key: string | null;
+  memory_type: string;
+  members: number;
+  algorithm: string;
+  options: Record<string, unknown>;
+  schedule: { type: string; every_seconds?: number };
+  enabled: boolean;
+  config_version: number;
+  /** Equal to config_version only when *this* version has been previewed. */
+  dry_run_version: number | null;
+  last_run_at: string | null;
+  archived_total: number;
+};
+
+export type CompactionRun = {
+  run_id: string;
+  mode: "dry" | "live";
+  trigger: string;
+  status: string;
+  considered: number;
+  archived: number;
+  artifacts: number;
+  bytes_before: number;
+  bytes_after: number;
+  model_calls: number;
+  error: string | null;
+  started_at: string;
+};
+
+export type Algorithm = {
+  label: string;
+  needs_model: boolean;
+  describe: string;
+  options: Record<string, string>;
+};
+
+/** Bytes as something a person reads, not a number they decode. */
+export function humanChars(n: number): string {
+  if (n < 1000) return `${n} chars`;
+  if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k chars`;
+  return `${(n / 1_000_000).toFixed(1)}M chars`;
+}
