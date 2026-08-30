@@ -57,9 +57,27 @@ step "Deploying the reconcile job"
 JOB_ENV="DB_HOST=${DB_HOST},DB_NAME=${DB_NAME},DB_USER=postgres,EMBED_DIM=768,EMBED_ENGINE=${EMBED_ENGINE:-gemini},EMBED_MODEL=${EMBED_MODEL:-gemini-embedding-001},RAW_BUCKET=${RAW_BUCKET},MEDIA_INTERPRETATION=true,EXTRACT_ENGINE=gemini,MULTIMODAL_MODEL=${MULTIMODAL_MODEL:-gemini-3.7-flash},TRANSCRIBE_MODEL=${TRANSCRIBE_MODEL:-gemini-3.5-transcribe},OTEL_GCP_PROJECT=${PROJECT},IMAGE_TAG=${TAG}"
 JOB_SECRETS="DB_PASSWORD=memdog-db-password:latest,MEMDOG_MASTER_KEY=memdog-master-key:latest,GEMINI_API_KEY=gemini-api-key:latest"
 
-for job_spec in "memdog-reconcile:reconcile" "memdog-crawl-tick:crawl-tick"; do
+# `memdog-seed` is here for the same reason the reconciler is: it was created by
+# hand against whatever image was current that day, and a job pinned to an image
+# nobody redeploys drifts until it runs code the service no longer has. The seed
+# drives the API in-process, so a stale one seeds a corpus the running service
+# would not have produced.
+#
+# Creating it costs nothing -- a job is not billed until executed -- and it is
+# the only way to seed at all, since Cloud SQL is private-IP and the seed needs
+# to be inside the VPC.
+for job_spec in "memdog-reconcile:reconcile" "memdog-crawl-tick:crawl-tick" \
+                "memdog-seed:seed,--demo"; do
   job="${job_spec%%:*}"
   command="${job_spec##*:}"
+  # The seed is not like the other two. It enriches forty-odd records
+  # synchronously in one shot, and it must not be retried: a second attempt
+  # finds the org the first one created and fails with that as its reason,
+  # which reads as a broken seed rather than a duplicate run.
+  case "$job" in
+    memdog-seed) cpu=2; memory=2Gi; retries=0 ;;
+    *)           cpu=1; memory=1Gi; retries=1 ;;
+  esac
   if gcloud run jobs describe "$job" --project "$PROJECT" --region "$REGION" >/dev/null 2>&1; then
     verb=update
   else
@@ -73,8 +91,8 @@ for job_spec in "memdog-reconcile:reconcile" "memdog-crawl-tick:crawl-tick"; do
     --set-env-vars "$JOB_ENV" \
     --set-secrets "$JOB_SECRETS" \
     --command python --args="-m,memdog,$command" \
-    --max-retries 1 --task-timeout 1800 \
-    --cpu 1 --memory 1Gi \
+    --max-retries "$retries" --task-timeout 1800 \
+    --cpu "$cpu" --memory "$memory" \
     --quiet
 done
 

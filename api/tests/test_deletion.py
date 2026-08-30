@@ -223,6 +223,60 @@ async def test_a_time_range_must_name_its_clock(pool, queue, blobs, settings, te
         )
 
 
+async def test_a_time_range_selects_from_an_iso_string(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """A selector arrives as JSON, where an instant can only be a string.
+
+    asyncpg refuses a `str` for a timestamptz outright, so every HTTP caller of
+    the time_range selector got a 500 -- the selector was unusable, not merely
+    awkward. It survived because the one test that passed a `since` raised on
+    an invalid `time_clock` first and never reached the query.
+    """
+    actor = await principal_for(tenant.api_key)
+    written = await _write(pool, queue, blobs, settings, actor,
+                           tenant.producer_id, "in-the-window")
+
+    result = await request_deletion(
+        pool, queue, actor,
+        selector={"project_id": tenant.project_id, "time_clock": "ingested_at",
+                  "since": "2020-01-01T00:00:00Z"},
+    )
+    assert written.results[0].data_id in result.data_ids
+
+
+async def test_a_naive_instant_is_read_as_utc_not_server_local(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """Offsets are optional in ISO-8601 and plenty of clients omit them. A
+    selector whose span depended on the server's zone would delete a different
+    set in staging than in production, with nothing in the request to show it."""
+    actor = await principal_for(tenant.api_key)
+    written = await _write(pool, queue, blobs, settings, actor,
+                           tenant.producer_id, "naive-window")
+
+    result = await request_deletion(
+        pool, queue, actor,
+        selector={"project_id": tenant.project_id, "since": "2020-01-01T00:00:00"},
+    )
+    assert written.results[0].data_id in result.data_ids
+
+
+async def test_an_unparseable_instant_is_a_bad_request_not_a_crash(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """ValueError is what the endpoint turns into a 400. Anything else reaching
+    asyncpg is a 500, which tells the caller nothing about their own typo."""
+    actor = await principal_for(tenant.api_key)
+    for bad in ("last tuesday", 1700000000):
+        with pytest.raises(ValueError) as exc:
+            await request_deletion(
+                pool, queue, actor,
+                selector={"project_id": tenant.project_id, "since": bad},
+            )
+        assert "since" in str(exc.value)
+
+
 async def test_an_empty_selector_is_refused(pool, queue, blobs, settings, tenant, principal_for):
     """A selector that narrows nothing is a request to delete everything, and
     it is far more likely to be a bug than an intention."""

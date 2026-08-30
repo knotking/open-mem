@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 import asyncpg
 
@@ -43,6 +44,36 @@ class Deletion:
     run_id: str
     data_ids: list[str]
     retained: list[tuple[str, str]]
+
+
+def _instant(value: object, field: str) -> datetime:
+    """Coerce a selector's timestamp, which arrives from JSON as a string.
+
+    asyncpg wants a `datetime` and refuses a `str` outright, so `since` and
+    `until` -- the time_range selector FR-DEL-3 requires and this module's own
+    comments describe -- raised a 500 for every caller that reached the endpoint
+    over HTTP. There is no way to send a datetime in a JSON body, so the
+    selector was unusable rather than merely awkward.
+
+    Parsed here rather than at the endpoint because the seed's reset builds a
+    selector too: a coercion that lives in one caller is one the next caller
+    does not have.
+    """
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError as exc:
+            raise ValueError(
+                f"{field} is not an ISO-8601 instant: {value!r}"
+            ) from exc
+    else:
+        raise ValueError(f"{field} must be an ISO-8601 instant")
+    # Naive means UTC, not server-local. A selector whose span depends on where
+    # the process happens to run deletes a different set in staging than in
+    # production, and nothing about the request would show it.
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
 async def _selected(
@@ -73,10 +104,10 @@ async def _selected(
     if clock not in ("ingested_at", "event_time"):
         raise ValueError("time_clock must be ingested_at or event_time")
     if selector.get("since"):
-        params.append(selector["since"])
+        params.append(_instant(selector["since"], "since"))
         clauses.append(f"d.{clock} >= ${len(params)}")
     if selector.get("until"):
-        params.append(selector["until"])
+        params.append(_instant(selector["until"], "until"))
         clauses.append(f"d.{clock} <= ${len(params)}")
 
     if not clauses:

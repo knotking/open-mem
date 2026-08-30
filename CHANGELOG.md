@@ -10,7 +10,37 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 
 ## Unreleased
 
+### Fixed
+- **`metadata` on a write item was accepted and thrown away.** The field has
+  been in the contract since the spine shipped, the write-api example shows
+  `{"tags": ["source:salesforce"]}` in it, and nothing read it — there was no
+  column. So every producer following the documented shape lost its tags, and so
+  did the crawler, which built `crawler:<id>`, the item's title and its source
+  URL into exactly that field. Nothing errored: the write succeeded, the item
+  was durable and searchable, and only the provenance was gone. It is stored
+  now, and a `tags` key inside `metadata` is **lifted into the `tags` column**
+  so the old shape works — merged with the top-level field rather than replacing
+  it, and deduped. Still never consulted for access control; the ACL is sealed
+  before any caller-supplied value is read.
+- **Crawled items carry `crawler:<crawler_id>` and their configured tags again.**
+  `CrawlerConfig.tags` was a documented, user-facing field that did nothing.
+  `GET /api/v1/data/{id}` now also returns `metadata` and `run_id`.
+
+### Migrations
+- `0032_item_metadata.sql` — `data_items.metadata jsonb NOT NULL DEFAULT '{}'`.
+  Additive, no backfill: records written before it keep the empty default, and
+  the provenance they lost is not recoverable from the item. Re-crawling
+  repopulates it, since `external_id` upserts.
+
 ### Added
+- **`reprocess` selects on `run_id` and `tags`.** This is the point of the
+  repair above. `enrich` is off by default on a crawler, so the intended
+  sequence is crawl → read the dry run's count → enrich what it found; but
+  `stale_only` and `stale_generator` both match on an existing artifact, which a
+  never-enriched item does not have. The one corpus that default produces was
+  the one corpus reprocess could not reach, short of enumerating ten thousand
+  `data_ids`. `tags` matches on **overlap, not containment** — "any of these",
+  which is the question people ask.
 - **Workday, Dynamics 365, and five more CRMs.** The CRM shelf held five entries
   and was missing the one most people name first. Nine catalog entries added —
   **Microsoft Dynamics 365** (any Dataverse table), **Close**, **Copper**,
