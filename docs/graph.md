@@ -31,13 +31,17 @@ past roughly 10⁸. None of that is close.
 
 They are deliberately not merged, because they carry different weight.
 
-| | Asserted edge | Co-mention |
-|---|---|---|
-| **What it is** | A claim a document made | Two entities named in the same record |
-| **Where it lives** | `entity_edges` | Computed from `entity_mentions` |
-| **Needs a model** | Yes — extraction must read for relationships | **No** |
-| **Evidence** | The record that said so, per edge | The count of shared records |
-| **Strength** | A specific claim, and it can be wrong | Weak. Appearing together is not a relationship |
+| | Derived fact | Asserted fact | Co-mention |
+|---|---|---|---|
+| **What it is** | A claim a document made | A claim a principal made outright | Two entities named in the same record |
+| **Where it lives** | `entity_facts` + `entity_edges` | `entity_facts` | Computed from `entity_mentions` |
+| **Needs a model** | Yes — extraction reads for relationships | **No** | **No** |
+| **Evidence** | The records that said so | None — the asserter *is* the evidence | The count of shared records |
+| **Strength** | A specific claim, and it can be wrong | A specific claim, and its author is named | Weak. Appearing together is not a relationship |
+
+`basis` is what keeps the first two apart, and it borrows `case_members`'
+vocabulary on purpose: a graph that cannot tell *a person said so* from *a model
+inferred it* is one nobody can rely on for either purpose.
 
 The second row is the one that matters in practice. **Co-mentions work the
 moment entities exist**, before any model has read a document for relationships
@@ -276,11 +280,68 @@ claiming the *record* is connected and has no view about which passage answers
 the question. Choosing a passage by relevance would be the other arms' job done
 worse.
 
+## Time: two clocks, not one
+
+A fact carries **both**, and conflating them is the failure this design exists
+to avoid.
+
+| | Column | Question it answers |
+|---|---|---|
+| **Valid time** | `valid_from` / `valid_to` | When was this true *in the world*? |
+| **Transaction time** | `recorded_at` / `retracted_at` | When did *we* learn it? |
+
+The difference is not academic. A document imported today about last year is
+visible at `valid_at=last year` and must be **invisible** at `as_of=last month`
+— we had not read it yet. One timestamp answers one of those two questions
+wrongly, whichever it stores.
+
+Valid time comes from the record's `event_time`, never from `now()`. Backfilling
+a two-year-old document places its claims two years ago, or every historical
+import lands as breaking news — the same argument [cases.md](cases.md) makes
+about timelines.
+
+Both parameters default to now, so a caller that does not care about time gets
+exactly the graph it got before any of this existed.
+
+### Supersession is declared, not judged
+
+Some predicates hold one open value at a time. A new one closes the previous:
+
+```
+located_in, reports_to      single-valued — a new fact closes the old one
+everything else             multi-valued  — accumulates
+```
+
+**No model decides what stopped being true.** Everywhere else here the
+deterministic layer runs first — six classification layers before any LLM, an
+identifier join before an inference — and cardinality is the same shape.
+
+The default is multi-valued and single-valued is opt-in, because the error is
+asymmetric. Marking `works_for` single-valued would silently close every second
+job as though the person had left it: recoverable, since closing is not
+deletion, but wrong in a way that reads as correct. People hold two jobs, sit on
+boards, and consult, so `works_for` is deliberately not on the list.
+
+Closing writes `valid_to` and leaves `recorded_at` alone. Nothing is deleted, so
+an earlier `as_of` still returns the graph exactly as it stood.
+
+### Two claims that begin at the same instant are not resolved
+
+Supersession requires a *strictly earlier* start. Two documents asserting
+different single-valued values from the same moment genuinely contradict, and
+picking one would be a guess wearing the clothes of a fact. They stay open and
+appear in `GET /api/v1/graph/conflicts` — which is what "a doc and a later
+thread disagree" needs, as a query rather than a model call.
+
+### Retraction is not supersession
+
+`valid_to` says the claim stopped being true. `retracted_at` says we should not
+have recorded it — the last evidence was erased, or a person withdrew it. A
+fact can be retracted without ever having become false, and neither deletes a
+row.
+
 ## What is not built
 
-- **No temporal validity.** `valid_from` / `valid_to` are not modelled, so "who
-  worked there in 2024" is unanswerable. This is the bitemporal layer, and it is
-  worth building only if someone actually asks point-in-time questions.
 - **No path finding between two named entities.** Only neighbourhoods.
 - **Edge quality is bounded by extraction quality.** With the extractor degraded
   to the local heuristic there are no entities and therefore no edges — a graph

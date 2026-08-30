@@ -96,17 +96,29 @@ async def _mention(pool, tenant, entity_id, data_id, surface):
 
 
 async def _edge(pool, tenant, subject, predicate, obj, source_data_id):
+    from memdog.graph import _upsert_fact
     from memdog.ids import new_id
 
-    await pool.execute(
-        """
-        INSERT INTO entity_edges (edge_id, org_id, project_id, subject_id,
-                                  predicate, object_id, source_data_id)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        """,
-        new_id("edg"), tenant.org_id, tenant.project_id, subject, predicate,
-        obj, source_data_id,
-    )
+    # Through `_upsert_fact` rather than a second INSERT: the fixture should
+    # exercise the invariant the traversal relies on, not simulate it.
+    async with pool.acquire() as conn, conn.transaction():
+        valid_from = await conn.fetchval(
+            "SELECT event_time FROM data_items WHERE data_id = $1", source_data_id
+        )
+        fact_id = await _upsert_fact(
+            conn, org_id=tenant.org_id, project_id=tenant.project_id,
+            subject_id=subject, predicate=predicate, object_id=obj,
+            valid_from=valid_from, basis="derived", confidence=0.5,
+        )
+        await conn.execute(
+            """
+            INSERT INTO entity_edges (edge_id, org_id, project_id, subject_id,
+                                      predicate, object_id, source_data_id, fact_id)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            """,
+            new_id("edg"), tenant.org_id, tenant.project_id, subject, predicate,
+            obj, source_data_id, fact_id,
+        )
 
 
 async def _world(pool, tenant, *, evidence_access="org"):
@@ -375,11 +387,13 @@ async def test_retrieval_traverses_through_the_graph_store(pool, embedder, tenan
 
     class Watched(PostgresGraph):
         async def neighbourhood(self, principal, *, entity_id, depth=1,
-                                predicates=None, limit=120):
+                                predicates=None, limit=120,
+                                valid_at=None, as_of=None):
             calls.append(entity_id)
             return await super().neighbourhood(
                 principal, entity_id=entity_id, depth=depth,
                 predicates=predicates, limit=limit,
+                valid_at=valid_at, as_of=as_of,
             )
 
     response = await retrieve(
@@ -406,7 +420,8 @@ async def test_a_store_that_reaches_nothing_yields_no_graph_hits(
 
     class Empty:
         async def neighbourhood(self, principal, *, entity_id, depth=1,
-                                predicates=None, limit=120):
+                                predicates=None, limit=120,
+                                valid_at=None, as_of=None):
             # Knows the entity, reaches nothing from it.
             return Neighbourhood(
                 root=Node(entity_id=entity_id, display_name="?", type="person",

@@ -46,12 +46,14 @@ costs to swap.
               │  → entities → indexes        │     │  ✗ no fallback for │
               └──────────────┬───────────────┘     │    embeddings or   │
                              │                     │    regulated data  │
-        ┌────────────────────┼──────────────┐      └────────────────────┘
-        ▼ sync               ▼ async        ▼
-  ┌─────────────┐   ┌────────────────┐  ┌──────────┐
-  │ Postgres    │   │ Neo4j+Graphiti │  │ GCS      │
-  │ ★ REQUIRED ★│   │ optional       │  │ blobs    │
-  └──────┬──────┘   └────────────────┘  └──────────┘
+        ┌────────────────────┴──────────────┐      └────────────────────┘
+        ▼ sync                               ▼
+  ┌────────────────────────────────┐   ┌──────────┐
+  │ Postgres                       │   │ GCS      │
+  │ ★ REQUIRED ★                   │   │ blobs    │
+  │ records · vectors · lexical    │   └──────────┘
+  │ entities · bitemporal facts    │
+  └──────┬─────────────────────────┘
          ▼
   POST /api/v1/retrieve — select × match × filter × rank, ACL in the query
          ▼
@@ -71,7 +73,7 @@ costs to swap.
 | **MCP server** | Python 3.12, SSE | Data-plane tools only; no control-plane surface |
 | **Postgres 16** | + pgvector, tsvector | Record store, vector index, lexical index, graph layer 1 |
 | **NATS / Pub-Sub** | behind one interface | Decouples ingest latency from enrichment |
-| **Neo4j + Graphiti** | optional | Bitemporal facts, entity resolution |
+| **Temporal graph** | Postgres | Bitemporal facts (`entity_facts`), supersession, conflict surfacing. An external store stays possible behind `GraphStore`, but must first carry the ACL predicate *inside* its traversal — post-filtering a graph discloses the shape of what it hid — and be reachable by `verify_erasure` |
 | **GCS** | | Raw binary, presigned uploads |
 | **Nango** | self-hosted | OAuth, refresh, credential encryption, provider catalog |
 | **Model layer** | Ollama local / cloud + Gemini | Capacity × capability routing |

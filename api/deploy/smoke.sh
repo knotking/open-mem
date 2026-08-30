@@ -23,7 +23,7 @@ curl -sf "$URL/api/v1/health" | tee /dev/stderr | grep -q '"status":"ok"'
 say "write"
 WRITE=$(curl -s -X POST "$URL/api/v1/write" -H "$AUTH" -H "$JSON" \
   -H "Idempotency-Key: smoke-$(date +%s)" \
-  -d "{\"producer_id\":\"$PRODUCER\",\"items\":[
+  -d "{\"producer_id\":\"$PRODUCER\",\"options\":{\"enrich\":true},\"items\":[
         {\"external_id\":\"smoke-incident\",\"content\":{\"kind\":\"inline\",
          \"text\":\"The checkout service returned 502s for eleven minutes after a bad deploy.\n\nRollback completed at 14:02 UTC and error rates recovered.\"}},
         {\"external_id\":\"smoke-pending\",\"content\":{\"kind\":\"pending\",
@@ -35,6 +35,12 @@ say "read back (durable before enrichment)"
 curl -sf "$URL/api/v1/data/$DATA_ID" -H "$AUTH" \
   | python3 -c 'import json,sys;d=json.load(sys.stdin);print("state",d["state"],"downloaded",d["is_downloaded"])'
 
+# `enrich` is requested explicitly rather than left to the project's
+# `enrich_by_default`, which is off on some projects because enrichment is
+# optional by design. Without it this script asserts a step it never asked for,
+# and ends in "FAIL: nothing retrievable" against a perfectly healthy
+# deployment -- items written, durable, and reported as `not_yet_enriched`,
+# with nothing in the logs.
 say "retrieve (polling until searchable)"
 for _ in $(seq 1 30); do
   FOUND=$(curl -s -X POST "$URL/api/v1/retrieve" -H "$AUTH" -H "$JSON" \

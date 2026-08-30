@@ -10,7 +10,72 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 
 ## Unreleased
 
+### Added
+- **The graph answers *what was true when*, and *what we believed when*.** Facts
+  now carry two clocks: `valid_from`/`valid_to` for the world, and
+  `recorded_at`/`retracted_at` for us. `GET /api/v1/entities/{id}/graph` and
+  `/retrieve`'s graph arm take **`valid_at`** and **`as_of`**, independently —
+  a document imported today about last year is visible at `valid_at=last year`
+  and **invisible** at `as_of=last month`, because we had not read it yet. Both
+  default to now, so nothing an existing caller does changes. Valid time comes
+  from the record's `event_time`, never `now()`; a backfill that used ingestion
+  time would land every historical import as breaking news.
+- **A claim can be superseded instead of accumulating.** `located_in` and
+  `reports_to` hold one open value, so moving to Berlin closes living in Lisbon
+  — writing `valid_to`, never deleting, so an earlier `as_of` still returns the
+  graph as it stood. Everything else accumulates, and **`works_for` is
+  deliberately multi-valued**: people hold two jobs, and marking it single would
+  quietly close every second one as though they had left. `GET
+  /api/v1/graph/predicates` now serves the single-valued list, since a caller
+  writing facts needs to know which of theirs will close another.
+- **Facts can be asserted with no document and no model.** `POST /api/v1/facts`
+  records a claim directly — until now `entity_edges.source_data_id` was NOT
+  NULL, so an agent that already knew something had to manufacture a document
+  for an extractor to read it back out. `basis` (`asserted` | `derived`) keeps
+  the two apart. `POST /api/v1/facts/{id}/retract` withdraws one without erasing
+  that it was made.
+- **`GET /api/v1/graph/conflicts`** surfaces single-valued predicates holding
+  more than one open value — a document and a later thread disagreeing, as a
+  query rather than a model call. Two claims beginning at the same instant are
+  deliberately *not* resolved: picking one would be a guess wearing the clothes
+  of a fact.
+- **`GET /api/v1/entities/{id}/history`** — every claim that has touched an
+  entity, closed and open alike, with its windows, evidence count and the reason
+  for any retraction.
+
+### Changed
+- **Erasing the last evidence for a derived fact retracts it rather than
+  deleting it.** Deleting would erase that we ever believed it, which is what a
+  bitemporal table exists to preserve; leaving it open would assert a claim with
+  nothing behind it. `verify_erasure` now checks that no derived fact is open
+  without evidence. An **asserted** fact survives item erasure — it never
+  depended on a record.
+- **The docs no longer promise Graphiti.** `comparison-onyx.md` claimed
+  `valid_at`/`invalid_at` "via Graphiti", `technology.md` gated a temporal store
+  behind an `is_graphiti_enabled()` that does not exist in the code, and
+  `architecture.md` drew Neo4j in the diagram. The capability is real now and it
+  is Postgres. An external store stays possible behind `GraphStore`, but must
+  first carry the ACL predicate *inside* its traversal — post-filtering a graph
+  discloses the shape of what it hid — and be reachable by `verify_erasure`.
+
+### Migrations
+- **`0033_temporal_graph.sql`** — adds `entity_facts` and backfills one fact per
+  existing edge group, then sets `entity_edges.fact_id` **NOT NULL**. An edge is
+  evidence for a claim; one written without a fact is silently invisible to the
+  traversal, so the constraint is structural rather than conventional. Additive
+  and self-contained: no row is deleted, and the ULID helper it needs is dropped
+  at the end of the migration.
+
 ### Fixed
+- **`deploy/smoke.sh` failed against healthy deployments.** It sent no
+  `options.enrich`, so the write fell back to the project's
+  `enrich_by_default` — off, because enrichment is optional by design. The
+  items landed in `stored` and stayed there, and the script then asserted
+  retrievability it had never asked for, printing `FAIL: nothing retrievable`
+  with **nothing in the logs to contradict it**. That silence is the
+  diagnostic: an enrichment that errors leaves a trace, one never requested
+  leaves none. A `Pending` item remaining `stored` is correct and still shows
+  up under `excluded` on a passing run.
 - **A deletion time range could not be sent over HTTP.** `since` and `until`
   reached asyncpg as strings, which it refuses for a `timestamptz` — so the
   time_range selector raised a 500 for every caller, and since a JSON body
@@ -66,6 +131,20 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   edges** joins the not-built list.
 
 ### Added
+- **A deploy runbook, checked against the live project rather than transcribed.**
+  `.claude/skills/deploy-gcp/` holds the routine deploy and its failure modes,
+  and a from-scratch guide in the one order that works — the peering range
+  before the database, because org policy forbids a public IP and the range
+  cannot sit inside the auto-mode network's own `10.128.0.0/9`. Reading it
+  against `memdog-dev-506718` corrected four things the scripts and
+  `deploy/README.md` did not say: **`GEMINI_API_KEY` is required** and was
+  undocumented, so a project provisioned from the prose starts cleanly and then
+  fails every enrichment; `storage.objectAdmin` is granted **on the bucket, not
+  the project**; **no `roles/cloudsql.client`** — it is for the auth proxy, and
+  there is none; and `memdog-bootstrap` is unmanaged, pinned to `spine-12`, and
+  runs `grant-key` rather than a bootstrap. Failure modes are indexed by
+  symptom, since the reader has an error message and not a diagnosis.
+  `CLAUDE.md` requires it be corrected in the same session the process changes.
 - **[docs/usage.md](docs/usage.md) — six scenarios against a running system.**
   Write and ask, pull from an app, receive a webhook, build the graph, backfill a
   crawl that ran with `enrich` off, and erase with a dry run first. Every request

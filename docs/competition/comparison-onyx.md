@@ -73,7 +73,7 @@ right shape, but it is a design and theirs is shipped.
 | TTL / expiry | Per-type defaults, overridable | None |
 | Versioning | Every mutation, with diffs | Re-index on change |
 | Compression | LLM summarization with archive | None |
-| Temporal facts | `valid_at` / `invalid_at` via Graphiti | LLM knowledge graph, non-temporal |
+| Temporal facts | Bitemporal in Postgres — valid time *and* transaction time | LLM knowledge graph, non-temporal |
 
 **Verdict: mem-dog leads.** Onyx has no memory abstraction — it indexes documents and searches
 them. Conversation state, session scoping, decaying context and point-in-time queries have no
@@ -86,10 +86,10 @@ model may matter less than search quality.
 |---------|---------|------|
 | Vector search | pgvector | OpenSearch-backed |
 | Keyword | Postgres `tsvector` BM25 | Hybrid built in |
-| Graph | Graphiti BFS + semantic | LLM-built knowledge graph |
+| Graph | Recursive CTE + semantic, ACL inside the traversal | LLM-built knowledge graph |
 | Modes | 5 (vector, fts, hybrid, graph, full) | Hybrid + reranking |
 | Rerankers | 4 (none, RRF, MMR, cross-encoder) | Reranking included |
-| Temporal filtering | Yes, via Graphiti | No |
+| Temporal filtering | Yes — `valid_at` and `as_of`, independently | No |
 | Deep research | No | **Multi-step deep research** |
 | Custom agents | Per-agent pipeline configs | **Custom agents with MCP tool use** |
 

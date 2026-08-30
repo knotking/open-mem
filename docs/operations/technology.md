@@ -14,7 +14,7 @@ that names a product cannot be re-filled.
 | `data access` | Kong + PostgREST via `supabase-py` | raw psycopg | **high** — `storage.py` is ~6,400 lines |
 | `blob store` | GCS | S3, Azure Blob, filesystem | **low** — abstracted by `STORAGE_BACKEND` |
 | `durable queue` | NATS JetStream / **Pub/Sub in cloud** | Kafka, SQS, Redis Streams | medium — **already swapped per variant** |
-| `temporal graph store` | Neo4j + Graphiti | FalkorDB, Memgraph, none | **low** — gated by `is_graphiti_enabled()` |
+| `temporal graph store` | **Postgres** — `entity_facts`, bitemporal | Neo4j + Graphiti, FalkorDB | **low** — one `GraphStore` Protocol |
 | `credential broker` | Nango, self-hosted | Paragon, Merge, custom | medium |
 | `inference layer` | **MVP: Gemini Flash + Gemini embeddings, plus Ollama Cloud (token-authenticated).** Later: local Ollama | any OpenAI-compatible endpoint | **low** — the catalog abstracts it |
 | `identity provider` | GoTrue → Firebase / local | any OIDC provider | **high today** (hardcoded at two sites); **low after abstraction** |

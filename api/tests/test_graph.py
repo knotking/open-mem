@@ -182,15 +182,25 @@ async def test_a_path_does_not_run_through_a_record_the_caller_cannot_read(
         """,
         lisbon, tenant.org_id, tenant.project_id,
     )
-    await pool.execute(
-        """
-        INSERT INTO entity_edges (edge_id, org_id, project_id, subject_id,
-            predicate, object_id, source_data_id)
-        VALUES ($1, $2, $3, $4, 'located_in', $5, $6)
-        """,
-        new_id("edg"), tenant.org_id, tenant.project_id,
-        ids["Northwind Trading"], lisbon, hidden,
-    )
+    async with pool.acquire() as conn, conn.transaction():
+        from memdog.graph import _upsert_fact
+        fact_id = await _upsert_fact(
+            conn, org_id=tenant.org_id, project_id=tenant.project_id,
+            subject_id=ids["Northwind Trading"], predicate="located_in",
+            object_id=lisbon,
+            valid_from=await conn.fetchval(
+                "SELECT event_time FROM data_items WHERE data_id = $1", hidden),
+            basis="derived", confidence=0.5,
+        )
+        await conn.execute(
+            """
+            INSERT INTO entity_edges (edge_id, org_id, project_id, subject_id,
+                predicate, object_id, source_data_id, fact_id)
+            VALUES ($1, $2, $3, $4, 'located_in', $5, $6, $7)
+            """,
+            new_id("edg"), tenant.org_id, tenant.project_id,
+            ids["Northwind Trading"], lisbon, hidden, fact_id,
+        )
 
     result = await PostgresGraph(pool).neighbourhood(
         owner, entity_id=ids["Priya Raman"], depth=3)
