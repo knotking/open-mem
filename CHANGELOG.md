@@ -11,6 +11,15 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Fixed
+- **A deletion time range could not be sent over HTTP.** `since` and `until`
+  reached asyncpg as strings, which it refuses for a `timestamptz` — so the
+  time_range selector raised a 500 for every caller, and since a JSON body
+  cannot carry a datetime, the selector was unusable rather than awkward. It
+  survived because the one test that passed a `since` also passed an invalid
+  `time_clock` and raised on that first, never reaching the query. Parsed now
+  where the selector is interpreted, so the seed's reset gets it too. A naive
+  instant is read as **UTC, not server-local**; an unparseable one is a 400
+  naming the field rather than a 500.
 - **`metadata` on a write item was accepted and thrown away.** The field has
   been in the contract since the spine shipped, the write-api example shows
   `{"tags": ["source:salesforce"]}` in it, and nothing read it — there was no
@@ -25,6 +34,14 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 - **Crawled items carry `crawler:<crawler_id>` and their configured tags again.**
   `CrawlerConfig.tags` was a documented, user-facing field that did nothing.
   `GET /api/v1/data/{id}` now also returns `metadata` and `run_id`.
+
+### Changed
+- `memdog-seed` is deployed by `deploy/cloudrun.sh` rather than created by hand.
+  A job pinned to whichever image was current the day someone made it drifts —
+  which is how the reconciler ended up twenty tags behind — and the seed drives
+  the API in-process, so a stale one seeds a corpus the running service would
+  not have produced. It takes its own resources and **no retries**: a retried
+  seed finds the org the first attempt created and fails with that as its reason.
 
 ### Migrations
 - `0032_item_metadata.sql` — `data_items.metadata jsonb NOT NULL DEFAULT '{}'`.
