@@ -20,9 +20,14 @@ import {
   AuditTrail,
   Item,
   Membership,
+  Alert,
+  AlertRun,
   Memory,
   MemoryMember,
   MemoryType,
+  ObservedEvent,
+  Subscription,
+  isApproved,
   Stair,
   Trace,
   Version,
@@ -34,6 +39,7 @@ type Section =
   | "overview"
   | "add" | "update" | "search" | "ask" | "inbound" | "crawlers" | "mcp"
   | "memory" | "cases" | "entities"
+  | "alerts"
   | "audit" | "sharing" | "deletion"
   | "settings" | "models" | "prompts"
   | "projects" | "keys" | "producers" | "platform";
@@ -65,6 +71,12 @@ const GROUPS: { title: string; items: { key: Section; label: string; hint: strin
       { key: "memory", label: "Memories", hint: "lifecycle containers" },
       { key: "cases", label: "Cases", hint: "subjects and timelines" },
       { key: "entities", label: "Entities", hint: "who and what, with evidence" },
+    ],
+  },
+  {
+    title: "Alerts",
+    items: [
+      { key: "alerts", label: "Alerts", hint: "tell me when this happens" },
     ],
   },
   {
@@ -220,6 +232,7 @@ export default function Console({
         {section === "audit" && <Audit projectId={projectId} />}
         {section === "memory" && <MemorySection projectId={projectId} />}
         {section === "cases" && <CasesSection projectId={projectId} />}
+        {section === "alerts" && <AlertsSection projectId={projectId} />}
         {section === "entities" && (
           <EntitiesSection
             projectId={projectId}
@@ -1186,6 +1199,280 @@ const PRESETS: Record<string,
     }),
   },
 };
+
+/**
+ * Alerts — declare what is worth knowing about, and see what fired.
+ *
+ * Its own group rather than under Data or Governance. The split those two
+ * preserve is *how is my data arranged* against *who touched it and can I
+ * prove it*, and an alert straddles them: watching a fact change is the first
+ * question, watching an access level change is the second. "Tell me when" is a
+ * third concern, so it gets a third heading.
+ *
+ * Three things this screen has to *enforce* rather than merely display, or the
+ * guarantees behind them are only true in the database:
+ *
+ *  - an alert cannot be enabled until this wording has been backtested
+ *  - editing what matches drops the approval, visibly
+ *  - a run that deferred work says so, because silent truncation reads as
+ *    "nothing else matched"
+ */
+function AlertsSection({ projectId }: { projectId: string }) {
+  const [alerts, setAlerts] = useState<Alert[]>([]);
+  const [surfaces, setSurfaces] = useState<Record<string, string[]>>({});
+  const [events, setEvents] = useState<ObservedEvent[]>([]);
+  const [runs, setRuns] = useState<Record<string, AlertRun[]>>({});
+  const [subs, setSubs] = useState<Subscription[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [secret, setSecret] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [draft, setDraft] = useState({
+    name: "", surface: "fact.superseded", field: "predicate", values: "located_in",
+  });
+  const [subUrl, setSubUrl] = useState("https://");
+
+  const load = useCallback(async () => {
+    try {
+      const [list, vocab, feed, subscriptions] = await Promise.all([
+        call<{ alerts: Alert[] }>(`api/v1/projects/${projectId}/alerts`),
+        call<{ surfaces: Record<string, string[]> }>("api/v1/alerts/surfaces"),
+        call<{ events: ObservedEvent[] }>("api/v1/events?since=0&limit=50"),
+        call<{ subscriptions: Subscription[] }>(
+          `api/v1/projects/${projectId}/event-subscriptions`),
+      ]);
+      setAlerts(list.alerts);
+      setSurfaces(vocab.surfaces);
+      setEvents(feed.events);
+      setSubs(subscriptions.subscriptions);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, [projectId]);
+
+  useEffect(() => { void load(); }, [load]);
+
+  const act = async (fn: () => Promise<unknown>, message?: string) => {
+    setBusy(true); setError(null); setNote(null);
+    try {
+      await fn();
+      if (message) setNote(message);
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const create = () =>
+    act(() => call("api/v1/alerts", {
+      project_id: projectId,
+      name: draft.name || `${draft.surface} watcher`,
+      surface: draft.surface,
+      where: draft.values.trim()
+        ? { [draft.field]: draft.values.split(",").map((v) => v.trim()).filter(Boolean) }
+        : {},
+    }), "Alert created. Backtest it before turning it on.");
+
+  const showRuns = async (alertId: string) => {
+    // Deliberately not loaded with the list: run history is what you open when
+    // an alert is behaving oddly, not something every row needs.
+    const page = await call<{ runs: AlertRun[] }>(
+      `api/v1/alerts/${alertId}/runs`).catch(() => ({ runs: [] as AlertRun[] }));
+    setRuns((prev) => ({ ...prev, [alertId]: page.runs }));
+  };
+
+  const fields = surfaces[draft.surface] ?? [];
+
+  return (
+    <section className="stack">
+      <h1>Alerts</h1>
+      <p className="hint">
+        Declare an event worth knowing about. Matches are recorded once and read
+        two ways — polled below, or pushed to an endpoint you register.
+      </p>
+      {error && <p className="error">{error}</p>}
+      {note && <p className="note">{note}</p>}
+
+      <div className="card">
+        <h2>New alert</h2>
+        <p className="hint">
+          It starts watching from now, not from the beginning of the log — an
+          alert that fires a hundred times about last month the moment you save
+          it is one you would turn straight back off.
+        </p>
+        <label>Name
+          <input value={draft.name} placeholder="a person relocates"
+                 onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
+        </label>
+        <label>When this happens
+          <select value={draft.surface}
+                  onChange={(e) => setDraft({
+                    ...draft, surface: e.target.value,
+                    field: (surfaces[e.target.value] ?? [])[0] ?? "",
+                  })}>
+            {Object.keys(surfaces).map((s) => <option key={s} value={s}>{s}</option>)}
+          </select>
+        </label>
+        <label>and
+          <select value={draft.field}
+                  onChange={(e) => setDraft({ ...draft, field: e.target.value })}>
+            {fields.map((f) => <option key={f} value={f}>{f}</option>)}
+          </select>
+        </label>
+        <label>is one of
+          <input value={draft.values} placeholder="located_in, reports_to"
+                 onChange={(e) => setDraft({ ...draft, values: e.target.value })} />
+        </label>
+        <button disabled={busy} onClick={() => void create()}>Create alert</button>
+      </div>
+
+      <div className="card">
+        <h2>{alerts.length} alert{alerts.length === 1 ? "" : "s"}</h2>
+        <table className="kv">
+          <thead>
+            <tr><th>Name</th><th>Watches</th><th>State</th><th>24h</th><th /></tr>
+          </thead>
+          <tbody>
+            {alerts.map((a) => (
+              <tr key={a.alert_id}>
+                <td>{a.name}</td>
+                <td><code>{a.surface}</code></td>
+                <td>
+                  {a.enabled
+                    ? <span className="ok">on</span>
+                    : isApproved(a)
+                      ? <span>off</span>
+                      /* The state worth naming: edited since its last
+                         backtest, so it cannot be turned on. */
+                      : <span className="warn">needs a backtest</span>}
+                </td>
+                <td>{a.matches_24h ?? 0}</td>
+                <td>
+                  <button disabled={busy} onClick={() => void act(
+                    () => call(`api/v1/alerts/${a.alert_id}/backtest`, {}),
+                    "Backtested. Nothing was recorded and nothing was sent.")}>
+                    Backtest
+                  </button>
+                  <button disabled={busy || (!a.enabled && !isApproved(a))}
+                          onClick={() => void act(
+                            () => call(`api/v1/alerts/${a.alert_id}/enabled`,
+                                       { enabled: !a.enabled }))}>
+                    {a.enabled ? "Turn off" : "Turn on"}
+                  </button>
+                  <button disabled={busy} onClick={() => void showRuns(a.alert_id)}>
+                    Runs
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {Object.entries(runs).map(([alertId, list]) => (
+          <div key={alertId}>
+            <h3>Recent runs</h3>
+            <table className="kv">
+              <thead>
+                <tr><th>When</th><th>Trigger</th><th>Seen</th><th>Matched</th>
+                    <th>Deferred</th></tr>
+              </thead>
+              <tbody>
+                {list.map((r) => (
+                  <tr key={r.run_id}>
+                    <td>{new Date(r.started_at).toLocaleString()}</td>
+                    <td>{r.trigger}</td>
+                    <td>{r.candidates}</td>
+                    <td>{r.matches}</td>
+                    {/* Surfaced, not buried: a capped batch that said nothing
+                        would read as "nothing else matched". */}
+                    <td>{r.deferred > 0
+                      ? <span className="warn">{r.deferred} left for the next run</span>
+                      : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ))}
+      </div>
+
+      <div className="card">
+        <h2>What fired</h2>
+        {events.length === 0
+          ? <p className="hint">Nothing yet. Alerts only report what happens after
+              they were created.</p>
+          : (
+            <table className="kv">
+              <thead>
+                <tr><th>When</th><th>Alert</th><th>Event</th><th>Detail</th></tr>
+              </thead>
+              <tbody>
+                {events.map((e) => (
+                  <tr key={e.event_id}>
+                    <td>{new Date(e.occurred_at).toLocaleString()}</td>
+                    <td>{e.alert_name}</td>
+                    <td><code>{e.surface}</code></td>
+                    <td><code>{JSON.stringify(e.payload).slice(0, 120)}</code></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+      </div>
+
+      <div className="card">
+        <h2>Push to an endpoint</h2>
+        <p className="hint">
+          HTTPS only, and the address is re-checked on every send. Deliveries are
+          signed the same way memdog asks providers to sign theirs.
+        </p>
+        <label>URL
+          <input value={subUrl} onChange={(e) => setSubUrl(e.target.value)} />
+        </label>
+        <button disabled={busy} onClick={() => void act(async () => {
+          const created = await call<{ signing_secret: string }>(
+            "api/v1/event-subscriptions", { project_id: projectId, url: subUrl });
+          // Shown once. There is deliberately no way to ask for it again.
+          setSecret(created.signing_secret);
+        })}>Register endpoint</button>
+        {secret && (
+          <p className="warn">
+            Signing secret — <strong>copy it now, it cannot be shown again</strong>:{" "}
+            <code>{secret}</code>
+          </p>
+        )}
+        <table className="kv">
+          <thead><tr><th>URL</th><th>Pending</th><th>Dead</th><th /></tr></thead>
+          <tbody>
+            {subs.map((s) => (
+              <tr key={s.subscription_id}>
+                <td><code>{s.url}</code></td>
+                <td>{s.pending}</td>
+                <td>{s.dead > 0 ? <span className="warn">{s.dead}</span> : "0"}</td>
+                <td>
+                  <button disabled={busy} onClick={() => void act(async () => {
+                    const rotated = await call<{ signing_secret: string }>(
+                      `api/v1/event-subscriptions/${s.subscription_id}/rotate`, {});
+                    setSecret(rotated.signing_secret);
+                  }, "Rotated. The previous secret still verifies for a short window.")}>
+                    Rotate
+                  </button>
+                  <button disabled={busy || s.dead === 0} onClick={() => void act(
+                    () => call(`api/v1/event-subscriptions/${s.subscription_id}/replay`, {}),
+                    "Dead letters re-armed.")}>
+                    Replay {s.dead > 0 ? `(${s.dead})` : ""}
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
 
 function CrawlersSection({ projectId }: { projectId: string }) {
   const [crawlers, setCrawlers] = useState<Crawler[]>([]);

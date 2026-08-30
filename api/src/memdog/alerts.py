@@ -233,6 +233,28 @@ async def list_alerts(pool: asyncpg.Pool, principal: Principal, project_id: str)
     return [_public(r) for r in rows]
 
 
+async def runs_for(
+    pool: asyncpg.Pool, principal: Principal, alert_id: str, limit: int = 20,
+) -> list[dict]:
+    """What each evaluation actually did.
+
+    `deferred` is the column this exists for: a run that hit its cap and said
+    nothing would read as "nothing else matched".
+    """
+    principal.require(DATA_READ)
+    await _owned(pool, principal, alert_id)
+    rows = await pool.fetch(
+        """
+        SELECT run_id, trigger, status, config_version, from_sequence, to_sequence,
+               candidates, matches, deferred, error, started_at, finished_at
+          FROM alert_runs WHERE alert_id = $1
+         ORDER BY started_at DESC LIMIT $2
+        """,
+        alert_id, limit,
+    )
+    return [dict(r) for r in rows]
+
+
 async def delete_alert(pool: asyncpg.Pool, principal: Principal, alert_id: str) -> dict:
     principal.require(CONFIG_WRITE)
     await _owned(pool, principal, alert_id)

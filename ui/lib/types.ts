@@ -168,3 +168,61 @@ export async function call<T>(
   if (!response.ok) throw new Error(payload?.detail ?? `request failed (${response.status})`);
   return payload as T;
 }
+
+
+/** An alert: what to watch, and whether it has been approved to run. */
+export type Alert = {
+  alert_id: string;
+  name: string;
+  mode: "rule" | "llm";
+  surface: string;
+  where: Record<string, string[]>;
+  describe: string | null;
+  enabled: boolean;
+  /** Bumped by any edit that changes what matches. */
+  config_version: number;
+  /** Equal to config_version only when *this* wording has been backtested. */
+  backtested_version: number | null;
+  watermark: number;
+  batch_cap: number;
+  matches_24h?: number;
+  last_run_at?: string | null;
+};
+
+export type ObservedEvent = {
+  event_id: string;
+  sequence: number;
+  alert_id: string;
+  alert_name: string;
+  config_version: number;
+  surface: string;
+  payload: Record<string, unknown>;
+  matched_by: "selector" | "model";
+  occurred_at: string;
+};
+
+export type AlertRun = {
+  run_id: string;
+  trigger: string;
+  status: string;
+  candidates: number;
+  matches: number;
+  /** Non-zero means a batch hit its cap. Never left implicit. */
+  deferred: number;
+  started_at: string;
+};
+
+export type Subscription = {
+  subscription_id: string;
+  url: string;
+  alert_id: string | null;
+  enabled: boolean;
+  dead: number;
+  pending: number;
+  signing_secret_rotated_at: string | null;
+};
+
+/** An alert is approved only while its backtest matches its current wording. */
+export function isApproved(alert: Alert): boolean {
+  return alert.backtested_version === alert.config_version;
+}

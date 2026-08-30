@@ -1949,6 +1949,7 @@ async def capabilities(request: Request) -> dict:
     maintainer typed will be wrong within a month, and wrong in the direction
     that overstates.
     """
+    from .alerts import SURFACES
     from .classify import _EXTENSION_MAP, _MIME_MAP
     from .connectors import CATALOG
     from .crawlers import STRATEGIES
@@ -1965,6 +1966,10 @@ async def capabilities(request: Request) -> dict:
         "extensions": len(_EXTENSION_MAP),
         "webhook_providers": len(PROVIDERS),
         "crawler_strategies": len(STRATEGIES),
+        # Counted from the vocabulary itself, so a surface that is added
+        # without being documented still shows up, and one that is removed
+        # stops being claimed.
+        "alert_surfaces": len(SURFACES),
         # Both, because the difference is the honest part: an entry that needs
         # something not built is listed rather than hidden, and a count that
         # silently dropped it would read as complete coverage.
@@ -2269,6 +2274,20 @@ async def backtest_alert_endpoint(
         return await backtest(
             request.app.state.pool, actor, alert_id,
             int((body or {}).get("since_sequence", 0)))
+    except (AlertError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/alerts/{alert_id}/runs")
+async def alert_runs_endpoint(
+    request: Request, alert_id: str, limit: int = 20,
+    actor: Principal = Depends(principal)
+) -> dict:
+    """What each evaluation did — including what it deferred."""
+    from .alerts import AlertError, runs_for
+
+    try:
+        return {"runs": await runs_for(request.app.state.pool, actor, alert_id, limit)}
     except (AlertError, AuthError) as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
 

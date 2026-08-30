@@ -11,7 +11,7 @@ you can prove completed.
 ```
 54 file formats · 24 data types · 18 extraction prompts · 9 webhook providers
 4 crawler strategies · 37 app connectors · 12 graph predicates · 8 MCP tools
-112 endpoints · 596 tests, against a real database, no mocks
+8 alert surfaces · 134 endpoints · 630 tests, against a real database, no mocks
 ```
 
 Those counts are read from the running build, not written here. The sign-in page gets them from
@@ -103,6 +103,39 @@ It buys two that a second store cannot. A path through a record you may not read
 at all, because the visibility predicate is joined into the recursive term rather than applied after
 it. And an erasure certificate can re-query **every** table that could hold a trace — a guarantee
 that stops at a database boundary is not a guarantee.
+
+---
+
+## Retrieval answers a question. An alert tells you when something happened.
+
+The pull surface is only half of it. Declare what is worth knowing about — a
+person's location changing, a record becoming org-visible, a guessed case
+membership being confirmed — and it is **recorded when it happens**, then polled
+from a cursor or pushed to your endpoint.
+
+```
+POST /api/v1/alerts
+{ "surface": "acl.changed", "where": { "to_level": ["org"] } }
+```
+
+Three properties are load-bearing, and each is a refusal:
+
+**No alert runs until you have replayed it against history.** A backtest runs
+the live path with its writes withheld, so what it reports is what a live run
+would do. Editing what an alert matches drops that approval and switches it off.
+
+**Nothing evaluates per write.** N alerts by M writes would mean every write
+paying for every alert; one crawl of ten thousand items would trigger ten
+thousand rounds. A consumer wakes on a transition and then waits, evaluating
+once over the batch — and the watermark in Postgres, not the queue, is what
+records where it got to.
+
+**An event carries no access level.** Visibility is the subject's, resolved when
+someone reads and again when a delivery is sent. A copy taken at match time
+would be stale the moment the record was re-shared, and notification is the one
+side channel around every other access check.
+
+See [`docs/alerts.md`](docs/alerts.md).
 
 ---
 
@@ -199,10 +232,11 @@ sections of this file.
 | Path | What is in it |
 |------|---------------|
 | [`docs/usage.md`](docs/usage.md) | Six scenarios against a running system — start here after `Run it` |
-| [`api/`](api/README.md) | The service. 58 modules, 112 endpoints, 55 tables across 32 migrations |
-| [`ui/`](ui/README.md) | The console. Ingestion, search, chat, entities, graph, crawlers, governance |
+| [`api/`](api/README.md) | The service. 60 modules, 134 endpoints, 61 tables across 35 migrations |
+| [`ui/`](ui/README.md) | The console. Ingestion, search, chat, entities, graph, crawlers, alerts, governance |
 | [`docs/`](docs/README.md) | The design, in eleven parts — requirements speak in roles, products appear only in the technology documents |
-| [`docs/graph.md`](docs/graph.md) | Why the graph is not a graph database, and what it costs |
+| [`docs/graph.md`](docs/graph.md) | Why the graph is not a graph database, what it costs, and what was true when |
+| [`docs/alerts.md`](docs/alerts.md) | Declaring an event, the backtest gate, and signed outbound delivery |
 | [`TBD.md`](TBD.md) | Twelve decisions designed but not decided, ordered by how expensive each becomes if made late |
 | [`CHANGELOG.md`](CHANGELOG.md) | What changed and why, one entry per commit that altered behaviour |
 
