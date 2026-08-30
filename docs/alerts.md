@@ -179,6 +179,36 @@ Two refusals hold it together:
   Inventing a match from an omission would fabricate alerts; treating it as an
   error would stall a batch on one bad row.
 
+## Scope: which subjects count at all
+
+`where` asks a question about the event's own fields. **Scope asks a different
+one** — *is this subject even mine to care about* — and it cannot be a payload
+field, because a transition does not know which memory its item is in, which
+case it belongs to, or who wrote it. Those are joins.
+
+```jsonc
+{ "surface": "data.revised",
+  "where":   { "source": ["write", "reprocess"] },
+  "scope":   { "memory_id": "mem_…" } }
+```
+
+| Scope | Bounds it to |
+|---|---|
+| `memory_id` | items in that memory |
+| `case_id` | items on that case |
+| `producer_id` | what that source wrote |
+| `entity_id` | claims naming that entity |
+
+Applied **after the selector and before any model** — it is a join, so it is
+cheaper than a judgement and there is no reason to pay for judging something
+that was never in scope. One query per scope key over the whole batch, not one
+per event.
+
+Denormalising membership onto each transition would have avoided the join and
+gone stale the moment somebody moved an item; letting the selector run
+subqueries would have been a query language nobody asked for. Changing a scope
+changes what matches, so it invalidates the backtest like any other edit.
+
 ## Conditions are generic
 
 A field name **or a dotted path**, with an operator. A payload shape this module

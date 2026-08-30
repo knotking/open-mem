@@ -189,6 +189,8 @@ export type Alert = {
   last_run_at?: string | null;
   debounce_seconds: number;
   overlap: string;
+  /** Bounds which subjects count at all — a join, not a payload field. */
+  scope: Record<string, string>;
   /** Transitions this alert has not looked at yet. Climbing means the sweep stopped. */
   behind?: number;
 };

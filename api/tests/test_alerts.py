@@ -72,6 +72,20 @@ async def _alert(pool, principal, tenant, **kw):
     return await create_alert(pool, principal, project_id=tenant.project_id, **kw)
 
 
+async def _item(pool, tenant, external_id, *, event_time=None):
+    data_id = new_id("data")
+    await pool.execute(
+        """
+        INSERT INTO data_items (data_id, org_id, project_id, owner_id, producer_id,
+            external_id, state, access_level, content_text, event_time)
+        VALUES ($1, $2, $3, $4, $5, $6, 'enriched', 'org', 'text', $7)
+        """,
+        data_id, tenant.org_id, tenant.project_id, tenant.user_id,
+        tenant.producer_id, external_id, event_time or NOW(),
+    )
+    return data_id
+
+
 async def _approve(pool, principal, alert_id):
     await backtest(pool, principal, alert_id)
     return await set_enabled(pool, principal, alert_id, True)
@@ -813,3 +827,100 @@ async def test_no_two_endpoints_claim_the_same_path_and_method(pool):
                 clashes.append(key)
             seen.add(key)
     assert not clashes, f"these paths are registered twice: {sorted(clashes)}"
+
+
+async def test_a_duplicate_name_is_a_sentence_not_a_500(pool, tenant, principal_for):
+    """Names are unique per project so a feed cannot confuse two alerts.
+
+    Reusing one is an ordinary mistake. It used to surface as `500 Internal
+    Server Error` with an empty body — which, to someone who had simply typed a
+    name they had used before, said nothing at all.
+    """
+    actor = await principal_for(tenant.api_key)
+    await _alert(pool, actor, tenant, name="the same name")
+    with pytest.raises(AlertError) as exc:
+        await _alert(pool, actor, tenant, name="the same name")
+    assert exc.value.status == 409
+    assert "already exists" in str(exc.value)
+
+
+# -- scope ------------------------------------------------------------------
+
+
+async def test_a_memory_scope_bounds_which_subjects_count(pool, tenant, principal_for):
+    """`where` asks about the event; scope asks whether the subject is yours.
+
+    A transition does not know which memory its item is in, so this is a join —
+    and denormalising membership onto the event would go stale the moment
+    somebody moved it.
+    """
+    from memdog.memories import add_member
+
+    actor = await principal_for(tenant.api_key)
+    memory_id = new_id("mem")
+    await pool.execute(
+        """
+        INSERT INTO memories (memory_id, org_id, project_id, type, memory_key, owner_id)
+        VALUES ($1, $2, $3, 'organizational', 'watched', $4)
+        """,
+        memory_id, tenant.org_id, tenant.project_id, tenant.user_id,
+    )
+
+    watched = await _item(pool, tenant, "in-the-memory")
+    ignored = await _item(pool, tenant, "not-in-the-memory")
+    async with pool.acquire() as conn:
+        await add_member(conn, memory_id, watched, "explicit")
+
+    alert = await _alert(pool, actor, tenant, surface="data.revised",
+                         where={"source": ["reprocess"]},
+                         scope={"memory_id": memory_id})
+    await _approve(pool, actor, alert["alert_id"])
+
+    from memdog.workers import record_version
+    async with pool.acquire() as conn:
+        for data_id in (watched, ignored):
+            await record_version(conn, data_id, source="write", content_text="first")
+            await record_version(conn, data_id, source="reprocess", content_text="second")
+
+    result = await evaluate_gap(pool, alert["alert_id"], trigger="tick")
+    assert result["candidates"] == 2, "both revisions were considered"
+    assert result["matches"] == 1, "only the one inside the memory counts"
+
+
+async def test_an_entity_scope_needs_no_join(pool, tenant, principal_for):
+    """Facts carry their own endpoints, so this one is free."""
+    actor = await principal_for(tenant.api_key)
+    ids = await _ingest(pool, tenant, "seed", "Lisbon",
+                        event_time=NOW() - timedelta(days=20))
+
+    watching = await _alert(pool, actor, tenant, name="that person",
+                            where={"predicate": ["located_in"]},
+                            scope={"entity_id": ids["Priya Raman"]})
+    elsewhere = await _alert(pool, actor, tenant, name="somebody else",
+                             where={"predicate": ["located_in"]},
+                             scope={"entity_id": ids["Berlin"]})
+    for a in (watching, elsewhere):
+        await _approve(pool, actor, a["alert_id"])
+
+    await _ingest(pool, tenant, "move", "Berlin", event_time=NOW())
+
+    assert (await evaluate_gap(pool, watching["alert_id"], trigger="tick"))["matches"] == 1
+    # Berlin is the *new* value, so the superseded fact does not name it.
+    assert (await evaluate_gap(pool, elsewhere["alert_id"], trigger="tick"))["matches"] == 0
+
+
+async def test_an_unknown_scope_is_refused_with_the_alternatives(pool, tenant, principal_for):
+    actor = await principal_for(tenant.api_key)
+    with pytest.raises(AlertError) as exc:
+        await _alert(pool, actor, tenant, scope={"colour": "blue"})
+    assert "memory_id" in str(exc.value)
+
+
+async def test_changing_the_scope_drops_the_approval(pool, tenant, principal_for):
+    """It changes what matches, so it invalidates the replay like any other edit."""
+    actor = await principal_for(tenant.api_key)
+    alert = await _alert(pool, actor, tenant, where={"predicate": ["located_in"]})
+    await _approve(pool, actor, alert["alert_id"])
+    edited = await update_alert(pool, actor, alert["alert_id"],
+                                {"scope": {"producer_id": tenant.producer_id}})
+    assert edited["enabled"] is False and edited["backtested_version"] is None

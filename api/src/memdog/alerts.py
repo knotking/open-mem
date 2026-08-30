@@ -65,7 +65,18 @@ SUBJECT_OF: dict[str, str] = {
 # Enough to judge a selector by eye without turning the response into a dump.
 SAMPLE_LIMIT = 25
 
-MATCHING_FIELDS = ("mode", "surface", "where_clause", "describe", "model_id")
+# What an alert may be scoped to. Each is a join rather than a payload field:
+# a transition does not know which memory its item is in, and denormalising that
+# onto the event would go stale the moment somebody moved it.
+SCOPES = {
+    "memory_id":   "only items in this memory",
+    "case_id":     "only items on this case",
+    "producer_id": "only what this source wrote",
+    "entity_id":   "only claims about this entity",
+}
+
+MATCHING_FIELDS = ("mode", "surface", "where_clause", "describe", "model_id",
+                   "scope")
 
 
 log = logging.getLogger(__name__)
@@ -75,6 +86,65 @@ class AlertError(Exception):
     def __init__(self, message: str, status: int = 400) -> None:
         super().__init__(message)
         self.status = status
+
+
+def validate_scope(scope: dict) -> None:
+    if not isinstance(scope, dict):
+        raise AlertError("scope must be an object")
+    unknown = sorted(set(scope) - set(SCOPES))
+    if unknown:
+        raise AlertError(
+            f"cannot scope by {', '.join(unknown)}; "
+            f"available: {', '.join(sorted(SCOPES))}")
+
+
+async def in_scope(
+    pool, scope: dict, candidates: list[tuple],
+) -> set[int]:
+    """Which candidates survive the scope, by sequence.
+
+    One query per scope key over the whole batch rather than one per candidate:
+    the batch is already bounded by `batch_cap`, and a join per event would put
+    five hundred round trips inside a run that is supposed to be cheap.
+
+    An empty scope admits everything, which is the common case and not a
+    degraded one.
+    """
+    if not scope:
+        return {c[0]["sequence"] for c in candidates}
+
+    surviving = {c[0]["sequence"] for c in candidates}
+    by_data = {c[0]["sequence"]: c[0]["data_id"] for c in candidates if c[0]["data_id"]}
+    data_ids = [d for d in by_data.values() if d]
+
+    if scope.get("entity_id"):
+        # Facts carry their endpoints, so this one needs no join at all.
+        wanted = scope["entity_id"]
+        surviving &= {
+            seq for seq, payload in ((c[0]["sequence"], c[1]) for c in candidates)
+            if payload.get("subject_id") == wanted or payload.get("object_id") == wanted
+        }
+
+    async def _allowed(sql: str, arg) -> set[str]:
+        rows = await pool.fetch(sql, arg, data_ids)
+        return {r["data_id"] for r in rows}
+
+    if scope.get("memory_id"):
+        allowed = await _allowed(
+            "SELECT data_id FROM memory_members WHERE memory_id = $1 "
+            "AND data_id = ANY($2::text[])", scope["memory_id"])
+        surviving &= {s for s, d in by_data.items() if d in allowed}
+    if scope.get("case_id"):
+        allowed = await _allowed(
+            "SELECT data_id FROM case_members WHERE case_id = $1 "
+            "AND data_id = ANY($2::text[])", scope["case_id"])
+        surviving &= {s for s, d in by_data.items() if d in allowed}
+    if scope.get("producer_id"):
+        allowed = await _allowed(
+            "SELECT data_id FROM data_items WHERE producer_id = $1 "
+            "AND data_id = ANY($2::text[])", scope["producer_id"])
+        surviving &= {s for s, d in by_data.items() if d in allowed}
+    return surviving
 
 
 def validate(*, mode: str, surface: str, where_clause: dict, describe: str | None) -> None:
@@ -185,25 +255,38 @@ async def create_alert(
     pool: asyncpg.Pool, principal: Principal, *, project_id: str, name: str,
     surface: str, mode: str = "rule", where: dict | None = None,
     describe: str | None = None, model_id: str | None = None,
-    debounce_seconds: int = 5, batch_cap: int = 500,
+    debounce_seconds: int = 5, batch_cap: int = 500, scope: dict | None = None,
 ) -> dict:
     principal.require(CONFIG_WRITE)
-    where = where or {}
+    where, scope = where or {}, scope or {}
     validate(mode=mode, surface=surface, where_clause=where, describe=describe)
+    validate_scope(scope)
     # Starts at the current head, never at zero: a new alert reports what
     # happens next, and firing a hundred notifications about last month the
     # moment someone saves a definition is how people switch alerts off.
     head = await pool.fetchval("SELECT coalesce(max(sequence), 0) FROM domain_events")
-    row = await pool.fetchrow(
-        """
-        INSERT INTO alerts (alert_id, org_id, project_id, name, mode, surface,
-            where_clause, describe, model_id, debounce_seconds, batch_cap, watermark)
-        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12)
-        RETURNING *
-        """,
-        new_id("alr"), principal.org_id, project_id, name, mode, surface,
-        json.dumps(where), describe, model_id, debounce_seconds, batch_cap, head,
-    )
+    try:
+        row = await pool.fetchrow(
+            """
+            INSERT INTO alerts (alert_id, org_id, project_id, name, mode, surface,
+                where_clause, describe, model_id, debounce_seconds, batch_cap,
+                watermark, scope)
+            VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12,
+                    $13::jsonb)
+            RETURNING *
+            """,
+            new_id("alr"), principal.org_id, project_id, name, mode, surface,
+            json.dumps(where), describe, model_id, debounce_seconds, batch_cap, head,
+            json.dumps(scope),
+        )
+    except asyncpg.UniqueViolationError as exc:
+        # Names are unique per project so two alerts cannot be confused in a
+        # feed. Reusing one is an ordinary mistake and deserves a sentence, not
+        # a 500 with an empty body -- which is what a console shows a person who
+        # simply typed a name they had used before.
+        raise AlertError(
+            f"an alert named {name!r} already exists in this project", status=409
+        ) from exc
     return _public(row)
 
 
@@ -225,17 +308,19 @@ async def update_alert(
         "where_clause": changes.get("where", _loads(current["where_clause"])),
         "describe": changes.get("describe", current["describe"]),
         "model_id": changes.get("model_id", current["model_id"]),
+        "scope": changes.get("scope", _loads(current["scope"])),
     }
     validate(mode=merged["mode"], surface=merged["surface"],
              where_clause=merged["where_clause"], describe=merged["describe"])
+    validate_scope(merged["scope"])
     changed = any(
-        merged[f] != (_loads(current[f]) if f == "where_clause" else current[f])
+        merged[f] != (_loads(current[f]) if f in ("where_clause", "scope") else current[f])
         for f in MATCHING_FIELDS
     )
     row = await pool.fetchrow(
         """
         UPDATE alerts SET mode = $3, surface = $4, where_clause = $5::jsonb,
-               describe = $6, model_id = $7,
+               describe = $6, model_id = $7, scope = $12::jsonb,
                name = coalesce($8, name),
                batch_cap = coalesce($9, batch_cap),
                debounce_seconds = coalesce($10, debounce_seconds),
@@ -251,7 +336,7 @@ async def update_alert(
         alert_id, principal.org_id, merged["mode"], merged["surface"],
         json.dumps(merged["where_clause"]), merged["describe"], merged["model_id"],
         changes.get("name"), changes.get("batch_cap"), changes.get("debounce_seconds"),
-        1 if changed else 0,
+        1 if changed else 0, json.dumps(merged["scope"]),
     )
     return _public(row)
 
@@ -350,6 +435,7 @@ def _loads(value):
 def _public(row) -> dict:
     d = dict(row)
     d["where"] = _loads(d.pop("where_clause", {}))
+    d["scope"] = _loads(d.get("scope") or {})
     d.pop("deleted_at", None)
     return d
 
@@ -430,6 +516,14 @@ async def evaluate_gap(
                 payload = _loads(row["payload"])
                 if matches_selector(where, payload):
                     matched.append((row, payload))
+
+            # Scope after the selector and before the model: it is a join, so
+            # it is cheaper than a judgement and there is no reason to pay for
+            # judging something that was never in scope.
+            scope = _loads(alert["scope"])
+            if scope and matched:
+                keep = await in_scope(pool, scope, matched)
+                matched = [m for m in matched if m[0]["sequence"] in keep]
 
             model_calls = 0
             if alert["mode"] == "llm" and matched:

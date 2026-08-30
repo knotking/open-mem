@@ -1234,11 +1234,14 @@ function condsFrom(where: Record<string, unknown>): Cond[] {
  * express something the API has always accepted.
  */
 function AlertEditor({
-  alert, surfaces, busy, runs, events, backtest, detailTab, onTab,
+  alert, surfaces, scopeOptions, busy, runs, events, backtest, detailTab, onTab,
   onBack, onSave, onBacktest, onToggle, onDelete,
 }: {
   alert: Alert | null;
   surfaces: Record<string, string[]>;
+  scopeOptions: { memories: Memory[]; cases: { case_id: string; title: string | null;
+                  external_id: string }[]; producers: { producer_id: string;
+                  type: string }[] };
   busy: boolean;
   runs: AlertRun[];
   events: ObservedEvent[];
@@ -1257,6 +1260,10 @@ function AlertEditor({
   const [describe, setDescribe] = useState(alert?.describe ?? "");
   const [conds, setConds] = useState<Cond[]>(
     alert ? condsFrom(alert.where) : [{ field: "predicate", op: "in", values: "located_in" }]);
+  const [scopeKind, setScopeKind] = useState<string>(
+    Object.keys(alert?.scope ?? {})[0] ?? "");
+  const [scopeValue, setScopeValue] = useState<string>(
+    Object.values(alert?.scope ?? {})[0] ?? "");
   const [debounce, setDebounce] = useState(alert?.debounce_seconds ?? 5);
   const [cap, setCap] = useState(alert?.batch_cap ?? 500);
   const [advanced, setAdvanced] = useState(false);
@@ -1276,6 +1283,7 @@ function AlertEditor({
     return {
       name: name || `${surface} watcher`, surface, mode, where,
       describe: mode === "llm" ? describe : null,
+      scope: scopeKind && scopeValue ? { [scopeKind]: scopeValue } : {},
       debounce_seconds: debounce, batch_cap: cap,
     };
   };
@@ -1381,6 +1389,62 @@ function AlertEditor({
           <button onClick={() => setConds([...conds, { field: "", op: "in", values: "" }])}>
             Add condition
           </button>
+
+          <h3>and only within</h3>
+          <p className="hint">
+            Optional. This is a different question from the conditions above —
+            they ask about the event, this asks whether the subject is one you
+            care about at all. Leave it as everything and the alert watches the
+            whole project.
+          </p>
+          <div className="row">
+            <select value={scopeKind} onChange={(e) => {
+              setScopeKind(e.target.value); setScopeValue("");
+            }}>
+              <option value="">everything in this project</option>
+              <option value="memory_id">one memory</option>
+              <option value="case_id">one case</option>
+              <option value="producer_id">one source</option>
+              <option value="entity_id">one entity</option>
+            </select>
+            {scopeKind === "memory_id" && (
+              <select value={scopeValue} onChange={(e) => setScopeValue(e.target.value)}>
+                <option value="">choose a memory…</option>
+                {scopeOptions.memories.map((m) => (
+                  <option key={m.memory_id} value={m.memory_id}>
+                    {m.title || m.memory_key || m.memory_id} · {m.type}
+                  </option>
+                ))}
+              </select>
+            )}
+            {scopeKind === "case_id" && (
+              <select value={scopeValue} onChange={(e) => setScopeValue(e.target.value)}>
+                <option value="">choose a case…</option>
+                {scopeOptions.cases.map((c) => (
+                  <option key={c.case_id} value={c.case_id}>
+                    {c.title || c.external_id}
+                  </option>
+                ))}
+              </select>
+            )}
+            {scopeKind === "producer_id" && (
+              <select value={scopeValue} onChange={(e) => setScopeValue(e.target.value)}>
+                <option value="">choose a source…</option>
+                {scopeOptions.producers.map((pr) => (
+                  <option key={pr.producer_id} value={pr.producer_id}>
+                    {pr.producer_id} · {pr.type}
+                  </option>
+                ))}
+              </select>
+            )}
+            {scopeKind === "entity_id" && (
+              <input value={scopeValue} placeholder="ent_…"
+                     onChange={(e) => setScopeValue(e.target.value)} />
+            )}
+          </div>
+          {scopeKind && !scopeValue && (
+            <p className="warn">Pick one, or set it back to everything.</p>
+          )}
 
           <h3>How it decides</h3>
           <div className="row">
@@ -1598,6 +1662,11 @@ function AlertsSection({ projectId }: { projectId: string }) {
   const [query, setQuery] = useState("");
   const [backtests, setBacktests] = useState<Record<string, Backtest>>({});
   const [subUrl, setSubUrl] = useState("https://");
+  const [scopeOptions, setScopeOptions] = useState<{
+    memories: Memory[];
+    cases: { case_id: string; title: string | null; external_id: string }[];
+    producers: { producer_id: string; type: string }[];
+  }>({ memories: [], cases: [], producers: [] });
 
   const load = useCallback(async () => {
     try {
@@ -1619,6 +1688,19 @@ function AlertsSection({ projectId }: { projectId: string }) {
           .then((r) => [a.alert_id, r.runs] as const)
           .catch(() => [a.alert_id, [] as AlertRun[]] as const)));
       setRunsByAlert(Object.fromEntries(runs));
+
+      // What an alert can be scoped to. Fetched here rather than in the editor
+      // so opening the form is instant and the lists are already right.
+      const [mem, cas, prod] = await Promise.all([
+        call<{ memories: Memory[] }>(`api/v1/projects/${projectId}/memories`)
+          .catch(() => ({ memories: [] })),
+        call<{ cases: { case_id: string; title: string | null; external_id: string }[] }>(
+          `api/v1/projects/${projectId}/cases`).catch(() => ({ cases: [] })),
+        call<{ producers: { producer_id: string; type: string }[] }>("api/v1/producers")
+          .catch(() => ({ producers: [] })),
+      ]);
+      setScopeOptions({ memories: mem.memories, cases: cas.cases,
+                        producers: prod.producers });
     } catch (e) {
       setError((e as Error).message);
     }
@@ -1742,6 +1824,9 @@ function AlertsSection({ projectId }: { projectId: string }) {
                       <span className="sub">
                         {a.surface}
                         {a.mode === "llm" ? " · judged in words" : ""}
+                        {Object.keys(a.scope ?? {}).length > 0
+                          ? ` · scoped to ${Object.keys(a.scope)[0].replace("_id", "")}`
+                          : ""}
                       </span>
                     </span>
                     <span className="hide-narrow">
@@ -1767,6 +1852,7 @@ function AlertsSection({ projectId }: { projectId: string }) {
           key={current?.alert_id ?? "new"}
           alert={current}
           surfaces={surfaces}
+          scopeOptions={scopeOptions}
           busy={busy}
           runs={current ? runsByAlert[current.alert_id] ?? [] : []}
           events={current ? eventsFor(current.alert_id) : []}

@@ -2180,9 +2180,16 @@ async def alert_surfaces_endpoint(actor: Principal = Depends(principal)) -> dict
     accepts, and hardcoding that list in the UI is how it drifts from the one
     the server validates against.
     """
-    from .alerts import SURFACES
+    from .alerts import OPERATORS, SCOPES, SURFACES
 
-    return {"surfaces": {k: sorted(v) for k, v in SURFACES.items()}}
+    return {
+        "surfaces": {k: sorted(v) for k, v in SURFACES.items()},
+        # Served rather than hardcoded in a console, for the same reason the
+        # predicate list is: two copies of a vocabulary drift, and the one that
+        # drifts is never the one the server validates against.
+        "operators": sorted(OPERATORS),
+        "scopes": SCOPES,
+    }
 
 
 @app.post("/api/v1/alerts", status_code=201)
@@ -2206,6 +2213,7 @@ async def create_alert_endpoint(
             model_id=body.get("model_id"),
             debounce_seconds=int(body.get("debounce_seconds", 5)),
             batch_cap=int(body.get("batch_cap", 500)),
+            scope=body.get("scope"),
         )
     except KeyError as exc:
         raise HTTPException(status_code=400, detail=f"missing {exc}") from exc
