@@ -196,6 +196,23 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="mem-dog", version="0.1.0", lifespan=lifespan)
 
 
+@app.exception_handler(AuthError)
+async def _auth_error(request: Request, exc: AuthError) -> JSONResponse:
+    """A permission failure is 401 or 403, from anywhere.
+
+    `_control` already translated these for the control plane, but ten handlers
+    call `actor.require()` in their own body and are not wrapped by it -- so a
+    credential lacking a capability escaped as a 500. That is worse than an
+    unhelpful status: it tells whoever is looking that the server is broken,
+    when the truth is that their key cannot do this, and those two send you to
+    completely different places.
+
+    Registered on the app rather than fixed in ten handlers, because the
+    eleventh would have reintroduced it.
+    """
+    return JSONResponse({"detail": str(exc)}, status_code=exc.status)
+
+
 async def principal(
     request: Request,
     authorization: str = Header(default=""),

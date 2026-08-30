@@ -278,6 +278,100 @@ class GeminiAnswerer:
         )
 
 
+class OllamaAnswerer:
+    """The open-model path, behind the same `Answerer` protocol.
+
+    This existed for extraction and not for answering, which made the catalog
+    quietly asymmetric: an org could run a Llama or a Qwen over its documents to
+    pull structured fields, then had no way to let the same model answer a
+    question about them. There was no reason for that other than nobody having
+    written it.
+
+    Ollama's `format` takes a JSON schema, so the answer comes back in the same
+    shape Gemini's `responseSchema` produces and the caller cannot tell which
+    engine served it -- which is the whole point of the seam.
+
+    **Token counts are reported in Ollama's units, not estimated.** A made-up
+    number would flow into the same meter that prices a paid provider, and a
+    plausible-looking cost is worse than a missing one.
+    """
+
+    def __init__(self, model_id: str, base_url: str) -> None:
+        self.model_id = model_id
+        self._base_url = base_url.rstrip("/")
+        self.generator_version = _fingerprint(model_id, "ollama")
+
+    async def answer(self, question: str, passages: list[Citation]) -> Generated:
+        if not passages:
+            return Generated(
+                "Nothing in the corpus matched that question.", [], False
+            )
+        user = (
+            f"{build_context(passages)}\n\n"
+            f"<<<QUESTION>>>\n{question.strip()}\n<<<END QUESTION>>>"
+        )
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                response = await client.post(
+                    f"{self._base_url}/api/chat",
+                    json={
+                        "model": self.model_id,
+                        "format": json.loads(_SCHEMA_TEXT),
+                        "stream": False,
+                        "options": {"temperature": 0, "num_predict": 2048},
+                        "messages": [
+                            {"role": "system", "content": SYSTEM},
+                            {"role": "user", "content": user},
+                        ],
+                    },
+                )
+                if response.status_code == 429:
+                    # Ollama Cloud rate limits; a local one does not. Same
+                    # signal either way, so the caller need not know which.
+                    raise AnswerRateLimited(
+                        "the model provider is rate limiting this project",
+                        retry_after=int(response.headers.get("retry-after") or 30),
+                    )
+                response.raise_for_status()
+                data = response.json()
+        except httpx.HTTPError as exc:
+            raise AnswerFailed(
+                f"the model provider did not answer ({exc.__class__.__name__})"
+            ) from exc
+
+        content = ((data.get("message") or {}).get("content") or "").strip()
+        if not content:
+            raise AnswerFailed("model returned no content")
+        try:
+            parsed = json.loads(content)
+        except ValueError as exc:
+            raise AnswerFailed(content[:2000]) from exc
+
+        text = (parsed.get("answer") or "").strip()
+        if not text:
+            raise AnswerFailed("model returned an empty answer")
+        cited = [c for c in parsed.get("citations") or [] if isinstance(c, int)]
+
+        prompt_tokens = int(data.get("prompt_eval_count") or 0)
+        output_tokens = int(data.get("eval_count") or 0)
+        usage.observe(
+            tokens_in=prompt_tokens,
+            tokens_out=output_tokens,
+            # Ollama has no prompt cache to report. Zero is the true value, not
+            # a placeholder.
+            tokens_cached=0,
+            response_id=None,
+        )
+        return Generated(
+            text,
+            cited,
+            bool(parsed.get("grounded")),
+            model_version=self.model_id,
+            response_id=None,
+            tokens=prompt_tokens + output_tokens,
+        )
+
+
 class ChainedAnswerer:
     """Several answerers, tried in order, behind the `Answerer` protocol.
 

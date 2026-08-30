@@ -424,6 +424,56 @@ SHIPPED_CARDS = [
     {"model_id": "local-heuristic-v1", "provider": "local", "capabilities": ["extraction"],
      "declared_by": "measured", "hosting": "local",
      "notes": "Deterministic envelope. Always produces a title, never invents fields."},
+
+    # --- open models, through Ollama -----------------------------------------
+    #
+    # One provider, several weights. Ollama is the engine; which model it pulls
+    # is a string, so these are cards rather than code -- and every one of them
+    # resolves to a builder that exists, which is the rule `test_catalog` now
+    # enforces.
+    #
+    # `hosting` is "local" for a self-hosted Ollama and is what makes these the
+    # only models a regulated data type may be served by. Pointing an engine's
+    # `base_url` at Ollama Cloud makes that untrue, which is why hosting is a
+    # property of the *engine* an operator registers as well as of the card.
+    #
+    # Context windows are the published defaults. Ollama serves a shorter one
+    # unless `num_ctx` is raised, so these are the ceiling rather than a promise.
+    #
+    # None of them declares "answer", because that is not a purpose: chat
+    # follows the org's *extraction* assignment on purpose, so that
+    # `allowed_providers` is one decision rather than two. Assigning one of
+    # these for extraction is what also makes it answer -- which needed
+    # `OllamaAnswerer` to exist, and until now silently fell back to the
+    # deployment's default answerer instead.
+    {"model_id": "llama3.3:70b", "provider": "ollama", "family": "llama",
+     "capabilities": ["extraction", "classification"],
+     "context_tokens": 131_072, "declared_by": "vendor", "hosting": "local",
+     "notes": "Strong general open model. Needs roughly 40GB to serve at Q4."},
+    {"model_id": "llama3.2:3b", "provider": "ollama", "family": "llama",
+     "capabilities": ["extraction", "classification"],
+     "context_tokens": 131_072, "declared_by": "vendor", "hosting": "local",
+     "notes": "Small enough for a laptop. Weakest at structured extraction -- "
+              "check a sample before assigning it to a data type."},
+    {"model_id": "qwen2.5:32b", "provider": "ollama", "family": "qwen",
+     "capabilities": ["extraction", "classification"],
+     "context_tokens": 131_072, "declared_by": "vendor", "hosting": "local",
+     "notes": "Reliable at schema-constrained output, which is what extraction "
+              "asks for."},
+    {"model_id": "mistral-small:24b", "provider": "ollama", "family": "mistral",
+     "capabilities": ["extraction", "classification"],
+     "context_tokens": 32_768, "declared_by": "vendor", "hosting": "local",
+     "notes": "Shorter context than the others; fine for records, tight for "
+              "long transcripts."},
+    {"model_id": "gemma3:27b", "provider": "ollama", "family": "gemma",
+     "capabilities": ["extraction", "classification"],
+     "context_tokens": 131_072, "declared_by": "vendor", "hosting": "local",
+     "notes": "Open-weight Gemini lineage."},
+    {"model_id": "deepseek-r1:32b", "provider": "ollama", "family": "deepseek",
+     "capabilities": ["extraction"],
+     "context_tokens": 131_072, "declared_by": "vendor", "hosting": "local",
+     "notes": "A reasoning model: slower, and it emits a thinking block the "
+              "schema constraint has to survive. Try it on a sample first."},
 ]
 
 SHIPPED_PROFILES = [

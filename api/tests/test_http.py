@@ -71,3 +71,23 @@ async def test_endpoints(client, tenant, pool):
     payload = found.json()
     assert [c["data_id"] for c in payload["results"]] == [data_id]
     assert payload["model_id"] == live_app.state.embedder.model_id
+
+
+async def test_a_permission_failure_is_never_a_500(client, tenant):
+    """`_control` translates AuthError for the control plane, but ten handlers
+    call `actor.require()` in their own body and are wrapped by nothing — so a
+    credential lacking a capability escaped as `500 Internal Server Error`.
+
+    That is worse than an unhelpful status. It tells whoever is looking that the
+    server is broken, when the truth is that their key cannot do this, and those
+    two send you to completely different places.
+
+    Asserted on `/platform/health` because ADMIN is the one capability an
+    ordinary tenant key is guaranteed not to hold.
+    """
+    response = await client.get(
+        "/api/v1/platform/health",
+        headers={"Authorization": f"Bearer {tenant.api_key}"},
+    )
+    assert response.status_code == 403, response.text
+    assert "admin" in response.json()["detail"].lower()

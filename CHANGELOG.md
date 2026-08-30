@@ -426,6 +426,27 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   Supermemory's latency, Letta's working context.
 
 ### Fixed
+- **The console could not reach the catalog it was built to show.** Three paths
+  were missing from the UI proxy's allow-list — the browser's only route to the
+  API — so `GET /api/v1/connectors`, `GET /api/v1/connections` and
+  `PATCH /api/v1/crawlers/{id}/connection` were all refused with a 403 the panel
+  had no way to report. The app catalog rendered as an empty category list and
+  the credentials list as no credentials, which is indistinguishable from a
+  catalog that is genuinely empty. Every endpoint and every panel already
+  existed; nothing connected them.
+- **The MCP panel was refused for the same reason.** Its path is now allowed for
+  `GET` only, under a separate list. `GET /api/v1/mcp` is a manifest that
+  discloses nothing; `POST` on the same path is a tool call, and the proxy
+  replaces the caller's credential with the console's own — falling back to the
+  service key when nobody is signed in. Allow-listing `POST` would publish an
+  unauthenticated MCP server over whatever that key can reach, so **the endpoint
+  the panel prints does not yet work for an external client**.
+- **The crawler preset row offered three of the four strategies.** `tree` is now
+  there as *Drive folder*, with a lower depth and item cap than the default,
+  because a drive nobody has pruned is where an unbounded first run finds forty
+  thousand files. Each preset now carries its own input placeholder: the seed
+  for a folder walk is an id, and labelling it "Seed URL" is how somebody pastes
+  the wrong thing.
 - **The console could not create either exchanged credential**, so the Google
   and Microsoft catalog entries were unreachable from the UI that listed them.
   The Credentials form now offers both styles, asks for the token endpoint and

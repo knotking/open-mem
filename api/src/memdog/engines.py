@@ -162,7 +162,7 @@ class EngineRegistry:
         provider is an entry and an unknown one is a `None` the caller reports
         rather than an exception nobody expected.
         """
-        from .chat import GeminiAnswerer
+        from .chat import GeminiAnswerer, OllamaAnswerer
         from .extraction import GeminiExtractor, OllamaExtractor
 
         builders = {
@@ -172,6 +172,10 @@ class EngineRegistry:
                 model_id, base_url or self._settings.ollama_url),
             ("answer", "google"): lambda: GeminiAnswerer(credential or "", model_id),
             ("answer", "gemini"): lambda: GeminiAnswerer(credential or "", model_id),
+            # Open models could extract and not answer, which made the catalog
+            # asymmetric for no reason anybody had decided.
+            ("answer", "ollama"): lambda: OllamaAnswerer(
+                model_id, base_url or self._settings.ollama_url),
         }
         build = builders.get((kind, provider))
         return build() if build else None
