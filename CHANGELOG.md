@@ -11,6 +11,59 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **Five more alert surfaces**, all deterministic: `data.revised`,
+  `memory.member_added`, `memory.retyped`, `case.member_promoted` and
+  **`acl.changed`**. The last could not have been done any other way — the
+  statement that changes a record's level destroys the evidence that it
+  changed, since `RETURNING` after `ON CONFLICT DO UPDATE` reports the new
+  value. The upsert now reads the prior level from the same unique index it was
+  about to probe.
+- **Three of them are mostly about refusing to fire.** A revision whose content
+  is byte-identical is not a change — a re-crawl and a re-parse produce them
+  constantly — and the first revision is skipped because the write already
+  announced that record. Re-adding an item already in a memory is not a
+  membership event, and landing in the `default` memory is not one either: that
+  is where an unattached item goes, which is the absence of a signal. A second
+  document agreeing with a fact is a corroboration, not an assertion.
+- **`data.revised` carries the old and new `source`.** `write` and `reprocess`
+  mean the upstream document changed; `parse` and `interpret` mean the same
+  bytes were read better. Only the first is a change in the world.
+- **Evaluation is asynchronous and debounced.** A consumer wakes on a
+  transition and then waits, coalescing before evaluating once — two hundred
+  messages inside a window produce at most one run. Nothing in the consumer is
+  the record; the watermark is, so a window lost with its instance costs
+  latency rather than an alert.
+- **Outbound delivery, which memdog has never had.** `POST
+  /api/v1/event-subscriptions` registers an **https-only** endpoint; deliveries
+  are signed HMAC-SHA256 over `{timestamp}.{body}` — the same scheme the
+  inbound path expects — retried with backoff, then **dead-lettered visibly**
+  and replayable. The signing secret is shown once and can be rotated, never
+  read back; the previous secret keeps verifying for an overlap.
+- **The subscription URL is validated on every attempt, not just at
+  registration.** A host that resolved to a public address yesterday can
+  resolve to a private one today, and this service reaches Cloud SQL over the
+  VPC. Redirects are not followed at all. A delivery whose recipient has since
+  lost sight of the subject is dropped rather than retried.
+- **An Alerts section in the console**, in its own group. It enforces rather
+  than displays: the enable button is disabled until this wording is
+  backtested, editing drops the approval visibly, deferred work is shown in run
+  history, and the signing secret says plainly that it will not be shown again.
+- **[docs/alerts.md](docs/alerts.md)**, and the sign-in page now describes the
+  two clocks the temporal graph shipped with.
+
+### Changed
+- **The README's counts were wrong.** 112 endpoints and 596 tests are 134 and
+  630; 58 modules across 32 migrations are 60 across 35. `GET
+  /api/v1/capabilities` now also reports `alert_surfaces`, counted from the
+  vocabulary, so a surface added without being documented still shows up.
+
+### Migrations
+- **`0035_event_delivery.sql`** — `event_subscriptions`, `event_deliveries`.
+  Additive. A subscription requires an **owner**: delivery is filtered by that
+  owner's rights at send time, and one without an owner is a notification
+  channel with no access control.
+
+### Added
 - **Alerts — declare an event worth knowing about, and be told when it
   happens.** `POST /api/v1/alerts` names a **surface** (a kind of transition)
   and a **selector** over it; matches are recorded and read back from
