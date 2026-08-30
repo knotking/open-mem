@@ -129,7 +129,15 @@ export default function Console({
   const [section, setSection] = useState<Section>("overview");
   // Only the group you are working in is expanded. Fifteen items visible at
   // once is a list to scan; four groups with one open is a place to be.
-  const [openGroup, setOpenGroup] = useState<string>("Data");
+  // Groups the reader can have open at once, not one.
+  //
+  // A single-open accordion hid two whole features: Compaction sits under
+  // Organize and Alerts is its own group, and with only Data open neither
+  // existed as far as anybody looking could tell. A nav that hides a feature
+  // until you guess which heading it is behind is a nav that has not been
+  // navigated.
+  const [openGroups, setOpenGroups] = useState<string[]>(
+    () => GROUPS.map((g) => g.title));
   // Handoffs between Search and Entities. A search result explains itself by
   // naming the entity it was reached through; the entity panel hands a name
   // back. Held here because the two panels are siblings and neither owns the
@@ -160,14 +168,16 @@ export default function Console({
         </div>
         <div className="navscroll">
           {GROUPS.map((group) => {
-            const open = openGroup === group.title;
+            const open = openGroups.includes(group.title);
             const current = group.items.some((i) => i.key === section);
             return (
               <div className="navgroup" key={group.title}>
                 <button
                   className={`navtitle${current ? " current" : ""}`}
                   aria-expanded={open}
-                  onClick={() => setOpenGroup(open ? "" : group.title)}
+                  onClick={() => setOpenGroups(open
+                    ? openGroups.filter((t) => t !== group.title)
+                    : [...openGroups, group.title])}
                 >
                   <span className={`caret${open ? " open" : ""}`} aria-hidden="true">
                     ›
@@ -230,7 +240,7 @@ export default function Console({
             onOpenEntity={(entityId) => {
               setFocusEntity(entityId);
               setSection("entities");
-              setOpenGroup("Organize");
+              setOpenGroups((g) => g.includes("Organize") ? g : [...g, "Organize"]);
             }}
           />
         )}
@@ -249,7 +259,7 @@ export default function Console({
             onSearchFor={(name) => {
               setSeededQuery(name);
               setSection("search");
-              setOpenGroup("Data");
+              setOpenGroups((g) => g.includes("Data") ? g : [...g, "Data"]);
             }}
           />
         )}

@@ -112,6 +112,24 @@ touched.
 The same applies to token names. Adding `--bad` is safe because nothing else
 defines it; redefining `--accent` would repaint every screen at once.
 
+## Navigation is part of the feature
+
+A screen nobody can find is not shipped. The sidebar groups were a
+**single-open accordion** — one group's items rendered, the rest hidden — with
+`Data` open by default. That hid two whole features: Compaction sits under
+Organize and Alerts is its own group, so to anyone looking, neither existed.
+
+Both were built, tested, deployed and verified in the served bundle. The report
+was still *"I can't see it"*, twice, and both times the first suspicion was the
+deploy.
+
+- **After adding a section, open the console and find it the way a person
+  would** — from the sidebar, not by remembering the state variable.
+- **Prefer showing to hiding.** Collapsing is for a reader who asked for less,
+  not a default that costs a feature its discoverability.
+- **A new nav entry is part of the change**, and so is whichever container it
+  lands in being visible.
+
 ## Write like a person, not like the schema
 
 The console says *"tell me when this happens"*, not *"transition subscription
