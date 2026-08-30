@@ -180,11 +180,11 @@ because the row is already there and the poll cursor still reaches it.
 
 ## 5 · Push and poll are one event read two ways
 
-**Poll** — `GET /api/v1/events?since=<sequence>&rule_id=&limit=`. Cursor-based
+**Poll** — `GET /api/v1/events?since=<sequence>&alert_id=&limit=`. Cursor-based
 on `sequence`, never on a timestamp: two events in the same millisecond are
 ordered by the sequence and not by luck.
 
-**Push** — subscriptions deliver signed HTTP, at-least-once, ordered per rule,
+**Push** — subscriptions deliver signed HTTP, at-least-once, ordered per alert,
 dead-lettered after `MAX_ATTEMPTS`. **This is the same outbound machinery the
 workflow plan needs, and it should be built once.** memdog has no outbound path
 today — `webhooks.py` is inbound only, by its own docstring — so whichever
@@ -225,7 +225,7 @@ a bill, and at any real corpus size the scan is not available anyway.
 To see history, **backtest**:
 
 ```
-POST /api/v1/event-rules/{id}/backtest {"since": "2026-06-01T00:00:00Z"}
+POST /api/v1/alerts/{id}/backtest {"since": "2026-06-01T00:00:00Z"}
 ```
 
 It replays historical transitions through **the same evaluation path**, reports
@@ -322,7 +322,7 @@ silence indistinguishable from "nothing happened".
 
 1. **`0034_alerts.sql`** — `alerts`, `alert_runs`, `observed_events`,
    `event_subscriptions`, `event_deliveries`. Indexes: `(sequence)` for the
-   cursor, `(rule_id, occurred_at DESC)`, `(status, next_attempt_at) WHERE
+   cursor, `(alert_id, occurred_at DESC)`, `(status, next_attempt_at) WHERE
    status='pending'`.
 2. **Transition capture** — emit `*.changed` domain events carrying before/after
    at each of the eight sites, inside the existing transactions. Small, and the
@@ -339,7 +339,7 @@ silence indistinguishable from "nothing happened".
 5. **`api/src/memdog/event_delivery.py`** — the outbound sender: HMAC signing as
    `0018` does inbound, `validate_url` per attempt, no redirects, backoff,
    dead-letter. **Shared with the workflow plan.**
-6. **`app.py`** — rule CRUD, `GET /api/v1/events`, subscription CRUD + rotate +
+6. **`app.py`** — alert CRUD, `GET /api/v1/events`, subscription CRUD + rotate +
    deliveries + replay, backtest.
 7. **`deletion.py`** — payload redaction and the `verify_erasure` check (§7).
 8. **Docs** — `docs/events.md`; the delivery contract in `docs/api.md` (headers,
