@@ -67,6 +67,15 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   at the end of the migration.
 
 ### Fixed
+- **`deploy/smoke.sh` failed against healthy deployments.** It sent no
+  `options.enrich`, so the write fell back to the project's
+  `enrich_by_default` — off, because enrichment is optional by design. The
+  items landed in `stored` and stayed there, and the script then asserted
+  retrievability it had never asked for, printing `FAIL: nothing retrievable`
+  with **nothing in the logs to contradict it**. That silence is the
+  diagnostic: an enrichment that errors leaves a trace, one never requested
+  leaves none. A `Pending` item remaining `stored` is correct and still shows
+  up under `excluded` on a passing run.
 - **A deletion time range could not be sent over HTTP.** `since` and `until`
   reached asyncpg as strings, which it refuses for a `timestamptz` — so the
   time_range selector raised a 500 for every caller, and since a JSON body
