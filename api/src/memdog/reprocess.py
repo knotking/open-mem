@@ -44,6 +44,12 @@ async def request_reprocess(
     `embed` re-chunks and re-embeds; `enrich` rebuilds the envelope only. They
     are separate because re-embedding a corpus is expensive and usually
     unnecessary when only a prompt changed.
+
+    Selectors compose, and all of them narrow: `data_ids`, `data_type`,
+    `run_id`, `tags`, `stale_generator`, `stale_only`. The last two match on an
+    existing artifact, so they cannot reach an item that was never enriched --
+    which is exactly the item a crawl run with `enrich` off produces. `run_id`
+    and `tags` are how that corpus is reached.
     """
     principal.require(DATA_WRITE)
     if stage not in ("embed", "enrich"):
@@ -59,6 +65,20 @@ async def request_reprocess(
     if selector.get("data_type"):
         params.append(selector["data_type"])
         clauses.append(f"d.data_type = ${len(params)}")
+    if selector.get("run_id"):
+        # The selector a crawl actually needs. `enrich` is off by default, so
+        # the intended sequence is crawl, read the count, then enrich what it
+        # found -- and until this existed the last step meant enumerating ten
+        # thousand data_ids by hand, because a never-enriched item has no
+        # artifact for `stale_only` or `stale_generator` to match on.
+        params.append(selector["run_id"])
+        clauses.append(f"d.run_id = ${len(params)}")
+    if selector.get("tags"):
+        # Overlap, not containment: "any of these tags" is the question people
+        # ask. `tags @> ARRAY[...]` would quietly return nothing whenever more
+        # than one tag was passed.
+        params.append(list(selector["tags"]))
+        clauses.append(f"d.tags && ${len(params)}::text[]")
     if selector.get("stale_generator"):
         # The common case: everything an outdated generator produced.
         params.append(selector["stale_generator"])

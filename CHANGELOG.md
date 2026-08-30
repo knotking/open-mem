@@ -11,6 +11,34 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **Workday, Dynamics 365, and five more CRMs.** The CRM shelf held five entries
+  and was missing the one most people name first. Nine catalog entries added —
+  **Microsoft Dynamics 365** (any Dataverse table), **Close**, **Copper**,
+  **Freshsales**, **Zendesk Sell**, **Capsule**, **Affinity**, and Workday
+  twice. **37 entries, 36 usable**; Zoho CRM remains the only blocked one. None
+  is verified, as before — the dry run is still where an entry stops being a
+  researched guess.
+- **Workday is two entries, and they are not the same promise.** *Workday
+  (custom report)* reaches a RaaS custom report with an integration system user
+  over basic auth, which is how bulk data actually leaves Workday and needs
+  nothing switched on. *Workday (workers)* uses the REST API and
+  `client_credentials`, and is conditional: the grant has to be enabled on the
+  API client, and some tenants permit only the JWT bearer grant, which is not
+  one of the six styles here. The entry says so rather than failing at the token
+  request with no explanation.
+- **Where only the operator knows the id, the form now asks for it.** Dynamics
+  and the Workday report both declare an **ID column** scope, because Dataverse
+  names a primary key after its singular table (`accountid`, `contactid`) and a
+  Workday report names its columns after their labels. A guessed id produces a
+  crawler that hashes every row into a fresh record on the next run, which reads
+  as duplication rather than a missing field.
+
+### Changed
+- Two of the new entries **say in their notes that they pull one page**, rather
+  than looking complete and quietly truncating: Dynamics pages with a whole
+  `@odata.nextLink` URL and Copper pages inside the request body, and the
+  crawler's pagination templates only the query string.
+
 - **Google and Microsoft, without a person in the loop.** "They need OAuth"
   stood here for weeks and was only ever true of a *person* connecting their own
   account. An organization connecting its own data uses a grant with no human
@@ -44,8 +72,8 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   tree)**, **SharePoint (library tree)**, **OneDrive (drive tree)**. The pair is
   not redundant — a listing stores what a folder contains, a tree stores what
   the documents say, and choosing between them is choosing between a file index
-  and a corpus. 28 entries, 27 usable; **Zoho CRM is the only genuine OAuth
-  case** and stays listed with that reason attached.
+  and a corpus. **Zoho CRM is the only genuine OAuth case** and stays listed
+  with that reason attached.
 - `GET /api/v1/capabilities` reports **`connectors`** and
   **`connectors_available`**. Both, because the difference is the honest part: a
   count that silently dropped the blocked entry would read as complete coverage.

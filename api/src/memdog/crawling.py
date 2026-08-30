@@ -594,8 +594,12 @@ class CrawlWorker:
             batch.append(WriteItem(
                 external_id=item.external_id,
                 content=content,
-                metadata={"tags": [*config.tags, f"crawler:{crawler['crawler_id']}"],
-                          "title": item.title, "source_url": item.url, **item.fields},
+                # `crawler:<id>` is what makes "which of these did that crawler
+                # pull?" answerable, and with it the reprocess selector that
+                # backfills a crawl run enriched with `enrich` off.
+                tags=[*config.tags, f"crawler:{crawler['crawler_id']}"],
+                metadata={"title": item.title, "source_url": item.url,
+                          **item.fields},
                 memory={"key": config.memory_key or crawler["crawler_id"],
                         "type": config.memory_type},
             ))

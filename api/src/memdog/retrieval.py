@@ -51,7 +51,7 @@ async def get_item(
                d.content_text, d.extracted_text, d.storage_ref, d.pending_ref,
                d.is_downloaded, d.parse_status, d.parse_detail,
                d.size_bytes, d.checksum, d.event_time, d.ingested_at, d.tags,
-               d.identifiers, d.producer_id, d.connection_id
+               d.identifiers, d.producer_id, d.connection_id, d.run_id, d.metadata
         FROM data_items d
         WHERE d.data_id = $1 AND {predicate}
         """,

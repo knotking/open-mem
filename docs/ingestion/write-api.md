@@ -85,7 +85,8 @@ Idempotency-Key: 9f2c...
     {
       "external_id": "0064xx0000ABCDE",
       "content": { "kind": "inline", "text": "..." },
-      "metadata": { "tags": ["source:salesforce"] },
+      "tags": ["source:salesforce"],
+      "metadata": { "source_url": "https://acme.my.salesforce.com/0064xx0000ABCDE" },
       "event_time": "2019-03-14T09:20:00Z",
       "memory": { "key": "thread-8841", "type": "conversation" },
       "case": { "external_id": "MRN-A12345", "case_type": "patient" }
@@ -109,6 +110,14 @@ Idempotency-Key: 9f2c...
   "options": { "enrich": true, "priority": "live" }
 }
 ```
+
+**`tags` and `metadata` are different fields.** `tags` is a `text[]` you filter and reprocess on;
+`metadata` is whatever else you want carried alongside the record. This example used to show tags
+*inside* `metadata`, and nothing read `metadata` at all — so every producer following it, the
+crawler included, had them silently dropped between the request body and the insert. Both are stored
+now, and a `tags` key inside `metadata` is still lifted into the column so the old shape works.
+Neither is ever consulted for access control: the ACL is sealed before any caller-supplied value is
+read.
 
 ```json
 207 Multi-Status

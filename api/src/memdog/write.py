@@ -355,8 +355,22 @@ async def _write_one(
         external_id=item.external_id,
     )
 
+    # `metadata.tags` is the shape the write-api doc has always shown, and the
+    # shape the crawler emits. Merged into the top-level field rather than
+    # honoured instead of it, because both are documented and a producer
+    # sending each should not have one silently win.
+    #
+    # Order-preserving and deduped: tags end up in a `text[]` people read, and
+    # the same tag twice is noise in every listing that renders it.
+    meta_tags = item.metadata.get("tags") if isinstance(item.metadata, dict) else None
+    tags = list(item.tags)
+    if isinstance(meta_tags, list):
+        tags += [t for t in meta_tags if isinstance(t, str)]
+    tags = list(dict.fromkeys(t for t in tags if t))
+
     # Sealed. This runs before any customizable phase, and no caller-supplied
-    # metadata reaches it.
+    # metadata reaches it. `metadata` is stored, never consulted here -- a
+    # value the writer controls must not be able to widen the ACL.
     requested = item.access
     assigned = acl_mod.acl_for_write(
         connection_scope=producer.connection_scope,
@@ -371,9 +385,10 @@ async def _write_one(
             data_id, org_id, project_id, producer_id, connection_id, owner_id,
             external_id, access_level, shared_with, content_text, storage_ref,
             pending_ref, mime_type, source_type, data_type, classified_by_layer,
-            size_bytes, checksum, event_time, state, identifiers, tags, run_id)
+            size_bytes, checksum, event_time, state, identifiers, tags, run_id,
+            metadata)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-                $16, $17, $18, $19, 'stored', $20, $21, $22)
+                $16, $17, $18, $19, 'stored', $20, $21, $22, $23)
         ON CONFLICT (project_id, producer_id, external_id) DO UPDATE SET
             content_text = EXCLUDED.content_text,
             storage_ref = EXCLUDED.storage_ref,
@@ -389,6 +404,7 @@ async def _write_one(
             shared_with = EXCLUDED.shared_with,
             identifiers = EXCLUDED.identifiers,
             tags = EXCLUDED.tags,
+            metadata = EXCLUDED.metadata,
             -- A rewrite belongs to the run that rewrote it.
             run_id = EXCLUDED.run_id,
             state = 'stored',
@@ -421,8 +437,9 @@ async def _write_one(
         checksum,
         event_time,
         item.identifiers,
-        item.tags,
+        tags,
         run_id,
+        json.dumps(item.metadata or {}),
     )
     data_id, created = row["data_id"], row["created"]
 

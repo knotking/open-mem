@@ -818,3 +818,132 @@ async def test_a_401_drops_the_cached_token_for_that_connection(
     assert connection["connection_id"] not in grants._cache, (
         "the refused token is still cached and the next run will reuse it"
     )
+
+
+async def test_a_crawled_item_carries_the_tag_that_says_which_crawler_pulled_it(
+    pool, queue, blobs, settings, tenant, principal_for, server
+):
+    """The provenance that makes a crawl reprocessable.
+
+    This was built and then thrown away: `_emit` put the tags inside
+    `WriteItem.metadata`, the write path reads `item.tags`, and `data_items` had
+    no metadata column at all -- so the tag, the title and the source URL were
+    all dropped between the crawler and the insert. Nothing errored. The items
+    were durable and searchable and simply could not be attributed, which is
+    only discovered by someone asking which crawler pulled them.
+    """
+    actor = await principal_for(tenant.api_key)
+    created = await create_crawler(
+        pool, actor, project_id=tenant.project_id,
+        config=http_config(server, tags=["source:acme"]),
+    )
+    crawler_id = created["crawler_id"]
+    worker = await _worker(pool, queue, blobs, settings)
+    await worker.execute(
+        (await start_run(pool, actor, crawler_id, mode="dry"))["run_id"])
+    await set_enabled(pool, actor, crawler_id, True)
+    run = await start_run(pool, actor, crawler_id)
+    await worker.execute(run["run_id"])
+
+    rows = await pool.fetch(
+        "SELECT tags, metadata, run_id FROM data_items WHERE project_id = $1 "
+        "AND external_id = ANY($2::text[])",
+        tenant.project_id, ["a1", "a2", "a3"],
+    )
+    assert rows, "the crawl wrote nothing"
+    for row in rows:
+        assert f"crawler:{crawler_id}" in row["tags"]
+        assert "source:acme" in row["tags"], "the configured tags went nowhere"
+        assert row["run_id"] == run["run_id"]
+        metadata = json.loads(row["metadata"]) if isinstance(row["metadata"], str) \
+            else row["metadata"]
+        assert "source_url" in metadata
+
+
+async def test_metadata_tags_are_lifted_for_a_producer_following_the_docs(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """The write-api example has always shown `metadata: {tags: [...]}`, so an
+    external producer sending that shape lost them exactly as the crawler did.
+    Merged rather than substituted: a producer sending both keeps both."""
+    from memdog.contracts import Inline, WriteItem, WriteRequest
+    from memdog.write import write_items
+
+    actor = await principal_for(tenant.api_key)
+    await write_items(
+        pool, queue, blobs, settings, actor,
+        WriteRequest(producer_id=tenant.producer_id, items=[WriteItem(
+            external_id="doc-tagged",
+            content=Inline(text="a record with tags in both places"),
+            tags=["top-level"],
+            metadata={"tags": ["source:salesforce", "top-level"], "note": "kept"},
+        )]),
+    )
+    row = await pool.fetchrow(
+        "SELECT tags, metadata FROM data_items WHERE project_id = $1 AND external_id = $2",
+        tenant.project_id, "doc-tagged",
+    )
+    assert sorted(row["tags"]) == ["source:salesforce", "top-level"], (
+        "a tag sent in both places must not appear twice"
+    )
+    metadata = json.loads(row["metadata"]) if isinstance(row["metadata"], str) \
+        else row["metadata"]
+    assert metadata["note"] == "kept"
+
+
+async def test_a_crawl_run_can_be_reprocessed_by_run_id_or_by_tag(
+    pool, queue, blobs, settings, tenant, principal_for, server
+):
+    """The loop `enrich: false` is supposed to leave open.
+
+    The default tells you to crawl, look at the dry run's count, and enrich only
+    if it looks right. But `stale_only` and `stale_generator` both match on an
+    existing artifact, and an item that was never enriched has none -- so the
+    corpus that default produces was the one corpus reprocess could not select.
+    Enumerating ten thousand data_ids by hand is not the answer.
+    """
+    from memdog.reprocess import request_reprocess
+
+    actor = await principal_for(tenant.api_key)
+    created = await create_crawler(
+        pool, actor, project_id=tenant.project_id,
+        config=http_config(server, tags=["source:acme"]),
+    )
+    crawler_id = created["crawler_id"]
+    worker = await _worker(pool, queue, blobs, settings)
+    await worker.execute(
+        (await start_run(pool, actor, crawler_id, mode="dry"))["run_id"])
+    await set_enabled(pool, actor, crawler_id, True)
+    run = await start_run(pool, actor, crawler_id)
+    result = await worker.execute(run["run_id"])
+    assert result["emitted"] == 3
+
+    selector = {"project_id": tenant.project_id}
+    by_run = await request_reprocess(
+        pool, queue, actor, selector={**selector, "run_id": run["run_id"]},
+        stage="embed", dry_run=True)
+    assert by_run["items"] == 3
+
+    by_tag = await request_reprocess(
+        pool, queue, actor, selector={**selector, "tags": [f"crawler:{crawler_id}"]},
+        stage="embed", dry_run=True)
+    assert by_tag["items"] == 3
+
+    # Overlap, not containment: one matching tag out of two is still a match.
+    either = await request_reprocess(
+        pool, queue, actor,
+        selector={**selector, "tags": ["source:acme", "source:nothing-here"]},
+        stage="embed", dry_run=True)
+    assert either["items"] == 3
+
+    # The gap this closes, asserted directly rather than described.
+    stale = await request_reprocess(
+        pool, queue, actor, selector={**selector, "stale_only": True},
+        stage="embed", dry_run=True)
+    assert stale["items"] == 0
+
+    # A selector must still narrow something -- project_id alone is not a
+    # selector, or "reprocess everything" becomes one missing key away.
+    with pytest.raises(ValueError):
+        await request_reprocess(pool, queue, actor, selector=selector,
+                                stage="embed", dry_run=True)
