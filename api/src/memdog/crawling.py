@@ -699,6 +699,11 @@ async def _tick(pool: asyncpg.Pool, conn, worker: CrawlWorker, limit: int,
          WHERE enabled AND next_due_at IS NOT NULL AND next_due_at <= now()
            AND ($2::text IS NULL OR org_id = $2)
          ORDER BY next_due_at LIMIT $1
+        -- No row lock here, deliberately. `tick()` holds a session-level
+        -- advisory lock across the whole pass, so a second scheduler selects
+        -- nothing at all rather than racing for rows -- and this statement runs
+        -- outside an explicit transaction, where FOR UPDATE would release at
+        -- statement end and protect nothing while appearing to.
         """,
         limit, org_id,
     )

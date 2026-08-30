@@ -66,8 +66,20 @@ JOB_SECRETS="DB_PASSWORD=memdog-db-password:latest,MEMDOG_MASTER_KEY=memdog-mast
 # Creating it costs nothing -- a job is not billed until executed -- and it is
 # the only way to seed at all, since Cloud SQL is private-IP and the seed needs
 # to be inside the VPC.
+# `memdog-bootstrap` is in here for the reason the others are, and it had drifted
+# furthest: created by hand, pinned to an image twenty tags old, and repurposed
+# along the way to run `grant-key` instead of a bootstrap. A job nobody
+# redeploys runs code the service no longer has, and this one issues the first
+# credential -- the worst possible thing to run from a stale build.
+#
+# Restoring it to `bootstrap-to-secret` costs nothing: `refuse_if_occupied`
+# turns it into a no-op on a deployment that already has a tenant, and a fresh
+# project needs exactly this. The secret *name* in the args is config; the
+# credential itself goes to Secret Manager and never to stdout, which on a Cloud
+# Run Job is Cloud Logging.
 for job_spec in "memdog-reconcile:reconcile" "memdog-crawl-tick:crawl-tick" \
                 "memdog-alert-tick:alert-tick" \
+                "memdog-bootstrap:bootstrap-to-secret,owner@memdog.dev,personal,${PROJECT},memdog-demo-key" \
                 "memdog-seed:seed,--demo"; do
   job="${job_spec%%:*}"
   command="${job_spec##*:}"
@@ -77,6 +89,9 @@ for job_spec in "memdog-reconcile:reconcile" "memdog-crawl-tick:crawl-tick" \
   # which reads as a broken seed rather than a duplicate run.
   case "$job" in
     memdog-seed) cpu=2; memory=2Gi; retries=0 ;;
+    # A retried bootstrap finds the tenant the first attempt created and fails
+    # with that as its reason, which reads as a broken bootstrap.
+    memdog-bootstrap) cpu=1; memory=1Gi; retries=0 ;;
     *)           cpu=1; memory=1Gi; retries=1 ;;
   esac
   if gcloud run jobs describe "$job" --project "$PROJECT" --region "$REGION" >/dev/null 2>&1; then

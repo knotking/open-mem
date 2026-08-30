@@ -205,11 +205,11 @@ Each of these presents as a different bug than it is.
 
 ## Known drift
 
-`memdog-bootstrap` is **not** managed by `cloudrun.sh`. It was created by hand,
-is pinned to `spine-12`, and currently runs `grant-key mdk_01M12VFWTA …` rather
-than a bootstrap. It is stale by construction. Either fold it into the script's
-job loop or treat it as a one-shot to re-point before each use — but do not
-assume it runs current code.
+None outstanding. `memdog-bootstrap` was the last of it — created by hand,
+pinned twenty tags behind, and repurposed to run `grant-key` instead of a
+bootstrap. It is in the job loop as of 30 Aug 2026, so it is redeployed with
+everything else and cannot drift again. `refuse_if_occupied` makes it a no-op
+on a deployment that already has a tenant.
 
 ## From scratch
 

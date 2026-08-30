@@ -947,3 +947,30 @@ async def test_a_crawl_run_can_be_reprocessed_by_run_id_or_by_tag(
     with pytest.raises(ValueError):
         await request_reprocess(pool, queue, actor, selector=selector,
                                 stage="embed", dry_run=True)
+
+
+async def test_two_schedulers_do_not_both_start_the_same_crawl(
+    pool, tenant, principal_for, queue, blobs, settings
+):
+    """The guard is an advisory lock across the whole pass, not a row lock.
+
+    Two schedulers electing themselves is how a nightly crawl becomes two
+    nightly crawls. A second tick selects nothing rather than racing for rows —
+    and a row lock would not help here anyway, since the selection runs outside
+    an explicit transaction and would release at statement end.
+    """
+    import asyncio
+
+    from memdog import crawling
+
+    class Idle:
+        async def execute(self, run_id):
+            return {"run_id": run_id}
+
+    first, second = await asyncio.gather(
+        crawling.tick(pool, Idle()), crawling.tick(pool, Idle()),
+    )
+    locked_out = [r for r in (first, second) if r.get("skipped_lock")]
+    assert len(locked_out) == 1, (
+        "exactly one pass runs; the other must decline rather than duplicate it"
+    )
