@@ -1202,47 +1202,401 @@ const PRESETS: Record<string,
   },
 };
 
+type Cond = { field: string; op: string; values: string };
+
+const OPS: [string, string][] = [
+  ["in", "is one of"], ["not_in", "is not one of"], ["eq", "equals"],
+  ["ne", "does not equal"], ["contains", "contains"], ["gt", "is greater than"],
+  ["lt", "is less than"], ["exists", "is present"], ["absent", "is absent"],
+];
+
+/** The stored shape back into rows, so editing shows what was actually saved. */
+function condsFrom(where: Record<string, unknown>): Cond[] {
+  const rows = Object.entries(where ?? {}).map(([field, c]) => {
+    if (c && typeof c === "object" && !Array.isArray(c)) {
+      const o = c as { op?: string; value?: unknown };
+      if (o.op === "exists") {
+        return { field, op: o.value ? "exists" : "absent", values: "" };
+      }
+      return { field, op: o.op ?? "in",
+               values: (Array.isArray(o.value) ? o.value : [o.value]).join(", ") };
+    }
+    return { field, op: "in", values: (c as unknown[]).join(", ") };
+  });
+  return rows.length ? rows : [{ field: "", op: "in", values: "" }];
+}
+
 /**
- * Alerts — declare what is worth knowing about, then watch it fire.
+ * One form for creating and for editing, because they are the same decision.
  *
- * Its own group rather than under Data or Governance. The split those two
- * preserve is *how is my data arranged* against *who touched it and can I
- * prove it*, and an alert straddles them: watching a fact change is the first
- * question, watching an access level change is the second.
+ * A separate create form drifts from the edit form, and then the two disagree
+ * about what an alert can even be — which is how a screen ends up unable to
+ * express something the API has always accepted.
+ */
+function AlertEditor({
+  alert, surfaces, busy, runs, events, backtest, detailTab, onTab,
+  onBack, onSave, onBacktest, onToggle, onDelete,
+}: {
+  alert: Alert | null;
+  surfaces: Record<string, string[]>;
+  busy: boolean;
+  runs: AlertRun[];
+  events: ObservedEvent[];
+  backtest?: Backtest;
+  detailTab: "definition" | "firings";
+  onTab: (t: "definition" | "firings") => void;
+  onBack: () => void;
+  onSave: (body: Record<string, unknown>) => void;
+  onBacktest: () => void;
+  onToggle: () => void;
+  onDelete: () => void;
+}) {
+  const [name, setName] = useState(alert?.name ?? "");
+  const [surface, setSurface] = useState(alert?.surface ?? "fact.superseded");
+  const [mode, setMode] = useState<"rule" | "llm">(alert?.mode ?? "rule");
+  const [describe, setDescribe] = useState(alert?.describe ?? "");
+  const [conds, setConds] = useState<Cond[]>(
+    alert ? condsFrom(alert.where) : [{ field: "predicate", op: "in", values: "located_in" }]);
+  const [debounce, setDebounce] = useState(alert?.debounce_seconds ?? 5);
+  const [cap, setCap] = useState(alert?.batch_cap ?? 500);
+  const [advanced, setAdvanced] = useState(false);
+
+  const fields = surfaces[surface] ?? [];
+  const approved = alert ? isApproved(alert) : false;
+
+  const body = () => {
+    const where: Record<string, unknown> = {};
+    for (const c of conds) {
+      if (!c.field) continue;
+      const values = c.values.split(",").map((v) => v.trim()).filter(Boolean);
+      if (c.op === "exists") where[c.field] = { op: "exists", value: true };
+      else if (c.op === "absent") where[c.field] = { op: "exists", value: false };
+      else if (values.length) where[c.field] = { op: c.op, value: values };
+    }
+    return {
+      name: name || `${surface} watcher`, surface, mode, where,
+      describe: mode === "llm" ? describe : null,
+      debounce_seconds: debounce, batch_cap: cap,
+    };
+  };
+
+  return (
+    <div className="stack">
+      <button className="backlink" onClick={onBack}>← All alerts</button>
+
+      {alert && (
+        <>
+          <div className="toolbar">
+            <h2 className="grow" style={{ margin: 0 }}>
+              <span className={`dot ${alertState(alert)}`} />{" "}{alert.name}
+            </h2>
+            <button disabled={busy} onClick={onBacktest}>Replay against history</button>
+            <button disabled={busy || (!alert.enabled && !approved)}
+                    title={!approved
+                      ? "Replay it against history first — an alert that has never been run is a guess"
+                      : undefined}
+                    onClick={onToggle}>
+              {alert.enabled ? "Stop" : "Start"}
+            </button>
+            <button disabled={busy} onClick={onDelete}>Delete</button>
+          </div>
+          {!approved && (
+            <p className="warn">
+              Edited since it was last replayed, so it is stopped and cannot start
+              until you replay it again. That gate is the only thing between a
+              changed definition and a page at three in the morning.
+            </p>
+          )}
+          <div className="tabs">
+            <button className={`tab ${detailTab === "definition" ? "on" : ""}`}
+                    onClick={() => onTab("definition")}>Definition</button>
+            <button className={`tab ${detailTab === "firings" ? "on" : ""}`}
+                    onClick={() => onTab("firings")}>
+              Firing history <span className="count">{events.length}</span>
+            </button>
+          </div>
+        </>
+      )}
+
+      {(!alert || detailTab === "definition") && (
+        <div className="card">
+          <h2>{alert ? "Definition" : "New alert"}</h2>
+          {!alert && (
+            <p className="hint">
+              It watches from now on, not backwards — one that fired a hundred
+              times about last month the moment you saved it is one you would turn
+              straight back off. Replay it against history to look back instead.
+            </p>
+          )}
+
+          <label>Name
+            <input value={name} placeholder="a person relocates"
+                   onChange={(e) => setName(e.target.value)} />
+          </label>
+
+          <label>When
+            <select value={surface} onChange={(e) => {
+              setSurface(e.target.value);
+              setConds([{ field: (surfaces[e.target.value] ?? [])[0] ?? "",
+                          op: "in", values: "" }]);
+            }}>
+              {Object.keys(surfaces).map((k) => <option key={k} value={k}>{k}</option>)}
+            </select>
+          </label>
+
+          <h3>and all of these hold</h3>
+          <p className="hint">
+            A field, or a dotted path into the event — <code>detail.score</code>
+            {" "}reaches a value this console has never seen, so a new kind of
+            event needs no change here.
+          </p>
+          {conds.map((c, i) => (
+            <div key={i} className="row">
+              <input value={c.field} list="alert-fields" placeholder="field or a.dotted.path"
+                     onChange={(e) => {
+                       const n = [...conds]; n[i] = { ...c, field: e.target.value }; setConds(n);
+                     }} />
+              <select value={c.op} onChange={(e) => {
+                const n = [...conds]; n[i] = { ...c, op: e.target.value }; setConds(n);
+              }}>
+                {OPS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              </select>
+              {c.op !== "exists" && c.op !== "absent" && (
+                <input value={c.values} placeholder="one or more, comma separated"
+                       onChange={(e) => {
+                         const n = [...conds]; n[i] = { ...c, values: e.target.value };
+                         setConds(n);
+                       }} />
+              )}
+              <button disabled={conds.length === 1}
+                      title={conds.length === 1 ? "At least one condition is required" : undefined}
+                      onClick={() => setConds(conds.filter((_, j) => j !== i))}>
+                Remove
+              </button>
+            </div>
+          ))}
+          <datalist id="alert-fields">
+            {fields.map((f) => <option key={f} value={f} />)}
+          </datalist>
+          <button onClick={() => setConds([...conds, { field: "", op: "in", values: "" }])}>
+            Add condition
+          </button>
+
+          <h3>How it decides</h3>
+          <div className="row">
+            <label><input type="radio" checked={mode === "rule"}
+                          onChange={() => setMode("rule")} /> Rules only — no model, no cost</label>
+            <label><input type="radio" checked={mode === "llm"}
+                          onChange={() => setMode("llm")} /> Rules, then judge the rest in words</label>
+          </div>
+          {mode === "llm" && (
+            <>
+              <label>Only alert me when
+                <textarea rows={3} value={describe}
+                          placeholder="a customer signals they may leave"
+                          onChange={(e) => setDescribe(e.target.value)} />
+              </label>
+              <p className="hint">
+                The conditions above still run first and decide what the model is
+                shown, which is why they stay required. Everything that survives is
+                judged in <strong>one call per run</strong>, not one per event. If
+                no model is available the run defers rather than guessing.
+              </p>
+            </>
+          )}
+
+          <p>
+            <button className="backlink" onClick={() => setAdvanced(!advanced)}>
+              {advanced ? "Hide" : "Show"} timing and limits
+            </button>
+          </p>
+          {advanced && (
+            <div className="stack">
+              <label>Wait before evaluating (seconds)
+                <input type="number" min={1} value={debounce}
+                       onChange={(e) => setDebounce(Number(e.target.value))} />
+              </label>
+              <p className="hint">
+                A burst of a thousand writes becomes one evaluation rather than a
+                thousand.
+              </p>
+              <label>Most events looked at per run
+                <input type="number" min={1} value={cap}
+                       onChange={(e) => setCap(Number(e.target.value))} />
+              </label>
+              <p className="hint">
+                Anything over this is carried to the next run and reported as left
+                over — never dropped quietly.
+              </p>
+            </div>
+          )}
+
+          <button disabled={busy} onClick={() => onSave(body())}>
+            {alert ? "Save changes" : "Create alert"}
+          </button>
+        </div>
+      )}
+
+      {backtest && (!alert || detailTab === "definition") && (
+        <div className="card">
+          <h2>Replay — nothing was recorded and nothing was sent</h2>
+          <p>
+            <strong>{backtest.matches}</strong> of {backtest.candidates} past
+            {" "}<code>{surface}</code> event
+            {backtest.candidates === 1 ? "" : "s"} would have fired this.
+            {backtest.deferred > 0 && ` ${backtest.deferred} more were not examined.`}
+          </p>
+          {backtest.matches === 0 ? (
+            <p className="hint">
+              Nothing matched — either it has not happened yet, or the conditions
+              are narrower than you meant.
+            </p>
+          ) : (
+            <table className="kv">
+              <thead><tr><th>When</th><th>What would have fired</th></tr></thead>
+              <tbody>
+                {backtest.samples.map((sm) => (
+                  <tr key={sm.sequence}>
+                    <td>{new Date(sm.occurred_at).toLocaleString()}</td>
+                    <td>{describeEvent(surface, sm.payload)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {backtest.matches > backtest.sampled && (
+            <p className="hint">Showing the first {backtest.sampled}.</p>
+          )}
+        </div>
+      )}
+
+      {alert && detailTab === "firings" && (
+        <>
+          <div className="card">
+            <h2>What it caught</h2>
+            {events.length === 0 ? (
+              <p className="hint">
+                Nothing yet. {alert.enabled
+                  ? "It is running — it reports only what happens from now on."
+                  : "It is stopped, so nothing is being watched."}
+              </p>
+            ) : (
+              <table className="kv">
+                <thead><tr><th>When</th><th>What happened</th><th>Told</th></tr></thead>
+                <tbody>
+                  {events.slice().reverse().map((e) => (
+                    <tr key={e.event_id}>
+                      <td>{new Date(e.occurred_at).toLocaleString()}</td>
+                      <td>{describeEvent(e.surface, e.payload)}</td>
+                      <td>
+                        {e.deliveries === 0 ? <span className="hint">no endpoint</span>
+                         : e.undeliverable > 0 ? <span className="warn">undeliverable</span>
+                         : e.delivered > 0 ? <span className="ok">sent</span> : "queued"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+          <div className="card">
+            <h2>Every time it ran</h2>
+            <p className="hint">
+              A run that looked at nothing is normal — the sweep wakes every
+              minute whether or not anything happened.
+            </p>
+            {runs.length === 0 ? <p className="hint">It has not run yet.</p> : (
+              <table className="kv">
+                <thead>
+                  <tr><th>When</th><th>Ran because</th><th>Looked at</th><th>Fired</th>
+                      <th>Left over</th><th>Cost</th></tr>
+                </thead>
+                <tbody>
+                  {runs.map((r) => (
+                    <tr key={r.run_id}>
+                      <td>{new Date(r.started_at).toLocaleString()}</td>
+                      <td>{r.trigger === "tick" ? "the sweep"
+                         : r.trigger === "consumer" ? "something happened" : "a replay"}</td>
+                      <td>{r.candidates}</td>
+                      <td>{r.matches > 0 ? <strong>{r.matches}</strong> : "0"}</td>
+                      <td>{r.deferred > 0
+                        ? <span className="warn">{r.deferred}</span> : "—"}</td>
+                      <td>{r.model_calls > 0
+                        ? `${r.model_calls} model call${r.model_calls === 1 ? "" : "s"}`
+                        : "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+
+/** Which state an alert is in, and it is the first thing the screen shows. */
+function alertState(a: Alert): "firing" | "running" | "blocked" | "idle" {
+  if (!isApproved(a)) return "blocked";
+  if (!a.enabled) return "idle";
+  return (a.matches_24h ?? 0) > 0 ? "firing" : "running";
+}
+
+const STATE_LABEL: Record<string, string> = {
+  firing: "firing", running: "quiet", blocked: "needs a backtest", idle: "stopped",
+};
+
+/** Recent runs as shape: height is how much fired, colour is whether any did. */
+function RunStrip({ runs }: { runs: AlertRun[] }) {
+  const recent = runs.slice(0, 20).reverse();
+  if (recent.length === 0) return <span className="strip empty">not run yet</span>;
+  const peak = Math.max(1, ...recent.map((r) => r.matches));
+  return (
+    <span className="strip">
+      {recent.map((r) => (
+        <i key={r.run_id}
+           className={r.matches > 0 ? "hit" : undefined}
+           style={{ height: `${Math.max(3, (r.matches / peak) * 22)}px` }}
+           title={`${new Date(r.started_at).toLocaleString()} — looked at ${
+             r.candidates}, fired ${r.matches}${
+             r.deferred ? `, ${r.deferred} left over` : ""}`} />
+      ))}
+    </span>
+  );
+}
+
+/**
+ * Alerts — a monitoring surface, not a form.
  *
- * The screen is built around the three moments that actually matter, in order:
- * say what you want, **see what it would have caught**, then watch it catch it.
- * The middle one is the part a count cannot do — "fourteen" is not calibration,
- * and a selector that matches everything looks identical to one that works
- * until you read what it matched.
+ * State first: counts by state double as filters, every row leads with a dot,
+ * and each carries a strip of its recent runs so *is this working* is answered
+ * by shape before anyone reads a number. That distinction matters more here than
+ * on most screens, because an alert that has stopped and an alert with nothing
+ * to say produce identical silence.
+ *
+ * Three tabs, along the seam of what you are actually doing: managing the
+ * definitions, reading what they caught, and wiring up where it gets sent.
  */
 function AlertsSection({ projectId }: { projectId: string }) {
+  const [tab, setTab] = useState<"alerts" | "activity" | "endpoints">("alerts");
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [surfaces, setSurfaces] = useState<Record<string, string[]>>({});
   const [events, setEvents] = useState<ObservedEvent[]>([]);
   const [subs, setSubs] = useState<Subscription[]>([]);
+  const [runsByAlert, setRunsByAlert] = useState<Record<string, AlertRun[]>>({});
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [secret, setSecret] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  // Per-alert, because these are what you open when one alert is misbehaving.
-  const [openAlert, setOpenAlert] = useState<string | null>(null);
-  const [runs, setRuns] = useState<AlertRun[]>([]);
-  const [backtest, setBacktest] = useState<Record<string, Backtest>>({});
-
-  const [name, setName] = useState("");
-  const [surface, setSurface] = useState("fact.superseded");
-  // Several conditions, not one. A single row cannot express "any *person's*
-  // location changing", which is the first thing anyone wants to say.
-  const [conds, setConds] = useState<{ field: string; op: string; values: string }[]>([
-    { field: "predicate", op: "in", values: "located_in" },
-  ]);
-  const [mode, setMode] = useState<"rule" | "llm">("rule");
-  const [describe, setDescribe] = useState("");
-  const [advanced, setAdvanced] = useState(false);
-  const [debounce, setDebounce] = useState(5);
-  const [cap, setCap] = useState(500);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [detailTab, setDetailTab] = useState<"definition" | "firings">("definition");
+  const [composing, setComposing] = useState(false);
+  const [filter, setFilter] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [backtests, setBacktests] = useState<Record<string, Backtest>>({});
   const [subUrl, setSubUrl] = useState("https://");
 
   const load = useCallback(async () => {
@@ -1250,7 +1604,7 @@ function AlertsSection({ projectId }: { projectId: string }) {
       const [list, vocab, feed, subscriptions] = await Promise.all([
         call<{ alerts: Alert[] }>(`api/v1/projects/${projectId}/alerts`),
         call<{ surfaces: Record<string, string[]> }>("api/v1/alerts/surfaces"),
-        call<{ events: ObservedEvent[] }>("api/v1/alert-events?since=0&limit=100"),
+        call<{ events: ObservedEvent[] }>("api/v1/alert-events?since=0&limit=200"),
         call<{ subscriptions: Subscription[] }>(
           `api/v1/projects/${projectId}/event-subscriptions`),
       ]);
@@ -1258,6 +1612,13 @@ function AlertsSection({ projectId }: { projectId: string }) {
       setSurfaces(vocab.surfaces);
       setEvents(feed.events.slice().reverse());
       setSubs(subscriptions.subscriptions);
+      // Strips need history for every row, so this is part of the list, not a
+      // detail nobody opens.
+      const runs = await Promise.all(list.alerts.map((a) =>
+        call<{ runs: AlertRun[] }>(`api/v1/alerts/${a.alert_id}/runs?limit=20`)
+          .then((r) => [a.alert_id, r.runs] as const)
+          .catch(() => [a.alert_id, [] as AlertRun[]] as const)));
+      setRunsByAlert(Object.fromEntries(runs));
     } catch (e) {
       setError((e as Error).message);
     }
@@ -1278,411 +1639,259 @@ function AlertsSection({ projectId }: { projectId: string }) {
     }
   };
 
-  const fields = surfaces[surface] ?? [];
-  const unusedFields = fields.filter((f) => !conds.some((c) => c.field === f));
-
-  const where = () => {
-    const out: Record<string, unknown> = {};
-    for (const c of conds) {
-      const values = c.values.split(",").map((v) => v.trim()).filter(Boolean);
-      if (!c.field) continue;
-      if (c.op === "exists") out[c.field] = { op: "exists", value: true };
-      else if (c.op === "absent") out[c.field] = { op: "exists", value: false };
-      else if (values.length) out[c.field] = { op: c.op, value: values };
-    }
-    return out;
+  const counts = {
+    firing: alerts.filter((a) => alertState(a) === "firing").length,
+    running: alerts.filter((a) => alertState(a) === "running").length,
+    blocked: alerts.filter((a) => alertState(a) === "blocked").length,
+    idle: alerts.filter((a) => alertState(a) === "idle").length,
   };
 
-  const create = () =>
-    act(() => call("api/v1/alerts", {
-      project_id: projectId,
-      name: name || `${surface} watcher`,
-      surface,
-      mode,
-      describe: mode === "llm" ? describe : undefined,
-      where: where(),
-      debounce_seconds: debounce,
-      batch_cap: cap,
-    }), "Created. Backtest it to see what it would have caught.");
+  const visible = alerts
+    .filter((a) => !filter || alertState(a) === filter)
+    .filter((a) => !query || a.name.toLowerCase().includes(query.toLowerCase())
+                          || a.surface.includes(query));
 
-  const runBacktest = (id: string) =>
-    act(async () => {
-      const result = await call<Backtest>(`api/v1/alerts/${id}/backtest`, {});
-      setBacktest((prev) => ({ ...prev, [id]: result }));
-      setOpenAlert(id);
-    });
-
-  const openRuns = (id: string) =>
-    act(async () => {
-      const page = await call<{ runs: AlertRun[] }>(`api/v1/alerts/${id}/runs`);
-      setRuns(page.runs);
-      setOpenAlert(id);
-    });
-
+  const current = alerts.find((a) => a.alert_id === selected) ?? null;
   const eventsFor = (id: string) => events.filter((e) => e.alert_id === id);
 
   return (
     <section className="stack">
       <h1>Alerts</h1>
-      <p className="hint">
-        Say what is worth knowing about. Matches are recorded once and read two
-        ways — the feed below, or pushed to an endpoint you register.
-      </p>
+
+      <div className="tabs">
+        <button className={`tab ${tab === "alerts" ? "on" : ""}`}
+                onClick={() => { setTab("alerts"); setSelected(null); }}>
+          Alerts <span className="count">{alerts.length}</span>
+        </button>
+        <button className={`tab ${tab === "activity" ? "on" : ""}`}
+                onClick={() => setTab("activity")}>
+          Activity <span className="count">{events.length}</span>
+        </button>
+        <button className={`tab ${tab === "endpoints" ? "on" : ""}`}
+                onClick={() => setTab("endpoints")}>
+          Endpoints <span className="count">{subs.length}</span>
+        </button>
+      </div>
+
       {error && <p className="error">{error}</p>}
       {note && <p className="note">{note}</p>}
 
-      {/* ---------- 1. say what you want ---------- */}
-      <div className="card">
-        <h2>New alert</h2>
-        <p className="hint">
-          It watches from now on, not backwards — one that fired a hundred times
-          about last month the moment you saved it is one you would turn
-          straight back off. Use the backtest to see history instead.
-        </p>
+      {/* ------------------------------- ALERTS ------------------------------ */}
+      {tab === "alerts" && !current && !composing && (
+        <>
+          <div className="statgrid">
+            {(["firing", "running", "blocked", "idle"] as const).map((k) => (
+              <button key={k}
+                      className={`stattile ${k} ${filter === k ? "on" : ""}`}
+                      onClick={() => setFilter(filter === k ? null : k)}>
+                <span className="n">{counts[k]}</span>
+                <span className="k">
+                  {k === "firing" ? "firing (24h)"
+                   : k === "running" ? "running, quiet"
+                   : k === "blocked" ? "needs a backtest" : "stopped"}
+                </span>
+              </button>
+            ))}
+          </div>
 
-        <label>Name
-          <input value={name} placeholder="a person relocates"
-                 onChange={(e) => setName(e.target.value)} />
-        </label>
-
-        <label>When
-          <select value={surface} onChange={(e) => {
-            setSurface(e.target.value);
-            const first = (surfaces[e.target.value] ?? [])[0] ?? "";
-            setConds([{ field: first, op: "in", values: "" }]);
-          }}>
-            {Object.keys(surfaces).map((s) => <option key={s} value={s}>{s}</option>)}
-          </select>
-        </label>
-
-        <h3>and all of these hold</h3>
-        <p className="hint">
-          A field name, or a dotted path into the event —{" "}
-          <code>detail.score</code> reaches a value this console has never seen,
-          so a new kind of event needs no change here.
-        </p>
-        {conds.map((c, i) => (
-          <div key={i} className="row">
-            <input value={c.field} list="alert-fields" placeholder="field or a.dotted.path"
-                   onChange={(e) => {
-                     const next = [...conds]; next[i] = { ...c, field: e.target.value };
-                     setConds(next);
-                   }} />
-            <select value={c.op} onChange={(e) => {
-              const next = [...conds]; next[i] = { ...c, op: e.target.value };
-              setConds(next);
-            }}>
-              <option value="in">is one of</option>
-              <option value="not_in">is not one of</option>
-              <option value="eq">equals</option>
-              <option value="ne">does not equal</option>
-              <option value="contains">contains</option>
-              <option value="gt">is greater than</option>
-              <option value="lt">is less than</option>
-              <option value="exists">is present</option>
-              <option value="absent">is absent</option>
-            </select>
-            {c.op !== "exists" && c.op !== "absent" && (
-              <input value={c.values} placeholder="one or more, comma separated"
-                     onChange={(e) => {
-                       const next = [...conds]; next[i] = { ...c, values: e.target.value };
-                       setConds(next);
-                     }} />
-            )}
-            <button disabled={conds.length === 1}
-                    onClick={() => setConds(conds.filter((_, j) => j !== i))}>
-              Remove
+          <div className="toolbar">
+            <input className="grow" value={query} placeholder="Filter by name or event kind"
+                   onChange={(e) => setQuery(e.target.value)} />
+            <button onClick={() => { setComposing(true); setSelected(null); }}>
+              New alert
             </button>
           </div>
-        ))}
-        <datalist id="alert-fields">
-          {fields.map((f) => <option key={f} value={f} />)}
-        </datalist>
-        <button onClick={() => setConds([
-          ...conds, { field: unusedFields[0] ?? "", op: "in", values: "" }])}>
-          Add condition
-        </button>
 
-        <h3>How it decides</h3>
-        <div className="row">
-          <label>
-            <input type="radio" checked={mode === "rule"}
-                   onChange={() => setMode("rule")} />
-            {" "}Rules only — no model, no cost
-          </label>
-          <label>
-            <input type="radio" checked={mode === "llm"}
-                   onChange={() => setMode("llm")} />
-            {" "}Rules, then judge the rest in words
-          </label>
-        </div>
-        {mode === "llm" && (
-          <>
-            <label>Only alert me when
-              <textarea rows={3} value={describe}
-                        placeholder="a customer signals they may leave"
-                        onChange={(e) => setDescribe(e.target.value)} />
-            </label>
-            <p className="hint">
-              The conditions above still run first and decide what the model is
-              shown — which is why they are required in this mode. Everything
-              that survives them is judged in <strong>one call per run</strong>,
-              not one per event. If no model is available the run defers rather
-              than guessing, and the sweep tries again.
-            </p>
-          </>
-        )}
-
-        <p>
-          <button onClick={() => setAdvanced(!advanced)}>
-            {advanced ? "Hide" : "Show"} advanced
-          </button>
-        </p>
-        {advanced && (
-          <div className="stack">
-            <label>Coalesce for (seconds)
-              <input type="number" min={1} value={debounce}
-                     onChange={(e) => setDebounce(Number(e.target.value))} />
-            </label>
-            <p className="hint">
-              How long it waits after something happens before evaluating, so a
-              burst of a thousand writes is one evaluation rather than a thousand.
-            </p>
-            <label>Most transitions per run
-              <input type="number" min={1} value={cap}
-                     onChange={(e) => setCap(Number(e.target.value))} />
-            </label>
-            <p className="hint">
-              Anything over this is carried to the next run and reported as
-              deferred, never dropped quietly.
-            </p>
-          </div>
-        )}
-        <button disabled={busy} onClick={() => void create()}>Create alert</button>
-      </div>
-
-      {/* ---------- 2. the alerts, and what each is doing ---------- */}
-      <div className="card">
-        <h2>{alerts.length} alert{alerts.length === 1 ? "" : "s"}</h2>
-        {alerts.length === 0 && (
-          <p className="hint">None yet. Create one above.</p>
-        )}
-        {alerts.map((a) => {
-          const approved = isApproved(a);
-          const bt = backtest[a.alert_id];
-          const fired = eventsFor(a.alert_id);
-          const open = openAlert === a.alert_id;
-          return (
-            <div key={a.alert_id} className="card">
-              <h3>{a.name}</h3>
-              <p>
-                <code>{a.surface}</code>
-                {a.mode === "llm" && <> · <span className="ok">judged in words</span></>}
-                {Object.entries(a.where).map(([f, vs]) => (
-                  <span key={f}> · <code>{f} ∈ {vs.join(", ")}</code></span>
-                ))}
+          {alerts.length === 0 ? (
+            <div className="card">
+              <h2>Nothing is being watched yet</h2>
+              <p className="hint">
+                An alert says what is worth knowing about — a person relocating, a
+                record becoming org-visible, a guess being confirmed. Create one,
+                replay it against history to see what it would have caught, then
+                start it.
               </p>
-              <p>
-                {a.enabled
-                  ? <span className="ok">running</span>
-                  : approved
-                    ? <span>ready, not running</span>
-                    : <span className="warn">edited since its last backtest</span>}
-                {" · "}{a.matches_24h ?? 0} in 24h
-                {typeof a.behind === "number" && a.behind > 0 && (
-                  /* Climbing rather than settling means the sweep has stopped,
-                     which otherwise looks exactly like "nothing happened". */
-                  <> · <span className="warn">{a.behind} transitions not yet seen</span></>
-                )}
-              </p>
-
-              <p>
-                <button disabled={busy} onClick={() => void runBacktest(a.alert_id)}>
-                  Backtest
-                </button>
-                <button disabled={busy || (!a.enabled && !approved)}
-                        title={!approved ? "Backtest this version first" : undefined}
-                        onClick={() => void act(() => call(
-                          `api/v1/alerts/${a.alert_id}/enabled`,
-                          { enabled: !a.enabled }))}>
-                  {a.enabled ? "Stop" : "Start"}
-                </button>
-                <button disabled={busy} onClick={() => void openRuns(a.alert_id)}>
-                  Firing history
-                </button>
-                <button disabled={busy} onClick={() => void act(
-                  () => call(`api/v1/alerts/${a.alert_id}`, undefined, "DELETE"))}>
-                  Delete
-                </button>
-              </p>
-
-              {bt && (
-                <div className="card">
-                  <h3>Backtest — nothing was recorded and nothing was sent</h3>
-                  <p>
-                    <strong>{bt.matches}</strong> of {bt.candidates} past{" "}
-                    <code>{a.surface}</code> transition
-                    {bt.candidates === 1 ? "" : "s"} would have fired this alert.
-                    {bt.deferred > 0 && ` ${bt.deferred} more were not examined.`}
-                  </p>
-                  {bt.matches === 0 && (
-                    <p className="hint">
-                      Nothing matched. Either it has not happened yet, or the
-                      conditions are narrower than you meant.
-                    </p>
-                  )}
-                  {bt.samples.length > 0 && (
-                    <table className="kv">
-                      <thead><tr><th>When</th><th>What would have fired</th></tr></thead>
-                      <tbody>
-                        {bt.samples.map((sm) => (
-                          <tr key={sm.sequence}>
-                            <td>{new Date(sm.occurred_at).toLocaleString()}</td>
-                            <td>{describeEvent(a.surface, sm.payload)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  )}
-                  {bt.matches > bt.sampled && (
-                    <p className="hint">Showing the first {bt.sampled}.</p>
-                  )}
-                </div>
-              )}
-
-              {open && runs.length > 0 && (
-                <div className="card">
-                  <h3>Firing history</h3>
-                  <table className="kv">
-                    <thead>
-                      <tr><th>When</th><th>Ran because</th><th>Looked at</th>
-                          <th>Fired</th><th>Left over</th><th>Cost</th></tr>
-                    </thead>
-                    <tbody>
-                      {runs.map((r) => (
-                        <tr key={r.run_id}>
-                          <td>{new Date(r.started_at).toLocaleString()}</td>
-                          <td>{r.trigger === "tick" ? "the sweep"
-                             : r.trigger === "consumer" ? "something happened"
-                             : "backtest"}</td>
-                          <td>{r.candidates}</td>
-                          <td>{r.matches > 0 ? <strong>{r.matches}</strong> : "0"}</td>
-                          <td>{r.deferred > 0
-                            ? <span className="warn">{r.deferred}</span> : "—"}</td>
-                          <td>{r.model_calls > 0 ? `${r.model_calls} model call${
-                            r.model_calls === 1 ? "" : "s"}` : "—"}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-
-              {fired.length > 0 && (
-                <div className="card">
-                  <h3>{fired.length} found</h3>
-                  <table className="kv">
-                    <thead><tr><th>When</th><th>What happened</th><th>Told</th></tr></thead>
-                    <tbody>
-                      {fired.slice(-10).reverse().map((e) => (
-                        <tr key={e.event_id}>
-                          <td>{new Date(e.occurred_at).toLocaleString()}</td>
-                          <td>{describeEvent(e.surface, e.payload)}</td>
-                          <td>
-                            {e.deliveries === 0 ? <span className="hint">no endpoint</span>
-                             : e.undeliverable > 0 ? <span className="warn">undeliverable</span>
-                             : e.delivered > 0 ? <span className="ok">sent</span>
-                             : "queued"}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
+              <button onClick={() => setComposing(true)}>Create the first one</button>
             </div>
-          );
-        })}
-      </div>
-
-      {/* ---------- 3. everything that has fired, across alerts ---------- */}
-      <div className="card">
-        <h2>Everything that fired</h2>
-        {events.length === 0
-          ? <p className="hint">
-              Nothing yet. Alerts only report what happens after they were
-              created — backtest one to see what it would have caught before.
+          ) : visible.length === 0 ? (
+            <p className="hint">
+              No alert matches that filter. {filter && (
+                <button className="backlink" onClick={() => setFilter(null)}>
+                  Show all {alerts.length}
+                </button>
+              )}
             </p>
-          : (
+          ) : (
+            <div className="card">
+              <div className="alerthead">
+                <span />
+                <span>Alert</span>
+                <span className="hide-narrow">Recent runs</span>
+                <span className="hide-narrow num">24h</span>
+                <span className="hide-narrow num">Unseen</span>
+                <span className="num">State</span>
+              </div>
+              {visible.map((a) => {
+                const st = alertState(a);
+                return (
+                  <button key={a.alert_id} className="alertrow"
+                          onClick={() => { setSelected(a.alert_id); setDetailTab("definition"); }}>
+                    <span className={`dot ${st}`} />
+                    <span>
+                      <span className="nm">{a.name}</span><br />
+                      <span className="sub">
+                        {a.surface}
+                        {a.mode === "llm" ? " · judged in words" : ""}
+                      </span>
+                    </span>
+                    <span className="hide-narrow">
+                      <RunStrip runs={runsByAlert[a.alert_id] ?? []} />
+                    </span>
+                    <span className="hide-narrow num">{a.matches_24h ?? 0}</span>
+                    <span className="hide-narrow num"
+                          title="transitions this alert has not looked at yet">
+                      {a.behind ? <span className="warn">{a.behind}</span> : "0"}
+                    </span>
+                    <span className="num sub">{STATE_LABEL[st]}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </>
+      )}
+
+      {/* ------------------------- CREATE / EDIT ----------------------------- */}
+      {tab === "alerts" && (composing || current) && (
+        <AlertEditor
+          key={current?.alert_id ?? "new"}
+          alert={current}
+          surfaces={surfaces}
+          busy={busy}
+          runs={current ? runsByAlert[current.alert_id] ?? [] : []}
+          events={current ? eventsFor(current.alert_id) : []}
+          backtest={current ? backtests[current.alert_id] : undefined}
+          detailTab={detailTab}
+          onTab={setDetailTab}
+          onBack={() => { setComposing(false); setSelected(null); }}
+          onSave={(body) => act(async () => {
+            if (current) await call(`api/v1/alerts/${current.alert_id}`, body, "PATCH");
+            else await call("api/v1/alerts", { project_id: projectId, ...body });
+            setComposing(false);
+          }, current
+            ? "Saved. Changing what it matches drops its approval, so backtest it again."
+            : "Created. Replay it against history before starting it.")}
+          onBacktest={() => act(async () => {
+            const r = await call<Backtest>(
+              `api/v1/alerts/${current!.alert_id}/backtest`, {});
+            setBacktests((prev) => ({ ...prev, [current!.alert_id]: r }));
+          })}
+          onToggle={() => act(() => call(
+            `api/v1/alerts/${current!.alert_id}/enabled`, { enabled: !current!.enabled }))}
+          onDelete={() => act(async () => {
+            await call(`api/v1/alerts/${current!.alert_id}`, undefined, "DELETE");
+            setSelected(null);
+          }, "Deleted.")}
+        />
+      )}
+
+      {/* ------------------------------ ACTIVITY ----------------------------- */}
+      {tab === "activity" && (
+        <div className="card">
+          <h2>{events.length} event{events.length === 1 ? "" : "s"}</h2>
+          {events.length === 0 ? (
+            <p className="hint">
+              Nothing has fired. Alerts only report what happens after they were
+              created — replay one against history to see what came before.
+            </p>
+          ) : (
             <table className="kv">
               <thead>
-                <tr><th>When</th><th>Alert</th><th>Event</th><th>What happened</th></tr>
+                <tr><th>When</th><th>Alert</th><th>What happened</th><th>Told</th></tr>
               </thead>
               <tbody>
-                {events.slice(0, 50).map((e) => (
+                {events.map((e) => (
                   <tr key={e.event_id}>
                     <td>{new Date(e.occurred_at).toLocaleString()}</td>
                     <td>{e.alert_name}</td>
-                    <td><code>{e.surface}</code></td>
-                    <td>{describeEvent(e.surface, e.payload)}</td>
+                    <td>
+                      {describeEvent(e.surface, e.payload)}<br />
+                      <span className="sub"><code>{e.surface}</code></span>
+                    </td>
+                    <td>
+                      {e.deliveries === 0 ? <span className="hint">no endpoint</span>
+                       : e.undeliverable > 0 ? <span className="warn">undeliverable</span>
+                       : e.delivered > 0 ? <span className="ok">sent</span> : "queued"}
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           )}
-      </div>
+        </div>
+      )}
 
-      {/* ---------- 4. push ---------- */}
-      <div className="card">
-        <h2>Push to an endpoint</h2>
-        <p className="hint">
-          HTTPS only, re-checked on every send. Signed the same way memdog asks
-          providers to sign theirs. Retried, then held as undeliverable rather
-          than dropped — and replayable once the endpoint is fixed.
-        </p>
-        <label>URL
-          <input value={subUrl} onChange={(e) => setSubUrl(e.target.value)} />
-        </label>
-        <button disabled={busy} onClick={() => void act(async () => {
-          const created = await call<{ signing_secret: string }>(
-            "api/v1/event-subscriptions", { project_id: projectId, url: subUrl });
-          setSecret(created.signing_secret);
-        })}>Register</button>
-        {secret && (
-          <p className="warn">
-            Signing secret — <strong>copy it now; it cannot be shown again</strong>:{" "}
-            <code>{secret}</code>
+      {/* ----------------------------- ENDPOINTS ----------------------------- */}
+      {tab === "endpoints" && (
+        <div className="card">
+          <h2>Where events get sent</h2>
+          <p className="hint">
+            HTTPS only, and the address is re-checked on every send. Signed the
+            same way memdog asks providers to sign theirs. Retried, then held as
+            undeliverable rather than dropped — and replayable once fixed.
           </p>
-        )}
-        {subs.length > 0 && (
-          <table className="kv">
-            <thead><tr><th>URL</th><th>Queued</th><th>Undeliverable</th><th /></tr></thead>
-            <tbody>
-              {subs.map((s) => (
-                <tr key={s.subscription_id}>
-                  <td><code>{s.url}</code></td>
-                  <td>{s.pending}</td>
-                  <td>{s.dead > 0 ? <span className="warn">{s.dead}</span> : "0"}</td>
-                  <td>
-                    <button disabled={busy} onClick={() => void act(async () => {
-                      const r = await call<{ signing_secret: string }>(
-                        `api/v1/event-subscriptions/${s.subscription_id}/rotate`, {});
-                      setSecret(r.signing_secret);
-                    }, "Rotated. The previous secret still verifies briefly.")}>
-                      Rotate
-                    </button>
-                    <button disabled={busy || s.dead === 0} onClick={() => void act(
-                      () => call(`api/v1/event-subscriptions/${s.subscription_id}/replay`, {}),
-                      "Re-armed.")}>
-                      Retry {s.dead > 0 ? `(${s.dead})` : ""}
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+          <div className="toolbar">
+            <input className="grow" value={subUrl}
+                   onChange={(e) => setSubUrl(e.target.value)} />
+            <button disabled={busy} onClick={() => void act(async () => {
+              const created = await call<{ signing_secret: string }>(
+                "api/v1/event-subscriptions", { project_id: projectId, url: subUrl });
+              setSecret(created.signing_secret);
+            })}>Register</button>
+          </div>
+          {secret && (
+            <p className="warn">
+              Signing secret — <strong>copy it now; it cannot be shown again</strong>:{" "}
+              <code>{secret}</code>
+            </p>
+          )}
+          {subs.length === 0 ? (
+            <p className="hint">
+              No endpoint yet. Without one, alerts still record everything — you
+              read them under Activity instead of being pushed.
+            </p>
+          ) : (
+            <table className="kv">
+              <thead><tr><th>URL</th><th>Queued</th><th>Undeliverable</th><th /></tr></thead>
+              <tbody>
+                {subs.map((s) => (
+                  <tr key={s.subscription_id}>
+                    <td><code>{s.url}</code></td>
+                    <td>{s.pending}</td>
+                    <td>{s.dead > 0 ? <span className="warn">{s.dead}</span> : "0"}</td>
+                    <td>
+                      <button disabled={busy} onClick={() => void act(async () => {
+                        const r = await call<{ signing_secret: string }>(
+                          `api/v1/event-subscriptions/${s.subscription_id}/rotate`, {});
+                        setSecret(r.signing_secret);
+                      }, "Rotated. The previous secret still verifies briefly.")}>
+                        Rotate
+                      </button>
+                      <button disabled={busy || s.dead === 0}
+                              title={s.dead === 0 ? "Nothing is undeliverable" : undefined}
+                              onClick={() => void act(() => call(
+                                `api/v1/event-subscriptions/${s.subscription_id}/replay`, {}),
+                                "Re-armed.")}>
+                        Retry {s.dead > 0 ? `(${s.dead})` : ""}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
     </section>
   );
 }

@@ -750,3 +750,82 @@ html { scroll-behavior: smooth; }
 @media (max-width: 760px) {
   .tabs { display: none; }
 }
+
+/* ---------------------------------------------------------------------------
+   Alerts — a monitoring surface, not a form.
+   
+   The organising idea is borrowed from monitor consoles generally: state is the
+   first thing you see, counts by state double as filters, and each row carries
+   a strip of its recent runs so "is this working" is answered by shape before
+   anybody reads a number. Nothing here introduces a new palette -- the accent
+   and warn tokens already exist, and `--bad` is the one addition, because
+   "undeliverable" and "needs attention" are genuinely different from "warn".
+--------------------------------------------------------------------------- */
+:root { --bad: #8c3a32; --bad-soft: #f7e7e4; --idle: #8e8a80; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --bad: #d99086; --bad-soft: #2f211f; --idle: #7d7a72; }
+}
+:root[data-theme="dark"] { --bad: #d99086; --bad-soft: #2f211f; --idle: #7d7a72; }
+
+.tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); margin: 0 0 18px; }
+.tab { appearance: none; background: none; border: 0; border-bottom: 2px solid transparent;
+       padding: 9px 14px; font: inherit; font-size: 13.5px; color: var(--muted);
+       cursor: pointer; }
+.tab:hover { color: var(--ink); }
+.tab.on { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+.tab .count { font-family: var(--mono); font-size: 11px; opacity: 0.75; margin-left: 6px; }
+
+.statgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 10px; margin-bottom: 16px; }
+.stattile { appearance: none; text-align: left; font: inherit; cursor: pointer;
+            background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+            padding: 12px 14px; display: flex; flex-direction: column; gap: 2px; }
+.stattile:hover { border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
+.stattile.on { border-color: var(--accent); background: var(--accent-soft); }
+.stattile .n { font-family: var(--mono); font-size: 24px; line-height: 1.1;
+               font-variant-numeric: tabular-nums; }
+.stattile .k { font-size: 11.5px; letter-spacing: 0.04em; text-transform: uppercase;
+               color: var(--muted); }
+.stattile.firing .n { color: var(--bad); }
+.stattile.running .n { color: var(--accent); }
+.stattile.blocked .n { color: var(--warn); }
+
+.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block;
+       flex: 0 0 auto; background: var(--idle); }
+.dot.firing { background: var(--bad); box-shadow: 0 0 0 3px var(--bad-soft); }
+.dot.running { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.dot.blocked { background: var(--warn); box-shadow: 0 0 0 3px var(--warn-soft); }
+
+/* Recent runs, oldest to newest. Height carries matches, colour carries whether
+   anything fired -- so a row that never fires and one that fires constantly are
+   distinguishable without reading either. */
+.strip { display: flex; align-items: flex-end; gap: 2px; height: 22px; }
+.strip i { width: 5px; border-radius: 1px; background: color-mix(in srgb, var(--idle) 45%, transparent);
+           min-height: 3px; }
+.strip i.hit { background: var(--bad); }
+.strip.empty { color: var(--muted); font-size: 11.5px; align-items: center; }
+
+.alertrow { display: grid; grid-template-columns: 14px 1.6fr 1.4fr 90px 96px 76px;
+            gap: 12px; align-items: center; width: 100%; text-align: left;
+            appearance: none; font: inherit; cursor: pointer; background: none;
+            border: 0; border-bottom: 1px solid var(--line); padding: 12px 6px; }
+.alertrow:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.alertrow .nm { font-weight: 600; }
+.alertrow .sub { font-size: 11.5px; color: var(--muted); font-family: var(--mono); }
+.alertrow .num { font-family: var(--mono); font-variant-numeric: tabular-nums;
+                 text-align: right; }
+.alerthead { display: grid; grid-template-columns: 14px 1.6fr 1.4fr 90px 96px 76px;
+             gap: 12px; padding: 0 6px 8px; font-size: 11px; letter-spacing: 0.06em;
+             text-transform: uppercase; color: var(--muted);
+             border-bottom: 1px solid var(--line); }
+.alerthead .num { text-align: right; }
+
+.toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 14px; }
+.toolbar .grow { flex: 1; }
+.backlink { appearance: none; background: none; border: 0; padding: 0; font: inherit;
+            color: var(--accent); cursor: pointer; font-size: 13px; }
+
+@media (max-width: 760px) {
+  .alertrow, .alerthead { grid-template-columns: 14px 1fr 70px; }
+  .alertrow > .hide-narrow, .alerthead > .hide-narrow { display: none; }
+}
