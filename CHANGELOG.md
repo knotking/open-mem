@@ -49,6 +49,15 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   the provenance they lost is not recoverable from the item. Re-crawling
   repopulates it, since `external_id` upserts.
 
+### Changed
+- **The README is rewritten against what the build reports.** Four counts had
+  drifted in a file whose own second paragraph says they come from the running
+  build; they now match `GET /api/v1/capabilities`. The `excluded` paragraph had
+  been duplicated near-verbatim one section apart and is said once. Three things
+  it was quiet about are now stated: **enrichment is optional** and its diagram
+  implied otherwise, `docs/usage.md` exists, and **no deterministic foreign-key
+  edges** joins the not-built list.
+
 ### Added
 - **[docs/usage.md](docs/usage.md) — six scenarios against a running system.**
   Write and ask, pull from an app, receive a webhook, build the graph, backfill a
