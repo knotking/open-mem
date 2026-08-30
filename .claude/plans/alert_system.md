@@ -8,44 +8,59 @@ Status: **plan only, nothing implemented.** Confirm before `/implement`.
 
 ---
 
-## 1 · Alerts are scheduled, not triggered per write
+## 1 · Async, debounced, with the schedule as the floor
 
-**Evaluating on every write is not practical, and the plan previously assumed
-it.** With N alerts and M writes it is N×M evaluations, every write pays for
-every alert, and one crawl importing ten thousand items triggers ten thousand
-rounds. In `llm` mode it is ten thousand model calls for a question nobody asked
-urgently. The cost is unbounded in exactly the way that is invisible until the
-bill.
+Three things, and the middle one is what makes the first affordable:
 
-So the write path does **one cheap thing**, and everything else runs on a
-schedule the alert itself declares:
+| | When | What |
+|---|---|---|
+| **Capture** | Inside the write transaction | Record before → after. One insert, no alert logic |
+| **Consume** | Asynchronously, off the `Queue` seam | Wake, **coalesce**, evaluate alerts whose watermark is behind |
+| **Reconcile** | On a schedule | Sweep what the queue lost, deliver what is owed, fire absence events |
 
-| | When | What | Cost |
-|---|---|---|---|
-| **Capture the transition** | Inside the write transaction | Record before → after | One insert, no alert logic |
-| **Evaluate** | On the alert's own schedule | Read transitions since this alert's watermark, in a batch | Bounded per run |
+### Evaluation is per wake-up, never per write
 
-Capture is the half that cannot be deferred, because **a transition is only
-observable at the moment it happens**. Once `access_level` reads `org`, the
-previous value is gone — the row simply says `org`. Everything else can wait,
-and waiting is what makes it affordable.
+Per-write evaluation is not practical: N alerts by M writes means every write
+pays for every alert, and one crawl importing ten thousand items would trigger
+ten thousand rounds — in `llm` mode, ten thousand model calls for a question
+nobody asked urgently.
 
-This is the crawler's shape, and deliberately so: `crawlers` already carries
-`schedule`, `next_due_at`, `watermark`, `overlap` and `config_version`, and the
-reasoning behind each transfers unchanged. One proven pattern rather than a
-second one that has to learn the same lessons.
+Being asynchronous does not fix that on its own. **Debounce does.** A consumer
+that evaluates one message at a time is per-write evaluation with extra latency.
+So the worker wakes on a transition and then *waits*: it coalesces for
+`debounce_seconds` or until `batch_cap` transitions have accumulated, whichever
+comes first, and evaluates once over the window.
 
-### What batching buys
+```
+transitions ──▶ queue ──▶ wake ──▶ coalesce (5s or 500) ──▶ evaluate once
+                                        ▲
+                          a burst of 10,000 collapses here
+```
 
-A scheduled run sees many transitions at once, which changes what is possible
-rather than merely what is cheaper:
+What the window buys is not merely cheapness:
 
-- **`llm` mode becomes affordable.** One call judging forty candidates, not
-  forty calls. The per-write design could never do this.
-- **Duplicates collapse.** Six revisions of one document between two runs are
-  one candidate, not six alerts.
-- **Bursts are absorbed.** A ten-thousand-item crawl is a batch with a cap, not
-  ten thousand evaluations.
+- **`llm` mode becomes viable** — one call judging forty candidates, not forty
+  calls. Per-message consumption could never do this.
+- **Duplicates collapse** — six revisions of one document inside a window are
+  one candidate.
+- **Bursts are absorbed** — a crawl is a handful of windows, not ten thousand
+  evaluations.
+
+Capture stays synchronous because it is the only part that cannot be deferred:
+**a transition is observable only while it happens.** Once `access_level` reads
+`org`, the previous value is gone.
+
+### The queue is not the record
+
+Behind the `Queue` Protocol — `InProcessQueue` today, Pub/Sub when that lands.
+That matters here more than elsewhere: Cloud Run runs `--min-instances 0`, so an
+in-process consumer exists only while an instance is alive, and a window in
+flight dies with it.
+
+So the **watermark in Postgres is the record of what has been evaluated**, and
+the queue is only how a worker learns there is something to do — the same
+relation `domain_events` already has to dispatch. A lost message costs latency,
+never an alert.
 
 ## 2 · What a rule watches
 
@@ -147,8 +162,9 @@ alerts                            -- THE CONFIGURATION, created via API/UI
   where_clause  jsonb              -- required in BOTH modes; see §3
   describe      text               -- llm mode only
   model_id      text               -- null = the org's assigned extractor
-  schedule      jsonb NOT NULL DEFAULT '{"type":"interval","every_seconds":300}'
-  next_due_at   timestamptz
+  -- How long the consumer coalesces before evaluating. The knob that decides
+  -- whether this is async batching or per-write evaluation wearing a queue.
+  debounce_seconds int NOT NULL DEFAULT 5
   -- The sequence this alert has evaluated up to. Advanced ONLY by a completed
   -- run: a partial run that advanced it steps over transitions nobody ever
   -- looked at, and nothing comes back for them.
@@ -257,66 +273,66 @@ the audit trail survives, and `verify_erasure` gains a check.
 
 ---
 
-## 7b · The tick is the mechanism, and the watermark is the contract
+## 7b · The reconciler, and why it is not optional
 
-There is no request-path worker. **The schedule is how alerts run**, and the
-tick is not a safety net under something faster.
+The async path is the fast path. The scheduled tick is the floor beneath it, and
+on this deployment the floor carries real weight:
 
-That also disposes of a problem the earlier design had: Cloud Run runs
-`--min-instances 0` and `queue.py` is in-process, so anything evaluated by a
-subscribed worker is lost when the instance goes. With scheduled evaluation
-there is nothing in flight to lose — a run either advanced the watermark or it
-did not.
+| Without the tick | Why |
+|---|---|
+| A window lost with its instance is never evaluated | `--min-instances 0`, in-process queue |
+| A failed delivery never retries | `next_attempt_at` implies something wakes to honour it |
+| Absence events never fire | `memory.expiring` and `item.erased` have no write to ride on |
+
+The rows are the record of outstanding work, and a sweep re-derives what is
+missing rather than trusting a message to have survived.
 
 ### `memdog-alert-tick`
 
-A Cloud Run Job on Cloud Scheduler, beside `memdog-reconcile-tick`, every
-minute. Per tick:
+A Cloud Run Job on Cloud Scheduler beside `memdog-reconcile-tick`, every minute:
 
 ```
 python -m memdog alert-tick
-  1. select alerts WHERE enabled AND next_due_at <= now()   FOR UPDATE SKIP LOCKED
-  2. for each: read transitions with sequence > watermark, up to batch_cap
-  3. evaluate (rule: SQL only · llm: one batched call)
-  4. record matches in observed_events
-  5. advance watermark, set next_due_at
-  6. deliver what is owed by next_attempt_at
-  7. sweep absence-caused events (§7)
+  1. select alerts whose watermark is behind          FOR UPDATE SKIP LOCKED
+  2. evaluate the gap in batches, up to batch_cap
+  3. deliver what is owed by next_attempt_at
+  4. sweep expiry and other absence-caused events (§7)
 ```
 
-A minute is the tick floor; each alert's own `schedule` decides whether it is
-considered. An hourly alert is examined sixty times and runs once.
+Steps 1–2 run **the same code** the async consumer runs. A reconciler that
+re-implements the thing it repairs drifts from it, and the drift shows up as a
+repair that quietly does something different from the work it stands in for —
+which is exactly how `memdog-reconcile` once re-embedded with a stale model and
+concluded nothing was stale.
 
-### Four rules carried over from crawlers, each earned
+### Four rules carried over from crawlers, each already earned there
 
-**The watermark advances only on a completed run.** A partial run that advanced
-it steps over transitions nobody ever evaluated, and nothing comes back for
+**The watermark advances only on a completed evaluation.** A partial one that
+advanced it steps over transitions nobody looked at, and nothing comes back for
 them. `crawlers.watermark` carries this comment already; the failure is silent
 and permanent.
 
-**`overlap: skip`** — a run still going when the next is due is recorded as
-skipped, not queued. Queueing guarantees a backlog that never drains for any
-alert slower than its interval.
+**`overlap: skip`** — an alert already evaluating when woken again is skipped,
+not queued. Queueing guarantees a backlog that never drains for any alert slower
+than its arrival rate.
 
-**`batch_cap` per run, with what was deferred logged.** A ten-thousand-item
-burst must not make one run unbounded, and the watermark carries the remainder
-to the next tick. **Silent truncation reads as "nothing else matched"**, which
-for an alert system is the worst possible lie.
+**`batch_cap`, with the remainder recorded.** A burst must not make one window
+unbounded, and the watermark carries the rest forward. **Silent truncation reads
+as "nothing else matched"**, which for an alert system is the worst available
+lie.
 
-**`config_version` invalidates a backtest.** Editing an alert's selector or
-description invalidates its last backtest exactly as editing a crawler
-invalidates its dry run, rather than carrying an approval forward onto a
-question that has changed.
+**`config_version` invalidates a backtest**, exactly as editing a crawler
+invalidates its dry run.
 
 ### This changes the deployment
 
-A new job and schedule mean `.claude/skills/deploy-gcp/` and
-`api/deploy/cloudrun.sh` change in the same commit — the job joins the loop so
-it cannot drift onto a stale image, and `provision.md` gains a second scheduler
-entry with the grant that is easy to miss: **the Cloud Scheduler service agent
-needs `roles/iam.serviceAccountTokenCreator`** on `memdog-api@…`. Without it the
-job never fires and the scheduler surfaces no error — for an alert system,
-silence indistinguishable from "nothing happened".
+`memdog-alert-tick` joins the job loop in `api/deploy/cloudrun.sh` so it cannot
+drift onto a stale image, and `provision.md` gains a second scheduler entry —
+with the grant that is easy to miss: **the Cloud Scheduler service agent needs
+`roles/iam.serviceAccountTokenCreator`** on `memdog-api@…`. Without it the job
+never fires and the scheduler surfaces no error, which for an alert system is
+silence indistinguishable from "nothing happened". `.claude/skills/deploy-gcp/`
+is updated in the same commit, per its own rule.
 
 ## 8 · Implementation steps
 
@@ -331,11 +347,12 @@ silence indistinguishable from "nothing happened".
    backtest invalidation, selector validation against a closed per-surface
    vocabulary, and `evaluate_batch()` implementing the §3 ladder — one batched
    model call in `llm` mode, none in `rule` mode.
-4. **`alert-tick`** — a `__main__.py` subcommand and a Cloud Run Job, following
-   `crawling.tick`: select due alerts `FOR UPDATE SKIP LOCKED`, read transitions
-   above each watermark up to `batch_cap`, evaluate, record, advance the
-   watermark on completion only, then deliver what is owed and run the absence
-   sweeps. **There is no request-path worker** — this is the mechanism.
+4. **`AlertWorker`** — subscribes off the `Queue` seam, **coalesces** for
+   `debounce_seconds` or `batch_cap` transitions, then calls the shared
+   `evaluate_gap()`. The fast path.
+4b. **`alert-tick`** — a `__main__.py` subcommand and a Cloud Run Job calling the
+   **same** `evaluate_gap()`, plus owed deliveries and the absence sweeps.
+   `FOR UPDATE SKIP LOCKED` throughout. Not optional (§7b).
 5. **`api/src/memdog/event_delivery.py`** — the outbound sender: HMAC signing as
    `0018` does inbound, `validate_url` per attempt, no redirects, backoff,
    dead-letter. **Shared with the workflow plan.**
@@ -364,8 +381,14 @@ Steps 1–4 are one commit and testable without any network. 5–6 a second.
   nothing for them. Then share the item and assert it appears — proving the
   filter is live and not a stored copy.
 - **Revocation between match and delivery is honoured.**
-- **Writes never evaluate an alert** — write with fifty enabled alerts and
-  assert no evaluation and no model call happened. The whole §1 claim.
+- **A write never evaluates an alert inline** — write with fifty enabled alerts
+  and assert the write path issues no evaluation and no model call. The §1 claim.
+- **A burst coalesces** — 500 transitions inside one debounce window produce
+  **one** evaluation, not 500. This is the test that separates "async" from
+  "per-write with extra latency", and it is the whole reason for the window.
+- **The consumer and the tick agree** — evaluate the same gap through both paths
+  and assert identical `observed_events`. A reconciler that drifts from the thing
+  it repairs is worse than none.
 - **An event survives the instance that captured it** — capture a transition,
   drop the in-process queue without draining, run `alert-tick`, assert the event
   is evaluated. Without this the feature passes everything else and does nothing
