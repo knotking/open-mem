@@ -126,7 +126,8 @@ async def graph_seeds(
 
 
 async def _expand(
-    graph, principal: Principal, seeds: list[GraphSeed], *, limit: int
+    graph, principal: Principal, seeds: list[GraphSeed], *, limit: int,
+    valid_at=None, as_of=None,
 ) -> dict[str, int]:
     """Seeds, plus what one hop reaches, with the fewest hops to each.
 
@@ -152,6 +153,7 @@ async def _expand(
             found = await graph.neighbourhood(
                 principal, entity_id=seed.entity_id, depth=1,
                 predicates=None, limit=limit,
+                valid_at=valid_at, as_of=as_of,
             )
         except GraphError:
             # The entity resolved a moment ago and is gone, or is not visible
@@ -262,7 +264,9 @@ async def _retrieve(
         )
         if seeds:
             reachable = await _expand(
-                graph or build_graph(pool), principal, seeds, limit=request.limit * 8
+                graph or build_graph(pool), principal, seeds,
+                limit=request.limit * 8,
+                valid_at=request.filter.valid_at, as_of=request.filter.as_of,
             )
     if reachable:
         ids_p = bind(list(reachable))

@@ -305,6 +305,21 @@ class DeleteWorker:
             # with no evidence behind it -- and the endpoints of that edge are
             # themselves derived personal data.
             await conn.execute("DELETE FROM entity_edges WHERE source_data_id = $1", data_id)
+            # A derived fact whose last evidence just went is retracted, not
+            # deleted. Deleting it would erase that we ever believed it, which
+            # is the one thing the bitemporal table exists to preserve; leaving
+            # it open would assert a claim with nothing behind it. An asserted
+            # fact is untouched -- it never depended on a record.
+            await conn.execute(
+                """
+                UPDATE entity_facts f
+                   SET retracted_at = now(),
+                       retracted_reason = 'last evidence erased'
+                 WHERE f.basis = 'derived' AND f.retracted_at IS NULL
+                   AND NOT EXISTS (SELECT 1 FROM entity_edges ev
+                                    WHERE ev.fact_id = f.fact_id)
+                """
+            )
             await conn.execute("DELETE FROM normalized_records WHERE data_id = $1", data_id)
             # A share link to a purged item can only 404; removing it stops the
             # public inventory listing something that no longer exists.
@@ -360,6 +375,20 @@ async def verify_erasure(pool: asyncpg.Pool, data_id: str) -> dict:
         "case_members": "SELECT count(*) FROM case_members WHERE data_id = $1",
         "entity_mentions": "SELECT count(*) FROM entity_mentions WHERE data_id = $1",
         "entity_edges": "SELECT count(*) FROM entity_edges WHERE source_data_id = $1",
+        # Evidence for this record must be gone, and no derived fact may still
+        # be open with nothing supporting it. Counted rather than assumed --
+        # this function's whole job is to re-check every table by hand.
+        # An invariant rather than a count for this item: after any purge, no
+        # derived fact may still be open with nothing supporting it. It is
+        # checked here because this function's whole job is re-checking by hand
+        # what a cascade is assumed to have done.
+        "open_facts_without_evidence": (
+            "SELECT count(*) FROM entity_facts f "
+            " WHERE f.basis = 'derived' AND f.retracted_at IS NULL "
+            "   AND NOT EXISTS (SELECT 1 FROM entity_edges ev "
+            "                    WHERE ev.fact_id = f.fact_id) "
+            "   AND $1::text IS NOT NULL"
+        ),
         "normalized_records": "SELECT count(*) FROM normalized_records WHERE data_id = $1",
         "share_links": "SELECT count(*) FROM share_links WHERE data_id = $1",
     }

@@ -177,6 +177,13 @@ class RetrieveFilter(BaseModel):
     tags: list[str] = Field(default_factory=list)
     since: datetime | None = None
     until: datetime | None = None
+    # Two clocks for the graph arm, and neither is `since`/`until` -- those bound
+    # which *records* to search. These bound which *claims* were true
+    # (`valid_at`) and which we had learned (`as_of`), so a search can be run as
+    # it would have run in March. Both default to now, so a caller that does not
+    # ask about time is unaffected.
+    valid_at: datetime | None = None
+    as_of: datetime | None = None
 
 
 class RetrieveRequest(BaseModel):

@@ -8,6 +8,7 @@ else in the design widens this.
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from datetime import datetime
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import Response
@@ -2007,6 +2008,7 @@ async def get_entity_endpoint(
 async def entity_graph_endpoint(
     request: Request, entity_id: str, depth: int = 1,
     predicates: str | None = None, limit: int = 120,
+    valid_at: datetime | None = None, as_of: datetime | None = None,
     actor: Principal = Depends(principal),
 ) -> dict:
     """The neighbourhood around an entity, as asserted edges.
@@ -2014,12 +2016,17 @@ async def entity_graph_endpoint(
     Visibility is enforced on every hop rather than on the result, so a path
     cannot pass through a record the caller cannot read — the endpoints of such
     a path would disclose that the record exists.
+
+    `valid_at` asks what was true then. `as_of` asks what we believed then. They
+    are different questions and a backfill separates them: a document imported
+    today about last year is visible at `valid_at=last year` and invisible at
+    `as_of=last month`. Both default to now.
     """
     try:
         result = await request.app.state.graph.neighbourhood(
             actor, entity_id=entity_id, depth=depth,
             predicates=[p for p in (predicates or "").split(",") if p] or None,
-            limit=limit,
+            limit=limit, valid_at=valid_at, as_of=as_of,
         )
     except (GraphError, AuthError) as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
@@ -2051,10 +2058,105 @@ async def co_mentions_endpoint(
 
 @app.get("/api/v1/graph/predicates")
 async def graph_predicates_endpoint(actor: Principal = Depends(principal)) -> dict:
-    """The closed predicate vocabulary, served rather than documented twice."""
-    from .graph import MAX_DEPTH, PREDICATES
+    """The closed predicate vocabulary, served rather than documented twice.
 
-    return {"predicates": list(PREDICATES), "max_depth": MAX_DEPTH}
+    `single_valued` is served with it because it is not a detail: it decides
+    which claims supersede one another, so a caller writing facts needs to know
+    that a second `located_in` closes the first and a second `works_for` does not.
+    """
+    from .graph import MAX_DEPTH, PREDICATES, SINGLE_VALUED
+
+    return {"predicates": list(PREDICATES), "max_depth": MAX_DEPTH,
+            "single_valued": sorted(SINGLE_VALUED)}
+
+
+@app.get("/api/v1/entities/{entity_id}/history")
+async def entity_history_endpoint(
+    request: Request, entity_id: str, limit: int = 200,
+    actor: Principal = Depends(principal),
+) -> dict:
+    """Every claim that has touched this entity, closed and open alike.
+
+    Deliberately not time-filtered: this is the view that answers *how did we
+    come to believe this*, so a superseded fact is the point rather than noise.
+    """
+    from .graph import fact_history
+
+    try:
+        return {"facts": await fact_history(
+            request.app.state.pool, actor, entity_id, limit=limit)}
+    except (GraphError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/graph/conflicts")
+async def graph_conflicts_endpoint(
+    request: Request, project_id: str, limit: int = 50,
+    actor: Principal = Depends(principal),
+) -> dict:
+    """Single-valued predicates holding more than one open value.
+
+    A document and a later thread disagreeing is a query here, not a model call:
+    two open `located_in` claims for one subject cannot both be true, and
+    supersession refuses to choose between claims that begin at the same instant.
+    """
+    from .graph import conflicts
+
+    try:
+        return {"conflicts": await conflicts(
+            request.app.state.pool, actor, project_id, limit=limit)}
+    except (GraphError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/facts", status_code=201)
+async def assert_fact_endpoint(
+    request: Request, body: dict, actor: Principal = Depends(principal),
+) -> dict:
+    """State a fact outright — no document, no model, no cost.
+
+    Every claim used to need a record to descend from, because
+    `entity_edges.source_data_id` is NOT NULL. An agent that already knew
+    something had to write a document for an extractor to read it back out.
+    `basis` keeps an asserted claim distinguishable from an inferred one, which
+    is the first thing anyone auditing the graph asks.
+    """
+    from .graph import assert_fact
+
+    try:
+        return await assert_fact(
+            request.app.state.pool, actor,
+            project_id=body["project_id"], subject_id=body["subject_id"],
+            predicate=body["predicate"], object_id=body["object_id"],
+            valid_from=body.get("valid_from"),
+            confidence=float(body.get("confidence", 1.0)),
+            access_level=body.get("access_level", "private"),
+            shared_with=body.get("shared_with"),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=400, detail=f"missing {exc}") from exc
+    except (GraphError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/facts/{fact_id}/retract")
+async def retract_fact_endpoint(
+    request: Request, fact_id: str, body: dict | None = None,
+    actor: Principal = Depends(principal),
+) -> dict:
+    """Withdraw a claim without erasing that it was made.
+
+    Distinct from supersession: `valid_to` says the claim stopped being true,
+    `retracted_at` says we should not have recorded it. Neither deletes a row —
+    an earlier `as_of` must still return what we believed at the time.
+    """
+    from .graph import retract_fact
+
+    try:
+        return await retract_fact(
+            request.app.state.pool, actor, fact_id, (body or {}).get("reason"))
+    except (GraphError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
 
 
 @app.post("/api/v1/entities/merge")

@@ -66,6 +66,20 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   edges** joins the not-built list.
 
 ### Added
+- **A deploy runbook, checked against the live project rather than transcribed.**
+  `.claude/skills/deploy-gcp/` holds the routine deploy and its failure modes,
+  and a from-scratch guide in the one order that works — the peering range
+  before the database, because org policy forbids a public IP and the range
+  cannot sit inside the auto-mode network's own `10.128.0.0/9`. Reading it
+  against `memdog-dev-506718` corrected four things the scripts and
+  `deploy/README.md` did not say: **`GEMINI_API_KEY` is required** and was
+  undocumented, so a project provisioned from the prose starts cleanly and then
+  fails every enrichment; `storage.objectAdmin` is granted **on the bucket, not
+  the project**; **no `roles/cloudsql.client`** — it is for the auth proxy, and
+  there is none; and `memdog-bootstrap` is unmanaged, pinned to `spine-12`, and
+  runs `grant-key` rather than a bootstrap. Failure modes are indexed by
+  symptom, since the reader has an error message and not a diagnosis.
+  `CLAUDE.md` requires it be corrected in the same session the process changes.
 - **[docs/usage.md](docs/usage.md) — six scenarios against a running system.**
   Write and ask, pull from an app, receive a webhook, build the graph, backfill a
   crawl that ran with `enrich` off, and erase with a dry run first. Every request
