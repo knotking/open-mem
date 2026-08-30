@@ -72,13 +72,31 @@ async def upsert_memory(
 
 
 async def add_member(conn, memory_id: str, data_id: str, added_by: str) -> None:
-    await conn.execute(
+    row = await conn.fetchrow(
         """
         INSERT INTO memory_members (memory_id, data_id, added_by)
         VALUES ($1, $2, $3)
         ON CONFLICT (memory_id, data_id) DO NOTHING
+        RETURNING memory_id
         """,
         memory_id, data_id, added_by,
+    )
+    # Nothing on a conflict: re-adding an item already in a memory is not a
+    # membership event, and an alert that fired on it would fire on every
+    # rewrite of the same record.
+    if row is None:
+        return
+    memory = await conn.fetchrow(
+        "SELECT org_id, project_id, type FROM memories WHERE memory_id = $1", memory_id)
+    if memory is None:
+        return
+    from .alerts import emit_transition
+
+    await emit_transition(
+        conn, "memory.member_added", org_id=memory["org_id"],
+        project_id=memory["project_id"], data_id=data_id,
+        payload={"memory_id": memory_id, "data_id": data_id,
+                 "memory_type": memory["type"], "added_by": added_by},
     )
 
 
@@ -395,6 +413,18 @@ async def retype_memory(
             conn, principal, action="memory.retyped", project_id=memory["project_id"],
             target_type="memory", target_id=memory_id,
             detail={"from": memory["type"], "to": type_name, "would_expire": would_expire},
+        )
+        # Promotion and demotion are the point of a mutable type -- a
+        # conversation that turned out to hold durable facts, a working set gone
+        # cold. Both are worth being told about, and neither leaves a trace once
+        # the column has been overwritten.
+        from .alerts import emit_transition
+
+        await emit_transition(
+            conn, "memory.retyped", org_id=memory["org_id"],
+            project_id=memory["project_id"],
+            payload={"memory_id": memory_id, "from_type": memory["type"],
+                     "to_type": type_name, "would_expire": would_expire},
         )
     return {"memory_id": memory_id, "from": memory["type"], "to": type_name,
             "ttl_seconds": target["ttl_seconds"], "would_expire": would_expire,

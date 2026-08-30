@@ -39,6 +39,22 @@ SURFACES: dict[str, frozenset[str]] = {
     "fact.asserted":   frozenset({"predicate", "basis", "subject_type", "object_type"}),
     "fact.superseded": frozenset({"predicate", "basis", "subject_type", "object_type"}),
     "fact.retracted":  frozenset({"predicate", "basis"}),
+    "data.revised":    frozenset({"source", "data_type", "producer_id"}),
+    "memory.member_added": frozenset({"memory_type", "added_by"}),
+    "memory.retyped":  frozenset({"from_type", "to_type"}),
+    "case.member_promoted": frozenset({"case_type"}),
+    # The from/to pair is why capture has to be synchronous: once the row reads
+    # its new level the old one is gone, and no sweep afterwards recovers it.
+    "acl.changed":     frozenset({"from_level", "to_level", "data_type"}),
+}
+
+# Which subject a surface's visibility is asked of. An event stores no ACL, so
+# this is how a read resolves one -- against the subject, now, rather than a
+# copy taken when the alert matched.
+SUBJECT_OF: dict[str, str] = {
+    "fact.asserted": "fact", "fact.superseded": "fact", "fact.retracted": "fact",
+    "data.revised": "item", "acl.changed": "item", "case.member_promoted": "item",
+    "memory.member_added": "memory", "memory.retyped": "memory",
 }
 
 # Editing any of these changes what matches, so it invalidates the backtest.
@@ -321,13 +337,15 @@ async def evaluate_gap(
                         """
                         INSERT INTO observed_events (event_id, alert_id, config_version,
                             run_id, org_id, project_id, surface, source_event_id,
-                            data_id, fact_id, payload, matched_by)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, 'selector')
+                            data_id, fact_id, memory_id, case_id, payload, matched_by)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+                                $13::jsonb, 'selector')
                         ON CONFLICT (alert_id, source_event_id) DO NOTHING
                         """,
                         new_id("oev"), alert_id, alert["config_version"], run_id,
                         row["org_id"], alert["project_id"], alert["surface"],
                         row["event_id"], row["data_id"], payload.get("fact_id"),
+                        payload.get("memory_id"), payload.get("case_id"),
                         json.dumps(payload),
                     )
 
@@ -407,20 +425,40 @@ async def poll_events(
     a revocation in between.
     """
     principal.require(DATA_READ)
+    from .acl import visibility_sql
     from .graph import _fact_visibility
 
     org_id, user_id, principals = visibility_params(principal)
+    # One predicate per kind of subject, OR'd. A fact is visible when its
+    # evidence is; an item on its own terms; a memory when you own it or can see
+    # something in it -- the same three rules those subjects already use, rather
+    # than a fourth invented here.
+    item_visible = visibility_sql("di", 1, 2, 3)
+    visible = f"""(
+        (o.fact_id IS NOT NULL AND {_fact_visibility(1, 2, 3)})
+     OR (o.fact_id IS NULL AND o.data_id IS NOT NULL AND {item_visible})
+     OR (o.memory_id IS NOT NULL AND (
+            m.owner_id = $2
+            OR EXISTS (SELECT 1 FROM memory_members mm
+                         JOIN data_items d ON d.data_id = mm.data_id
+                        WHERE mm.memory_id = m.memory_id
+                          AND {visibility_sql("d", 1, 2, 3)})
+        ))
+    )"""
     rows = await pool.fetch(
         f"""
         SELECT o.event_id, o.sequence, o.alert_id, o.config_version, o.surface,
-               o.source_event_id, o.data_id, o.fact_id, o.payload, o.matched_by,
-               o.confidence, o.occurred_at, a.name AS alert_name
+               o.source_event_id, o.data_id, o.fact_id, o.memory_id, o.case_id,
+               o.payload, o.matched_by, o.confidence, o.occurred_at,
+               a.name AS alert_name
           FROM observed_events o
           JOIN alerts a ON a.alert_id = o.alert_id
-          JOIN entity_facts f ON f.fact_id = o.fact_id
+          LEFT JOIN entity_facts f ON f.fact_id = o.fact_id
+          LEFT JOIN data_items di ON di.data_id = o.data_id
+          LEFT JOIN memories m ON m.memory_id = o.memory_id
          WHERE o.sequence > $4 AND o.org_id = $1
            AND ($5::text IS NULL OR o.alert_id = $5)
-           AND {_fact_visibility(1, 2, 3)}
+           AND {visible}
          ORDER BY o.sequence
          LIMIT $6
         """,
@@ -428,3 +466,27 @@ async def poll_events(
     )
     out = [dict(r) | {"payload": _loads(r["payload"])} for r in rows]
     return {"events": out, "cursor": out[-1]["sequence"] if out else since}
+
+
+# -- capture ----------------------------------------------------------------
+
+
+async def emit_transition(conn, event_type: str, *, org_id: str,
+                          project_id: str, payload: dict,
+                          data_id: str | None = None) -> None:
+    """Record a transition where alerts can read it, in the caller's transaction.
+
+    Synchronous because a transition is observable **only while it happens**:
+    once `access_level` reads `org` the previous value is gone, and no later
+    sweep recovers it. `domain_events` rather than a table of its own -- it
+    already carries the monotonic sequence an alert reads forward from, and a
+    second log would be a second place work can be lost.
+
+    Deliberately cheap: one insert, no alert is consulted, and nothing here
+    knows whether any alert cares. That is what keeps write latency independent
+    of how many alerts a project has.
+    """
+    from .events import emit
+
+    await emit(conn, event_type=event_type, org_id=org_id, project_id=project_id,
+               data_id=data_id, payload=payload)

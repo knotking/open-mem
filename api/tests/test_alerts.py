@@ -287,3 +287,133 @@ async def test_an_unknown_surface_or_field_is_refused_at_creation(pool, tenant, 
         await _alert(pool, actor, tenant, surface="fact.invented")
     with pytest.raises(AlertError):
         await _alert(pool, actor, tenant, where={"colour": ["blue"]})
+
+
+# -- the surfaces that are not facts ----------------------------------------
+
+
+async def test_a_revision_that_changes_nothing_is_not_an_event(pool, tenant, principal_for):
+    """A re-crawl and a re-parse produce byte-identical revisions constantly.
+
+    Treating one as a change would make every poll an event, which is the
+    quickest way to teach someone to ignore alerts.
+    """
+    from memdog.workers import record_version
+
+    data_id = await _item(pool, tenant, "doc")
+    async with pool.acquire() as conn:
+        await record_version(conn, data_id, source="write", content_text="same")
+        await record_version(conn, data_id, source="parse", content_text="same")
+        await record_version(conn, data_id, source="reprocess", content_text="different")
+
+    rows = await pool.fetch(
+        "SELECT payload FROM domain_events WHERE event_type = 'data.revised'")
+    assert len(rows) == 1, "only the revision that changed the content"
+    payload = rows[0]["payload"]
+    payload = payload if isinstance(payload, dict) else __import__("json").loads(payload)
+    assert payload["source"] == "reprocess"
+
+
+async def test_the_first_write_is_not_a_revision(pool, tenant, principal_for):
+    """The write path already announced it; saying it twice makes every new
+    record look like an edit."""
+    from memdog.workers import record_version
+
+    data_id = await _item(pool, tenant, "fresh")
+    async with pool.acquire() as conn:
+        await record_version(conn, data_id, source="write", content_text="first")
+    assert await pool.fetchval(
+        "SELECT count(*) FROM domain_events WHERE event_type = 'data.revised'") == 0
+
+
+async def test_an_acl_change_is_captured_because_nothing_else_could(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """The evidence is destroyed by the statement that causes it.
+
+    After the upsert the row simply reads its new level, so "this became
+    org-visible on the third of March" has no other source. Driven through the
+    real write path, because a direct UPDATE would prove nothing about it.
+    """
+    from memdog.contracts import Inline, WriteItem, WriteOptions, WriteRequest
+    from memdog.write import write_items
+
+    actor = await principal_for(tenant.api_key)
+    alert = await _alert(pool, actor, tenant, surface="acl.changed",
+                         where={"to_level": ["org"]})
+    await _approve(pool, actor, alert["alert_id"])
+
+    async def _write(level):
+        return await write_items(
+            pool, queue, blobs, settings, actor,
+            WriteRequest(producer_id=tenant.producer_id, items=[
+                WriteItem(external_id="shifting",
+                          content=Inline(text="a note"),
+                          access={"level": level}),
+            ], options=WriteOptions(enrich=False)),
+        )
+
+    await _write("private")
+    assert (await evaluate_gap(pool, alert["alert_id"], trigger="tick"))["matches"] == 0, (
+        "the first write is not a change of level"
+    )
+
+    await _write("org")
+    result = await evaluate_gap(pool, alert["alert_id"], trigger="tick")
+    assert result["matches"] == 1
+
+    seen = await poll_events(pool, actor, since=0)
+    payload = seen["events"][0]["payload"]
+    assert payload["from_level"] == "private" and payload["to_level"] == "org"
+
+
+async def test_a_memory_retype_is_an_event_and_a_re_add_is_not(pool, tenant, principal_for):
+    """Promotion is the point of a mutable type. Re-adding an item is not."""
+    from memdog.memories import add_member
+
+    actor = await principal_for(tenant.api_key)
+    memory_id = new_id("mem")
+    await pool.execute(
+        """
+        INSERT INTO memories (memory_id, org_id, project_id, type, memory_key, owner_id)
+        VALUES ($1, $2, $3, 'conversation', 'thread-1', $4)
+        """,
+        memory_id, tenant.org_id, tenant.project_id, tenant.user_id,
+    )
+    data_id = await _item(pool, tenant, "note")
+    async with pool.acquire() as conn:
+        await add_member(conn, memory_id, data_id, "explicit")
+        await add_member(conn, memory_id, data_id, "explicit")
+
+    assert await pool.fetchval(
+        "SELECT count(*) FROM domain_events WHERE event_type = 'memory.member_added'"
+    ) == 1, "a re-add is not a membership event"
+
+
+async def test_events_about_a_memory_are_visible_to_its_owner_only(
+    pool, tenant, other_tenant, principal_for
+):
+    """A memory surface resolves visibility against the memory, not the fact."""
+    from memdog.memories import add_member
+
+    actor = await principal_for(tenant.api_key)
+    stranger = await principal_for(other_tenant.api_key)
+    alert = await _alert(pool, actor, tenant, surface="memory.member_added",
+                         where={"added_by": ["explicit"]})
+    await _approve(pool, actor, alert["alert_id"])
+
+    memory_id = new_id("mem")
+    await pool.execute(
+        """
+        INSERT INTO memories (memory_id, org_id, project_id, type, memory_key, owner_id)
+        VALUES ($1, $2, $3, 'conversation', 'thread-2', $4)
+        """,
+        memory_id, tenant.org_id, tenant.project_id, tenant.user_id,
+    )
+    data_id = await _item(pool, tenant, "note-2")
+    async with pool.acquire() as conn:
+        await add_member(conn, memory_id, data_id, "explicit")
+
+    assert (await evaluate_gap(pool, alert["alert_id"], trigger="tick"))["matches"] == 1
+    assert len((await poll_events(pool, actor, since=0))["events"]) == 1
+    assert (await poll_events(pool, stranger, since=0))["events"] == []

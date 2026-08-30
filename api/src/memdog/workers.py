@@ -598,13 +598,21 @@ async def record_version(
     import hashlib
 
     checksum = "sha256:" + hashlib.sha256((content_text or "").encode()).hexdigest()
+    # What the last revision said, read before this one is appended. A revision
+    # whose content is byte-identical is not a change in the world -- a re-crawl
+    # and a re-parse both produce them constantly -- and treating it as one
+    # would make every poll an event.
+    previous = await conn.fetchrow(
+        "SELECT checksum, source FROM data_versions WHERE data_id = $1 "
+        "ORDER BY revision DESC LIMIT 1", data_id,
+    )
     for attempt in range(attempts):
         try:
             # A savepoint, because a unique violation aborts the surrounding
             # transaction: without this the retry would run inside a failed
             # transaction and fail differently.
             async with conn.transaction():
-                return await conn.fetchval(
+                revision = await conn.fetchval(
                 """
                     INSERT INTO data_versions (version_id, data_id, revision, source,
                         content_text, content_chars, checksum, mime_type, model_id,
@@ -620,6 +628,35 @@ async def record_version(
                     model_id, generator_version, tokens, detail or {},
                     model_version, response_id,
                 )
+                # A revision that changed nothing is not an event. And a
+                # revision with no predecessor is the first write, which the
+                # write path already announced -- saying it twice would make
+                # every new record look like an edit.
+                if previous is not None and previous["checksum"] != checksum:
+                    owner = await conn.fetchrow(
+                        "SELECT org_id, project_id, data_type FROM data_items "
+                        "WHERE data_id = $1", data_id,
+                    )
+                    if owner is not None:
+                        from .alerts import emit_transition
+
+                        await emit_transition(
+                            conn, "data.revised", org_id=owner["org_id"],
+                            project_id=owner["project_id"], data_id=data_id,
+                            payload={
+                                "data_id": data_id, "revision": revision,
+                                "from_revision": revision - 1,
+                                # `write` and `reprocess` mean the upstream
+                                # document changed; `parse` and `interpret` mean
+                                # the same bytes were read better. A selector
+                                # needs to tell those apart, because only the
+                                # first is a change in the world.
+                                "source": source,
+                                "from_source": previous["source"],
+                                "data_type": owner["data_type"],
+                            },
+                        )
+                return revision
         except asyncpg.UniqueViolationError:
             if attempt == attempts - 1:
                 raise

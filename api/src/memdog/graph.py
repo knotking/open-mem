@@ -492,17 +492,10 @@ async def _endpoint_types(conn, subject_id: str, object_id: str) -> dict:
 
 async def _emit_transition(conn, event_type: str, *, org_id: str,
                            project_id: str, payload: dict) -> None:
-    """Record a transition where alerts can find it.
+    from .alerts import emit_transition
 
-    Inside the caller's transaction, because a transition is observable only
-    while it happens -- once the row reads its new value the old one is gone,
-    and no later sweep can recover it. `domain_events` rather than a table of
-    its own: it already has the monotonic sequence an alert reads forward from.
-    """
-    from .events import emit
-
-    await emit(conn, event_type=event_type, org_id=org_id,
-               project_id=project_id, payload=payload)
+    await emit_transition(conn, event_type, org_id=org_id,
+                          project_id=project_id, payload=payload)
 
 
 async def assert_fact(

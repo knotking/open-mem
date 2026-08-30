@@ -11,6 +11,60 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **Alerts — declare an event worth knowing about, and be told when it
+  happens.** `POST /api/v1/alerts` names a **surface** (a kind of transition)
+  and a **selector** over it; matches are recorded and read back from
+  `GET /api/v1/events?since=<sequence>`. First surfaces are the fact
+  transitions: `fact.asserted`, `fact.superseded`, `fact.retracted`. The cursor
+  is a sequence and not a timestamp, because two events in the same millisecond
+  would otherwise come back in whichever order the planner liked, and a poller
+  re-reading from a time would skip one.
+- **Evaluation is per window, never per write.** Alerts read forward from a
+  watermark rather than being triggered by each write — N alerts by M writes
+  means every write pays for every alert, and one crawl importing ten thousand
+  items would trigger ten thousand rounds. Five enabled alerts cost a write
+  zero evaluations, which the suite asserts rather than the comments claim.
+- **A new alert starts at the head of the log, not the beginning.** One that
+  fires a hundred notifications about last month the moment it is saved is one
+  somebody switches off.
+- **Enabling requires a backtest of the current version** — `POST
+  /api/v1/alerts/{id}/backtest` runs history through the live path with its
+  writes withheld, so what it reports is what a live run would do. Editing what
+  matches bumps the version, drops the approval and **disables the alert**;
+  renaming does none of those. Refusing to enable an un-backtested alert is a
+  409.
+- **A capped batch reports what it deferred.** Silent truncation reads as
+  "nothing else matched", which for an alert system is the worst available lie.
+  The watermark carries the remainder to the next run, and advances only after
+  matches are written — so a crash cannot step over transitions nobody looked at.
+- **`memdog-alert-tick`**, deployed with the API and driven by a **one-minute**
+  Cloud Scheduler job. The reconciler's ten minutes are fine for enrichment,
+  where lateness costs nothing a user sees; an alert ten minutes late is a
+  different product.
+- **`llm` mode is refused with a 501.** The schema and the surface are designed
+  for it, the evaluation is not built, and accepting it would look like a
+  working alert that ignores its own description.
+
+### Changed
+- **Fact transitions are recorded in `domain_events`** as `fact.asserted`,
+  `fact.superseded` and `fact.retracted`, carrying subject, predicate, object,
+  basis and both entity types. Emitted inside the transaction that made them,
+  because a transition is observable only while it happens — once a row reads
+  its new value the old one is gone. A second assertion of a claim already held
+  is a corroboration and **does not** emit `fact.asserted`, or an alert watching
+  assertions would fire every time another document agreed.
+- **An event carries no access level, deliberately.** Visibility is the
+  subject's, resolved when someone reads: a copy taken at match time is stale
+  the moment the record is re-shared, and ignores a revocation in between. A
+  notification is the one side channel around every other access check.
+
+### Migrations
+- **`0034_alerts.sql`** — `alerts`, `alert_runs`, `observed_events`. Additive.
+  Transitions deliberately have **no table of their own**; they are
+  `domain_events` rows, which already carry the sequence an alert reads forward
+  from.
+
+### Added
 - **The graph answers *what was true when*, and *what we believed when*.** Facts
   now carry two clocks: `valid_from`/`valid_to` for the world, and
   `recorded_at`/`retracted_at` for us. `GET /api/v1/entities/{id}/graph` and
