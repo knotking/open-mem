@@ -151,6 +151,76 @@ def test_rendering_does_not_break_on_a_value_containing_braces():
     CrawlerConfig.model_validate(config)
 
 
+def test_every_placeholder_in_a_template_is_a_scope_the_form_asks_for():
+    """Both directions, because both failures are silent.
+
+    A `{tenant}` nobody declares survives rendering and goes out in a URL
+    literally. A scope nobody uses is a field the form demands and then throws
+    away. Neither shows up as an error -- the first 404s, the second wastes
+    somebody's time -- so they are asserted rather than noticed.
+
+    The placeholder pattern is deliberately narrow: a GraphQL body is full of
+    braces, and only `{lower_snake}` is a substitution here.
+    """
+    import json
+    import re
+
+    placeholder = re.compile(r"\{([a-z][a-z0-9_]*)\}")
+    for connector in CATALOG:
+        used = set(placeholder.findall(json.dumps(connector.template)))
+        declared = {s.key for s in connector.scopes}
+        assert not used - declared, (
+            f"{connector.key} substitutes {sorted(used - declared)}, which the "
+            "form never asks for"
+        )
+        if connector.requires is None:
+            assert not declared - used, (
+                f"{connector.key} asks for {sorted(declared - used)} and does "
+                "nothing with it"
+            )
+
+
+def test_an_id_the_operator_names_is_asked_for_rather_than_guessed():
+    """Dataverse names a primary key after its table and a Workday report names
+    its columns after their labels. There is no id to default to, and defaulting
+    one would produce a crawler that pulls rows and hashes every one of them
+    into a fresh record on the next run."""
+    for key in ("dynamics365", "workday_report"):
+        connector = connectors.BY_KEY[key]
+        assert connector.template["extract"]["id_path"] == "{id_field}"
+        assert "id_field" in {s.key for s in connector.scopes}
+        rendered = connectors.build(key, _scope_for(connector))
+        assert rendered["extract"]["id_path"] == "value-for-id_field"
+
+
+def test_workday_offers_both_ways_in_and_says_which_one_is_conditional():
+    """The report is the one that always works -- an ISU with basic auth on
+    RaaS is how bulk data leaves Workday. The REST API is nicer and depends on
+    a grant the tenant may not permit, so it says so rather than failing at the
+    token request with no explanation."""
+    report = connectors.BY_KEY["workday_report"]
+    rest = connectors.BY_KEY["workday_workers"]
+    assert report.auth_style == "basic"
+    assert rest.auth_style == "client_credentials"
+    assert report.requires is None and rest.requires is None
+    assert "jwt bearer" in rest.notes.lower(), (
+        "the conditional grant is the whole reason this entry needs a note"
+    )
+    for connector in (report, rest):
+        CrawlerConfig.model_validate(
+            connectors.build(connector.key, _scope_for(connector)))
+
+
+def test_the_crm_category_covers_what_someone_would_actually_name():
+    """A catalog missing Dynamics is a catalog somebody bounces off. This is a
+    coverage assertion, not a behaviour one: it fails when an entry is dropped
+    without the decision being made on purpose."""
+    crm = {c.key for c in CATALOG if c.category == "CRM"}
+    assert {"salesforce", "hubspot", "dynamics365", "pipedrive", "zoho_crm",
+            "close", "copper", "freshsales", "zendesk_sell", "capsule",
+            "attio", "affinity"} <= crm
+
+
 # --- through the API ---------------------------------------------------------
 
 

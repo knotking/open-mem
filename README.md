@@ -10,7 +10,7 @@ which model produced it, who is allowed to see it, and can you prove you deleted
 
 ```
 54 file formats   ·   24 data types   ·   18 extraction prompts
-9 webhook providers   ·   4 crawler strategies   ·   28 app connectors
+9 webhook providers   ·   4 crawler strategies   ·   37 app connectors
 12 graph predicates   ·   8 MCP tools   ·   110 endpoints
 569 tests, against a real database, no mocks
 ```
@@ -113,7 +113,7 @@ a guarantee that stops at the database boundary is not one.
 | **A knowledge graph** | Entities resolved cautiously, typed edges carrying the records that assert them, plus co-mentions that need no model at all |
 | **Inbound webhooks** | 9 providers, each signing a different string over a different encoding |
 | **Crawlers** | Templated HTTP, feeds, bounded link traversal and folder walks, with a mandatory dry run |
-| **28 app connectors** | Jira, GitHub, Notion, Salesforce, Drive, SharePoint and the rest — as catalog *data*, not per-source code. None is verified, and the catalog says so |
+| **37 app connectors** | Jira, GitHub, Notion, Salesforce, Dynamics 365, Workday, Drive, SharePoint and the rest — as catalog *data*, not per-source code. None is verified, and the catalog says so |
 | **Deletion that completes** | Four blast radii, async reclamation, and a certificate re-queried from every table that could hold a trace |
 | **Cost, metered** | A durable row per model call — including the ones that failed, because a call that generated three thousand tokens and then timed out consumed them. Quota is weighted by what a request authorises, not by the fact that it arrived |
 | **Residency, enforced** | A regulated data type is served only by a model that runs inside the deployment. Checked when a model is assigned, again when one is resolved, and again before bytes reach it |

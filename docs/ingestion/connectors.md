@@ -115,19 +115,34 @@ It is never set by default, because an assertion that impersonates by default is
 
 ## What is in the catalog
 
-28 entries. 27 usable; one blocked, and listed anyway — hiding it would make the catalog look
+37 entries. 36 usable; one blocked, and listed anyway — hiding it would make the catalog look
 complete.
 
 | Category | Entries |
 |----------|---------|
 | **Issues and projects** | Jira · GitHub · Linear · Asana |
-| **CRM** | HubSpot · Pipedrive · Attio · Salesforce · ~~Zoho CRM~~ |
+| **CRM** | Salesforce · HubSpot · Dynamics 365 · Pipedrive · Close · Copper · Freshsales · Zendesk Sell · Capsule · Attio · Affinity · ~~Zoho CRM~~ |
 | **Documents and knowledge** | Notion · Confluence |
 | **Support** | Zendesk · Intercom · Freshdesk |
 | **Commerce** | Shopify · Stripe |
-| **People** | Greenhouse · BambooHR |
+| **People** | Greenhouse · BambooHR · Workday (custom report) · Workday (workers) |
 | **Google** | Drive · Drive (folder tree) · Gmail · Calendar |
 | **Microsoft** | SharePoint · SharePoint (library tree) · OneDrive · OneDrive (drive tree) · Outlook · Teams |
+
+### Workday, twice
+
+Workday is two entries because it has two ways in and they are not equivalent.
+
+| | Auth | Paging | When |
+|---|---|---|---|
+| **Custom report** (`workday_report`) | basic, an integration system user | none — the report is one document | always works; RaaS with an ISU is how bulk data leaves Workday |
+| **Workers** (`workday_workers`) | `client_credentials` | `offset` / `limit` | cleaner, and conditional — the grant must be enabled, and some tenants permit only the JWT bearer grant, which is not one of the six styles |
+
+The report entry asks for an **ID column**, because a Workday report names its columns after their
+labels and there is no id to default to. Dynamics 365 asks the same question for the same reason —
+Dataverse names a primary key after its singular table (`accountid`, `contactid`). Guessing either
+would produce a crawler that pulls rows and then hashes every one of them into a fresh record on the
+next run, which looks like duplication rather than a missing field.
 
 **Zoho CRM is the one genuine OAuth case.** It issues a refresh token only through a one-time
 interactive authorization — there is no non-interactive grant to substitute. It stays blocked with

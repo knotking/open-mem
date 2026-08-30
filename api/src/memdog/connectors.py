@@ -265,6 +265,152 @@ CATALOG: tuple[Connector, ...] = (
               "it is off by default.",
     ),
     Connector(
+        key="dynamics365", label="Microsoft Dynamics 365", category="CRM",
+        pulls="Records from any Dataverse table",
+        auth_style="client_credentials",
+        auth_help="An app registration, as `client_id:client_secret`. "
+                  "auth_config needs your tenant's token_url and the scope "
+                  "`https://<org>.crm.dynamics.com/.default`.",
+        scopes=(
+            Scope("org", "Organization host", "acme.crm.dynamics.com"),
+            Scope("entity", "Entity set", "accounts",
+                  "accounts \u00b7 contacts \u00b7 leads \u00b7 opportunities"),
+            Scope("id_field", "ID column", "accountid",
+                  "Dataverse names the primary key after the singular table -- "
+                  "`accountid`, `contactid`, `opportunityid`."),
+        ),
+        template=_http(
+            "https://{org}/api/data/v9.2/{entity}",
+            headers={"Accept": "application/json", "OData-Version": "4.0",
+                     "OData-MaxVersion": "4.0"},
+            items="value[*]", id_path="{id_field}", version="modifiedon",
+        ),
+        notes="The app registration must also exist as an application user "
+              "inside Dynamics with a security role. Without that it "
+              "authenticates cleanly and then sees nothing, which reads as an "
+              "empty CRM rather than a permissions problem. Paging is a whole "
+              "`@odata.nextLink` URL, which this pagination cannot template, "
+              "so this pulls one page.",
+    ),
+    Connector(
+        key="close", label="Close", category="CRM",
+        pulls="Leads, with their contacts and opportunities inline",
+        auth_style="basic",
+        auth_help="`your_api_key:` -- the password is empty.",
+        scopes=(),
+        template=_http(
+            "https://api.close.com/api/v1/lead/",
+            query={"_limit": "100"},
+            items="data[*]", id_path="id", title="display_name",
+            version="date_updated",
+            pagination={"type": "offset", "page_param": "_skip",
+                        "size_param": "_limit", "page_size": 100,
+                        "stop_when": "has_more == `false`"},
+        ),
+    ),
+    Connector(
+        key="copper", label="Copper", category="CRM",
+        pulls="Records from one object, by search",
+        auth_style="header", auth_name="X-PW-AccessToken",
+        auth_help="An API key from Settings \u2192 Integrations \u2192 API Keys.",
+        scopes=(
+            Scope("object", "Object", "opportunities",
+                  "people \u00b7 companies \u00b7 opportunities \u00b7 projects"),
+            Scope("email", "Account email", "you@acme.com",
+                  "Copper identifies the key's owner in a second header, so "
+                  "the key alone is not enough."),
+        ),
+        template=_http(
+            "https://api.copper.com/developer_api/v1/{object}/search",
+            method="POST", body={"page_size": 100},
+            headers={"X-PW-Application": "developer_api",
+                     "X-PW-UserEmail": "{email}",
+                     "Content-Type": "application/json"},
+            items="@", id_path="id", title="name", version="date_modified",
+        ),
+        notes="Copper pages with `page_number` in the request body, and this "
+              "pagination templates only the query string, so this pulls the "
+              "first page.",
+    ),
+    Connector(
+        key="freshsales", label="Freshsales", category="CRM",
+        pulls="Records in a saved view",
+        auth_style="header", auth_name="Authorization",
+        auth_help="Store the whole header value -- `Token token=your_api_key`. "
+                  "Freshsales does not use a `Bearer` prefix.",
+        scopes=(
+            Scope("domain", "Domain", "acme",
+                  "The subdomain in your Freshworks URL."),
+            Scope("object", "Object", "contacts",
+                  "contacts \u00b7 deals \u00b7 sales_accounts \u00b7 leads"),
+            Scope("view", "View ID", "401000123456",
+                  "Freshsales lists only through a saved view. "
+                  "`GET /crm/sales/api/<object>/filters` returns yours."),
+        ),
+        template=_http(
+            "https://{domain}.myfreshworks.com/crm/sales/api/{object}/view/{view}",
+            items="{object}[*]", id_path="id", version="updated_at",
+            pagination={"type": "page", "page_param": "page"},
+        ),
+        notes="No title is mapped: a contact calls it `display_name` and a "
+              "deal calls it `name`, and guessing one would silently blank the "
+              "other. The record is stored whole either way.",
+    ),
+    Connector(
+        key="zendesk_sell", label="Zendesk Sell", category="CRM",
+        pulls="Deals, contacts or leads",
+        auth_style="bearer",
+        auth_help="An access token from Settings \u2192 Integrations \u2192 OAuth. "
+                  "Sell is a separate API from Zendesk Support and does not "
+                  "take the Support token.",
+        scopes=(Scope("object", "Object", "deals",
+                      "deals \u00b7 contacts \u00b7 leads"),),
+        template=_http(
+            "https://api.getbase.com/v2/{object}",
+            query={"per_page": "100"},
+            items="items[*].data", id_path="id", title="name",
+            version="updated_at",
+            pagination={"type": "page", "page_param": "page",
+                        "size_param": "per_page", "page_size": 100},
+        ),
+    ),
+    Connector(
+        key="capsule", label="Capsule", category="CRM",
+        pulls="Parties, opportunities or cases",
+        auth_style="bearer",
+        auth_help="A personal access token from My Preferences \u2192 API "
+                  "Authentication Tokens.",
+        scopes=(Scope("object", "Object", "parties",
+                      "parties \u00b7 opportunities \u00b7 kases \u00b7 projects"),),
+        template=_http(
+            "https://api.capsulecrm.com/api/v2/{object}",
+            query={"perPage": "100"},
+            items="{object}[*]", id_path="id", title="name",
+            version="updatedAt",
+            pagination={"type": "page", "page_param": "page",
+                        "size_param": "perPage", "page_size": 100},
+        ),
+        notes="A party is a person or an organisation and only the "
+              "organisation has a `name`, so a person's title comes out empty.",
+    ),
+    Connector(
+        key="affinity", label="Affinity", category="CRM",
+        pulls="Organizations, people or opportunities",
+        auth_style="basic",
+        auth_help="`:your_api_key` -- the username is empty and the leading "
+                  "colon is not a typo.",
+        scopes=(Scope("object", "Object", "organizations",
+                      "organizations \u00b7 persons \u00b7 opportunities"),),
+        template=_http(
+            "https://api.affinity.co/{object}",
+            query={"page_size": "100"},
+            items="{object}[*]", id_path="id", title="name",
+            pagination={"type": "cursor", "cursor_path": "next_page_token",
+                        "cursor_param": "page_token",
+                        "size_param": "page_size", "page_size": 100},
+        ),
+    ),
+    Connector(
         key="zoho_crm", label="Zoho CRM", category="CRM",
         pulls="Modules and their records", auth_style="bearer",
         requires=OAUTH,
@@ -413,6 +559,58 @@ CATALOG: tuple[Connector, ...] = (
             headers={"Accept": "application/json"},
             items="employees[*]", id_path="id", title="displayName",
         ),
+    ),
+
+    Connector(
+        key="workday_report", label="Workday (custom report)", category="People",
+        pulls="Rows of a custom report",
+        auth_style="basic",
+        auth_help="An integration system user, as `isu@tenant:password`. The "
+                  "ISU needs a security group with Get access to the report's "
+                  "data sources, and its password set not to expire.",
+        scopes=(
+            Scope("report_url", "Report URL",
+                  "https://acme.workday.com/ccx/service/customreport2/acme/isu/Workers",
+                  "From the report's Actions \u2192 Web Service \u2192 View URLs, the "
+                  "JSON one, with its query string removed."),
+            Scope("id_field", "ID column", "Employee_ID",
+                  "A column of the report that identifies a row. Report "
+                  "columns are named by their label, so only you know it."),
+        ),
+        template=_http(
+            "{report_url}", query={"format": "json"},
+            items="Report_Entry[*]", id_path="{id_field}",
+        ),
+        notes="RaaS is how bulk data actually leaves Workday, and it is the "
+              "one endpoint an ISU reaches with basic auth alone. A report "
+              "returns its whole result set in a single document with no "
+              "paging, so narrow it inside Workday rather than here -- a "
+              "whole-tenant worker report will pass the crawler's per-item "
+              "byte limit.",
+    ),
+    Connector(
+        key="workday_workers", label="Workday (workers)", category="People",
+        pulls="The worker directory",
+        auth_style="client_credentials",
+        auth_help="An API client registered in Workday, as "
+                  "`client_id:client_secret`. auth_config needs the token_url "
+                  "`https://<host>/ccx/oauth2/<tenant>/token`.",
+        scopes=(
+            Scope("host", "Host", "acme.workday.com"),
+            Scope("tenant", "Tenant", "acme"),
+        ),
+        template=_http(
+            "https://{host}/ccx/api/v1/{tenant}/workers",
+            query={"limit": "100"},
+            items="data[*]", id_path="id", title="descriptor",
+            pagination={"type": "offset", "page_param": "offset",
+                        "size_param": "limit", "page_size": 100},
+        ),
+        notes="Cleaner than a report and conditional on your tenant: the "
+              "client-credentials grant has to be switched on for the API "
+              "client, and some tenants permit only the JWT bearer grant, "
+              "which is not one of the six styles here. If the token request "
+              "is refused, the custom report is the way in.",
     ),
 
     # --------------------------------------------- Google, by service account
