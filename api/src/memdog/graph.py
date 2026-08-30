@@ -424,7 +424,11 @@ async def _upsert_fact(
         -- that a second claim began.
         DO UPDATE SET confidence = greatest(entity_facts.confidence, EXCLUDED.confidence),
                       valid_from = least(entity_facts.valid_from, EXCLUDED.valid_from)
-        RETURNING fact_id
+        -- `xmax = 0` is true only for a row this statement inserted. Without it
+        -- a second source for a claim we already hold would announce itself as a
+        -- new one, and an alert watching assertions would fire on every
+        -- corroboration.
+        RETURNING fact_id, (xmax = 0) AS inserted
         """,
         new_id("fct"), org_id, project_id, subject_id, predicate, object_id,
         valid_from, basis, confidence, generator_version, owner_id, access_level,
@@ -432,8 +436,17 @@ async def _upsert_fact(
     )
     fact_id = row["fact_id"]
 
+    types = await _endpoint_types(conn, subject_id, object_id)
+    if row["inserted"]:
+        await _emit_transition(
+            conn, "fact.asserted", org_id=org_id, project_id=project_id,
+            payload={"fact_id": fact_id, "subject_id": subject_id,
+                     "predicate": predicate, "object_id": object_id,
+                     "basis": basis, **types},
+        )
+
     if predicate in SINGLE_VALUED:
-        await conn.execute(
+        closed = await conn.fetch(
             """
             UPDATE entity_facts
                SET valid_to = $4, superseded_by = $5
@@ -445,10 +458,44 @@ async def _upsert_fact(
                -- that is for the conflicts view to surface rather than for this
                -- to silently resolve.
                AND valid_from < $4
+            RETURNING fact_id, subject_id, predicate, object_id, basis
             """,
             project_id, subject_id, predicate, valid_from, fact_id,
         )
+        for old_fact in closed:
+            await _emit_transition(
+                conn, "fact.superseded", org_id=org_id, project_id=project_id,
+                payload={"fact_id": old_fact["fact_id"],
+                         "subject_id": old_fact["subject_id"],
+                         "predicate": old_fact["predicate"],
+                         "object_id": old_fact["object_id"],
+                         "basis": old_fact["basis"],
+                         "superseded_by": fact_id, **types},
+            )
     return fact_id
+
+
+async def _endpoint_types(conn, subject_id: str, object_id: str) -> dict:
+    """Entity types, denormalised onto the transition.
+
+    A selector asking for "any person's location changing" has to be answerable
+    without a join, because the alert evaluator reads the event log and nothing
+    else -- and by the time it looks, the entity may have been merged away.
+    """
+    rows = await conn.fetch(
+        "SELECT entity_id, type FROM entities WHERE entity_id = ANY($1::text[])",
+        [subject_id, object_id],
+    )
+    by_id = {r["entity_id"]: r["type"] for r in rows}
+    return {"subject_type": by_id.get(subject_id), "object_type": by_id.get(object_id)}
+
+
+async def _emit_transition(conn, event_type: str, *, org_id: str,
+                           project_id: str, payload: dict) -> None:
+    from .alerts import emit_transition
+
+    await emit_transition(conn, event_type, org_id=org_id,
+                          project_id=project_id, payload=payload)
 
 
 async def assert_fact(
@@ -516,6 +563,18 @@ async def retract_fact(
     )
     if row is None:
         raise GraphError("fact not found or already retracted", status=404)
+    async with pool.acquire() as conn:
+        detail = await conn.fetchrow(
+            "SELECT org_id, project_id, subject_id, predicate, object_id, basis "
+            "FROM entity_facts WHERE fact_id = $1", fact_id)
+        await _emit_transition(
+            conn, "fact.retracted", org_id=detail["org_id"],
+            project_id=detail["project_id"],
+            payload={"fact_id": fact_id, "subject_id": detail["subject_id"],
+                     "predicate": detail["predicate"],
+                     "object_id": detail["object_id"], "basis": detail["basis"],
+                     "reason": reason},
+        )
     return dict(row)
 
 

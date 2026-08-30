@@ -148,6 +148,31 @@ async def _bootstrap_to_secret(email: str, scope: str, project: str, secret: str
     return 0
 
 
+async def _alert_tick(limit: int) -> None:
+    """The floor under the async consumer.
+
+    Cloud Run scales to zero and the queue is in-process, so a window in flight
+    dies with its instance. The rows are the record of outstanding work, and
+    this is what re-derives it.
+    """
+    import json as jsonlib
+
+    from .alerts import tick
+    from .crypto import Envelope
+
+    settings = load_settings()
+    pool = await create_pool(settings)
+    try:
+        # The envelope is what lets the sweep sign a delivery. Without it the
+        # tick would evaluate and then quietly deliver nothing, which is the
+        # failure that looks most like success.
+        result = await tick(pool, limit=limit,
+                            envelope=Envelope.from_settings(settings))
+        print(jsonlib.dumps(result, default=str))
+    finally:
+        await pool.close()
+
+
 async def _reconcile(grace: int) -> None:
     """One sweep, then exit. Cloud Scheduler drives this as a job.
 
@@ -412,7 +437,7 @@ async def _seed(*, reset: bool, demo: bool) -> int:
 def main() -> int:
     if len(sys.argv) < 2 or sys.argv[1] not in (
         "bootstrap", "smoke", "revoke-key", "bootstrap-to-secret", "reconcile",
-        "crawl-tick", "seed",
+        "crawl-tick", "seed", "alert-tick",
         "grant-key", "add-member",
     ):
         print("usage: python -m memdog bootstrap [email] [personal|shared]",
@@ -422,6 +447,7 @@ def main() -> int:
         print("       python -m memdog revoke-key <prefix>", file=sys.stderr)
         print("       python -m memdog reconcile [grace_seconds]", file=sys.stderr)
         print("       python -m memdog crawl-tick [max_crawlers]", file=sys.stderr)
+        print("       python -m memdog alert-tick [max_alerts]", file=sys.stderr)
         print("       python -m memdog seed --demo [--reset]", file=sys.stderr)
         print("       python -m memdog bootstrap-to-secret <email> <scope> "
               "<project> <secret_name>   # for jobs: stdout is Cloud Logging",
@@ -437,6 +463,9 @@ def main() -> int:
     if sys.argv[1] == "crawl-tick":
         asyncio.run(_crawl_tick(int(sys.argv[2]) if len(sys.argv) > 2 else 5))
         return
+    if sys.argv[1] == "alert-tick":
+        asyncio.run(_alert_tick(int(sys.argv[2]) if len(sys.argv) > 2 else 20))
+        return 0
     if sys.argv[1] == "reconcile":
         asyncio.run(_reconcile(int(sys.argv[2]) if len(sys.argv) > 2 else 300))
         return 0

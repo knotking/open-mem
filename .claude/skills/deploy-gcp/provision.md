@@ -229,6 +229,25 @@ item, and both workers rebuild rather than append, so a spurious re-enqueue
 costs a little compute and nothing else. A `Pending` item is never swept — it is
 not behind, it is waiting for a fetch worker that does not exist yet.
 
+### The alert sweep
+
+A second schedule, the same two grants, and a **one-minute** interval rather
+than ten. The reconciler repairs enrichment, where lateness costs nothing a user
+sees; an alert ten minutes late is a different product, and for a deadline it
+may be worthless.
+
+```bash
+gcloud scheduler jobs create http memdog-alert-sweep --project $PROJECT \
+  --location $REGION --schedule="* * * * *" \
+  --uri="https://${REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT}/jobs/memdog-alert-tick:run" \
+  --http-method=POST --oauth-service-account-email=$SA
+```
+
+It is the floor under the in-process consumer, not a spare wheel: Cloud Run
+scales to zero, so a coalescing window in flight dies with its instance. The
+alert watermark in Postgres is the record of what has actually been evaluated,
+and this re-derives the rest.
+
 ## 10. Seed and UI
 
 ```bash

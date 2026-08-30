@@ -39,6 +39,14 @@ TOPIC_FOR_EVENT: dict[str, str] = {
     "reprocess.requested": "reprocess",
 }
 
+# Transitions alerts watch. All onto one topic, because the message says only
+# *something happened* -- the consumer coalesces and then reads the log itself,
+# so which transition woke it is not information it needs.
+for _surface in ("fact.asserted", "fact.superseded", "fact.retracted",
+                 "data.revised", "memory.member_added", "memory.retyped",
+                 "case.member_promoted", "acl.changed"):
+    TOPIC_FOR_EVENT[_surface] = "alerts"
+
 # `enrichment.refused` is emitted when a sensitivity policy withholds the
 # expensive tier from a record. Nothing consumes it and nothing should -- it is
 # evidence that a control fired, and the question it answers ("why does this

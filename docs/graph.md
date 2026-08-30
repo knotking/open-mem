@@ -340,6 +340,12 @@ have recorded it — the last evidence was erased, or a person withdrew it. A
 fact can be retracted without ever having become false, and neither deletes a
 row.
 
+## Being told when it changes
+
+Every transition here is a surface an alert can watch — `fact.asserted`,
+`fact.superseded`, `fact.retracted` — so *"tell me when any person's location
+changes"* is a selector rather than a polling loop. See [alerts](alerts.md).
+
 ## What is not built
 
 - **No path finding between two named entities.** Only neighbourhoods.

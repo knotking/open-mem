@@ -607,6 +607,46 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
         </div>
       </section>
 
+      <section className="steps" id="time">
+        <h2 className="section-title">And when each thing was true</h2>
+        <p className="hero-lede" style={{ marginBottom: 22 }}>
+          A claim carries two clocks: when it was true in the world, and when we learned it. A
+          document imported today about last year is visible as of last year, and invisible as of
+          last month — because we had not read it yet. One timestamp answers one of those
+          questions wrongly.
+        </p>
+        <div className="steps-grid">
+          <article>
+            <span className="step-n">THEN</span>
+            <h3>Nothing is overwritten</h3>
+            <p>
+              Moving to Berlin closes living in Lisbon rather than replacing it, so the graph as it
+              stood in March is still there to ask. A fact can also be withdrawn without ever
+              having been false — those are different, and they are stored differently.
+            </p>
+          </article>
+          <article>
+            <span className="step-n">RULES</span>
+            <h3>No model decides what stopped being true</h3>
+            <p>
+              Some relationships hold one value at a time and some do not. A second address
+              supersedes the first; a second employer does not, because people hold two jobs.
+              That is declared, not inferred.
+            </p>
+          </article>
+          <article>
+            <span className="step-n">ALERTS</span>
+            <h3>Say what matters, and be told</h3>
+            <p>
+              Describe an event — a location changing, a record becoming org-visible, a guess being
+              confirmed — and it is recorded when it happens, then polled or pushed to your
+              endpoint. Nothing runs until you have replayed it against history and seen what it
+              would have caught.
+            </p>
+          </article>
+        </div>
+      </section>
+
       <section className="steps" id="principles">
         <h2 className="section-title">What it holds itself to</h2>
         <div className="pillars-grid">

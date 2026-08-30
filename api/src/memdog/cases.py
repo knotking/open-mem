@@ -51,7 +51,7 @@ async def add_case_member(
     conn, case_id: str, data_id: str, *, basis: str, confidence: float | None = None,
     matched_on: str | None = None,
 ) -> None:
-    await conn.execute(
+    row = await conn.fetchrow(
         """
         INSERT INTO case_members (case_id, data_id, basis, confidence, matched_on)
         VALUES ($1, $2, $3, $4, $5)
@@ -60,9 +60,25 @@ async def add_case_member(
         -- was guessed, the membership is upgraded, never downgraded.
         DO UPDATE SET basis = CASE WHEN case_members.basis = 'asserted'
                                    THEN 'asserted' ELSE EXCLUDED.basis END
+        RETURNING basis, (xmax = 0) AS created
         """,
         case_id, data_id, basis, confidence, matched_on,
     )
+    # The moment a guess becomes something to act on. In a clinical or legal
+    # context that is the event people care about -- not that the association
+    # existed, but that a person stood behind it.
+    if row is not None and not row["created"] and basis == "asserted":
+        case = await conn.fetchrow(
+            "SELECT org_id, project_id, case_type FROM cases WHERE case_id = $1", case_id)
+        if case is not None:
+            from .alerts import emit_transition
+
+            await emit_transition(
+                conn, "case.member_promoted", org_id=case["org_id"],
+                project_id=case["project_id"], data_id=data_id,
+                payload={"case_id": case_id, "data_id": data_id,
+                         "case_type": case["case_type"], "matched_on": matched_on},
+            )
 
 
 async def route_case(

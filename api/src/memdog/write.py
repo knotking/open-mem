@@ -381,6 +381,15 @@ async def _write_one(
     event_time = item.event_time or datetime.now(timezone.utc)
     row = await conn.fetchrow(
         """
+        -- What the row said before this write, read from the same unique index
+        -- the upsert is about to probe. RETURNING cannot answer it: after
+        -- ON CONFLICT DO UPDATE it reports the new value, and by then the old
+        -- one is gone for good -- which is exactly why an ACL change has to be
+        -- captured here and cannot be swept up afterwards.
+        WITH prior AS (
+            SELECT access_level FROM data_items
+             WHERE project_id = $3 AND producer_id = $4 AND external_id = $7
+        )
         INSERT INTO data_items (
             data_id, org_id, project_id, producer_id, connection_id, owner_id,
             external_id, access_level, shared_with, content_text, storage_ref,
@@ -409,7 +418,8 @@ async def _write_one(
             run_id = EXCLUDED.run_id,
             state = 'stored',
             updated_at = now()
-        RETURNING data_id, (xmax = 0) AS created
+        RETURNING data_id, (xmax = 0) AS created,
+                  (SELECT access_level FROM prior) AS prior_access_level
         """,
         data_id,
         producer.org_id,
@@ -442,6 +452,22 @@ async def _write_one(
         json.dumps(item.metadata or {}),
     )
     data_id, created = row["data_id"], row["created"]
+
+    # The highest-stakes transition here, and the only one whose evidence is
+    # destroyed by the statement that causes it. "This record became org-visible
+    # on the third of March" is what an auditor asks for, and after the update
+    # the row simply says `org`.
+    if not created and row["prior_access_level"] not in (None, assigned.access_level):
+        from .alerts import emit_transition
+
+        await emit_transition(
+            conn, "acl.changed", org_id=producer.org_id,
+            project_id=producer.project_id, data_id=data_id,
+            payload={"data_id": data_id,
+                     "from_level": row["prior_access_level"],
+                     "to_level": assigned.access_level,
+                     "data_type": data_type},
+        )
 
     if not created:
         # Content may have changed under the same natural key. Dropping the

@@ -67,6 +67,7 @@ JOB_SECRETS="DB_PASSWORD=memdog-db-password:latest,MEMDOG_MASTER_KEY=memdog-mast
 # the only way to seed at all, since Cloud SQL is private-IP and the seed needs
 # to be inside the VPC.
 for job_spec in "memdog-reconcile:reconcile" "memdog-crawl-tick:crawl-tick" \
+                "memdog-alert-tick:alert-tick" \
                 "memdog-seed:seed,--demo"; do
   job="${job_spec%%:*}"
   command="${job_spec##*:}"

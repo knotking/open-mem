@@ -31,6 +31,7 @@ from .crawlers import CrawlerConfig, CrawlerError
 from . import crawling
 from . import entities as entities_mod
 from . import graph as graph_mod
+from .fetching import FetchError
 from .graph import GraphError
 from .entities import EntityError
 from . import account, agents, cases, connections, connectors, control, memories as memories_mod, models, normalize, sharing
@@ -127,6 +128,13 @@ async def lifespan(app: FastAPI):
         parse_worker=parse_worker, embed_worker=embed_worker,
         enrich_worker=enrich_worker, fetch_worker=fetch_worker,
     ).register(queue)
+    # Wakes on a transition and then waits. The waiting is the design: a
+    # consumer that evaluated one message at a time would be per-write
+    # evaluation with a queue in front of it.
+    from .alerts import AlertWorker
+
+    app.state.alert_worker = AlertWorker(pool)
+    app.state.alert_worker.register(queue)
 
     # The meter needs somewhere to write before the first model call, which
     # the workers above can make as soon as they are registered.
@@ -1941,6 +1949,7 @@ async def capabilities(request: Request) -> dict:
     maintainer typed will be wrong within a month, and wrong in the direction
     that overstates.
     """
+    from .alerts import SURFACES
     from .classify import _EXTENSION_MAP, _MIME_MAP
     from .connectors import CATALOG
     from .crawlers import STRATEGIES
@@ -1957,6 +1966,10 @@ async def capabilities(request: Request) -> dict:
         "extensions": len(_EXTENSION_MAP),
         "webhook_providers": len(PROVIDERS),
         "crawler_strategies": len(STRATEGIES),
+        # Counted from the vocabulary itself, so a surface that is added
+        # without being documented still shows up, and one that is removed
+        # stops being claimed.
+        "alert_surfaces": len(SURFACES),
         # Both, because the difference is the honest part: an entry that needs
         # something not built is listed rather than hidden, and a count that
         # silently dropped it would read as complete coverage.
@@ -2156,6 +2169,247 @@ async def retract_fact_endpoint(
         return await retract_fact(
             request.app.state.pool, actor, fact_id, (body or {}).get("reason"))
     except (GraphError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/alerts/surfaces")
+async def alert_surfaces_endpoint(actor: Principal = Depends(principal)) -> dict:
+    """The closed vocabulary, served rather than documented twice.
+
+    A console building a condition form needs to know which fields a surface
+    accepts, and hardcoding that list in the UI is how it drifts from the one
+    the server validates against.
+    """
+    from .alerts import SURFACES
+
+    return {"surfaces": {k: sorted(v) for k, v in SURFACES.items()}}
+
+
+@app.post("/api/v1/alerts", status_code=201)
+async def create_alert_endpoint(
+    request: Request, body: dict, actor: Principal = Depends(principal)
+) -> dict:
+    """Declare an event worth knowing about.
+
+    Starts watching from **now**, never from the beginning of the log: an alert
+    that fires a hundred notifications about last month the moment it is saved
+    is an alert someone switches off.
+    """
+    from .alerts import AlertError, create_alert
+
+    try:
+        return await create_alert(
+            request.app.state.pool, actor,
+            project_id=body["project_id"], name=body["name"],
+            surface=body["surface"], mode=body.get("mode", "rule"),
+            where=body.get("where"), describe=body.get("describe"),
+            model_id=body.get("model_id"),
+            debounce_seconds=int(body.get("debounce_seconds", 5)),
+            batch_cap=int(body.get("batch_cap", 500)),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=400, detail=f"missing {exc}") from exc
+    except (AlertError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/projects/{project_id}/alerts")
+async def list_alerts_endpoint(
+    request: Request, project_id: str, actor: Principal = Depends(principal)
+) -> dict:
+    from .alerts import AlertError, list_alerts
+
+    try:
+        return {"alerts": await list_alerts(request.app.state.pool, actor, project_id)}
+    except (AlertError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.patch("/api/v1/alerts/{alert_id}")
+async def update_alert_endpoint(
+    request: Request, alert_id: str, body: dict,
+    actor: Principal = Depends(principal)
+) -> dict:
+    """Editing what matches bumps the version, and un-approves the alert.
+
+    It is also disabled by the same edit. Leaving it on would keep firing a
+    question nobody has looked at since it changed.
+    """
+    from .alerts import AlertError, update_alert
+
+    try:
+        return await update_alert(request.app.state.pool, actor, alert_id, body)
+    except (AlertError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/alerts/{alert_id}/enabled")
+async def set_alert_enabled_endpoint(
+    request: Request, alert_id: str, body: dict,
+    actor: Principal = Depends(principal)
+) -> dict:
+    """409 until this version has been backtested. The dry-run gate, renamed."""
+    from .alerts import AlertError, set_enabled
+
+    try:
+        return await set_enabled(
+            request.app.state.pool, actor, alert_id, bool(body.get("enabled", True)))
+    except (AlertError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/alerts/{alert_id}/backtest")
+async def backtest_alert_endpoint(
+    request: Request, alert_id: str, body: dict | None = None,
+    actor: Principal = Depends(principal)
+) -> dict:
+    """Run history through the live path. Records nothing, delivers nothing.
+
+    What it reports is what a live run would do, because it *is* the live run
+    with its writes withheld — the crawler's dry-run discipline.
+    """
+    from .alerts import AlertError, backtest
+
+    try:
+        return await backtest(
+            request.app.state.pool, actor, alert_id,
+            int((body or {}).get("since_sequence", 0)))
+    except (AlertError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/alerts/{alert_id}/runs")
+async def alert_runs_endpoint(
+    request: Request, alert_id: str, limit: int = 20,
+    actor: Principal = Depends(principal)
+) -> dict:
+    """What each evaluation did — including what it deferred."""
+    from .alerts import AlertError, runs_for
+
+    try:
+        return {"runs": await runs_for(request.app.state.pool, actor, alert_id, limit)}
+    except (AlertError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.delete("/api/v1/alerts/{alert_id}")
+async def delete_alert_endpoint(
+    request: Request, alert_id: str, actor: Principal = Depends(principal)
+) -> dict:
+    from .alerts import AlertError, delete_alert
+
+    try:
+        return await delete_alert(request.app.state.pool, actor, alert_id)
+    except (AlertError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/events")
+async def poll_events_endpoint(
+    request: Request, since: int = 0, alert_id: str | None = None,
+    limit: int = 100, actor: Principal = Depends(principal)
+) -> dict:
+    """What fired, from a cursor.
+
+    Ordered by `sequence` rather than time: two events in the same millisecond
+    would otherwise come back in whichever order the planner liked, and a poller
+    that re-read from a timestamp would skip one of them.
+
+    Visibility is the subject's, resolved here against the caller's rights now —
+    never a copy taken when the alert matched.
+    """
+    from .alerts import AlertError, poll_events
+
+    try:
+        return await poll_events(
+            request.app.state.pool, actor, since=since, alert_id=alert_id, limit=limit)
+    except (AlertError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/event-subscriptions", status_code=201)
+async def create_subscription_endpoint(
+    request: Request, body: dict, actor: Principal = Depends(principal)
+) -> dict:
+    """Register an endpoint to be told at. The secret is returned **once**.
+
+    `https` only, and the URL is refused here *and* re-checked on every send —
+    a host that resolves to a public address today can resolve to a private one
+    tomorrow, and this service reaches Cloud SQL over the VPC.
+    """
+    from .event_delivery import DeliveryError, create_subscription
+
+    state = request.app.state
+    try:
+        return await create_subscription(
+            state.pool, actor, state.envelope,
+            project_id=body["project_id"], url=body["url"],
+            alert_id=body.get("alert_id"))
+    except KeyError as exc:
+        raise HTTPException(status_code=400, detail=f"missing {exc}") from exc
+    except (DeliveryError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    except FetchError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/projects/{project_id}/event-subscriptions")
+async def list_subscriptions_endpoint(
+    request: Request, project_id: str, actor: Principal = Depends(principal)
+) -> dict:
+    """Never includes the signing secret. It is shown once and rotated, not read."""
+    from .event_delivery import DeliveryError, list_subscriptions
+
+    try:
+        return {"subscriptions": await list_subscriptions(
+            request.app.state.pool, actor, project_id)}
+    except (DeliveryError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/event-subscriptions/{subscription_id}/rotate")
+async def rotate_subscription_endpoint(
+    request: Request, subscription_id: str, actor: Principal = Depends(principal)
+) -> dict:
+    """New secret; the previous one keeps verifying for the overlap window."""
+    from .event_delivery import DeliveryError, rotate_secret
+
+    state = request.app.state
+    try:
+        return await rotate_secret(state.pool, actor, state.envelope, subscription_id)
+    except (DeliveryError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/event-subscriptions/{subscription_id}/deliveries")
+async def subscription_deliveries_endpoint(
+    request: Request, subscription_id: str, limit: int = 50,
+    actor: Principal = Depends(principal)
+) -> dict:
+    """Attempts, statuses and last error — the "is my endpoint healthy" view."""
+    from .event_delivery import DeliveryError, deliveries_for
+
+    try:
+        return {"deliveries": await deliveries_for(
+            request.app.state.pool, actor, subscription_id, limit)}
+    except (DeliveryError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/event-subscriptions/{subscription_id}/replay")
+async def replay_deliveries_endpoint(
+    request: Request, subscription_id: str, actor: Principal = Depends(principal)
+) -> dict:
+    """Re-arm dead letters once the endpoint is fixed.
+
+    The rows were kept for exactly this: an hour of downtime is recoverable
+    rather than gone.
+    """
+    from .event_delivery import DeliveryError, replay_dead
+
+    try:
+        return await replay_dead(request.app.state.pool, actor, subscription_id)
+    except (DeliveryError, AuthError) as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
 
 
