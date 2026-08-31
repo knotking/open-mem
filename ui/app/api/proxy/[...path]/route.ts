@@ -68,6 +68,12 @@ const ALLOWED = [
   /^api\/v1\/alerts\/[A-Za-z0-9_]+\/(backtest|enabled|runs)(\?.*)?$/,
   /^api\/v1\/projects\/[A-Za-z0-9_]+\/alerts$/,
   /^api\/v1\/alert-events(\?.*)?$/,
+  // Standing queries: the same shape as alerts, matching on the record rather
+  // than on a transition.
+  /^api\/v1\/standing-queries$/,
+  /^api\/v1\/standing-queries\/[A-Za-z0-9_]+$/,
+  /^api\/v1\/standing-queries\/[A-Za-z0-9_]+\/(backtest|enabled|matches)(\?.*)?$/,
+  /^api\/v1\/projects\/[A-Za-z0-9_]+\/standing-queries$/,
   /^api\/v1\/event-subscriptions$/,
   /^api\/v1\/event-subscriptions\/[A-Za-z0-9_]+$/,
   /^api\/v1\/event-subscriptions\/[A-Za-z0-9_]+\/(rotate|replay|deliveries)(\?.*)?$/,

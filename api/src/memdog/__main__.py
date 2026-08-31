@@ -148,6 +148,18 @@ async def _bootstrap_to_secret(email: str, scope: str, project: str, secret: str
     return 0
 
 
+async def _standing_in(pool) -> dict:
+    """Standing queries ride the alert sweep rather than adding a job.
+
+    They are due at most once a minute and evaluate a bounded window, so a
+    per-minute pass costs one indexed lookup that usually returns nothing --
+    the same argument compaction made for riding it.
+    """
+    from .standing import tick as standing_tick
+
+    return await standing_tick(pool)
+
+
 async def _alert_tick(limit: int) -> None:
     """The floor under the async consumer.
 
@@ -175,6 +187,10 @@ async def _alert_tick(limit: int) -> None:
         # lookup that usually returns nothing.
         result["compaction"] = await compaction_tick(
             pool, extractor=build_extractor(settings))
+        # And standing queries, for the same reason: a bounded window per pass,
+        # no model call anywhere in the path, and one indexed lookup when
+        # nothing is due.
+        result["standing"] = await _standing_in(pool)
         print(jsonlib.dumps(result, default=str))
     finally:
         await pool.close()

@@ -10,6 +10,15 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 
 ## Unreleased
 
+### Fixed
+- **A compaction job on a parent memory reported "0 members"** beside a run that
+  would consider three — the count was single-level while the run reads through
+  `part_of`. The card is what somebody reads before deciding whether to run it,
+  so **a count that disagrees with what the job does is worse than no count**.
+  This was the third single-level reader of `memory_members`; the other two are
+  defensible, since a listing showing a container's own members has the tree
+  beside it.
+
 ### Changed
 - **`memories.md` says what the two hierarchical relations actually do.** It
   described `memory_links` as a table with five relations and never said that

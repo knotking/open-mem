@@ -1928,6 +1928,137 @@ async def read_expiring(
     }
 
 
+@app.post("/api/v1/standing-queries", status_code=201)
+async def create_standing(
+    request: Request, body: dict, actor: Principal = Depends(principal)
+) -> dict:
+    """Say once what you want to be told about.
+
+    Created **disabled**, like a crawler: enabling requires a backtest, because
+    a selector that matches everything looks exactly like one that works until
+    somebody reads what it caught.
+    """
+    from .standing import StandingError, create
+
+    try:
+        return await create(
+            request.app.state.pool, actor,
+            project_id=body.get("project_id", ""), name=body.get("name", "untitled"),
+            selector=body.get("selector") or {}, delivery=body.get("delivery"),
+        )
+    except (StandingError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/projects/{project_id}/standing-queries")
+async def list_standing(
+    request: Request, project_id: str, actor: Principal = Depends(principal)
+) -> dict:
+    from .standing import StandingError, listing
+
+    try:
+        return {"queries": await listing(request.app.state.pool, actor, project_id)}
+    except (StandingError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/standing-queries/{query_id}")
+async def read_standing(
+    request: Request, query_id: str, actor: Principal = Depends(principal)
+) -> dict:
+    from .standing import StandingError, get
+
+    try:
+        return await get(request.app.state.pool, actor, query_id)
+    except (StandingError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.patch("/api/v1/standing-queries/{query_id}")
+async def patch_standing(
+    request: Request, query_id: str, body: dict, actor: Principal = Depends(principal)
+) -> dict:
+    """Editing what matches drops the approval, as editing a crawler drops its
+    dry run: an approval belongs to the question that was asked."""
+    from .standing import StandingError, update
+
+    try:
+        return await update(
+            request.app.state.pool, actor, query_id,
+            selector=body.get("selector"), delivery=body.get("delivery"),
+            name=body.get("name"),
+        )
+    except (StandingError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.delete("/api/v1/standing-queries/{query_id}")
+async def delete_standing(
+    request: Request, query_id: str, actor: Principal = Depends(principal)
+) -> dict:
+    from .standing import StandingError, delete
+
+    try:
+        return await delete(request.app.state.pool, actor, query_id)
+    except (StandingError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/standing-queries/{query_id}/backtest")
+async def backtest_standing(
+    request: Request, query_id: str, body: dict | None = None,
+    actor: Principal = Depends(principal),
+) -> dict:
+    """What it *would* have caught, with the matches themselves.
+
+    A count cannot tell a selector that works from one that caught the whole
+    corpus, which is the lesson the alert backtest had to learn twice.
+    """
+    from .standing import StandingError, evaluate
+
+    body = body or {}
+    try:
+        actor.require(DATA_READ)
+        return await evaluate(
+            request.app.state.pool, query_id, trigger="backtest", record=False,
+            from_sequence=int(body.get("from_sequence", 0)),
+        )
+    except (StandingError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/standing-queries/{query_id}/enabled")
+async def enable_standing(
+    request: Request, query_id: str, body: dict, actor: Principal = Depends(principal)
+) -> dict:
+    from .standing import StandingError, set_enabled
+
+    try:
+        return await set_enabled(
+            request.app.state.pool, actor, query_id, bool(body.get("enabled", True)))
+    except (StandingError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/standing-queries/{query_id}/matches")
+async def standing_matches(
+    request: Request, query_id: str, since: int = 0, limit: int = 100,
+    actor: Principal = Depends(principal),
+) -> dict:
+    """The feed, from a cursor.
+
+    Visibility is the reader's, resolved now rather than copied when the match
+    was recorded -- a record unshared since is not in their feed today.
+    """
+    from .standing import StandingError, matches_for
+
+    try:
+        return await matches_for(
+            request.app.state.pool, actor, query_id, since=since, limit=limit)
+    except (StandingError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
 @app.get("/api/v1/artifacts/stale")
 async def read_stale(
     request: Request, actor: Principal = Depends(principal), limit: int = 100

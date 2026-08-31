@@ -68,7 +68,7 @@ type Section =
   | "overview"
   | "add" | "update" | "search" | "ask" | "inbound" | "crawlers" | "mcp"
   | "memory" | "cases" | "entities" | "compaction" | "reprocess"
-  | "alerts"
+  | "alerts" | "standing"
   | "audit" | "sharing" | "deletion"
   | "settings" | "models" | "prompts"
   | "projects" | "keys" | "producers" | "platform";
@@ -101,6 +101,7 @@ const GROUPS: { title: string; items: { key: Section; label: string; hint: strin
     items: [
       { key: "overview", label: "Overview", hint: "is this working?" },
       { key: "alerts", label: "Alerts", hint: "tell me when this happens" },
+      { key: "standing", label: "Standing queries", hint: "tell me when this arrives" },
     ],
   },
   {
@@ -308,6 +309,7 @@ export default function Console({
         {section === "memory" && <MemorySection projectId={projectId} />}
         {section === "cases" && <CasesSection projectId={projectId} />}
         {section === "alerts" && <AlertsSection projectId={projectId} />}
+        {section === "standing" && <StandingSection projectId={projectId} />}
         {section === "compaction" && <CompactionSection projectId={projectId} />}
         {section === "reprocess" && <ReprocessSection projectId={projectId} />}
         {section === "entities" && (
@@ -5280,6 +5282,362 @@ function ScopeReach({ memoryId }: { memoryId: string }) {
       includes {tree.descendants.length} child memor
       {tree.descendants.length === 1 ? "y" : "ies"}
     </span>
+  );
+}
+
+/* ----------------------------------------------------- standing queries */
+
+type StandingQuery = {
+  query_id: string;
+  name: string;
+  selector: { query?: string; data_type?: string; tags?: string[]; producer_id?: string };
+  delivery: { kind: string; memory_key?: string; memory_type?: string };
+  enabled: boolean;
+  approved: boolean;
+  watermark: number;
+  matches: number;
+  last_match_at: string | null;
+  last_run_at: string | null;
+};
+
+type StandingMatch = {
+  match_id: string;
+  data_id: string;
+  sequence: number;
+  matched_at: string;
+  visible: boolean;
+  external_id: string | null;
+  data_type: string | null;
+  preview: string | null;
+};
+
+type StandingBacktest = {
+  candidates: number;
+  matches: number;
+  withheld: number;
+  deferred: number;
+  samples: { data_id: string; external_id: string | null; data_type: string | null;
+             preview: string | null; visible: boolean }[];
+};
+
+/**
+ * Standing queries — the one thing here that speaks first.
+ *
+ * Everything else answers when asked. This screen exists to make the three
+ * rules of that visible rather than documented: it never re-scans, so a query
+ * only ever sees what arrives after it was registered; delivery is a read, so a
+ * match the owner cannot see is withheld and *counted*; and time is not a
+ * selector, which is why there is no "in thirty days" field here and a sentence
+ * saying where that lives instead.
+ *
+ * The backtest shows what it caught, not how much. A selector that matches
+ * everything and one that works produce the same number.
+ */
+function StandingSection({ projectId }: { projectId: string }) {
+  const [queries, setQueries] = useState<StandingQuery[] | null>(null);
+  const [selected, setSelected] = useState<StandingQuery | null>(null);
+  const [feed, setFeed] = useState<{ matches: StandingMatch[]; withheld: number } | null>(null);
+  const [backtest, setBacktest] = useState<StandingBacktest | null>(null);
+
+  const [name, setName] = useState("");
+  const [text, setText] = useState("");
+  const [dataType, setDataType] = useState("");
+  const [tags, setTags] = useState("");
+  const [deliverTo, setDeliverTo] = useState("");
+
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      setQueries((await call<{ queries: StandingQuery[] }>(
+        `api/v1/projects/${projectId}/standing-queries`)).queries);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, [projectId]);
+  useEffect(() => { void load(); }, [load]);
+
+  async function act(message: string, run: () => Promise<unknown>) {
+    setBusy(true); setError(null); setNote(null);
+    try {
+      await run();
+      setNote(message);
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function open(q: StandingQuery) {
+    setSelected(q);
+    setBacktest(null);
+    setError(null);
+    try {
+      setFeed(await call<{ matches: StandingMatch[]; withheld: number }>(
+        `api/v1/standing-queries/${q.query_id}/matches?limit=50`));
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  const selector = () => {
+    const s: Record<string, unknown> = {};
+    if (text.trim()) s.query = text.trim();
+    if (dataType.trim()) s.data_type = dataType.trim();
+    if (tags.trim()) s.tags = tags.split(",").map((t) => t.trim()).filter(Boolean);
+    return s;
+  };
+  const narrows = text.trim() !== "" || dataType.trim() !== "" || tags.trim() !== "";
+
+  return (
+    <>
+      <h1>Standing queries</h1>
+      <p className="lede">
+        Everything else here answers when asked. This is the one thing that speaks first: say once
+        what you want to be told about, and each new record is checked against it as it arrives.
+      </p>
+      {error && <p className="err">{error}</p>}
+      {note && <p className="empty">{note}</p>}
+
+      <section className="panel">
+        <h2>Watch for something</h2>
+        <div className="row">
+          <label style={{ flex: 1 }}>
+            Name
+            <input type="text" value={name} placeholder="what this is for"
+                   onChange={(e) => setName(e.target.value)} />
+          </label>
+          <label style={{ flex: 2 }}>
+            Words
+            <input type="text" value={text}
+                   placeholder={'acme  ·  "data breach" -rumour  ·  outage or incident'}
+                   onChange={(e) => setText(e.target.value)} />
+          </label>
+        </div>
+        <div className="row">
+          <label>
+            Type
+            <input type="text" value={dataType} placeholder="email · issue · note"
+                   onChange={(e) => setDataType(e.target.value)} />
+          </label>
+          <label style={{ flex: 1 }}>
+            Tags
+            <input type="text" value={tags} placeholder="source:acme, priority"
+                   onChange={(e) => setTags(e.target.value)} />
+          </label>
+          <label style={{ flex: 1 }}>
+            Collect into a memory
+            <input type="text" value={deliverTo} placeholder="optional — a memory key"
+                   onChange={(e) => setDeliverTo(e.target.value)} />
+          </label>
+          <button
+            disabled={busy || !narrows || !name.trim()}
+            title={!narrows
+              ? "Narrow it first. A selector matching everything makes the feed a copy of the project."
+              : "Created disabled — it has to be backtested before it can start."}
+            onClick={() =>
+              act("Created. Backtest it, then enable it.", async () => {
+                await call("api/v1/standing-queries", {
+                  project_id: projectId, name: name.trim(), selector: selector(),
+                  delivery: deliverTo.trim()
+                    ? { kind: "memory", memory_key: deliverTo.trim() }
+                    : { kind: "poll" },
+                });
+                setName(""); setText(""); setDataType(""); setTags(""); setDeliverTo("");
+              })
+            }
+          >
+            Create
+          </button>
+        </div>
+        <p className="empty" style={{ marginBottom: 0 }}>
+          Quoted phrases, <code>or</code> and <code>-exclusion</code> all work — it is the same
+          lexical matching search uses, so a standing query and a search agree about what the words
+          mean. <strong>No model is called anywhere in this path</strong>, so a query costs nothing
+          per record however many you register.
+        </p>
+        <p className="warned" style={{ marginBottom: 0 }}>
+          <strong>&ldquo;Thirty days before a due date&rdquo; is not one of these.</strong> Nothing
+          arrives on that day, so no predicate over new writes can catch it — that needs a scheduled
+          sweep over dates, which is what expiry does and this deliberately does not.
+        </p>
+      </section>
+
+      <section className="panel">
+        <h2>What is being watched</h2>
+        {queries === null ? (
+          <p className="empty">Loading…</p>
+        ) : queries.length === 0 ? (
+          <p className="empty">
+            Nothing yet. A standing query earns its place when you would otherwise be searching for
+            the same thing on a schedule.
+          </p>
+        ) : (
+          <div className="excluded">
+            {queries.map((q) => (
+              <button
+                className={`item memrow${selected?.query_id === q.query_id ? " chosen" : ""}`}
+                key={q.query_id}
+                onClick={() => void open(q)}
+              >
+                <span className={`chip ${q.enabled ? "on" : ""}`}>
+                  {q.enabled ? "watching" : q.approved ? "ready" : "not backtested"}
+                </span>
+                <strong>{q.name}</strong>
+                <code>{q.selector.query ?? Object.keys(q.selector).join(" · ")}</code>
+                {q.delivery.kind === "memory" && (
+                  <span className="chip">→ {q.delivery.memory_key}</span>
+                )}
+                <span className="empty">{q.matches} match{q.matches === 1 ? "" : "es"}</span>
+                <span className="empty far">
+                  {q.last_match_at
+                    ? `last ${new Date(q.last_match_at).toLocaleString()}`
+                    : q.enabled ? "nothing yet" : "not started"}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {selected && (
+        <>
+          <section className="panel">
+            <h2>{selected.name}</h2>
+            <div className="row">
+              <button
+                className="secondary"
+                disabled={busy}
+                title="Runs the selector over everything already here and shows what it would have caught. Writes nothing."
+                onClick={() =>
+                  act("Backtested — nothing was recorded.", async () => {
+                    setBacktest(await call<StandingBacktest>(
+                      `api/v1/standing-queries/${selected.query_id}/backtest`,
+                      { from_sequence: 0 }));
+                  })
+                }
+              >
+                Backtest
+              </button>
+              <button
+                disabled={busy || (!selected.enabled && !selected.approved)}
+                title={!selected.enabled && !selected.approved
+                  ? "Backtest this version first — a selector that matches everything looks exactly like one that works until you read what it caught."
+                  : selected.enabled ? "Stops it watching." : "Starts it. It sees what arrives from now on."}
+                onClick={() =>
+                  act(selected.enabled ? "Stopped." : "Watching from now on.", async () => {
+                    await call(`api/v1/standing-queries/${selected.query_id}/enabled`,
+                               { enabled: !selected.enabled });
+                    setSelected({ ...selected, enabled: !selected.enabled });
+                  })
+                }
+              >
+                {selected.enabled ? "Stop" : "Start watching"}
+              </button>
+              <button
+                className="linkish far"
+                disabled={busy}
+                onClick={() =>
+                  act("Deleted.", async () => {
+                    await call(`api/v1/standing-queries/${selected.query_id}`,
+                               undefined, "DELETE");
+                    setSelected(null);
+                    setFeed(null);
+                  })
+                }
+              >
+                Delete
+              </button>
+            </div>
+            <p className="empty" style={{ marginBottom: 0 }}>
+              It sees records written <strong>after it was registered</strong> — a query is a
+              statement about what arrives next, and starting one at the beginning of the corpus
+              would replay the whole history into its feed. Use the backtest to look backwards.
+            </p>
+          </section>
+
+          {backtest && (
+            <section className="panel">
+              <h2>It would have caught {backtest.matches}</h2>
+              <div className="row">
+                <span className="chip on">{backtest.matches} matched</span>
+                {backtest.withheld > 0 && (
+                  <span className="chip warnchip">{backtest.withheld} withheld</span>
+                )}
+                <span className="chip">{backtest.candidates} considered</span>
+                {backtest.deferred > 0 && (
+                  <span className="chip">{backtest.deferred} not yet looked at</span>
+                )}
+              </div>
+              {backtest.withheld > 0 && (
+                <p className="warned">
+                  {backtest.withheld} of these matched records <strong>you cannot see</strong>.
+                  They are counted and never shown: a match delivered to somebody without rights to
+                  the record would be a leak through the notification channel.
+                </p>
+              )}
+              {backtest.samples.length === 0 ? (
+                <p className="empty">
+                  Nothing matched. That is a result, not a failure — check the words before
+                  assuming the corpus is empty.
+                </p>
+              ) : (
+                <div className="excluded">
+                  {backtest.samples.filter((s) => s.visible).map((s) => (
+                    <div className="item" key={s.data_id}>
+                      <code>{s.external_id ?? s.data_id}</code>
+                      <span className="chip">{s.data_type ?? "untyped"}</span>
+                      <span className="empty">{s.preview}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <p className="empty" style={{ marginBottom: 0 }}>
+                The matches themselves, rather than a number: a selector that caught the whole
+                project and one that works report the same count.
+              </p>
+            </section>
+          )}
+
+          <section className="panel">
+            <h2>What it has caught</h2>
+            {feed === null ? (
+              <p className="empty">Loading…</p>
+            ) : feed.matches.length === 0 ? (
+              <p className="empty">
+                {selected.enabled
+                  ? "Nothing has matched yet. It is watching — this is what quiet looks like."
+                  : "Not started, so nothing has been checked against it."}
+              </p>
+            ) : (
+              <div className="excluded">
+                {feed.matches.map((m) => (
+                  <div className="item" key={m.match_id}>
+                    <code>{m.external_id ?? m.data_id}</code>
+                    <span className="chip">{m.data_type ?? "untyped"}</span>
+                    <span className="empty">{m.preview}</span>
+                    <span className="empty far">
+                      {new Date(m.matched_at).toLocaleString()}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {feed && feed.withheld > 0 && (
+              <p className="warned">
+                {feed.withheld} match{feed.withheld === 1 ? " is" : "es are"} withheld — the query
+                matched records you cannot read. Said rather than hidden, because a silently
+                incomplete feed is one nobody can explain.
+              </p>
+            )}
+          </section>
+        </>
+      )}
+    </>
   );
 }
 
