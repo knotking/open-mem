@@ -95,6 +95,11 @@ async def add_member(conn, memory_id: str, data_id: str, added_by: str) -> None:
     # the *absence* of a signal, and it happens on essentially every write, so
     # announcing it would put an event and a queue message on the write path
     # for nothing.
+    # Every rollup built from this memory is now out of date. Marked before the
+    # transition is emitted, so a consumer woken by the event that reads the
+    # rollup finds it already flagged rather than racing the flag.
+    await mark_ancestors_stale(conn, memory_id, reason="a member was added")
+
     if memory["type"] == "default":
         return
     from .alerts import emit_transition
@@ -324,6 +329,10 @@ async def remove_member(
         raise MemoryError("memory not found", status=404)
 
     async with pool.acquire() as conn, conn.transaction():
+        # Removing is a change too, and the direction people forget: a rollup
+        # that still describes a record the memory no longer holds is wrong in
+        # the way that is hardest to notice, because it reads as complete.
+        await mark_ancestors_stale(conn, memory_id, reason="a member was removed")
         removed = await conn.execute(
             "DELETE FROM memory_members WHERE memory_id = $1 AND data_id = $2",
             memory_id, data_id,
@@ -1047,6 +1056,56 @@ TREE_MAX_DEPTH = 12
 TREE_MAX_NODES = 200
 
 
+async def mark_ancestors_stale(conn, memory_id: str, *, reason: str) -> int:
+    """A child changed, so every rollup built from it is now wrong.
+
+    Deterministic and free: no model, no queue, and it cannot be mistaken. What
+    it does **not** do is recompute -- that is deliberate, and it is the same
+    correction the alert system had to make. Recomputing on write turns one bulk
+    import into thousands of model calls nobody asked for, so the mark is the
+    signal and the recompute is a decision somebody makes.
+
+    Only `derived_from`. A `part_of` parent has no separate state: its members
+    *are* its children's members, so there is nothing to be stale.
+
+    Idempotent by construction -- `WHERE stale_since IS NULL` -- so forty
+    children moving in one import costs one row write, and `stale_since` keeps
+    the first change rather than the last. *How long has this been wrong* is the
+    question; *when did it last get worse* is not.
+    """
+    marked = await conn.fetch(
+        """
+        WITH RECURSIVE ancestry(memory_id, depth) AS (
+            SELECT l.from_memory, 1 FROM memory_links l
+            WHERE l.to_memory = $1 AND l.relation = 'derived_from'
+            UNION
+            SELECT l.from_memory, a.depth + 1
+            FROM memory_links l JOIN ancestry a ON l.to_memory = a.memory_id
+            WHERE l.relation = 'derived_from' AND a.depth < $3
+        )
+        UPDATE memories m SET stale_since = now(), stale_reason = $2
+        -- DISTINCT because a diamond is the requested shape, not an edge case:
+        -- two children rolling into one parent means the parent is reachable by
+        -- two paths, and an UPDATE joined against both would be told to write
+        -- the same row twice.
+        FROM (SELECT DISTINCT memory_id FROM ancestry) a
+        WHERE m.memory_id = a.memory_id AND m.stale_since IS NULL
+          AND m.deleted_at IS NULL
+        RETURNING m.memory_id
+        """,
+        memory_id, reason, TREE_MAX_DEPTH,
+    )
+    return len(marked)
+
+
+async def clear_stale(conn, memory_id: str) -> None:
+    """Recomputed, so it is current again."""
+    await conn.execute(
+        "UPDATE memories SET stale_since = NULL, stale_reason = NULL WHERE memory_id = $1",
+        memory_id,
+    )
+
+
 async def tree(
     pool: asyncpg.Pool, principal, memory_id: str, *, relation: str = "part_of",
 ) -> dict:
@@ -1095,6 +1154,7 @@ async def tree(
                 WHERE l.relation = $2 AND w.depth < $3
             )
             SELECT w.depth, m.memory_id, m.type, m.memory_key, m.title,
+                   m.stale_since, m.stale_reason,
                    (SELECT count(*) FROM memory_members mm
                     WHERE mm.memory_id = m.memory_id) AS members
             FROM walk w JOIN memories m ON m.memory_id = w.memory_id
@@ -1108,9 +1168,13 @@ async def tree(
 
     ancestors = await walk("up")
     descendants = await walk("down")
+    subject = await pool.fetchrow(
+        "SELECT stale_since, stale_reason FROM memories WHERE memory_id = $1", memory_id)
     return {
         "memory_id": memory_id,
         "relation": relation,
+        "stale_since": subject["stale_since"] if subject else None,
+        "stale_reason": subject["stale_reason"] if subject else None,
         "ancestors": ancestors,
         "descendants": descendants,
         # Distinct memories, because a diamond -- two children of one parent

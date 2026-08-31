@@ -678,6 +678,10 @@ async def list_memories(pool: asyncpg.Pool, principal: Principal, project_id: st
         f"""
         SELECT m.memory_id, m.type, m.memory_key, m.title, m.owner_id, m.created_at,
                t.ttl_seconds, t.on_expiry,
+               -- A rollup nobody can tell is out of date is one people keep
+               -- quoting. Returned with the listing rather than behind a second
+               -- request, because the moment it matters is while reading it.
+               m.stale_since, m.stale_reason,
                (SELECT count(*) FROM memory_members mm
                   JOIN data_items d ON d.data_id = mm.data_id
                  WHERE mm.memory_id = m.memory_id AND {predicate}) AS members

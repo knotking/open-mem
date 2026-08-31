@@ -11,6 +11,115 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **Groups can be created, and shared with.** A group is a principal the ACL
+  predicate has always resolved — the mechanism behind permission-aware
+  retrieval — and **there was no way to create one**, so `restricted` to a
+  group was unreachable in practice. Creating them was half the loop: nothing
+  changes an item's ACL after the fact, so Add data now sets the level and its
+  principals, which is the only moment that decision can be made.
+- **The erasure certificate is displayed.** `GET /data/{id}/erasure` re-queries
+  every table holding item-scoped data rather than trusting the cascade ran —
+  the cascade being the thing under test — and is issued against `purged_at`,
+  not `deleted_at`: **a tombstone is a promise and the purge is the thing that
+  kept it**. The screen names the tables it checked, because a certificate that
+  says only *complete* is the claim it exists to replace.
+
+### Fixed
+- **A principal is prefixed — `group:grp_…`, `user:usr_…` — and a bare id
+  matches nothing.** Found by walking the new picker: the record is written,
+  stored correctly, and **invisible to everyone including the person who wrote
+  it**, with nothing anywhere saying why.
+
+### Known
+- **`ItemAccess` promises a rule that is not enforced.** It says a caller may
+  narrow visibility and never widen it, and that a level the producer's
+  connection scope does not permit is a rejected item — and `acl_for_write`
+  does not check, so a personal-connection producer can request `public` and
+  get it. Implementing it changes behaviour the suite and the seed depend on,
+  which makes *which levels a scope permits* a policy decision rather than a
+  bug fix.
+
+### Added
+- **An API key can be revoked, and issued as something other than
+  `data:read`.** The Keys screen created keys and could not revoke one — the
+  half that matters after a laptop goes missing. A revoked key stays listed
+  rather than vanishing: it answers *what was this allowed to do while it
+  worked*, which is the question asked after it leaks.
+- **Invites have a surface.** `registration_mode` defaults to `invite_only`, so
+  this is **the entire path by which a second person joins a deployment**, and
+  it existed only as four endpoints. Issue, list and revoke, with the token
+  shown once and said to be — and an empty state that separates *none
+  outstanding* from *you are not an admin and would not see them either*.
+- **A producer can be enabled and disabled from the console.** Disabling says
+  what it does rather than what it sets: **deliveries are still accepted and
+  dropped**, because a provider handed a `4xx` retries forever or gives up
+  silently, and neither is what you meant.
+- **Freshness is shown per scope.** `source-lag` shipped three commits ago with
+  no reader, while the Producers screen showed one number per producer — and a
+  crawler over forty channels is forty sources behind one number, so a single
+  busy channel kept it looking healthy while thirty quiet ones went unread.
+  **Cooling is rendered separately from broken**: a rate-limited credential is
+  waiting exactly as long as it was told to.
+- **The alert editor reads the predicate vocabulary** from
+  `GET /graph/predicates` instead of the `located_in` it had typed into its own
+  default condition, and names the **single-valued** predicates — the
+  difference between a second fact closing the first and a second fact
+  accumulating, which decides whether a rule sees `fact.superseded` or
+  `fact.asserted`.
+
+### Changed
+- The endpoint-caller exemption list drops from **29 to 24**. What remains is
+  deferral rather than omission: groups, schema editing, presigned upload,
+  manual fact assertion, the erasure certificate.
+
+### Added
+- **A test that fails when an endpoint has no caller.** Four defects in one day
+  shared a shape — `POST /data/{id}/enrich`, `POST /reprocess`,
+  `GET /artifacts/stale` and `PUT /settings/{scope}/{key}` all existed, were
+  correct, had tests and documentation, and **were reached by no client we
+  ship**. Each presented as *we never built that*. `test_wiring.py` already
+  guarded a setting nothing reads and a column nothing mentions; this is the
+  sibling it was missing, and `scripts/check-proxy-paths.mjs` does the mirror
+  direction, so the loop is closed.
+- **It found 29 of 144, and the exemption list is the inventory.** A few are
+  correct by construction — a share link is opened by whoever received it, and
+  the ephemeral-token exchange is for embedding hosts rather than our own
+  console. **Most are gaps now named**: invites have no surface though
+  registration is invite-only by default, an API key can be issued and not
+  revoked, a producer's status is shown and cannot be changed, `source-lag`
+  shipped with no reader, and the alert editor types in a predicate that
+  `GET /graph/predicates` exists to supply. The list is a ratchet — it may
+  shrink, and wiring something while leaving it listed fails the other half.
+
+### Added
+- **An alert on a parent memory now sees changes in its children.** The scope
+  was one row — `WHERE memory_id = $1` — so it was single-level, and **a scope
+  that silently means less than it says is the same failure as one that
+  silently means more**. It is resolved by walking `part_of` downward at match
+  time: no new writes, no duplicated events, no propagation storm. Emitting a
+  parent transition per child write would cost an event per level per item and
+  is what the alert system already had to undo.
+- **`GET /api/v1/memories/{id}/tree`** — ancestors and descendants, kept apart
+  because *what rolls up into this* and *what this rolls up into* are different
+  questions. Depth- and node-limited, and both limits report themselves: a
+  silently truncated tree has the same shape as one that really is that deep.
+- **A link that would close a cycle is refused** (`409`), at the edge that
+  closes it rather than survived by every recursive reader. Per relation — a
+  memory derived from another can also be part of it.
+- **The console builds and shows the hierarchy**: where a memory sits, a
+  control to make it part of another, and *"includes N child memories"* beside
+  a hierarchical alert scope — read from the same walk the matcher uses, so the
+  sentence cannot drift from the behaviour.
+
+### Fixed
+- **`{"op": "exists"}` meant *does not exist*.** The operator compares against
+  `bool(value)` and `validate` deliberately permits the value to be omitted for
+  exactly this operator, so the obvious way to write it inverted the condition.
+  **A rule that matches nothing is indistinguishable from a quiet week**, which
+  is the failure alerts exist to remove. Say `{"op": "exists", "value": false}`
+  for the opposite.
+
+### Added
 - **TTL is enforced.** `ttl_seconds` and `on_expiry` have been storable,
   editable and computed since the memories slice shipped while **nothing
   swept** — a `conversation` memory with a one-hour TTL was still there a year

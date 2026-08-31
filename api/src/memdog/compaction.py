@@ -318,6 +318,14 @@ async def run(
             "WHERE run_id = $1", run_id, str(exc)[:500])
         raise
 
+    if mode == "live":
+        # Recomputed, so it is current again. A dry run must not clear it: what
+        # it reports is what *would* happen, and a preview that marked the
+        # rollup fresh would be a preview with a side effect.
+        from .memories import clear_stale
+
+        async with pool.acquire() as conn:
+            await clear_stale(conn, memory_id)
     if job is not None and mode == "live":
         await pool.execute(
             "UPDATE compaction_jobs SET next_due_at = $2 WHERE job_id = $1",
@@ -333,8 +341,26 @@ async def run(
 
 
 async def _members(pool, principal, memory_id: str) -> list[dict]:
-    """Live members only. An archived item is already out of the working set, and
-    compacting it twice would report work that did not happen."""
+    """Live members only, **through the hierarchy**.
+
+    An archived item is already out of the working set, and compacting it twice
+    would report work that did not happen.
+
+    A `part_of` parent has no members of its own -- its members *are* its
+    children's -- so a compaction of one used to consider nothing and report a
+    successful run over zero records. Reading through the hierarchy is the same
+    walk the alert scope makes, for the same reason: the container means what it
+    says it means, at the point of use.
+
+    The ACL follows for free and is the part worth stating. `_summarize` takes
+    the strictest access level among the sources it read, so a rollup over four
+    child memories is visible only to whoever can read **all four**. That will
+    surprise somebody, and the alternative is a summary that says out loud what
+    one of its sources was restricted about.
+    """
+    from .memories import contained_memories
+
+    scope = await contained_memories(pool, memory_id)
     if principal is not None:
         org_id, user_id, principals = visibility_params(principal)
         predicate = visibility_sql("d", 1, 2, 3)
@@ -344,10 +370,11 @@ async def _members(pool, principal, memory_id: str) -> list[dict]:
                    d.access_level, d.shared_with,
                    length(coalesce(d.content_text, '')) AS content_chars, d.created_at
               FROM memory_members mm JOIN data_items d ON d.data_id = mm.data_id
-             WHERE mm.memory_id = $4 AND d.archived_at IS NULL AND {predicate}
+             WHERE mm.memory_id = ANY($4::text[]) AND d.archived_at IS NULL
+               AND {predicate}
              ORDER BY d.created_at
             """,
-            org_id, user_id, principals, memory_id,
+            org_id, user_id, principals, scope,
         )
     else:
         # The scheduled path has no caller. It compacts the memory's members as
@@ -359,12 +386,22 @@ async def _members(pool, principal, memory_id: str) -> list[dict]:
                    d.access_level, d.shared_with,
                    length(coalesce(d.content_text, '')) AS content_chars, d.created_at
               FROM memory_members mm JOIN data_items d ON d.data_id = mm.data_id
-             WHERE mm.memory_id = $1 AND d.archived_at IS NULL AND d.deleted_at IS NULL
+             WHERE mm.memory_id = ANY($1::text[]) AND d.archived_at IS NULL
+               AND d.deleted_at IS NULL
              ORDER BY d.created_at
             """,
-            memory_id,
+            scope,
         )
-    return [dict(r) for r in rows]
+    # One row per item, not one per membership: a record held by both a child
+    # and its parent would otherwise be counted twice, folded twice, and
+    # reported as two records freed.
+    seen, unique = set(), []
+    for row in rows:
+        if row["data_id"] in seen:
+            continue
+        seen.add(row["data_id"])
+        unique.append(dict(row))
+    return unique
 
 
 async def _archive(pool, data_ids: list[str], run_id: str) -> None:

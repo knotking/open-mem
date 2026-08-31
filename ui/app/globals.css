@@ -183,6 +183,16 @@ button.secondary { background: transparent; color: var(--accent); border: 1px so
   color: var(--ink);
 }
 .notice strong { color: var(--warn); }
+/* `.notice.caution` was used twice and defined nowhere, so the modifier that
+ * says "this one is more serious than the others" rendered identically to the
+ * ones it was distinguishing itself from. The account-deletion warning has worn
+ * it since that screen shipped. */
+.notice.caution {
+  background: color-mix(in srgb, var(--bad) 8%, transparent);
+  border-color: color-mix(in srgb, var(--bad) 35%, transparent);
+  border-left-color: var(--bad);
+}
+.notice.caution strong { color: var(--bad); }
 
 /* staircase */
 .stair { display: grid; gap: 7px; }

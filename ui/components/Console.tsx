@@ -4159,6 +4159,16 @@ function MemorySection({ projectId }: { projectId: string }) {
                   {m.members} member{m.members === 1 ? "" : "s"}
                 </span>
                 <span className="chip">{describeTtl(m.ttl_seconds)}</span>
+                {/* A rollup nobody can tell is out of date is one people keep
+                  * quoting. It is a flag rather than a queue entry, so this is
+                  * a state to read rather than progress to watch. */}
+                {m.stale_since && (
+                  <span className="chip warnchip far"
+                        title={`${m.stale_reason ?? "a source changed"} — since `
+                               + new Date(m.stale_since).toLocaleString()}>
+                    out of date
+                  </span>
+                )}
               </div>
             ))}
           </div>
@@ -4175,6 +4185,17 @@ function MemorySection({ projectId }: { projectId: string }) {
             <h2>
               {selected.type} · {selected.memory_key ?? selected.memory_id}
             </h2>
+
+            {selected.stale_since && (
+              <div className="notice caution">
+                <strong>This rollup is out of date.</strong> Something it is derived from changed
+                {selected.stale_reason ? ` — ${selected.stale_reason}` : ""}, on{" "}
+                {new Date(selected.stale_since).toLocaleString()}. Nothing recomputed it, and that
+                is deliberate: recomputing on every write turns one bulk import into thousands of
+                model calls nobody asked for. <strong>Run its compaction job</strong> to rebuild it
+                — a live run clears this, a preview does not.
+              </div>
+            )}
 
             <h3>Where it sits</h3>
             {tree === null ? (
@@ -4200,6 +4221,7 @@ function MemorySection({ projectId }: { projectId: string }) {
                       <span className="chip on">{"↓".repeat(d.depth)} contains</span>
                       <code>{d.title || d.memory_key || d.memory_id}</code>
                       <span className="empty">{d.type} · {d.members} member{d.members === 1 ? "" : "s"}</span>
+                      {d.stale_since && <span className="chip warnchip far">out of date</span>}
                     </div>
                   ))}
                 </div>

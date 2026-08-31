@@ -97,6 +97,10 @@ export type Memory = {
   ttl_seconds: number | null;
   on_expiry: string | null;
   members: number;
+  /** Set when a memory this one is `derived_from` changed. Cleared by a
+   *  recompute — never by a preview, which would be a side effect. */
+  stale_since: string | null;
+  stale_reason: string | null;
 };
 
 export type MemoryMember = {
@@ -390,6 +394,8 @@ export type Setting = {
 export type MemoryTree = {
   memory_id: string;
   relation: string;
+  stale_since: string | null;
+  stale_reason: string | null;
   ancestors: TreeNode[];
   descendants: TreeNode[];
   descendant_members: number;
@@ -404,4 +410,6 @@ export type TreeNode = {
   memory_key: string | null;
   title: string | null;
   members: number;
+  stale_since: string | null;
+  stale_reason: string | null;
 };

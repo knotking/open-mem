@@ -133,3 +133,171 @@ async def test_containment_includes_the_memory_itself(pool, tenant, principal_fo
     await _seed_types(pool, actor, tenant)
     only = await _memory(pool, actor, tenant, "alone")
     assert await contained_memories(pool, only) == [only]
+
+
+# ------------------------------------------------------- derived, and stale
+
+
+async def _derived_rollup(pool, actor, tenant, child_key: str, parent_key: str):
+    """A rollup memory, and the child it is built from."""
+    child = await _memory(pool, actor, tenant, child_key)
+    parent = await _memory(pool, actor, tenant, parent_key)
+    await link(pool, actor, from_memory=parent, to_memory=child, relation="derived_from")
+    return child, parent
+
+
+async def test_a_child_changing_marks_the_rollup_stale(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """Deterministic before probabilistic: the mark costs nothing and cannot be
+    wrong, and recomputing is a decision somebody makes rather than something a
+    write triggers -- the correction the alert system already had to make."""
+    from memdog.retrieval import list_memories
+
+    actor = await principal_for(tenant.api_key)
+    await _seed_types(pool, actor, tenant)
+    child, parent = await _derived_rollup(pool, actor, tenant, "notes", "digest")
+
+    await write_items(
+        pool, queue, blobs, settings, actor,
+        WriteRequest(
+            producer_id=tenant.producer_id,
+            items=[WriteItem(external_id="note-1", content=Inline(text="a change"),
+                             memory=MemoryRef(type="factual", key="notes"))],
+            options=WriteOptions(enrich=False),
+        ),
+    )
+
+    rows = {m["memory_id"]: m for m in await list_memories(pool, actor, tenant.project_id)}
+    assert rows[parent]["stale_since"] is not None
+    assert rows[parent]["stale_reason"] == "a member was added"
+    # The child itself is not stale: it *is* the change, not something derived
+    # from it.
+    assert rows[child]["stale_since"] is None
+
+
+async def test_marking_is_idempotent_and_keeps_the_first_change(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """A bulk import moving forty children must not enqueue forty recomputes.
+
+    And `stale_since` answers *how long has this been wrong*, so it keeps the
+    first change rather than the most recent one.
+    """
+    actor = await principal_for(tenant.api_key)
+    await _seed_types(pool, actor, tenant)
+    child, parent = await _derived_rollup(pool, actor, tenant, "notes", "digest")
+
+    async def _add(external_id: str):
+        await write_items(
+            pool, queue, blobs, settings, actor,
+            WriteRequest(
+                producer_id=tenant.producer_id,
+                items=[WriteItem(external_id=external_id, content=Inline(text=external_id),
+                                 memory=MemoryRef(type="factual", key="notes"))],
+                options=WriteOptions(enrich=False),
+            ),
+        )
+
+    await _add("first")
+    first = await pool.fetchval(
+        "SELECT stale_since FROM memories WHERE memory_id = $1", parent)
+    await _add("second")
+    await _add("third")
+    assert await pool.fetchval(
+        "SELECT stale_since FROM memories WHERE memory_id = $1", parent) == first
+
+
+async def test_a_diamond_marks_the_shared_ancestor_once(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """Two children rolling into one parent is the requested shape, not an edge
+    case, so a memory reachable by two paths must not be written twice."""
+    actor = await principal_for(tenant.api_key)
+    await _seed_types(pool, actor, tenant)
+    left = await _memory(pool, actor, tenant, "left")
+    right = await _memory(pool, actor, tenant, "right")
+    parent = await _memory(pool, actor, tenant, "both")
+    await link(pool, actor, from_memory=parent, to_memory=left, relation="derived_from")
+    await link(pool, actor, from_memory=parent, to_memory=right, relation="derived_from")
+
+    from memdog.memories import mark_ancestors_stale
+
+    async with pool.acquire() as conn:
+        assert await mark_ancestors_stale(conn, left, reason="a member was added") == 1
+        # Already marked, so the second child costs nothing.
+        assert await mark_ancestors_stale(conn, right, reason="a member was added") == 0
+
+
+async def test_part_of_never_goes_stale(pool, tenant, principal_for):
+    """A container has no separate state to keep in sync: its members *are* its
+    children's members. Marking it would be a badge nothing can clear."""
+    from memdog.memories import mark_ancestors_stale
+
+    actor = await principal_for(tenant.api_key)
+    await _seed_types(pool, actor, tenant)
+    child = await _memory(pool, actor, tenant, "workstream")
+    parent = await _memory(pool, actor, tenant, "programme")
+    await link(pool, actor, from_memory=child, to_memory=parent, relation="part_of")
+
+    async with pool.acquire() as conn:
+        assert await mark_ancestors_stale(conn, child, reason="a member was added") == 0
+
+
+async def test_compacting_a_parent_folds_what_its_children_hold(
+    pool, queue, blobs, settings, tenant, principal_for, extractor
+):
+    """A `part_of` parent has no members of its own, so compacting one used to
+    consider nothing and report a successful run over zero records."""
+    from memdog.compaction import run
+
+    actor = await principal_for(tenant.api_key)
+    await _seed_types(pool, actor, tenant)
+    child = await _memory(pool, actor, tenant, "workstream")
+    parent = await _memory(pool, actor, tenant, "programme")
+    await link(pool, actor, from_memory=child, to_memory=parent, relation="part_of")
+
+    for i in range(3):
+        await write_items(
+            pool, queue, blobs, settings, actor,
+            WriteRequest(
+                producer_id=tenant.producer_id,
+                items=[WriteItem(external_id=f"w-{i}", content=Inline(text="the same text"),
+                                 memory=MemoryRef(type="factual", key="workstream"))],
+                options=WriteOptions(enrich=False),
+            ),
+        )
+
+    preview = await run(pool, actor, memory_id=parent, algorithm="dedupe", mode="dry")
+    assert preview["considered"] == 3, "the parent sees what its children hold"
+
+
+async def test_a_recompute_clears_the_flag_and_a_preview_does_not(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """A preview reports what *would* happen. One that marked the rollup fresh
+    would be a preview with a side effect."""
+    from memdog.compaction import run
+
+    actor = await principal_for(tenant.api_key)
+    await _seed_types(pool, actor, tenant)
+    child, parent = await _derived_rollup(pool, actor, tenant, "notes", "digest")
+    await write_items(
+        pool, queue, blobs, settings, actor,
+        WriteRequest(
+            producer_id=tenant.producer_id,
+            items=[WriteItem(external_id="note-1", content=Inline(text="a change"),
+                             memory=MemoryRef(type="factual", key="notes"))],
+            options=WriteOptions(enrich=False),
+        ),
+    )
+    assert await pool.fetchval(
+        "SELECT stale_since FROM memories WHERE memory_id = $1", parent) is not None
+
+    await run(pool, actor, memory_id=parent, algorithm="dedupe", mode="dry")
+    assert await pool.fetchval(
+        "SELECT stale_since FROM memories WHERE memory_id = $1", parent) is not None
+
+    await run(pool, actor, memory_id=parent, algorithm="dedupe", mode="live")
+    assert await pool.fetchval(
+        "SELECT stale_since FROM memories WHERE memory_id = $1", parent) is None
