@@ -39,6 +39,9 @@ const ALLOWED = [
   /^api\/v1\/settings\/[A-Za-z0-9_]+\/[A-Za-z0-9_]+$/,
   /^api\/v1\/models\/assignments$/,
   /^api\/v1\/reprocess$/,
+  // Expiry: the sweep, and the forecast of what it would take.
+  /^api\/v1\/expiry\/sweep$/,
+  /^api\/v1\/projects\/[A-Za-z0-9_]+\/expiring(\?.*)?$/,
   /^api\/v1\/artifacts\/stale(\?.*)?$/,
   /^api\/v1\/projects\/[A-Za-z0-9_]+\/staircase$/,
   /^api\/v1\/projects\/[A-Za-z0-9_]+\/overview$/,

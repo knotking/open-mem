@@ -1847,6 +1847,66 @@ async def create_reprocess(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.post("/api/v1/expiry/sweep")
+async def sweep_expiry(
+    request: Request, body: dict, actor: Principal = Depends(principal)
+) -> dict:
+    """Apply every memory type's `on_expiry` to whatever is due.
+
+    Runs on the ordinary reconcile schedule; this is the same pass, on demand
+    and previewable. `dry_run` defaults to **true**: the difference between the
+    two is a deletion cascade, and a sweep is the one operation here whose
+    default should not do anything.
+
+    What it reports is scoped to what the caller can see, because so is what it
+    does — a private record is invisible to everyone but its owner, including
+    here. The scheduled pass covers each owner in turn and therefore covers more
+    than any single person's run of this will.
+    """
+    from .memories import sweep_expired
+
+    state = request.app.state
+    try:
+        return await sweep_expired(
+            state.pool, state.queue, actor,
+            project_id=body.get("project_id"),
+            limit=int(body.get("limit", 500)),
+            dry_run=bool(body.get("dry_run", True)),
+        )
+    except MemoryError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/projects/{project_id}/expiring")
+async def read_expiring(
+    request: Request, project_id: str, limit: int = 200,
+    actor: Principal = Depends(principal),
+) -> dict:
+    """What is already due, and under which policy.
+
+    Separate from the sweep because *what would happen* is a question people ask
+    without wanting anything to happen -- and a retention policy nobody can
+    inspect before it runs is one nobody will turn on.
+    """
+    from .memories import due_for_expiry
+
+    try:
+        actor.require(DATA_READ)
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    rows = await due_for_expiry(request.app.state.pool, project_id=project_id, limit=limit)
+    return {
+        "due": [
+            {"data_id": r["data_id"], "memory_id": r["memory_id"], "type": r["type"],
+             "on_expiry": r["on_expiry"], "expired_at": r["expires_at"].isoformat()}
+            for r in rows
+        ],
+        "capped": len(rows) == limit,
+    }
+
+
 @app.get("/api/v1/artifacts/stale")
 async def read_stale(
     request: Request, actor: Principal = Depends(principal), limit: int = 100

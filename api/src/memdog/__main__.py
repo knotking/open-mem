@@ -191,6 +191,7 @@ async def _reconcile(grace: int) -> None:
     from .extraction import build_extractor
     from .multimodal import build_multimodal
     from .queue import InProcessQueue
+    from .memories import sweep_all
     from .reconcile import reconcile
     from .workers import EmbedWorker, EnrichWorker, ParseWorker
 
@@ -216,6 +217,14 @@ async def _reconcile(grace: int) -> None:
     enrich = EnrichWorker(pool, build_extractor(settings), settings)
     await enrich.ensure_generator()
     enrich.register(queue)
+    # The delete tier, for the same reason the parse tier is here: expiry
+    # tombstones through the ordinary cascade, and a tombstone whose reclamation
+    # message nothing consumes leaves chunks, embeddings and blobs behind for a
+    # record the platform has already promised is gone.
+    from .blobs import build_blob_store as _blobs
+    from .deletion import DeleteWorker
+
+    DeleteWorker(pool, _blobs(settings)).register(queue)
 
     swept = await reconcile(
         pool, queue, embed_generator=embed.generator_version,
@@ -233,8 +242,21 @@ async def _reconcile(grace: int) -> None:
         )
         print(f"usage events purged: {dropped} "
               f"(older than {settings.usage_retention_days} days)")
-    if swept.total:
-        await queue.drain(timeout=600)
+
+    # Expiry, on the same schedule and for the same reason `purge_events` is
+    # here. `ttl_seconds` and `on_expiry` were storable, editable and displayed
+    # while **nothing swept**, so a conversation memory with a one-hour TTL was
+    # still there a year later and the retention story read as implemented.
+    expired = await sweep_all(pool, queue)
+    print(f"expired: considered={expired['considered']} deleted={expired['deleted']} "
+          f"archived={expired['archived']} refiled={expired['refiled']} "
+          f"across {expired['scopes']} owner-project scopes")
+    # Unconditionally, now that the sweep publishes too: gating the drain on
+    # the reconciler's own count would exit while an expiry deletion was still
+    # queued, leaving a tombstoned record whose blobs were never reclaimed --
+    # and nothing would look wrong, which is the failure this file keeps
+    # meeting.
+    await queue.drain(timeout=600)
     await queue.close()
     await pool.close()
     print("reconcile complete")

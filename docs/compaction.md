@@ -125,11 +125,36 @@ Scheduled jobs ride the same minute sweep the alerts use rather than adding a
 fourth Cloud Run job: they are due at most daily, so a per-minute pass costs one
 indexed lookup that usually returns nothing.
 
-## Not built
+## The other half: expiry
 
-**TTL is still not enforced.** `memory_types.ttl_seconds` and `on_expiry` are
-stored and `effective_expiry()` is computed, but nothing sweeps — a
-`conversation` memory with a one-hour TTL is still there next year, and
-`orphan_delete` and `archive` have never run. Compaction is explicit and
-scheduled; **expiry is a separate mechanism that does not exist yet**, and the
-plan for it is in `.claude/plans/compaction.md`.
+Compaction is deliberate — a person configures a job, previews it and schedules
+it. **Expiry is the opposite**: nobody asks for it, a TTL declared once decides
+it, and it runs unattended on the reconcile schedule.
+
+| | Compaction | Expiry |
+|---|---|---|
+| Asked for by | a job somebody created | a memory type's `ttl_seconds` |
+| Decides what | which members to fold | which records are past their time |
+| Does what | archives, always | `orphan_delete` · `keep_members` · `archive`, per type |
+| Runs | on its own schedule | with the reconcile pass |
+
+An item is due only when **every** memory holding it has expired, and the
+governing policy is that of the membership that expired **last** — the
+container that kept it alive longest. One unbounded membership keeps a record
+indefinitely, which is `effective_expiry` in another form: an item in an
+hour-long conversation and in a permanent factual memory is not an hour-old
+item.
+
+`orphan_delete` runs through the ordinary deletion cascade rather than a second
+erasure path, so an expired record gets the same tombstone, blob reclamation,
+legal hold and audit trail as any other.
+
+| | |
+|---|---|
+| `GET` | `/api/v1/projects/{id}/expiring` — what is due, and under which policy |
+| `POST` | `/api/v1/expiry/sweep` — `dry_run` defaults to **true** |
+
+The scheduled pass sweeps **per owner**, because the deletion cascade selects
+under the caller's own visibility: a private record is invisible to everyone
+but its owner, so one privileged-looking pass would skip exactly the records
+with the tightest retention need and report a clean sweep.

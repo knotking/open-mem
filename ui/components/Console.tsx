@@ -3741,6 +3741,24 @@ function Audit({ projectId }: { projectId: string }) {
     </>
   );
 }
+type ExpiryDue = {
+  due: { data_id: string; memory_id: string; type: string; on_expiry: string;
+         expired_at: string }[];
+  capped: boolean;
+};
+
+type SweepResult = {
+  considered: number; deleted: number; archived: number; refiled: number;
+  applied: boolean; run_id: string | null; capped: boolean;
+};
+
+/** The policy, as the thing it does rather than as its column value. */
+const POLICY_VERB: Record<string, string> = {
+  orphan_delete: "deleted, unless another memory holds it",
+  keep_members: "re-filed into the default",
+  archive: "archived — out of the working set, still readable",
+};
+
 function MemorySection({ projectId }: { projectId: string }) {
   const [memories, setMemories] = useState<Memory[]>([]);
   const [types, setTypes] = useState<MemoryType[]>([]);
@@ -3757,15 +3775,19 @@ function MemorySection({ projectId }: { projectId: string }) {
   const [newType, setNewType] = useState("session");
   const [newKey, setNewKey] = useState("");
   const [newTitle, setNewTitle] = useState("");
+  const [due, setDue] = useState<ExpiryDue | null>(null);
+  const [sweep, setSweep] = useState<SweepResult | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const [m, t] = await Promise.all([
+      const [m, t, d] = await Promise.all([
         call<{ memories: Memory[] }>(`api/v1/projects/${projectId}/memories`),
         call<{ types: MemoryType[] }>(`api/v1/projects/${projectId}/memory-types`),
+        call<ExpiryDue>(`api/v1/projects/${projectId}/expiring?limit=200`),
       ]);
       setMemories(m.memories);
       setTypes(t.types);
+      setDue(d);
     } catch (e) {
       setError((e as Error).message);
     }
@@ -3878,6 +3900,94 @@ function MemorySection({ projectId }: { projectId: string }) {
           memory key also creates one — this is the path for organising deliberately rather than as
           a side effect of a write.
         </p>
+      </section>
+
+      <section className="panel">
+        <h2>Past its TTL</h2>
+        <p className="empty" style={{ marginTop: 0 }}>
+          A TTL is only a retention policy if something acts on it. The sweep runs with the
+          scheduled reconcile; this is the same pass, on demand and previewable — and{" "}
+          <strong>it only ever sees what you can see</strong>, so a colleague&rsquo;s private
+          records are counted by the scheduled run and not here.
+        </p>
+        {due === null ? (
+          <p className="empty">Loading…</p>
+        ) : due.due.length === 0 ? (
+          <p className="empty">
+            Nothing is due. An item is due only when <strong>every</strong> memory holding it has
+            expired — one permanent membership keeps it, which is why a record in an hour-long
+            conversation and in a factual memory is not an hour-old record.
+          </p>
+        ) : (
+          <>
+            <div className="row">
+              {Object.entries(
+                due.due.reduce<Record<string, number>>((acc, d) => {
+                  acc[d.on_expiry] = (acc[d.on_expiry] ?? 0) + 1;
+                  return acc;
+                }, {}),
+              ).map(([policy, count]) => (
+                <span className="chip on" key={policy}>{count} {POLICY_VERB[policy] ?? policy}</span>
+              ))}
+            </div>
+            <div className="excluded" style={{ marginTop: 10 }}>
+              {due.due.slice(0, 10).map((d) => (
+                <div className="item" key={d.data_id}>
+                  <span className="chip">{d.type}</span>
+                  <code>{d.data_id}</code>
+                  <span className="why">{POLICY_VERB[d.on_expiry] ?? d.on_expiry}</span>
+                  <span className="empty far">
+                    due since {new Date(d.expired_at).toLocaleString()}
+                  </span>
+                </div>
+              ))}
+            </div>
+            {due.capped && (
+              <p className="warned">
+                <strong>We stopped counting at 200.</strong> There are more; this is not the total.
+              </p>
+            )}
+            <div className="row end" style={{ marginTop: 10 }}>
+              <button
+                className="secondary"
+                disabled={busy}
+                title="Runs the sweep with its writes withheld and reports what it would do."
+                onClick={() =>
+                  act("Previewed. Nothing was changed.", async () => {
+                    setSweep(await call<SweepResult>("api/v1/expiry/sweep", {
+                      project_id: projectId, dry_run: true,
+                    }));
+                  })
+                }
+              >
+                Preview the sweep
+              </button>
+              <button
+                disabled={busy}
+                title="Deletes, archives or re-files each record according to its memory type. Deletion is the ordinary cascade — tombstone, then reclamation."
+                onClick={() =>
+                  act("Swept.", async () => {
+                    setSweep(await call<SweepResult>("api/v1/expiry/sweep", {
+                      project_id: projectId, dry_run: false,
+                    }));
+                    await load();
+                  })
+                }
+              >
+                Sweep now
+              </button>
+            </div>
+            {sweep && (
+              <p className={sweep.applied ? "ok" : "empty"}>
+                {sweep.applied ? "Swept" : "Would sweep"} {sweep.considered} record
+                {sweep.considered === 1 ? "" : "s"}: <strong>{sweep.deleted}</strong> deleted,{" "}
+                <strong>{sweep.archived}</strong> archived, <strong>{sweep.refiled}</strong>{" "}
+                re-filed into the default.
+                {sweep.run_id && <> Deletion run <code>{sweep.run_id}</code>.</>}
+              </p>
+            )}
+          </>
+        )}
       </section>
 
       <section className="panel">

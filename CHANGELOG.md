@@ -10,6 +10,28 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 
 ## Unreleased
 
+### Added
+- **Bulk interpretation — `stage: "interpret"` on `POST /reprocess`.** `embed`
+  and `enrich` rebuild derived work that already exists; this asks for work
+  that was **never requested**, which is exactly what a crawl or a feed run
+  with enrichment off leaves behind. It emits `enrichment.requested` per item
+  rather than republishing onto a topic, and that matters beyond bookkeeping:
+  **the reconciler repairs requested work and never invents it**, so a bulk
+  interpret that skipped the log would be the one enrichment a dropped message
+  loses for good.
+- **A dry run returns evidence, not a number.** `by_state`, eight `samples`
+  with their text, and `capped` when the selection stopped at ten thousand —
+  because *"nothing else matched"* and *"we stopped looking"* are different
+  facts. **4,212 reads identically whether the selector caught the crawl you
+  meant or the whole project**, and the only way to tell is to look at a few.
+- **A console screen for both** — *Interpret & rebuild*, under Lifecycle.
+  `POST /reprocess` and `GET /artifacts/stale` had no caller at all, so the
+  answer to *"interpretation is on now, what about the records already here"*
+  was an API call typed by hand. Four tiles say what is behind (never
+  interpreted · embedded but not summarised · built by an old generator ·
+  done), and the run is **gated on a preview of that exact selector** — editing
+  the selector drops the approval, since the cost is a model call per item.
+
 ### Fixed
 - **Every webhook delivery landed unenriched, and no screen said so.** The
   producer's `defaults.enrich` governs it, defaults to `false`, and **nothing

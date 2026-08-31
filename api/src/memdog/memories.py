@@ -790,3 +790,220 @@ async def delete_memory(
         "deletion_run_id": run_id,
         "applied": True,
     }
+
+
+# ------------------------------------------------------------------ expiry
+
+
+async def due_for_expiry(
+    pool: asyncpg.Pool,
+    *,
+    project_id: str | None = None,
+    owner_id: str | None = None,
+    limit: int = 500,
+) -> list[dict]:
+    """Items every one of whose memberships has expired.
+
+    The rule is `effective_expiry` expressed in SQL: an item is due when it has
+    at least one membership, **none of its memberships is unbounded**, and the
+    **latest** of them is in the past. Anything else would delete data a
+    permanent memory still depends on -- an item in an hour-long conversation
+    and in a factual memory is not an hour-old item, and expiring it per
+    membership is the `orphan_delete` bug in another form.
+
+    The governing policy is the one belonging to the membership that expired
+    **last**, because that is the container that kept the item alive: a record
+    held in a conversation for an hour and a case for a year is a case record by
+    the time it expires, and the case's policy is the one that should decide.
+    """
+    rows = await pool.fetch(
+        """
+        WITH memberships AS (
+            SELECT mm.data_id, m.project_id, m.org_id, d.owner_id, m.memory_id, m.type,
+                   coalesce(t.on_expiry, 'orphan_delete') AS on_expiry,
+                   CASE WHEN t.ttl_seconds IS NULL THEN NULL
+                        ELSE mm.added_at + make_interval(secs => t.ttl_seconds)
+                   END AS expires_at
+            FROM memory_members mm
+            JOIN memories m ON m.memory_id = mm.memory_id AND m.deleted_at IS NULL
+            JOIN data_items d ON d.data_id = mm.data_id
+            LEFT JOIN memory_types t
+                   ON t.project_id = m.project_id AND t.name = m.type
+            WHERE d.deleted_at IS NULL
+              AND ($1::text IS NULL OR m.project_id = $1)
+              AND ($3::text IS NULL OR d.owner_id = $3)
+        ),
+        rolled AS (
+            SELECT data_id, project_id, org_id, owner_id,
+                   count(*) FILTER (WHERE expires_at IS NULL) AS unbounded,
+                   max(expires_at) AS expires_at
+            FROM memberships GROUP BY data_id, project_id, org_id, owner_id
+        )
+        SELECT r.data_id, r.project_id, r.org_id, r.owner_id, r.expires_at,
+               last.memory_id, last.type, last.on_expiry
+        FROM rolled r
+        JOIN LATERAL (
+            SELECT memory_id, type, on_expiry FROM memberships m
+            WHERE m.data_id = r.data_id AND m.expires_at = r.expires_at
+            ORDER BY m.memory_id LIMIT 1
+        ) last ON true
+        WHERE r.unbounded = 0 AND r.expires_at < now()
+        ORDER BY r.expires_at
+        LIMIT $2
+        """,
+        project_id, limit, owner_id,
+    )
+    return [dict(r) for r in rows]
+
+
+async def sweep_expired(
+    pool: asyncpg.Pool,
+    queue,
+    principal,
+    *,
+    project_id: str | None = None,
+    owner_id: str | None = None,
+    limit: int = 500,
+    dry_run: bool = False,
+) -> dict:
+    """Apply `on_expiry` to everything whose time is up.
+
+    `ttl_seconds` and `on_expiry` were storable, editable and displayed for
+    months while **nothing swept**: a `conversation` memory with a one-hour TTL
+    was still there a year later, and a retention policy that does not run is a
+    compliance claim rather than a control.
+
+    Three policies, and none of them is "delete unconditionally":
+
+    - **`orphan_delete`** — through the ordinary deletion cascade, so an expired
+      item gets the same tombstone, blob reclamation, audit record and legal
+      hold as any other. Expiry must not become a second erasure path that
+      forgets one of them.
+    - **`keep_members`** — the memberships go, the item is re-filed into the
+      applicable default so it never becomes unreachable, and nothing is erased.
+    - **`archive`** — `archived_at` is stamped and the item leaves the working
+      set while staying readable, searchable with `include_archived` and
+      citable. The same column compaction uses, because *out of the way* and
+      *gone* are different states and only one of them is reversible.
+    """
+    from .audit import record_audit
+    from .auth import DATA_WRITE
+    from .deletion import request_deletion
+
+    principal.require(DATA_WRITE)
+    # Scoped to an owner when the caller is a scheduled pass, because the
+    # deletion cascade selects under the caller's *visibility*: a private item
+    # is invisible to anyone but its owner, so a single privileged-looking pass
+    # would skip precisely the records with the tightest ACL and report a clean
+    # sweep. There is no such thing here as an actor who can see everything.
+    due = await due_for_expiry(
+        pool, project_id=project_id, owner_id=owner_id, limit=limit)
+    by_policy: dict[str, list[dict]] = {}
+    for row in due:
+        by_policy.setdefault(row["on_expiry"], []).append(row)
+
+    result = {
+        "considered": len(due),
+        "deleted": len(by_policy.get("orphan_delete", [])),
+        "archived": len(by_policy.get("archive", [])),
+        "refiled": len(by_policy.get("keep_members", [])),
+        "applied": not dry_run,
+        # Enough to recognise the selection rather than trust it. A sweep that
+        # reports only a count cannot be told apart from one that is about to
+        # empty a memory nobody meant to expire.
+        "samples": [
+            {"data_id": r["data_id"], "memory_id": r["memory_id"], "type": r["type"],
+             "on_expiry": r["on_expiry"], "expired_at": r["expires_at"].isoformat()}
+            for r in due[:8]
+        ],
+        # A bounded sweep that says nothing about its bound reads as "that was
+        # everything", and the next run would look like it did nothing.
+        "capped": len(due) == limit,
+        "run_id": None,
+    }
+    if dry_run or not due:
+        return result
+
+    to_delete = [r["data_id"] for r in by_policy.get("orphan_delete", [])]
+    if to_delete:
+        deletion = await request_deletion(
+            pool, queue, principal,
+            selector={"project_id": project_id, "data_ids": to_delete},
+            reason="expired: ttl reached",
+        )
+        result["run_id"] = deletion.run_id
+
+    async with pool.acquire() as conn, conn.transaction():
+        for row in by_policy.get("archive", []):
+            await conn.execute(
+                "UPDATE data_items SET archived_at = now(), archived_by = 'expiry' "
+                "WHERE data_id = $1 AND archived_at IS NULL",
+                row["data_id"],
+            )
+        for row in by_policy.get("keep_members", []):
+            item = await conn.fetchrow(
+                """
+                SELECT d.owner_id, c.scope FROM data_items d
+                LEFT JOIN connections c ON c.connection_id = d.connection_id
+                WHERE d.data_id = $1
+                """,
+                row["data_id"],
+            )
+            if item is None:
+                continue
+            shared = item["scope"] == "shared"
+            landed = await upsert_memory(
+                conn, org_id=principal.org_id, project_id=row["project_id"],
+                type_name="default",
+                memory_key=row["project_id"] if shared else item["owner_id"],
+                owner_id=None if shared else item["owner_id"],
+                title="Project default" if shared else "My unattached items",
+            )
+            # The expired memberships go first, or the item is immediately due
+            # again on the next sweep and the default membership never saves it.
+            await conn.execute(
+                """
+                DELETE FROM memory_members mm USING memories m
+                WHERE mm.data_id = $1 AND m.memory_id = mm.memory_id
+                  AND m.memory_id <> $2
+                """,
+                row["data_id"], landed,
+            )
+            await add_member(conn, landed, row["data_id"], "routed")
+
+        await record_audit(
+            conn, principal, action="memory.expired", project_id=project_id,
+            target_type="run", target_id=result["run_id"],
+            detail={"considered": result["considered"], "deleted": result["deleted"],
+                    "archived": result["archived"], "refiled": result["refiled"]},
+        )
+    return result
+
+
+async def sweep_all(pool: asyncpg.Pool, queue, *, limit: int = 500) -> dict:
+    """Every project with something due, on the schedule that already runs.
+
+    Grouped by project and swept under a principal scoped to that project's own
+    org, rather than one privileged pass over everything: the deletion cascade
+    audits whoever asked, and `expiry` acting as nobody in particular would put
+    an unattributable actor on a record's erasure -- the one place attribution
+    is most needed.
+    """
+    from .auth import DATA_READ, DATA_WRITE, Principal
+
+    due = await due_for_expiry(pool, limit=limit)
+    scopes = {(r["org_id"], r["project_id"], r["owner_id"]) for r in due}
+    totals = {"scopes": len(scopes), "considered": 0, "deleted": 0,
+              "archived": 0, "refiled": 0}
+    for org_id, project_id, item_owner in sorted(scopes):
+        principal = Principal(
+            user_id=item_owner, org_id=org_id,
+            capabilities=frozenset({DATA_WRITE, DATA_READ}),
+            project_id=project_id, mode="expiry",
+        )
+        swept = await sweep_expired(
+            pool, queue, principal, project_id=project_id, owner_id=item_owner,
+            limit=limit)
+        for key in ("considered", "deleted", "archived", "refiled"):
+            totals[key] += swept[key]
+    return totals
