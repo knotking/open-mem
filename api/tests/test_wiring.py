@@ -305,24 +305,13 @@ UNCALLED_ENDPOINTS: dict[str, str] = {
     "DELETE /api/v1/organizations/members/{user_id}":
         "removing a member; there is no member-administration screen",
 
-    # Invites, entirely. `registration_mode` defaults to invite_only, so this
-    # is the whole path by which a second person joins -- and none of it is
-    # reachable from the console.
-    "DELETE /api/v1/invites/{invite_id}": "no invite surface in the console at all",
-
-    # A key that can be issued and not revoked. The Keys screen lists and
-    # creates; revocation is the half that matters after a laptop is lost.
-    "DELETE /api/v1/users/me/api-keys/{key_id}": "the Keys screen cannot revoke one",
-
     # Groups: the principal type `shared_with` already resolves against, with
     # no way to create one or put anybody in it.
     "GET /api/v1/groups": "no groups surface",
     "POST /api/v1/groups": "no groups surface",
     "PUT /api/v1/groups/{group_id}/members": "no groups surface",
 
-    # Producer and connection administration.
-    "PATCH /api/v1/producers/{producer_id}":
-        "enable and disable a producer; the Inbound screen shows status and cannot change it",
+    # Connection administration.
     "PATCH /api/v1/connections/{connection_id}":
         "personal vs shared scope, which decides ACL inheritance; nothing sets it",
 
@@ -356,12 +345,8 @@ UNCALLED_ENDPOINTS: dict[str, str] = {
     "POST /api/v1/facts/{fact_id}/retract": "no manual retraction surface",
     "GET /api/v1/entities/{entity_id}/history": "bitemporal history has no screen",
     "GET /api/v1/graph/conflicts": "contradiction surfacing has no screen",
-    "GET /api/v1/graph/predicates":
-        "the vocabulary a condition builder should read; the alert editor still types one in",
 
     # Observability that shipped without its reader.
-    "GET /api/v1/projects/{project_id}/source-lag":
-        "per-scope freshness; the Producers screen shows only seconds_since_last_item",
     "GET /api/v1/crawlers/{crawler_id}/runs": "run history per crawler; the screen shows one run",
     "GET /api/v1/event-subscriptions/{subscription_id}/deliveries":
         "delivery attempts per subscription; the alerts screen does not read them",

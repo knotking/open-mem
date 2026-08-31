@@ -310,7 +310,7 @@ export default function Console({
         {section === "mcp" && <McpSection projectId={projectId} />}
         {section === "projects" && <ProjectsSection />}
         {section === "keys" && <KeysSection />}
-        {section === "producers" && <ProducersSection />}
+        {section === "producers" && <ProducersSection projectId={projectId} />}
         {section === "platform" && <PlatformSection />}
       </main>
     </div>
@@ -1543,11 +1543,12 @@ function condsFrom(where: Record<string, unknown>): Cond[] {
  * express something the API has always accepted.
  */
 function AlertEditor({
-  alert, surfaces, scopeOptions, busy, runs, events, backtest, detailTab, onTab,
+  alert, surfaces, vocabulary, scopeOptions, busy, runs, events, backtest, detailTab, onTab,
   onBack, onSave, onBacktest, onToggle, onDelete,
 }: {
   alert: Alert | null;
   surfaces: Record<string, string[]>;
+  vocabulary: { predicates: string[]; single_valued: string[] };
   scopeOptions: { memories: Memory[]; cases: { case_id: string; title: string | null;
                   external_id: string }[]; producers: { producer_id: string;
                   type: string }[] };
@@ -1680,6 +1681,13 @@ function AlertEditor({
               </select>
               {c.op !== "exists" && c.op !== "absent" && (
                 <input value={c.values} placeholder="one or more, comma separated"
+                       /* The predicate vocabulary is closed and the server
+                        * serves it, so it is offered here rather than typed
+                        * twice -- the editor shipped with `located_in` written
+                        * into it, which is the copy that goes stale. A datalist
+                        * rather than a select because a dotted path can reach a
+                        * value this console has never seen. */
+                       list={c.field === "predicate" ? "graph-predicates" : undefined}
                        onChange={(e) => {
                          const n = [...conds]; n[i] = { ...c, values: e.target.value };
                          setConds(n);
@@ -1695,6 +1703,16 @@ function AlertEditor({
           <datalist id="alert-fields">
             {fields.map((f) => <option key={f} value={f} />)}
           </datalist>
+          <datalist id="graph-predicates">
+            {vocabulary.predicates.map((pd) => <option key={pd} value={pd} />)}
+          </datalist>
+          {conds.some((c) => c.field === "predicate") && vocabulary.single_valued.length > 0 && (
+            <p className="hint">
+              <strong>Single-valued:</strong> {vocabulary.single_valued.join(", ")}. A second one of
+              these closes the first, so it fires <code>fact.superseded</code>; every other
+              predicate accumulates and fires <code>fact.asserted</code>.
+            </p>
+          )}
           <button onClick={() => setConds([...conds, { field: "", op: "in", values: "" }])}>
             Add condition
           </button>
@@ -2220,6 +2238,11 @@ function AlertsSection({ projectId }: { projectId: string }) {
   const [tab, setTab] = useState<"alerts" | "activity" | "endpoints">("alerts");
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [surfaces, setSurfaces] = useState<Record<string, string[]>>({});
+  // Served rather than typed twice: the editor shipped with `located_in`
+  // written into its default condition and no way to discover the rest.
+  const [vocabulary, setVocabulary] = useState<{ predicates: string[];
+                                                 single_valued: string[] }>(
+    { predicates: [], single_valued: [] });
   const [events, setEvents] = useState<ObservedEvent[]>([]);
   const [subs, setSubs] = useState<Subscription[]>([]);
   const [runsByAlert, setRunsByAlert] = useState<Record<string, AlertRun[]>>({});
@@ -2243,15 +2266,18 @@ function AlertsSection({ projectId }: { projectId: string }) {
 
   const load = useCallback(async () => {
     try {
-      const [list, vocab, feed, subscriptions] = await Promise.all([
+      const [list, vocab, predicates, feed, subscriptions] = await Promise.all([
         call<{ alerts: Alert[] }>(`api/v1/projects/${projectId}/alerts`),
         call<{ surfaces: Record<string, string[]> }>("api/v1/alerts/surfaces"),
+        call<{ predicates: string[]; single_valued: string[] }>("api/v1/graph/predicates"),
         call<{ events: ObservedEvent[] }>("api/v1/alert-events?since=0&limit=200"),
         call<{ subscriptions: Subscription[] }>(
           `api/v1/projects/${projectId}/event-subscriptions`),
       ]);
       setAlerts(list.alerts);
       setSurfaces(vocab.surfaces);
+      setVocabulary({ predicates: predicates.predicates,
+                      single_valued: predicates.single_valued });
       setEvents(feed.events.slice().reverse());
       setSubs(subscriptions.subscriptions);
       // Strips need history for every row, so this is part of the list, not a
@@ -2425,6 +2451,7 @@ function AlertsSection({ projectId }: { projectId: string }) {
           key={current?.alert_id ?? "new"}
           alert={current}
           surfaces={surfaces}
+          vocabulary={vocabulary}
           scopeOptions={scopeOptions}
           busy={busy}
           runs={current ? runsByAlert[current.alert_id] ?? [] : []}
@@ -5692,22 +5719,41 @@ function PromptsSection({ projectId }: { projectId: string }) {
 
 /* -------------------------------------------------- 10-13. admin */
 
+type Invite = {
+  invite_id: string; prefix: string; role: string; email: string | null;
+  created_at: string; expires_at: string; status: string;
+};
+
 function ProjectsSection() {
   const [projects, setProjects] = useState<Record<string, unknown>[]>([]);
   const [members, setMembers] = useState<Record<string, unknown>[]>([]);
+  const [invites, setInvites] = useState<Invite[] | null>(null);
+  const [email, setEmail] = useState("");
+  const [role, setRole] = useState("member");
+  const [days, setDays] = useState("7");
+  const [transferable, setTransferable] = useState(false);
+  const [token, setToken] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    Promise.all([
-      call<{ projects: Record<string, unknown>[] }>("api/v1/projects"),
-      call<{ members: Record<string, unknown>[] }>("api/v1/organizations/members"),
-    ])
-      .then(([p, m]) => {
-        setProjects(p.projects);
-        setMembers(m.members);
-      })
-      .catch((e) => setError((e as Error).message));
+  const load = useCallback(async () => {
+    try {
+      const [p, m] = await Promise.all([
+        call<{ projects: Record<string, unknown>[] }>("api/v1/projects"),
+        call<{ members: Record<string, unknown>[] }>("api/v1/organizations/members"),
+      ]);
+      setProjects(p.projects);
+      setMembers(m.members);
+      // Admin-only, and a member opening this screen should see the rest of it
+      // rather than one failed request taking the page down.
+      setInvites((await call<{ invites: Invite[] }>("api/v1/invites")
+        .catch(() => ({ invites: [] as Invite[] }))).invites);
+    } catch (e) {
+      setError((e as Error).message);
+    }
   }, []);
+  useEffect(() => { void load(); }, [load]);
 
   return (
     <>
@@ -5717,6 +5763,7 @@ function ProjectsSection() {
         platform grants — a platform admin holds nothing inside an org they are not a member of.
       </p>
       {error && <p className="err">{error}</p>}
+      {note && <p className="empty">{note}</p>}
       <section className="panel">
         <h2>Projects</h2>
         <div className="excluded">
@@ -5730,6 +5777,112 @@ function ProjectsSection() {
           ))}
         </div>
       </section>
+      <section className="panel">
+        <h2>Invites</h2>
+        <p className="empty" style={{ marginTop: 0 }}>
+          Registration is <code>invite_only</code> by default, so this is the whole path by which a
+          second person joins — and it had no surface at all. An invite is <strong>single-use,
+          expiring and bound to the address it was issued for</strong> unless you say otherwise, and
+          both issuing and redeeming are audited.
+        </p>
+        <div className="row">
+          <label>
+            Email
+            <input type="text" value={email} placeholder="who it is for"
+                   onChange={(e) => setEmail(e.target.value)} />
+          </label>
+          <label>
+            Role
+            <select value={role} onChange={(e) => setRole(e.target.value)}>
+              <option value="member">member</option>
+              <option value="admin">admin</option>
+            </select>
+          </label>
+          <label>
+            Expires in
+            <input type="number" min="1" value={days} style={{ width: 90 }}
+                   onChange={(e) => setDays(e.target.value)} />
+          </label>
+          <label className="check"
+                 title="An invite not bound to one address can be forwarded and redeemed by anyone holding it.">
+            <input type="checkbox" checked={transferable}
+                   onChange={(e) => setTransferable(e.target.checked)} />
+            Transferable
+          </label>
+          <button
+            disabled={busy || (!transferable && !email.trim())}
+            title={!transferable && !email.trim()
+              ? "An invite is bound to an address unless it is transferable."
+              : "Issues an invite. The token is shown once."}
+            onClick={async () => {
+              setBusy(true); setError(null); setNote(null);
+              try {
+                const r = await call<{ token: string; prefix: string }>("api/v1/invites", {
+                  email: email.trim() || null, role,
+                  expires_in_days: Number(days) || 7, transferable,
+                });
+                setToken(r.token);
+                setEmail("");
+                await load();
+              } catch (e) {
+                setError((e as Error).message);
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            {busy ? "Issuing…" : "Invite"}
+          </button>
+        </div>
+        {token && (
+          <div className="notice" style={{ marginTop: 12 }}>
+            <strong>Shown once.</strong> <code>{token}</code>
+            <span className="empty"> Send it to them yourself — nothing here emails it, and it
+            cannot be retrieved again, only revoked and reissued.</span>
+          </div>
+        )}
+        {invites === null ? (
+          <p className="empty">Loading…</p>
+        ) : invites.length === 0 ? (
+          <p className="empty" style={{ marginBottom: 0 }}>
+            None outstanding. If you are not an admin, you would not see them either — this list is
+            empty in both cases and that is worth knowing before you conclude nothing was sent.
+          </p>
+        ) : (
+          <div className="excluded" style={{ marginTop: 12 }}>
+            {invites.map((i) => (
+              <div className="item" key={i.invite_id}>
+                <code>{i.prefix}</code>
+                <span className={`chip ${i.status === "pending" ? "on" : ""}`}>{i.status}</span>
+                <span className="empty">{i.email ?? "transferable"}</span>
+                <span className="chip">{i.role}</span>
+                <span className="empty far">
+                  expires {new Date(i.expires_at).toLocaleDateString()}
+                </span>
+                {i.status === "pending" && (
+                  <button
+                    className="linkish"
+                    title="Kills it before it is redeemed. Anyone holding the token gets nothing."
+                    onClick={async () => {
+                      setError(null);
+                      try {
+                        await call(`api/v1/invites/${i.invite_id}`, undefined, "DELETE");
+                        setNote(`${i.prefix} revoked.`);
+                        await load();
+                      } catch (e) {
+                        setError((e as Error).message);
+                      }
+                    }}
+                  >
+                    Revoke
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
       <section className="panel">
         <h2>Members</h2>
         <div className="excluded">
@@ -5746,10 +5899,33 @@ function ProjectsSection() {
   );
 }
 
+/**
+ * API keys — issued, and revocable.
+ *
+ * The screen could create a key and not revoke one, which is the half that
+ * matters after a laptop goes missing: `DELETE /users/me/api-keys/{id}` existed
+ * from the first release and had no caller anywhere. It could also only issue
+ * `data:read`, so every other capability the endpoint accepts was reachable by
+ * curl and nowhere else.
+ */
 function KeysSection() {
   const [keys, setKeys] = useState<Record<string, unknown>[]>([]);
   const [issued, setIssued] = useState<string | null>(null);
+  const [name, setName] = useState("console");
+  const [caps, setCaps] = useState<string[]>(["data:read"]);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+
+  // What a key can be granted. A key can never hold more than the credential
+  // that issued it, so the API refuses the rest -- this list is what to offer,
+  // not what will be allowed.
+  const CAPABILITIES = [
+    { key: "data:read", blurb: "retrieve, read an item, read the trace" },
+    { key: "data:write", blurb: "write, update, delete" },
+    { key: "config:write", blurb: "producers, crawlers, alerts, settings" },
+    { key: "admin:*", blurb: "everything, including other people's" },
+  ];
 
   const load = useCallback(() => {
     call<{ keys: Record<string, unknown>[] }>("api/v1/users/me/api-keys")
@@ -5765,57 +5941,175 @@ function KeysSection() {
         Hashed at rest with a display prefix. A key can never grant more than the credential that
         created it — otherwise capability scoping is decorative.
       </p>
+      {error && <p className="err">{error}</p>}
+      {note && <p className="empty">{note}</p>}
+
       <section className="panel">
+        <h2>Issue one</h2>
         <div className="row">
+          <label>
+            Name
+            <input type="text" value={name} onChange={(e) => setName(e.target.value)}
+                   placeholder="what will use it" />
+          </label>
+          {CAPABILITIES.map((c) => (
+            <label className="check" key={c.key} title={c.blurb}>
+              <input
+                type="checkbox"
+                checked={caps.includes(c.key)}
+                onChange={(e) => setCaps(e.target.checked
+                  ? [...caps, c.key]
+                  : caps.filter((x) => x !== c.key))}
+              />
+              <code>{c.key}</code>
+            </label>
+          ))}
           <button
+            disabled={busy || caps.length === 0 || !name.trim()}
+            title={caps.length === 0
+              ? "A key with no capabilities can do nothing at all."
+              : "Issues a key. The token is shown once and cannot be retrieved again."}
             onClick={async () => {
-              setError(null);
+              setBusy(true); setError(null); setNote(null);
               try {
                 const r = await call<{ token: string }>("api/v1/users/me/api-keys", {
-                  name: "console", capabilities: ["data:read"],
+                  name: name.trim(), capabilities: caps,
                 });
                 setIssued(r.token);
                 load();
               } catch (e) {
                 setError((e as Error).message);
+              } finally {
+                setBusy(false);
               }
             }}
           >
-            Issue a read-only key
+            {busy ? "Issuing…" : "Issue a key"}
           </button>
         </div>
+        <p className="empty" style={{ marginBottom: 0 }}>
+          {CAPABILITIES.map((c) => `${c.key} — ${c.blurb}`).join(" · ")}. A capability this
+          credential does not itself hold is refused rather than granted quietly.
+        </p>
         {issued && (
           <div className="notice" style={{ marginTop: 12 }}>
             <strong>Shown once.</strong> <code>{issued}</code>
+            <span className="empty"> There is no way to ask for it again — only to revoke it and
+            issue another.</span>
           </div>
         )}
-        {error && <p className="err">{error}</p>}
-        <div className="excluded" style={{ marginTop: 12 }}>
-          {keys.map((k) => (
-            <div className="item" key={String(k.key_id)}>
-              <code>{String(k.prefix)}</code>
-              <span className="chip">{(k.capabilities as string[]).join(" ")}</span>
-              <span className="empty">
-                {k.revoked_at ? "revoked" : k.last_used_at
-                  ? `used ${new Date(String(k.last_used_at)).toLocaleString()}`
-                  : "never used"}
-              </span>
-            </div>
-          ))}
-        </div>
+      </section>
+
+      <section className="panel">
+        <h2>Live keys</h2>
+        {keys.length === 0 ? (
+          <p className="empty">None yet.</p>
+        ) : (
+          <div className="excluded">
+            {keys.map((k) => {
+              const revoked = Boolean(k.revoked_at);
+              return (
+                <div className="item" key={String(k.key_id)}>
+                  <code>{String(k.prefix)}</code>
+                  {k.name ? <span className="empty">{String(k.name)}</span> : null}
+                  <span className="chip">{(k.capabilities as string[]).join(" ")}</span>
+                  <span className="empty">
+                    {revoked ? "revoked" : k.last_used_at
+                      ? `used ${new Date(String(k.last_used_at)).toLocaleString()}`
+                      : "never used"}
+                  </span>
+                  {!revoked && (
+                    <button
+                      className="linkish far"
+                      title="Stops this key working immediately. Anything it wrote stays, attributed to it."
+                      onClick={async () => {
+                        setError(null); setNote(null);
+                        try {
+                          await call(`api/v1/users/me/api-keys/${k.key_id}`,
+                                     undefined, "DELETE");
+                          setNote(`${k.prefix} revoked. It stops working immediately; what it `
+                                  + `wrote stays, attributed to it.`);
+                          load();
+                        } catch (e) {
+                          setError((e as Error).message);
+                        }
+                      }}
+                    >
+                      Revoke
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+        <p className="empty">
+          A revoked key is listed rather than removed: it is the answer to <em>what was this key
+          allowed to do while it worked</em>, which is the question asked after it leaks.
+        </p>
       </section>
     </>
   );
 }
 
-function ProducersSection() {
+type SourceLag = {
+  crawler_id: string;
+  name: string | null;
+  scope: string;
+  last_ok_at: string | null;
+  last_error: string | null;
+  behind_seconds: number | null;
+  cooling_until: string | null;
+  cooling_reason: string | null;
+};
+
+/**
+ * Producers — freshness, and the two things that were only readable.
+ *
+ * `seconds_since_last_item` is one number per producer, and a crawler over
+ * forty Slack channels is forty sources behind one number: `source-lag` breaks
+ * it out per scope and separates *cooling* from *broken*, which is the whole
+ * point — a rate-limited source is not a failed one and does not need a person.
+ * It shipped with no reader.
+ *
+ * And a producer's status was displayed and could not be changed, so the way to
+ * stop a misbehaving webhook was a curl.
+ */
+function ProducersSection({ projectId }: { projectId: string }) {
   const [rows, setRows] = useState<Record<string, unknown>[]>([]);
+  const [lag, setLag] = useState<SourceLag[] | null>(null);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
-    call<{ producers: Record<string, unknown>[] }>("api/v1/producers")
-      .then((d) => setRows(d.producers))
-      .catch((e) => setError((e as Error).message));
-  }, []);
+  const [note, setNote] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      setRows((await call<{ producers: Record<string, unknown>[] }>(
+        "api/v1/producers")).producers);
+      setLag((await call<{ sources: SourceLag[] }>(
+        `api/v1/projects/${projectId}/source-lag`)).sources);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, [projectId]);
+  useEffect(() => { void load(); }, [load]);
+
+  async function setStatus(producerId: string, status: string) {
+    setBusy(true); setError(null); setNote(null);
+    try {
+      await call(`api/v1/producers/${producerId}`, { status }, "PATCH");
+      setNote(status === "enabled"
+        ? "Enabled. It writes again from the next delivery."
+        : "Disabled. Deliveries are still accepted and are dropped — a provider that "
+          + "gets a 4xx retries forever or gives up silently, and neither is what you meant.");
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <>
       <h1>Producers</h1>
@@ -5825,22 +6119,81 @@ function ProducersSection() {
         client that quietly died — with one query.
       </p>
       {error && <p className="err">{error}</p>}
+      {note && <p className="empty">{note}</p>}
+
       <section className="panel">
+        <h2>Who writes here</h2>
         <div className="excluded">
-          {rows.map((p) => (
-            <div className="item" key={String(p.producer_id)}>
-              <code>{String(p.producer_id)}</code>
-              <span className="chip on">{String(p.type)}</span>
-              <span className={`chip ${p.status === "enabled" ? "on" : ""}`}>{String(p.status)}</span>
-              {p.connection_scope ? <span className="chip">{String(p.connection_scope)}</span> : null}
-              <span className="empty">
-                {p.seconds_since_last_item === null
-                  ? "never written"
-                  : `last item ${Math.round(Number(p.seconds_since_last_item))}s ago`}
-              </span>
-            </div>
-          ))}
+          {rows.map((p) => {
+            const enabled = p.status === "enabled";
+            return (
+              <div className="item" key={String(p.producer_id)}>
+                <code>{String(p.producer_id)}</code>
+                <span className="chip on">{String(p.type)}</span>
+                <span className={`chip ${enabled ? "on" : ""}`}>{String(p.status)}</span>
+                {p.connection_scope ? <span className="chip">{String(p.connection_scope)}</span> : null}
+                <span className="empty">
+                  {p.seconds_since_last_item === null
+                    ? "never written"
+                    : `last item ${Math.round(Number(p.seconds_since_last_item))}s ago`}
+                </span>
+                <button
+                  className="linkish far"
+                  disabled={busy}
+                  title={enabled
+                    ? "Stops it writing. A webhook keeps accepting deliveries and drops them, because a 4xx makes a provider retry forever or give up silently."
+                    : "Lets it write again."}
+                  onClick={() => void setStatus(String(p.producer_id),
+                                                enabled ? "disabled" : "enabled")}
+                >
+                  {enabled ? "Disable" : "Enable"}
+                </button>
+              </div>
+            );
+          })}
         </div>
+      </section>
+
+      <section className="panel">
+        <h2>How far behind each source is</h2>
+        <p className="empty" style={{ marginTop: 0 }}>
+          Per <strong>scope</strong>, not per crawler: one crawler over forty channels is forty
+          sources, and a single busy one keeps the producer&rsquo;s freshness looking healthy while
+          thirty quiet ones go unread. <strong>Cooling is not broken</strong> — a rate-limited
+          credential is waiting exactly as long as it was told to, and does not need a person.
+        </p>
+        {lag === null ? (
+          <p className="empty">Loading…</p>
+        ) : lag.length === 0 ? (
+          <p className="empty">
+            No crawler has recorded a position in this project yet. That is different from being
+            behind: nothing has run.
+          </p>
+        ) : (
+          <div className="excluded">
+            {lag.map((s) => {
+              const cooling = s.cooling_until !== null
+                && new Date(s.cooling_until).getTime() > Date.now();
+              const stale = staleness(s.behind_seconds);
+              return (
+                <div className="item" key={`${s.crawler_id}-${s.scope}`}>
+                  <code>{s.name || s.crawler_id}</code>
+                  <span className="chip">{s.scope || "whole source"}</span>
+                  {cooling ? (
+                    <span className="chip warnchip">
+                      cooling until {new Date(s.cooling_until as string).toLocaleTimeString()}
+                    </span>
+                  ) : s.last_error ? (
+                    <span className="why">{s.last_error}</span>
+                  ) : null}
+                  <span className={stale?.warn ? "why far" : "empty far"}>
+                    {s.last_ok_at === null ? "never succeeded" : stale?.label}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </section>
     </>
   );

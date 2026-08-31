@@ -98,6 +98,13 @@ const ALLOWED = [
   /^api\/v1\/users\/me$/,
   /^api\/v1\/users\/me\/api-keys$/,
   /^api\/v1\/producers$/,
+  // Enable and disable a producer, revoke a key, revoke an invite, and the
+  // per-scope freshness the Producers screen reads.
+  /^api\/v1\/producers\/[A-Za-z0-9_]+$/,
+  /^api\/v1\/users\/me\/api-keys\/[A-Za-z0-9_]+$/,
+  /^api\/v1\/invites$/,
+  /^api\/v1\/invites\/[A-Za-z0-9_]+$/,
+  /^api\/v1\/projects\/[A-Za-z0-9_]+\/source-lag$/,
   /^api\/v1\/producers\/[A-Za-z0-9_]+\/inbound$/,
   /^api\/v1\/producers\/[A-Za-z0-9_]+\/signing-secret$/,
   /^api\/v1\/producers\/[A-Za-z0-9_]+\/test-delivery$/,
