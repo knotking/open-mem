@@ -520,6 +520,41 @@ you want after a prompt change). `tags` matches on **overlap**: any of these, no
 
 ---
 
+## Scenario 5c — Check a source is still being pulled
+
+A connector that quietly stopped syncing looks exactly like a project that went quiet. Both
+present as no new records, and a status signal computed over the first one is confidently wrong.
+
+```bash
+curl -s "$BASE/api/v1/projects/$PRJ/source-lag" -H "X-API-Key: $KEY"
+```
+
+```json
+{"sources": [
+  {"crawler_id": "crw_01J...", "name": "slack-eng", "scope": "C04ENGINEERING",
+   "last_ok_at": "2026-08-30T09:12:04Z", "behind_seconds": 900, "items_seen": 4821,
+   "last_error": null, "cooling_until": null, "cooling_reason": null},
+  {"crawler_id": "crw_01J...", "name": "slack-eng", "scope": "C04DESIGN",
+   "last_ok_at": "2026-08-23T02:40:11Z", "behind_seconds": 631000, "items_seen": 12,
+   "last_error": "401 invalid_auth", "cooling_until": null, "cooling_reason": null}
+]}
+```
+
+Read it as: engineering is current, **design has not been reached in seven days and the reason is
+a dead token** — not that the design team stopped talking.
+
+Three fields carry most of the meaning:
+
+| Field | Says |
+|-------|------|
+| `behind_seconds` | How far behind *this scope* is — per channel, repo or project, not per crawler |
+| `last_error` | Why it stopped. A gap with a reason is a failure; a gap without one is a genuinely quiet source |
+| `cooling_until` | The credential is rate-limited and everything sharing it is waiting. Not a failure, and it will retry the same range |
+
+A scope that is cooling or failing **keeps its position**, so nothing is skipped when it recovers.
+
+---
+
 ## Scenario 5b — Fold a memory down without losing it
 
 A memory that only grows stops being a working set. Compaction shrinks what

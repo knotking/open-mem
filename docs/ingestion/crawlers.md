@@ -517,6 +517,42 @@ skips everything that did succeed.
 | `crawl_frontier` | Per-item work queue for the active run |
 | `crawl_seen` | Dedupe — provider, external_id, version hash, last seen run |
 | `crawl_errors` | Per-item failures with reason |
+| `crawl_cursors` | **Position, error and counts per scope** — see below |
+
+### Sync state
+
+Three things used to share one `watermark` column, and they are not the same thing.
+
+**The position is per scope, not per crawler.** One crawler over forty Slack channels had a
+single position, so a busy channel dragged it past thirty quiet ones and their history was
+never read. `crawl_cursors` keys on `(crawler_id, scope)` — a channel, a repo, a Jira project,
+a Drive folder. The cursor is **opaque**: a Jira cursor is a timestamp, a GitHub one an etag, a
+Salesforce one a `nextRecordsUrl`, and the crawler does not interpret it. `scope = ''` is
+exactly the single-scope behaviour that came before, so nothing had to be migrated.
+
+**The remaining budget belongs to the credential, not the job.** Two crawlers sharing one Slack
+connection draw on the same quota and neither can see the other. A `429` is its own error type
+carrying whatever `Retry-After` actually said, and it parks the *connection* — so every crawler
+sharing it waits. The scheduler skips a cooling credential and reports it **separately from
+`skipped`**, which means already running: a throttled token and a busy crawler both look like
+"did not run" and only one of them is a problem.
+
+**A rate-limited run is not a failed one.** It ends with its own status, does not move the
+cursor, and the next run retries the same range. A scope that *failed* also keeps its cursor and
+records why — so a gap in the record reads as a failure and never as a quiet source.
+
+### Source lag
+
+```http
+GET /api/v1/projects/{project_id}/source-lag
+```
+
+Per scope: when it last succeeded, how far behind that is, what it last failed on, whether its
+credential is cooling.
+
+This is the number every project signal depends on. A signal computed over a source that
+stopped syncing is confidently wrong, and **"no activity for seven days" is indistinguishable
+from "the connector broke seven days ago"** without it.
 
 ### Failure behaviour
 
@@ -526,7 +562,21 @@ skips everything that did succeed.
 | Single item fails | Recorded in `crawl_errors`; run continues; ends `partial` |
 | Provider returns `429` | Backoff and narrow that provider's bucket — not a failure |
 | Worker dies | Heartbeat goes stale; a reaper marks the run `interrupted`; the next tick resumes from checkpoint |
+| Provider returns `429` at discovery | Run ends `rate_limited`, **credential parked** for `Retry-After`, cursor unmoved, same range retried |
+| Single scope fails | Its cursor is kept and the reason recorded — the next run retries that range |
 | Budget exhausted mid-run | Run stops as `partial` with a reason; no watermark advance |
+
+### Watching a run while it runs
+
+A run used to be a blank row until it ended. Worse, the emit phase wrote no heartbeat at all
+while `STALE_HEARTBEAT_SECONDS` was 300 — so a crawl emitting for more than five minutes was
+reaped as `interrupted` by the very mechanism meant to catch dead workers. With `max_items`
+defaulting to 1000 that is the ordinary case for a real source, not an edge, and it presented as
+noise: runs randomly interrupted, a position that never advanced, and a next run that re-fetched
+everything.
+
+The loop now reports every 25 items and before every write chunk, which fixes the reaping and
+makes the counters move — so a run in flight can be watched rather than waited on.
 
 ### Control
 

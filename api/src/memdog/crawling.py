@@ -469,13 +469,16 @@ class CrawlWorker:
         checkpoint = json.loads(claimed["checkpoint"]) if isinstance(
             claimed["checkpoint"], str) else dict(claimed["checkpoint"] or {})
 
+        scope = config.scope_param or ""
         status, reason = "completed", None
         found: list[Discovered] = []
         try:
             found, budget, stopped = await discover(
-                config, watermark=await cursor_for(
-                self.pool, claimed["crawler_id"], config.scope_param or ""),
-            checkpoint=checkpoint,
+                config,
+                watermark=await cursor_for(
+                    self.pool, claimed["crawler_id"], scope,
+                ),
+                checkpoint=checkpoint,
                 auth=await self._auth(crawler),
             )
             if stopped:
@@ -536,7 +539,6 @@ class CrawlWorker:
                 reason = f"{failed} item(s) failed"
 
         advanced = claimed["watermark_before"]
-        scope = config.scope_param or ""
         if status == "completed" and claimed["mode"] == "live":
             advanced = next_watermark(config, found, claimed["watermark_before"])
             await self.pool.execute(
@@ -949,9 +951,16 @@ async def source_lag(pool, project_id: str) -> list[dict]:
         """
         SELECT c.crawler_id, c.name, cu.scope, cu.last_ok_at, cu.last_error,
                cu.items_seen,
-               EXTRACT(EPOCH FROM (now() - cu.last_ok_at))::bigint AS behind_seconds
+               EXTRACT(EPOCH FROM (now() - cu.last_ok_at))::bigint AS behind_seconds,
+               -- Cooling is not broken. Without this a rate-limited source and a
+               -- dead one report identically, and only one of them needs a person.
+               CASE WHEN cn.limited_until > now() THEN cn.limited_until END
+                 AS cooling_until,
+               CASE WHEN cn.limited_until > now() THEN cn.last_limit_reason END
+                 AS cooling_reason
           FROM crawlers c
           LEFT JOIN crawl_cursors cu ON cu.crawler_id = c.crawler_id
+          LEFT JOIN connections cn ON cn.connection_id = c.connection_id
          WHERE c.project_id = $1
          ORDER BY cu.last_ok_at NULLS FIRST
         """,

@@ -4555,6 +4555,40 @@ connection and the single most valuable alert.
 
 ---
 
+### Sync state, and knowing a source is still alive
+
+Three things shared one `watermark` column and are not the same thing.
+
+**Position is per scope.** One crawler over forty Slack channels had a single position, so a
+busy channel dragged it past thirty quiet ones and their history was never read. `crawl_cursors`
+keys on `(crawler_id, scope)` — channel, repo, Jira project, Drive folder — and the cursor is
+opaque, because a Jira cursor is a timestamp, a GitHub one an etag and a Salesforce one a
+`nextRecordsUrl`.
+
+**The remaining budget belongs to the credential, not the job.** Two crawlers sharing a Slack
+connection draw on the same quota and neither can see the other. A `429` parks the connection
+for as long as `Retry-After` asked, and the scheduler reports a cooling credential *separately*
+from an already-running crawler — both look like "did not run" and only one is a problem.
+
+**A rate-limited run is not a failed one.** It keeps its cursor and retries the same range. So
+does a failed scope, with its reason recorded — which makes a gap in the record legible as a
+failure rather than as silence.
+
+`GET /projects/{id}/source-lag` reports all of it per scope. It is the number every project
+signal depends on: **"no activity for seven days" is indistinguishable from "the connector broke
+seven days ago"** without it, and a signal over a stale source should decline to compute rather
+than compute.
+
+One defect worth recording, because it was invisible and expensive. `STALE_HEARTBEAT_SECONDS`
+is 300 and the reaper marks anything older `interrupted`, but the emit phase wrote no heartbeat
+at all — so a crawl emitting for over five minutes killed its own run. With `max_items`
+defaulting to 1000 that is the ordinary case for a real source, not an edge, and it presented as
+noise: runs randomly interrupted, a position that never advanced, and a next run that re-fetched
+everything.
+
+**Not yet built:** no connector template declares an incremental clause, so all 37 still
+full-scan. The machinery is wired and tested; the templates have not been filled in.
+
 ## Bulk Operations
 
 > **Phase 1, not Phase 4.** The run entity, bulk write at scale, selector-based delete and account

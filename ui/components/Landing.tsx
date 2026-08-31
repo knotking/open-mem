@@ -30,6 +30,7 @@ const TABS = [
   { id: "graph", label: "Graph" },
   { id: "alerts", label: "Alerts" },
   { id: "compaction", label: "Compaction" },
+  { id: "sources", label: "Sources" },
   { id: "compare", label: "Comparison" },
   { id: "principles", label: "Principles" },
 ];
@@ -734,6 +735,44 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
               A run reports what it would fold and archives nothing, through the same path a live
               one takes. Scheduling is refused until you have looked — a compaction nobody has
               seen is one that empties a memory quietly.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section className="steps" id="sources">
+        <h2 className="section-title">And a source you can tell is still working</h2>
+        <p className="hero-lede" style={{ marginBottom: 22 }}>
+          A connector that quietly stopped syncing looks exactly like a project that went quiet.
+          Both present as no new records. Only one is a problem, and nothing downstream can tell
+          them apart without being told when each source was last actually reached.
+        </p>
+        <div className="steps-grid">
+          <article>
+            <span className="step-n">WHERE</span>
+            <h3>A position per scope, not per connector</h3>
+            <p>
+              One crawler over forty Slack channels used to keep a single position, so a busy
+              channel dragged it past thirty quiet ones and their history was never read. Each
+              channel, repo, Jira project and folder now keeps its own.
+            </p>
+          </article>
+          <article>
+            <span className="step-n">SLOW</span>
+            <h3>The limit belongs to the token</h3>
+            <p>
+              Two crawlers on one Slack connection draw down the same quota and neither can see
+              the other. A rate limit parks the credential, so everything sharing it waits — and
+              waits as long as the API asked for, not as long as we guessed.
+            </p>
+          </article>
+          <article>
+            <span className="step-n">LAG</span>
+            <h3>Stale is reported, not inferred</h3>
+            <p>
+              Every scope reports when it last succeeded and why it last failed. A run that hit a
+              limit is not a failed run: it keeps its position and retries the same range, so a
+              gap in the record means a failure and never a silence.
             </p>
           </article>
         </div>
