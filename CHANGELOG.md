@@ -11,6 +11,39 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **A rollup says when it is out of date.** A membership change marks every
+  `derived_from` ancestor stale — deterministic, free, and it cannot be wrong.
+  `part_of` is untouched on purpose: a container's members *are* its children's,
+  so there is no separate state to go stale. **Nothing recomputes on write**,
+  which is the correction the alert system already had to make; the mark is the
+  signal and the recompute is a decision, taken through compaction with its
+  existing preview gate. A **preview leaves the flag alone** — one that cleared
+  it would be a preview with a side effect.
+- **A flag, not a queue entry.** One import moving forty children would enqueue
+  forty recomputes of the same rollup. Marking is idempotent, so it costs one
+  row write however many children moved, and `stale_since` keeps the **first**
+  change: *how long has this been wrong* is the question, not *when did it last
+  get worse*. The walk is `DISTINCT` — two children rolling into one parent is
+  the requested shape, so a diamond must not mark the shared ancestor twice.
+
+### Fixed
+- **Compacting a `part_of` parent considered nothing and reported success.**
+  Its members are its children's, so a single-level `WHERE memory_id = $1` found
+  none — a run over zero records that completes is the worst available outcome.
+  It reads through the hierarchy now, deduped by `data_id`, since a record held
+  by a child and its parent is one member and was otherwise folded twice.
+  **The rollup's ACL follows for free**: the summary takes the strictest level
+  among the sources it read, so one over four child memories is visible only to
+  whoever can read all four.
+- **`.notice.caution` was used twice and defined nowhere**, so the modifier
+  meaning *this one is more serious* rendered identically to the notices it was
+  distinguishing itself from — since the account-deletion screen shipped.
+
+### Migrations
+- **`0041_memory_staleness.sql`** — `memories.stale_since`, `stale_reason`, and
+  a partial index over the only query that reads them. Additive.
+
+### Added
 - **Groups can be created, and shared with.** A group is a principal the ACL
   predicate has always resolved — the mechanism behind permission-aware
   retrieval — and **there was no way to create one**, so `restricted` to a

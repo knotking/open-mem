@@ -3,7 +3,27 @@
 **Requirement.** Two memories converge into a third. A change in either is
 visible at the one above, and an alert can be set there.
 
-Status: **plan only, nothing implemented.** Confirm before `/implement`.
+Status: **shipped, all six steps** (31 Aug 2026). Cycle rejection, the tree
+endpoint and the recursive alert scope in `feat(memories): a change in a child
+is visible at the parent`; strictest-ACL, `stale_since` and the console in
+`feat(memories): a rollup that is out of date says so`.
+
+Two things this plan did not predict, both found by building it:
+
+- **§4 was a bug, not a feature.** Compacting a `part_of` parent considered
+  *nothing* -- its members are its children's, so a single-level
+  `WHERE memory_id = $1` matched none and the run completed successfully over
+  zero records. The strictest-ACL rule then needed no new code at all:
+  `_summarize` already takes the strictest level among the sources it read, so
+  reading through the hierarchy was the whole of it.
+- **The alert scope was not the only single-level reader.** Compaction was the
+  other, and there may be a third: anything that selects `memory_members` by a
+  single `memory_id` means *this container only*, which is now sometimes the
+  wrong reading.
+
+The open questions in §8 are answered by what shipped: a rollup has **inherited
+members only** (nothing writes members to a parent), and only `part_of` is
+walked -- `about` and `continues` propagate nothing.
 
 ---
 

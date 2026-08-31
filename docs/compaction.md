@@ -125,6 +125,22 @@ Scheduled jobs ride the same minute sweep the alerts use rather than adding a
 fourth Cloud Run job: they are due at most daily, so a per-minute pass costs one
 indexed lookup that usually returns nothing.
 
+## A parent folds what its children hold
+
+A compaction of a memory reads **through `part_of`**: the parent's members are
+its children's members, so compacting one used to consider nothing and report a
+successful run over zero records. Members are deduplicated by `data_id`, since a
+record held by both a child and its parent is one member and would otherwise be
+folded twice and counted twice.
+
+The summary's ACL follows from that rather than being a separate rule — it takes
+the strictest level among the sources it actually read, so **a rollup over four
+child memories is visible only to whoever can read all four**.
+
+A live run also **clears `stale_since`** on the memory it compacted; a preview
+does not, because a preview with a side effect is not a preview. See
+[memories](memories.md#derived_from-goes-stale-and-says-so) for what sets it.
+
 ## The other half: expiry
 
 Compaction is deliberate — a person configures a job, previews it and schedules

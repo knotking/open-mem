@@ -207,6 +207,52 @@ The same distinction that governs [case membership](cases.md), for the same reas
 eleven data items are probably related; that is a good reason to surface one while reading the
 other, and a bad reason to extend one's TTL because the other was touched.
 
+### A hierarchy is read where it is used, never propagated
+
+`part_of` and `derived_from` are both links and they behave nothing alike, which is the distinction
+the whole feature turns on:
+
+| | `part_of` | `derived_from` |
+|---|---|---|
+| The parent is | A **container** — the children's items *are* its items | A **generated artifact** — a summary, a rollup, a status |
+| Reading it | A join. No model, no cost, never stale | Whatever was last generated |
+| A child changing | Changes the parent by definition, instantly | Makes the parent **wrong** |
+| Cost of a change | Nothing | A model call, when somebody decides to pay it |
+
+So **`part_of` needs no propagation at all**, and three readers walk it instead: an alert scoped to
+a memory matches changes in every memory beneath it, a compaction of a parent folds what its
+children hold, and `GET /memories/{id}/tree` shows both directions.
+
+Resolving the hierarchy at the point of use rather than emitting a parent event per child write is
+deliberate. The alternative costs an event per level per item, has to be kept consistent, and turns
+one bulk crawl into thousands of evaluations — the mistake the alert system made once and undid. It
+is also the house rule the ACL already follows: **a predicate inside the query, never a
+post-filter.**
+
+Two consequences worth stating because they surprise people:
+
+- **A rollup takes the strictest access level among its sources.** A summary over four child
+  memories is visible only to whoever can read all four. The alternative is a summary that says out
+  loud what one of its sources was restricted about.
+- **A link that would close a cycle is refused** at the edge that closes it (`409`), per relation,
+  rather than defended against in every recursive reader.
+
+### `derived_from` goes stale, and says so
+
+A membership change marks every `derived_from` ancestor stale — `stale_since` and `stale_reason` on
+the memory, visible in the listing, the tree and the console.
+
+**Nothing recomputes on write.** The mark is deterministic, free and cannot be wrong; recomputing
+is a decision somebody makes, through [compaction](compaction.md) with its preview gate. A live run
+clears the flag; a preview does not, because a preview with a side effect is not a preview.
+
+It is a **flag rather than a queue entry**. One import moving forty children would otherwise
+enqueue forty recomputes of the same rollup — marking is idempotent, so it costs one row write
+however many children moved, and `stale_since` keeps the *first* change: *how long has this been
+wrong* is the question, not *when did it last get worse*. The walk is `DISTINCT`, because two
+children rolling into one parent is the requested shape and a shared ancestor must not be marked
+twice.
+
 ### What correlation unlocks
 
 - **Traversal at retrieval** — answering from a conversation and the case it is about, in one query
@@ -403,6 +449,10 @@ POST  /api/v1/memories/{id}/members        explicit mapping
 GET   /api/v1/data/{id}/memories           reverse lookup
 POST  /api/v1/memories/{id}/compress
 PATCH /api/v1/memories/{id}                ttl_hours, no_expiry
+GET   /api/v1/memories/{id}/tree           ancestors and descendants, with a cap that reports itself
+CRUD  /api/v1/memories/{id}/links          relate two memories; a cycle is a 409
+GET   /api/v1/projects/{id}/expiring       what is past its TTL, and under which policy
+POST  /api/v1/expiry/sweep                 apply it; `dry_run` defaults to true
 ```
 
 Everything is available in the UI at the same granularity — memory-type editor with TTL and expiry
