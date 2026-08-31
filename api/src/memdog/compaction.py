@@ -172,8 +172,25 @@ async def list_jobs(pool: asyncpg.Pool, principal: Principal, project_id: str) -
     rows = await pool.fetch(
         """
         SELECT j.*, m.title AS memory_title, m.type AS memory_type, m.memory_key,
-               (SELECT count(*) FROM memory_members mm
-                 WHERE mm.memory_id = j.memory_id) AS members,
+               -- Through `part_of`, because that is what the run does.
+               --
+               -- Counted single-level, a job on a parent memory rendered as
+               -- "0 members" beside a run that would consider three: the number
+               -- on the card and the number the job acts on disagreed, and the
+               -- card is the one people read before deciding whether to run it.
+               -- DISTINCT for the same reason the run deduplicates -- a record
+               -- held by both a child and its parent is one member.
+               (SELECT count(DISTINCT mm.data_id) FROM memory_members mm
+                 WHERE mm.memory_id IN (
+                   WITH RECURSIVE contained(memory_id, depth) AS (
+                       SELECT j.memory_id, 0
+                       UNION
+                       SELECT l.from_memory, c.depth + 1
+                       FROM memory_links l JOIN contained c ON l.to_memory = c.memory_id
+                       WHERE l.relation = 'part_of' AND c.depth < 12
+                   )
+                   SELECT memory_id FROM contained
+                 )) AS members,
                (SELECT max(started_at) FROM compaction_runs r WHERE r.job_id = j.job_id)
                  AS last_run_at,
                (SELECT coalesce(sum(archived), 0) FROM compaction_runs r

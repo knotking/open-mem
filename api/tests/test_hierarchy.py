@@ -301,3 +301,36 @@ async def test_a_recompute_clears_the_flag_and_a_preview_does_not(
     await run(pool, actor, memory_id=parent, algorithm="dedupe", mode="live")
     assert await pool.fetchval(
         "SELECT stale_since FROM memories WHERE memory_id = $1", parent) is None
+
+
+async def test_a_compaction_job_on_a_parent_counts_what_it_would_fold(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """The card said "0 members" beside a run that would consider three.
+
+    A count next to a job that disagrees with what the job does is worse than
+    no count: the card is what people read before deciding whether to run it.
+    """
+    from memdog.compaction import create_job, list_jobs
+
+    actor = await principal_for(tenant.api_key)
+    await _seed_types(pool, actor, tenant)
+    child = await _memory(pool, actor, tenant, "workstream")
+    parent = await _memory(pool, actor, tenant, "programme")
+    await link(pool, actor, from_memory=child, to_memory=parent, relation="part_of")
+
+    for i in range(3):
+        await write_items(
+            pool, queue, blobs, settings, actor,
+            WriteRequest(
+                producer_id=tenant.producer_id,
+                items=[WriteItem(external_id=f"c-{i}", content=Inline(text="repeated"),
+                                 memory=MemoryRef(type="factual", key="workstream"))],
+                options=WriteOptions(enrich=False),
+            ),
+        )
+
+    await create_job(pool, actor, project_id=tenant.project_id, memory_id=parent,
+                     algorithm="dedupe", name="programme fold")
+    jobs = await list_jobs(pool, actor, tenant.project_id)
+    assert jobs[0]["members"] == 3

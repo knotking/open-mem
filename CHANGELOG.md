@@ -10,6 +10,14 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 
 ## Unreleased
 
+### Changed
+- **`memories.md` says what the two hierarchical relations actually do.** It
+  described `memory_links` as a table with five relations and never said that
+  `part_of` and `derived_from` behave nothing alike — a container has no
+  separate state and can never be stale; a generated rollup is made *wrong* by
+  the same change. The plan file also still opened *"plan only, nothing
+  implemented"* after all six steps had shipped.
+
 ### Added
 - **A rollup says when it is out of date.** A membership change marks every
   `derived_from` ancestor stale — deterministic, free, and it cannot be wrong.
