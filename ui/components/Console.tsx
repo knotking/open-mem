@@ -14,6 +14,7 @@ import { Fragment, useCallback, useEffect, useState } from "react";
 
 import Capture, { humanBytes } from "./Capture";
 import ThemeToggle from "./ThemeToggle";
+import { WriteProgress, useTracked } from "./Progress";
 import {
   ARMS,
   ArmKey,
@@ -440,26 +441,9 @@ function StoredMedia({ item }: { item: Item }) {
   );
 }
 
-function useTracked() {
-  const [item, setItem] = useState<Item | null>(null);
-  const [versions, setVersions] = useState<Version[]>([]);
-
-  const track = useCallback(async (dataId: string, onTick?: () => Promise<void>) => {
-    for (let attempt = 0; attempt < 60; attempt += 1) {
-      const current = await call<Item>(`api/v1/data/${dataId}`);
-      setItem(current);
-      setVersions((await call<{ versions: Version[] }>(`api/v1/data/${dataId}/versions`)).versions);
-      await onTick?.();
-      const settled =
-        current.state === "enriched" ||
-        (current.parse_status !== null && current.parse_status !== "parsed");
-      if (settled) return;
-      await new Promise((r) => setTimeout(r, 2000));
-    }
-  }, []);
-
-  return { item, versions, track, setItem };
-}
+/* The tracker moved to `Progress.tsx`, where it can be read by the sandbox
+ * too. The loop that lived here polled sixty times, rendered nothing while it
+ * did, and returned silently whether the item had arrived or never would. */
 
 /* --------------------------------------------------------------- 1. add */
 
@@ -479,10 +463,40 @@ function AddData({
   );
   const [memoryType, setMemoryType] = useState("");
   const [memoryKey, setMemoryKey] = useState("");
+  // Enrichment is off by default at the API, and a write from here that does
+  // not say otherwise stops at `stored` — durable, and invisible to search.
+  // That is right for a producer pushing ten thousand records and wrong for a
+  // person adding one item by hand and then looking for it, so this screen
+  // asks, visibly, with the cost said out loud next to the switch.
+  const [enrich, setEnrich] = useState(true);
+  const [embed, setEmbed] = useState(true);
+  const [summarize, setSummarize] = useState(true);
+  // Per-request overrides. The API accepts both and persists neither, which is
+  // the whole point of them -- a saved override would change what a project
+  // does with no audit trail on the setting that appears to control it. That is
+  // also why they are here rather than on Prompts, which is where a *saved*
+  // instruction block belongs.
+  const [promptOverride, setPromptOverride] = useState("");
+  const [modelOverride, setModelOverride] = useState("");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const { item, versions, track } = useTracked();
+  const { item, versions, climb, watching, elapsed, track, resume, enrichNow } =
+    useTracked(onChange);
+
+  // Said beside every control that causes the spend, because the panel that
+  // configures it is further down the page and a person writes before they
+  // scroll. "Stored only" is the sentence that would otherwise be discovered
+  // afterwards, in a search that finds nothing.
+  const willDo = !enrich
+    ? "stored only — not searchable"
+    : embed && summarize
+      ? "will embed and summarise"
+      : embed
+        ? "will embed, no summary"
+        : summarize
+          ? "will summarise, not searchable"
+          : "stored only — both steps unchecked";
 
   async function submit(content: Record<string, unknown>, externalId: string, label: string) {
     setBusy(true);
@@ -493,16 +507,29 @@ function AddData({
         memoryType || memoryKey
           ? { type: memoryType || "default", key: memoryKey || null }
           : undefined;
-      const response = await call<{ results: { data_id: string; memories: string[] }[] }>(
-        "api/v1/write",
-        { producer_id: producerId, items: [{ external_id: externalId, content, memory }] },
-      );
+      const response = await call<{
+        results: { data_id: string; memories: string[]; events: string[] }[];
+      }>("api/v1/write", {
+        producer_id: producerId,
+        items: [{ external_id: externalId, content, memory }],
+        options: {
+          enrich,
+          enrichment: {
+            embed,
+            summarize,
+            prompt: promptOverride.trim() || null,
+            model_id: modelOverride.trim() || null,
+          },
+        },
+      });
       const first = response.results[0];
       setNote(
-        `${label} committed as ${first.data_id}, mapped into ${first.memories.length} memory(ies). ` +
-          "It is durable now; interpretation is queued.",
+        `${label} committed as ${first.data_id}, mapped into ${first.memories.length} memory(ies).`,
       );
-      await track(first.data_id, onChange);
+      // The write is done the moment it returns — the button goes back to
+      // being a button, and the climb is watched below rather than behind a
+      // disabled control that looks like a hang.
+      track(first.data_id);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -522,6 +549,7 @@ function AddData({
         <h2>Paste text</h2>
         <textarea value={text} onChange={(e) => setText(e.target.value)} />
         <div className="row end" style={{ marginTop: 10 }}>
+          <span className={enrich ? "empty" : "warntext"}>{willDo}</span>
           <button
             onClick={() =>
               submit({ kind: "inline", text }, `text-${Date.now()}`, "Text")
@@ -539,12 +567,76 @@ function AddData({
           <strong>Media is interpreted by a model.</strong> Audio and video are transcribed, images
           described and their text transcribed. That costs tokens per file, recorded per revision.
         </div>
+        <p className={enrich ? "empty" : "warntext"} style={{ marginTop: 0 }}>{willDo}</p>
         <Capture
           busy={busy}
           onSubmit={(name, mime, base64, size) =>
             submit({ kind: "inline", bytes_b64: base64 }, name, `${name} (${humanBytes(size)})`)
           }
         />
+      </section>
+
+      <section className="panel">
+        <h2>Interpretation</h2>
+        <p className="empty" style={{ marginTop: 0 }}>
+          Off, an item is stored and durable and <strong>nothing can find it</strong> — search runs
+          on embeddings and there would be none. On, it costs one model call per chunk to embed and
+          one more to summarise, metered against this project&rsquo;s budget.
+        </p>
+        <div className="row">
+          <label className="check">
+            <input type="checkbox" checked={enrich} onChange={(e) => setEnrich(e.target.checked)} />
+            Interpret this write
+          </label>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={embed}
+              disabled={!enrich}
+              onChange={(e) => setEmbed(e.target.checked)}
+            />
+            Embed — makes it searchable
+          </label>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={summarize}
+              disabled={!enrich}
+              onChange={(e) => setSummarize(e.target.checked)}
+            />
+            Summarise — title, keywords, entities
+          </label>
+        </div>
+        <div className="row" style={{ marginTop: 10 }}>
+          <input
+            type="text"
+            placeholder="prompt override — this write only, never saved"
+            value={promptOverride}
+            disabled={!enrich || !summarize}
+            onChange={(e) => setPromptOverride(e.target.value)}
+            style={{ flex: 2, minWidth: 240 }}
+          />
+          <input
+            type="text"
+            placeholder="model override — e.g. gemini-2.5-flash"
+            value={modelOverride}
+            disabled={!enrich || !summarize}
+            onChange={(e) => setModelOverride(e.target.value)}
+            style={{ flex: 1, minWidth: 180 }}
+          />
+        </div>
+        <p className="empty" style={{ marginBottom: 0 }}>
+          Both apply to this write alone and are never persisted as configuration. A locked org
+          prompt still wins over either — otherwise a lock would be advisory. Saved instruction
+          blocks live under <strong>Prompts</strong>; assignment per purpose lives under{" "}
+          <strong>Models</strong>.
+        </p>
+        {!enrich && (
+          <p className="warned" style={{ marginBottom: 0 }}>
+            This write will stop at <code>stored</code>. You can ask for interpretation later, from
+            the progress panel below or from Browse.
+          </p>
+        )}
       </section>
 
       <section className="panel">
@@ -569,12 +661,20 @@ function AddData({
         </p>
       </section>
 
-      {note && <p className="empty">{note}</p>}
       {error && <p className="err">{error}</p>}
-      {item && (
+      {(watching || item) && (
         <section className="panel">
           <h2>What happened to it</h2>
-          <ItemDetail item={item} versions={versions} />
+          {note && <p className="empty" style={{ marginTop: 0 }}>{note}</p>}
+          <WriteProgress
+            climb={climb}
+            watching={watching}
+            elapsed={elapsed}
+            dataId={item?.data_id ?? null}
+            onEnrich={enrichNow}
+            onResume={resume}
+          />
+          {item && <ItemDetail item={item} versions={versions} />}
         </section>
       )}
       {stair && (
@@ -712,7 +812,11 @@ function UpdateData({
         "api/v1/write",
         { producer_id: producerId,
           items: [{ external_id: selected.external_id,
-                    content: { kind: "inline", text: draft } }] },
+                    content: { kind: "inline", text: draft } }],
+          // Without this the revision lands and nothing re-reads it: the
+          // embedding still indexes the text this edit replaced, so search
+          // keeps matching on words the item no longer contains.
+          options: { enrich: true } },
       );
       const first = response.results[0];
       setNote(first.status === "updated"
@@ -720,6 +824,29 @@ function UpdateData({
         : "That key did not exist, so this created a new item.");
       setEditing(false);
       await open(first.data_id);
+      await onChange();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /**
+   * Ask for the interpretation the write did not.
+   *
+   * The state alone says where an item stopped, never why, so the note says
+   * what was asked for rather than claiming what will happen — a refusal or an
+   * exhausted budget lands the same way and neither is this screen's to promise.
+   */
+  async function interpret() {
+    if (!selected) return;
+    setBusy(true); setError(null);
+    try {
+      await call(`api/v1/data/${selected.data_id}/enrich`,
+                 { embed: true, summarize: true });
+      setNote("Interpretation requested. It runs off the write path, so reopen the item in a "
+              + "moment to see whether it reached enriched.");
       await onChange();
     } catch (e) {
       setError((e as Error).message);
@@ -821,7 +948,24 @@ function UpdateData({
                 <pre className="excerpt">
                   {selected.content_text ?? selected.extracted_text ?? "—"}
                 </pre>
-                <button onClick={() => setEditing(true)}>Edit</button>
+                <div className="row">
+                  <button onClick={() => setEditing(true)}>Edit</button>
+                  {/* Enrichment is opt-in, so a corpus contains items that were
+                    * recorded and never interpreted -- stored, durable, and
+                    * invisible to search. Until now the console could see that
+                    * state and do nothing about it. */}
+                  {selected.state !== "enriched" && (
+                    <button
+                      disabled={busy}
+                      title="Embeds and summarises this item. One model call per chunk, plus one for the summary."
+                      onClick={() => void interpret()}
+                    >
+                      {selected.state === "stored"
+                        ? "Interpret it — it is not searchable yet"
+                        : "Summarise it"}
+                    </button>
+                  )}
+                </div>
               </>
             ) : (
               <>

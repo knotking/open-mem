@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import Capture, { humanBytes } from "./Capture";
-import { ARMS, type ArmKey } from "@/lib/types";
+import { WriteProgress, useTracked } from "./Progress";
+import { ARMS, call, type ArmKey, type Item, type Version } from "@/lib/types";
 
 // The sandbox is a demonstration of the write-then-find path, so it searches
 // the way an ordinary caller does. The graph arm belongs in the console, where
@@ -29,32 +30,9 @@ type Citation = {
   state: string;
 };
 
-type Version = {
-  version_id: string;
-  revision: number;
-  source: string;
-  content_chars: number;
-  mime_type: string | null;
-  model_id: string | null;
-  tokens: number | null;
-  preview: string | null;
-  created_at: string;
-  detail: Record<string, unknown>;
-};
-
-type Item = {
-  data_id: string;
-  state: string;
-  mime_type: string | null;
-  data_type: string | null;
-  storage_ref: string | null;
-  checksum: string | null;
-  size_bytes: number | null;
-  parse_status: string | null;
-  parse_detail: Record<string, unknown> | null;
-  content_text: string | null;
-  extracted_text: string | null;
-};
+// `Item` and `Version` come from `lib/types` rather than being declared again
+// here: the sandbox and the console read the same rows, and two copies of a
+// shape drift in exactly the field that matters.
 
 type Excluded = {
   data_id: string;
@@ -77,17 +55,6 @@ const REASON_TEXT: Record<Excluded["reason"], string> = {
   not_yet_enriched: "not searchable yet — it could not have matched",
 };
 
-async function call<T>(path: string, body?: unknown): Promise<T> {
-  const response = await fetch(`/api/proxy/${path}`, {
-    method: body ? "POST" : "GET",
-    headers: body ? { "content-type": "application/json" } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const payload = await response.json();
-  if (!response.ok) throw new Error(payload?.detail ?? `request failed (${response.status})`);
-  return payload as T;
-}
-
 export default function Sandbox({
   projectId,
   producerId,
@@ -102,8 +69,6 @@ export default function Sandbox({
   const [stair, setStair] = useState<Stair | null>(null);
   const [trace, setTrace] = useState<Trace | null>(null);
   const [busy, setBusy] = useState<"write" | "search" | "upload" | null>(null);
-  const [item, setItem] = useState<Item | null>(null);
-  const [versions, setVersions] = useState<Version[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const poll = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -138,24 +103,11 @@ export default function Sandbox({
     };
   }, [stair, refresh]);
 
-  // Watch one item up the staircase. Media takes a model call, so this is the
-  // difference between "it is working" and "it is broken".
-  const track = useCallback(
-    async (dataId: string) => {
-      for (let attempt = 0; attempt < 60; attempt += 1) {
-        const current = await call<Item>(`api/v1/data/${dataId}`);
-        setItem(current);
-        setVersions((await call<{ versions: Version[] }>(`api/v1/data/${dataId}/versions`)).versions);
-        await refresh();
-        const settled =
-          current.state === "enriched" ||
-          (current.parse_status !== null && current.parse_status !== "parsed");
-        if (settled) return;
-        await new Promise((r) => setTimeout(r, 2000));
-      }
-    },
-    [refresh],
-  );
+  // Watching one item up the staircase, shared with the console. Media takes a
+  // model call, so this is the difference between "it is working" and "it is
+  // broken" -- and the tracker says which, rather than polling in silence.
+  const { item, versions, climb, watching, elapsed, track, resume, enrichNow } =
+    useTracked(refresh);
 
   async function ingestBytes(name: string, mime: string, base64: string, size: number) {
     setBusy("upload");
@@ -169,6 +121,10 @@ export default function Sandbox({
           items: [
             { external_id: name, content: { kind: "inline", bytes_b64: base64 } },
           ],
+          // The sandbox exists to show write-then-find, and enrichment is off
+          // by default at the API. Without asking, nothing is embedded and the
+          // search below can only ever come back empty.
+          options: { enrich: true },
         },
       );
       const first = response.results[0];
@@ -176,7 +132,7 @@ export default function Sandbox({
         `${name} (${humanBytes(size)}) committed as ${first.data_id}. ` +
           "The bytes are in object storage; interpretation is queued.",
       );
-      await track(first.data_id);
+      track(first.data_id);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -199,11 +155,12 @@ export default function Sandbox({
               content: { kind: "inline", text },
             },
           ],
+          options: { enrich: true },
         },
       );
       const first = response.results[0];
       setNote(`Committed as ${first.data_id} at state “${first.state}”. Enrichment is queued.`);
-      await track(first.data_id);
+      track(first.data_id);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -257,6 +214,19 @@ export default function Sandbox({
         <Capture onSubmit={ingestBytes} busy={busy !== null} />
       </section>
 
+      {(watching || item) && (
+        <section className="panel">
+          <h2>What happened to it</h2>
+          <WriteProgress
+            climb={climb}
+            watching={watching}
+            elapsed={elapsed}
+            dataId={item?.data_id ?? null}
+            onEnrich={enrichNow}
+            onResume={resume}
+          />
+        </section>
+      )}
       {item && <ItemPanel item={item} versions={versions} />}
 
       <section className="panel">

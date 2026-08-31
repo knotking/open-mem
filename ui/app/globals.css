@@ -866,3 +866,54 @@ button.stattile:focus-visible { outline: 2px solid var(--accent); outline-offset
   .alertrow, .alerthead { grid-template-columns: 14px 1fr 70px; }
   .alertrow > .hide-narrow, .alerthead > .hide-narrow { display: none; }
 }
+
+/* The climb — one item's progress up the staircase.
+ *
+ * Named `climb` rather than `progress` or `pipeline` because both of those are
+ * taken: `.pipeline` is the landing page's diagram, and the cascade does not
+ * report a collision — the later rule simply wins somewhere nobody is looking.
+ *
+ * A step encodes its state in shape as well as colour: done is filled, running
+ * pulses, waiting is hollow, stopped is a warn ring. A reader glancing at the
+ * column sees where it got to without reading a word. */
+.climb { display: grid; gap: 10px; margin: 4px 0 2px; }
+.climb-head { display: flex; align-items: baseline; gap: 10px; font-size: 13.5px; }
+.climb-head .far { margin-left: auto; font-size: 11.5px; }
+.climb-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.climb-step { display: grid; grid-template-columns: 14px 92px 1fr; gap: 10px;
+              align-items: baseline; font-size: 12.5px; }
+.climb-mark { width: 9px; height: 9px; border-radius: 50%; align-self: center;
+              border: 1.5px solid var(--line); background: transparent; }
+.climb-step.done .climb-mark { background: var(--step3); border-color: var(--step3); }
+.climb-step.running .climb-mark { background: var(--step2); border-color: var(--step2);
+                                  animation: climb-pulse 1.4s ease-in-out infinite; }
+.climb-step.stopped .climb-mark { border-color: var(--warn); background: var(--warn-soft); }
+.climb-step.skipped .climb-mark { border-style: dashed; }
+.climb-label { font-family: var(--mono); font-size: 12px; }
+.climb-step.waiting .climb-label, .climb-step.waiting .climb-note { color: var(--muted); }
+.climb-note { color: var(--muted); }
+.climb-step.stopped .climb-note { color: var(--warn); }
+
+/* A warning that stands on its own, rather than inside `.excluded` where `.why`
+ * is the only place that class is styled. */
+.warned, .climb-why {
+  font-size: 12.5px; color: var(--warn); margin: 2px 0 0;
+  border-left: 3px solid var(--warn); padding-left: 10px;
+}
+
+/* The colour without the block treatment, for a warning that sits inline
+ * beside a control rather than under one. */
+.warntext { color: var(--warn); font-size: 12.5px; }
+
+.check { display: inline-flex; align-items: center; gap: 7px; font-size: 13px;
+         cursor: pointer; }
+.check input { width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; }
+.check:has(input:disabled) { color: var(--muted); cursor: default; }
+
+@keyframes climb-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .climb-step.running .climb-mark { animation: none; }
+}

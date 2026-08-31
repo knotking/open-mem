@@ -335,3 +335,25 @@ export function humanChars(n: number): string {
   if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k chars`;
   return `${(n / 1_000_000).toFixed(1)}M chars`;
 }
+
+/**
+ * One entry from the domain event log, as `GET /events?data_id=…` returns it.
+ *
+ * This is what makes a stalled item explainable rather than merely stuck. A
+ * `state` says where an item got to; only the log says whether anything was
+ * ever asked to take it further, and what happened when it tried.
+ */
+export type DomainEvent = {
+  event_id: string;
+  sequence: number;
+  event_type: string;
+  data_id: string | null;
+  caused_by: string | null;
+  /** pending · dispatched · consumed · failed · no_consumer */
+  status: string;
+  attempts: number;
+  last_error: string | null;
+  payload: Record<string, unknown>;
+  occurred_at: string;
+  consumed_at: string | null;
+};
