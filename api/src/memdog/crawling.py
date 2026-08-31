@@ -210,7 +210,15 @@ async def set_enabled(
             "estimate before enabling",
             status=409,
         )
-    next_due = _now() if enabled else None
+    # Manual means manual. Enabling used to make any crawler due immediately,
+    # regardless of its schedule -- so a crawler someone had deliberately marked
+    # manual was picked up by the platform scheduler and ran once before they
+    # ever triggered it. Enabling a manual crawler makes it *runnable*, not due.
+    schedule = row["schedule"]
+    if isinstance(schedule, str):
+        schedule = json.loads(schedule)
+    scheduled = (schedule or {}).get("type", "manual") != "manual"
+    next_due = _now() if (enabled and scheduled) else None
     await pool.execute(
         "UPDATE crawlers SET enabled = $2, next_due_at = $3 WHERE crawler_id = $1",
         crawler_id, enabled, next_due,
@@ -554,7 +562,16 @@ class CrawlWorker:
                 kind="etag" if config.incremental == "etag" else "watermark",
                 items=emitted,
             )
-        elif claimed["mode"] == "live" and status in ("failed", "partial", "interrupted"):
+        elif claimed["mode"] == "live" and status == "partial":
+            # Progress, not failure. A run that hit its item budget reached the
+            # source and did work -- 1000 items emitted is not an outage -- so
+            # it records that it succeeded and how much it moved, and leaves the
+            # cursor where it was. Filing it as an error made a healthy crawler
+            # read as one that had never once worked, which is the false alarm
+            # this whole surface exists to prevent.
+            await record_scope_progress(
+                self.pool, claimed["crawler_id"], scope, items=emitted)
+        elif claimed["mode"] == "live" and status in ("failed", "interrupted"):
             await record_scope_failure(
                 self.pool, claimed["crawler_id"], scope, reason or status)
 
@@ -903,6 +920,30 @@ async def record_scope_failure(pool, crawler_id: str, scope: str, reason: str) -
            SET last_error = EXCLUDED.last_error, updated_at = now()
         """,
         crawler_id, scope, reason[:500],
+    )
+
+
+async def record_scope_progress(
+    pool, crawler_id: str, scope: str, *, items: int,
+) -> None:
+    """A run that made progress without finishing.
+
+    Two questions were conflated here and they are not the same: *how far can
+    the next run safely resume from* and *is this source healthy*. Hitting an
+    item budget answers the first with "no further" and the second with "yes" --
+    so the cursor stays put while the success is recorded, and a prior error is
+    cleared because the source has plainly answered since.
+    """
+    await pool.execute(
+        """
+        INSERT INTO crawl_cursors (crawler_id, scope, items_seen, last_ok_at,
+                                   updated_at)
+        VALUES ($1, $2, $3, now(), now())
+        ON CONFLICT (crawler_id, scope) DO UPDATE
+           SET items_seen = crawl_cursors.items_seen + EXCLUDED.items_seen,
+               last_ok_at = now(), last_error = NULL, updated_at = now()
+        """,
+        crawler_id, scope, max(0, items),
     )
 
 

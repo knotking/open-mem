@@ -564,7 +564,7 @@ from "the connector broke seven days ago"** without it.
 | Worker dies | Heartbeat goes stale; a reaper marks the run `interrupted`; the next tick resumes from checkpoint |
 | Provider returns `429` at discovery | Run ends `rate_limited`, **credential parked** for `Retry-After`, cursor unmoved, same range retried |
 | Single scope fails | Its cursor is kept and the reason recorded — the next run retries that range |
-| Budget exhausted mid-run | Run stops as `partial` with a reason; no watermark advance |
+| Budget exhausted mid-run | Run stops as `partial` with a reason; **no watermark advance**, but the scope records the items it did move and counts as reached — a capped run is progress, not an outage |
 
 ### Watching a run while it runs
 

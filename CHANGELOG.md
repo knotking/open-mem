@@ -11,6 +11,70 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **`GET /api/v1/projects/{id}/source-lag`** — per scope: when it last
+  succeeded, how far behind that is, what it last failed on, and whether its
+  credential is cooling. **A connector that quietly stopped syncing looks
+  exactly like a project that went quiet** — both are no new records, and a
+  status signal computed over the first is confidently wrong. `cooling_until`
+  is separate from `last_error` because a rate-limited source is not a broken
+  one and does not need a person.
+- **A crawl position per scope**, not per crawler. One crawler over forty Slack
+  channels kept a single position, so a busy channel dragged it past thirty
+  quiet ones and their history was never read. The cursor is **opaque** — a
+  Jira cursor is a timestamp, a GitHub one an etag, a Salesforce one a
+  `nextRecordsUrl` — and `scope = ''` is exactly the previous behaviour, so
+  nothing needed migrating.
+- **Rate-limit state on the connection, not the crawler.** Two crawlers sharing
+  a Slack connection draw on the same quota and neither can see the other. A
+  `429` parks the credential for as long as `Retry-After` asked rather than a
+  guessed backoff, and everything sharing it waits. The scheduler reports a
+  cooling credential **separately from `skipped`**, which means already
+  running: both look like *did not run* and only one is a problem.
+- **A run's counters move while it runs.** Emitted, skipped and failed are
+  written every 25 items instead of once at the end, so a run in flight can be
+  watched rather than waited on.
+
+### Changed
+- **A rate-limited run is no longer a failed one.** It ends with its own status,
+  **does not move the cursor**, and the next run retries the same range. A
+  scope that genuinely failed also keeps its cursor and records why — so a gap
+  in the record reads as a failure and never as a quiet source.
+
+### Fixed
+- **A crawl that emitted for more than five minutes killed its own run.**
+  `STALE_HEARTBEAT_SECONDS` is 300 and the reaper marks anything older
+  `interrupted`, but the emit phase wrote no heartbeat at all. With `max_items`
+  defaulting to 1000 that is the ordinary case for a real source, not an edge,
+  and it presented as noise: runs randomly interrupted, a position that never
+  advanced, and a next run that re-fetched everything.
+
+- **A run that hit its item budget was filed as a scope failure**, so a crawler
+  that had just emitted a thousand items reported `last_ok_at: null`,
+  `items_seen: 0` and an error — reading as a source that had never once
+  worked. That is precisely the false alarm source lag exists to prevent,
+  inverted. Two questions were conflated: *how far can the next run safely
+  resume from* and *is this source healthy*. A capped run answers the first
+  with "no further" and the second with "yes", so it now records the items it
+  moved and clears the error while leaving the cursor where it was.
+
+- **Enabling a crawler made it due immediately whatever its schedule said**, and
+  the scheduler's selection never checked the type — so a crawler someone had
+  deliberately marked `manual` was picked up and run by the platform scheduler
+  before they ever triggered it themselves. Enabling a manual crawler now makes
+  it *runnable*, not due.
+
+### Migrations
+- **`0039_sync_state.sql`** — `crawl_cursors`, and `limited_until` /
+  `last_limit_reason` on `connections`. Additive; existing crawlers keep their
+  position as `scope = ''`.
+
+### Not built
+- **No connector template declares an incremental clause**, so all 37 still
+  full-scan. The machinery above is wired and tested; the templates have not
+  been filled in, and until they are the recorded cursor is never fed back into
+  a request.
+
+### Added
 - **Alerts can be described in words, not only as a selector.** `mode: "llm"`
   judges what the conditions let through — **one call per run over the whole
   batch**, never one per event, which is what makes it affordable at all. The

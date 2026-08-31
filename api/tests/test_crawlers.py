@@ -1134,3 +1134,61 @@ async def test_lag_per_source_is_reportable(pool, tenant):
     rows = await source_lag(pool, tenant.project_id)
     mine = [r for r in rows if r["crawler_id"] == crawler["crawler_id"]]
     assert mine and mine[0]["behind_seconds"] > 60 * 60 * 24 * 2
+
+
+@pytest.mark.asyncio
+async def test_a_budget_capped_run_is_progress_not_failure(pool, tenant):
+    """1000 items emitted is not an outage.
+
+    Caught live: a run that hit `max_items` was filed through
+    `record_scope_failure`, so a crawler that had just successfully emitted a
+    thousand items reported `last_ok_at: null` and an error -- reading as a
+    source that had never once worked. That is the exact false alarm source lag
+    exists to prevent, inverted.
+    """
+    from memdog.crawling import record_scope_failure, record_scope_progress
+
+    crawler = await _bare_crawler(pool, tenant)
+    cid = crawler["crawler_id"]
+    await record_scope_failure(pool, cid, "", "earlier outage")
+
+    await record_scope_progress(pool, cid, "", items=1000)
+    row = await pool.fetchrow(
+        "SELECT * FROM crawl_cursors WHERE crawler_id = $1 AND scope = ''", cid)
+
+    assert row["last_ok_at"] is not None, "it reached the source"
+    assert row["items_seen"] == 1000, "and it moved a thousand items"
+    assert row["last_error"] is None, "a source that just answered is not failing"
+    assert row["cursor"] is None, "but it must not resume past what it did not read"
+
+
+@pytest.mark.asyncio
+async def test_enabling_a_manual_crawler_does_not_schedule_it(
+    pool, tenant, principal_for, server
+):
+    """Manual means manual.
+
+    Enabling set `next_due_at = now()` whatever the schedule said, and the
+    scheduler's selection never checked the type -- so a crawler someone had
+    deliberately marked manual was picked up and run once before they ever
+    triggered it themselves. Found on a live crawler sitting due with
+    `schedule: {"type": "manual"}`.
+    """
+    actor = await principal_for(tenant.api_key)
+    created = await create_crawler(
+        pool, actor, project_id=tenant.project_id, config=http_config(server),
+        schedule={"type": "manual"},
+    )
+    cid = created["crawler_id"]
+    await start_run(pool, actor, cid, mode="dry")
+    row = await pool.fetchrow("SELECT * FROM crawlers WHERE crawler_id = $1", cid)
+    await pool.execute(
+        "UPDATE crawlers SET dry_run_version = config_version WHERE crawler_id = $1",
+        cid)
+
+    await set_enabled(pool, actor, cid, True)
+
+    row = await pool.fetchrow(
+        "SELECT enabled, next_due_at FROM crawlers WHERE crawler_id = $1", cid)
+    assert row["enabled"] is True, "it is runnable"
+    assert row["next_due_at"] is None, "but the scheduler must not claim it"
