@@ -47,7 +47,7 @@ import {
 type Section =
   | "overview"
   | "add" | "update" | "search" | "ask" | "inbound" | "crawlers" | "mcp"
-  | "memory" | "cases" | "entities" | "compaction"
+  | "memory" | "cases" | "entities" | "compaction" | "reprocess"
   | "alerts"
   | "audit" | "sharing" | "deletion"
   | "settings" | "models" | "prompts"
@@ -119,6 +119,7 @@ const GROUPS: { title: string; items: { key: Section; label: string; hint: strin
     // proves it.
     title: "Lifecycle",
     items: [
+      { key: "reprocess", label: "Interpret & rebuild", hint: "what is behind, in bulk" },
       { key: "compaction", label: "Compaction", hint: "fold a memory down, keep it all" },
       { key: "deletion", label: "Deletion", hint: "dry-run, then erase" },
     ],
@@ -288,6 +289,7 @@ export default function Console({
         {section === "cases" && <CasesSection projectId={projectId} />}
         {section === "alerts" && <AlertsSection projectId={projectId} />}
         {section === "compaction" && <CompactionSection projectId={projectId} />}
+        {section === "reprocess" && <ReprocessSection projectId={projectId} />}
         {section === "entities" && (
           <EntitiesSection
             projectId={projectId}
@@ -4819,6 +4821,355 @@ function SettingRow({
         </div>
       )}
     </div>
+  );
+}
+
+/* ------------------------------------------------- interpret and rebuild */
+
+type ReprocessPreview = {
+  run_id: string;
+  items: number;
+  stage: string;
+  mode: string;
+  by_state: Record<string, number>;
+  samples: {
+    data_id: string;
+    external_id: string | null;
+    state: string;
+    data_type: string | null;
+    preview: string | null;
+  }[];
+  capped: boolean;
+};
+
+type StaleArtifact = {
+  artifact_id: string;
+  kind: string;
+  purpose: string;
+  model_id: string;
+  data_id: string;
+  generator_version: string;
+};
+
+const STAGES: { key: string; label: string; blurb: string; cost: string }[] = [
+  {
+    key: "interpret",
+    label: "Interpret",
+    blurb:
+      "For records nobody ever asked to interpret. They sit at stored — durable, and invisible " +
+      "to search, because no embedding exists for a query to match.",
+    cost: "one model call per chunk to embed, plus one per item to summarise",
+  },
+  {
+    key: "embed",
+    label: "Re-embed",
+    blurb:
+      "Rebuild the vectors. What a changed embedding model or chunk size needs — and until it " +
+      "finishes these records drop back to stored, because claiming searchable while the " +
+      "vectors are being replaced would be a lie.",
+    cost: "one model call per chunk",
+  },
+  {
+    key: "enrich",
+    label: "Re-summarise",
+    blurb:
+      "Rebuild the envelope — title, summary, keywords, entities — from text that is already " +
+      "embedded. What a changed prompt or extraction model needs.",
+    cost: "one model call per item",
+  },
+];
+
+/**
+ * Interpret a corpus, or rebuild one.
+ *
+ * Two endpoints existed for months with no caller: `POST /reprocess` and
+ * `GET /artifacts/stale`. Between them they answer *what is behind* and *do
+ * something about it* — and without a screen, the answer to "I turned
+ * enrichment on, what about the fifty thousand records already here" was an
+ * API call typed by hand.
+ *
+ * The preview is a gate rather than a courtesy, for the same reason
+ * compaction's is. A selector is one missing key away from every record in the
+ * project, the cost is a model call per item, and **a count cannot tell those
+ * apart** — 4,212 reads identically whether it caught the crawl you meant or
+ * the whole corpus. So the run button stays disabled until this exact selector
+ * has been previewed, and editing the selector drops the approval.
+ */
+function ReprocessSection({ projectId }: { projectId: string }) {
+  const [stage, setStage] = useState("interpret");
+  const [dataType, setDataType] = useState("");
+  const [tags, setTags] = useState("");
+  const [runId, setRunId] = useState("");
+  const [staleOnly, setStaleOnly] = useState(false);
+
+  const [stair, setStair] = useState<Stair | null>(null);
+  const [stale, setStale] = useState<StaleArtifact[] | null>(null);
+  const [preview, setPreview] = useState<ReprocessPreview | null>(null);
+  const [approved, setApproved] = useState<string | null>(null);
+  const [ran, setRan] = useState<ReprocessPreview | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // What was previewed, as a string. If the selector no longer matches it, the
+  // approval is stale and the run button closes again.
+  const shape = JSON.stringify({ stage, dataType, tags, runId, staleOnly });
+
+  const load = useCallback(async () => {
+    try {
+      setStair(await call<Stair>(`api/v1/projects/${projectId}/staircase`));
+      // The endpoint answers under `stale`, not `artifacts`. Reading the wrong
+      // key is the failure that renders an empty screen with a 200 behind it.
+      setStale((await call<{ stale: StaleArtifact[] }>(
+        "api/v1/artifacts/stale?limit=100")).stale);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, [projectId]);
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  function selector(): Record<string, unknown> {
+    const s: Record<string, unknown> = { project_id: projectId };
+    if (dataType.trim()) s.data_type = dataType.trim();
+    if (tags.trim()) s.tags = tags.split(",").map((t) => t.trim()).filter(Boolean);
+    if (runId.trim()) s.run_id = runId.trim();
+    if (staleOnly) s.stale_only = true;
+    return s;
+  }
+
+  // The API refuses a selector that narrows nothing, because "reprocess
+  // everything" should not be one empty field away. Said here rather than
+  // discovered as a 400.
+  const narrows = dataType.trim() !== "" || tags.trim() !== "" || runId.trim() !== "" || staleOnly;
+
+  async function run(dryRun: boolean) {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await call<ReprocessPreview>("api/v1/reprocess", {
+        selector: selector(), stage, dry_run: dryRun,
+      });
+      if (dryRun) {
+        setPreview(result);
+        setApproved(shape);
+        setRan(null);
+      } else {
+        setRan(result);
+        setApproved(null);
+        setPreview(null);
+        await load();
+      }
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const notInterpreted = stair === null ? 0 : stair.total - stair.searchable - stair.enriched;
+  const staleCount = stale?.length ?? 0;
+
+  return (
+    <>
+      <h1>Interpret and rebuild</h1>
+      <p className="lede">
+        Enrichment is opt-in, and a changed model or prompt does not reach back. So a corpus holds
+        two kinds of record that need work: <strong>never interpreted</strong>, which is stored and
+        unfindable, and <strong>built by something that is no longer current</strong>.
+      </p>
+      {error && <p className="err">{error}</p>}
+
+      <section className="panel">
+        <h2>What is behind</h2>
+        <div className="statgrid">
+          <div className={`stattile${notInterpreted > 0 ? " blocked" : ""}`}>
+            <div className="hero-value">{notInterpreted}</div>
+            <div className="tile-label">never interpreted</div>
+            <div className="tile-note">stored and durable · not findable by search</div>
+          </div>
+          <div className="stattile">
+            <div className="hero-value">{stair?.searchable ?? 0}</div>
+            <div className="tile-label">embedded, not summarised</div>
+            <div className="tile-note">findable, with no title, keywords or entities</div>
+          </div>
+          <div className={`stattile${staleCount > 0 ? " blocked" : ""}`}>
+            <div className="hero-value">{staleCount === 100 ? "100+" : staleCount}</div>
+            <div className="tile-label">built by an old generator</div>
+            <div className="tile-note">the model or prompt has changed since</div>
+          </div>
+          <div className="stattile on">
+            <div className="hero-value">{stair?.enriched ?? 0}</div>
+            <div className="tile-label">fully enriched</div>
+            <div className="tile-note">nothing to do</div>
+          </div>
+        </div>
+        {notInterpreted === 0 && staleCount === 0 && (
+          <p className="empty">
+            Nothing is behind. This screen is meant to be boring — it is only interesting after a
+            crawl that ran with interpretation off, or a model change.
+          </p>
+        )}
+      </section>
+
+      <section className="panel">
+        <h2>What to do</h2>
+        <div className="scopes">
+          {STAGES.map((s) => (
+            <button
+              key={s.key}
+              className={`scope${stage === s.key ? " active" : ""}`}
+              onClick={() => setStage(s.key)}
+            >
+              <span className="scope-label">{s.label}</span>
+              <span className="scope-blast">{s.blurb}</span>
+            </button>
+          ))}
+        </div>
+        <p className="empty">
+          Costs <strong>{STAGES.find((s) => s.key === stage)?.cost}</strong>, metered against this
+          project&rsquo;s budget. Work already done is redone: an artifact is rewritten for its
+          generator rather than appended to, so running twice costs twice and changes nothing.
+        </p>
+      </section>
+
+      <section className="panel">
+        <h2>Which records</h2>
+        <div className="row">
+          <label>
+            Data type
+            <input type="text" placeholder="email · issue · note"
+                   value={dataType} onChange={(e) => setDataType(e.target.value)} />
+          </label>
+          <label>
+            Tags
+            <input type="text" placeholder="source:acme, crawler:crw_…"
+                   value={tags} onChange={(e) => setTags(e.target.value)} />
+          </label>
+          <label>
+            Run
+            <input type="text" placeholder="run_… — everything one crawl emitted"
+                   value={runId} onChange={(e) => setRunId(e.target.value)} />
+          </label>
+          <label className="check">
+            <input type="checkbox" checked={staleOnly}
+                   onChange={(e) => setStaleOnly(e.target.checked)} />
+            Only what is already marked stale
+          </label>
+        </div>
+        <p className="empty">
+          Selectors compose and every one of them narrows. <strong>Tags match on overlap</strong> —
+          any of these, not all of them. <code>stale_only</code> matches on an existing artifact, so
+          it can never reach a record that was never interpreted: that corpus is reached by run or
+          by tag, which is why both are here.
+        </p>
+        <div className="row end">
+          <button
+            className="secondary"
+            disabled={busy || !narrows}
+            title={narrows
+              ? "Runs the selection and reports what it would touch. Writes nothing."
+              : "Narrow by type, tag, run or staleness first — a selector that matches everything is one empty field away from reprocessing the project."}
+            onClick={() => void run(true)}
+          >
+            {busy ? "Working…" : "Preview"}
+          </button>
+          <button
+            disabled={busy || approved !== shape || (preview?.items ?? 0) === 0}
+            title={
+              approved !== shape
+                ? "Preview this exact selection first. The cost is a model call per item and a count alone cannot tell a crawl from a corpus."
+                : `Requests ${stage} for ${preview?.items ?? 0} records.`
+            }
+            onClick={() => void run(false)}
+          >
+            Run it
+          </button>
+        </div>
+      </section>
+
+      {preview && (
+        <section className="panel">
+          <h2>It would touch {preview.items} record{preview.items === 1 ? "" : "s"}</h2>
+          {preview.items === 0 ? (
+            <p className="empty">
+              Nothing matched this selector. That is different from nothing needing work — check the
+              tag or run id, since both are exact.
+            </p>
+          ) : (
+            <>
+              <div className="row">
+                {Object.entries(preview.by_state).map(([state, count]) => (
+                  <span className={`chip ${state}`} key={state}>{count} {state}</span>
+                ))}
+              </div>
+              {stage === "interpret" && (preview.by_state.enriched ?? 0) > 0 && (
+                <p className="warned">
+                  {preview.by_state.enriched} of these are already enriched. They will be
+                  interpreted again, at full cost, for the same result — narrow by run or tag if you
+                  meant only the records that were never interpreted.
+                </p>
+              )}
+              {preview.capped && (
+                <p className="warned">
+                  <strong>We stopped looking at 10,000.</strong> There may be more that match; this
+                  is not &ldquo;nothing else matched&rdquo;. Run it, then preview again.
+                </p>
+              )}
+              <h3>A few of them</h3>
+              <div className="excluded">
+                {preview.samples.map((s) => (
+                  <div className="item" key={s.data_id}>
+                    <span className={`chip ${s.state}`}>{s.state}</span>
+                    <code>{s.external_id ?? s.data_id}</code>
+                    <span className="chip">{s.data_type ?? "untyped"}</span>
+                    <span className="empty">{s.preview ?? "no text"}</span>
+                  </div>
+                ))}
+              </div>
+              <p className="empty">
+                Eight at most, so the selector can be recognised rather than trusted. Previewing
+                writes nothing and is recorded as its own dry run.
+              </p>
+            </>
+          )}
+        </section>
+      )}
+
+      {ran && (
+        <section className="panel">
+          <h2>Requested for {ran.items} record{ran.items === 1 ? "" : "s"}</h2>
+          <p className="empty">
+            Run <code>{ran.run_id}</code>. The work happens off the write path, so this screen does
+            not wait for it — the counts above move as it lands, and the request for each record is
+            in its event log whether or not the message survived.
+          </p>
+        </section>
+      )}
+
+      {stale !== null && stale.length > 0 && (
+        <section className="panel">
+          <h2>Built by a generator that is no longer current</h2>
+          <div className="excluded">
+            {stale.slice(0, 12).map((a) => (
+              <div className="item" key={a.artifact_id}>
+                <span className="chip">{a.purpose}</span>
+                <code>{a.data_id}</code>
+                <span className="empty">produced by {a.model_id}</span>
+                <span className="why far">{a.generator_version.slice(0, 12)}…</span>
+              </div>
+            ))}
+          </div>
+          <p className="empty">
+            Staleness is a join rather than a flag somebody remembered to set: an artifact whose
+            fingerprint is not the one currently assigned for its purpose is stale by construction.
+            That is what catches a prompt, schema, parser or chunker change nobody thought to
+            version.
+            {stale.length > 12 && ` ${stale.length - 12} more not shown.`}
+          </p>
+        </section>
+      )}
+    </>
   );
 }
 

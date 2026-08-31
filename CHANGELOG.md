@@ -11,6 +11,50 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Fixed
+- **Every webhook delivery landed unenriched, and no screen said so.** The
+  producer's `defaults.enrich` governs it, defaults to `false`, and **nothing
+  in the console could set it** — so a provider could post all day while
+  Inbound reported healthy deliveries and **nothing it sent was findable**. The
+  endpoint list now reads `interpreted` or `stored only` per row, which is the
+  whole difference between two rows that otherwise look identical.
+- **`budget_daily_credits: null` — "no ceiling" — could not be written at
+  all.** asyncpg sends a Python `None` as SQL NULL without consulting the jsonb
+  codec and `settings.value` is `NOT NULL`, so a project clearing an inherited
+  budget got an integrity error from the driver. JSON `null` is a value; SQL
+  NULL is the absence of a row, and `resolve` already reads presence.
+- **`answer_storage` was documented with the wrong vocabulary.** It is
+  `none` · `metadata` · `full` — the `CHECK` in `0001_spine.sql` and the
+  comparison in `chat.py` — which writing the choices down is what caught.
+
+### Added
+- **The Settings screen writes.** It listed eleven settings with their values,
+  provenance and lock state and could change none of them, which left
+  **`enrich_by_default` — the switch deciding whether any write is interpreted
+  — reachable only by calling the API by hand**. Scope is chosen per row rather
+  than assumed, since the same key set for a user and for an org are different
+  acts, and a refusal is shown as the server phrased it: *locked at org scope*,
+  *must be one of invite_only, open, disabled*.
+- **Settings are typed, and the type is enforced.** `put` accepted any JSON for
+  any key, so `registration_mode: "opne"` stored cleanly and **matched none of
+  the three branches that read it** — registration closes, nothing reports it.
+  The register now declares `kind`, an enum's `choices` and whether `null` is a
+  value; **refused, never coerced**, because `"true"` is not `True` and
+  accepting both makes the stored shape depend on which client wrote it.
+  `bool` is checked before `int`: in Python `True` **is** an `int`, and the
+  obvious ordering stores `true` in a credit ceiling.
+- **`GET /settings/effective` publishes that vocabulary** — `kind`, `choices`,
+  `nullable`, `default` — so the console builds each control from the rule the
+  server enforces. A dropdown whose options are typed out in the UI is a second
+  copy, and the copy is the one that goes stale.
+- **A webhook can ask for half of enrichment.** `defaults.embed` and
+  `defaults.summarize` are honoured separately, because they are priced
+  separately: embedding is one call per chunk and is what makes a delivery
+  findable, summarising is one call per item. Reading only `enrich` made that a
+  choice between an unbounded bill and an invisible corpus.
+- **`GET /producers` returns `defaults`**, without which the console cannot
+  show what it is about to change.
+
+### Fixed
 - **Nothing written from the console was ever searchable.** Enrichment is
   opt-in — `enrich_by_default` resolves to `false` and embedding runs only off
   `enrichment.requested` — and none of the three places the UI writes ever sent

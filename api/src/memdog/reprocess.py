@@ -45,6 +45,15 @@ async def request_reprocess(
     are separate because re-embedding a corpus is expensive and usually
     unnecessary when only a prompt changed.
 
+    `interpret` is the third, and it is not a rebuild: it asks for work that was
+    **never requested**. Enrichment is opt-in, so a crawl or a feed run with it
+    off leaves a corpus that is stored, durable and unfindable, and the only way
+    out of that state was one item at a time. It differs from the other two in
+    that it emits `enrichment.requested` per item rather than republishing onto
+    a pipeline topic -- which matters beyond bookkeeping: **the reconciler
+    repairs requested work and never invents it**, so a message dropped between
+    here and the worker is only recoverable if the request is in the log.
+
     Selectors compose, and all of them narrow: `data_ids`, `data_type`,
     `run_id`, `tags`, `stale_generator`, `stale_only`. The last two match on an
     existing artifact, so they cannot reach an item that was never enriched --
@@ -52,8 +61,8 @@ async def request_reprocess(
     and `tags` are how that corpus is reached.
     """
     principal.require(DATA_WRITE)
-    if stage not in ("embed", "enrich"):
-        raise ValueError("stage must be embed or enrich")
+    if stage not in ("embed", "enrich", "interpret"):
+        raise ValueError("stage must be embed, enrich or interpret")
 
     org_id, user_id, principals = visibility_params(principal)
     predicate = visibility_sql("d", 2, 3, 4)
@@ -99,7 +108,9 @@ async def request_reprocess(
 
     rows = await pool.fetch(
         f"""
-        SELECT d.data_id FROM data_items d
+        SELECT d.data_id, d.external_id, d.state, d.data_type,
+               left(d.indexable_text, 120) AS preview
+        FROM data_items d
         WHERE ($1::text IS NULL OR d.project_id = $1) AND {predicate}
           AND d.indexable_text IS NOT NULL
           AND {" AND ".join(clauses)}
@@ -136,8 +147,28 @@ async def request_reprocess(
 
     if not dry_run and data_ids:
         await queue.publish(REPROCESS_TOPIC, {"run_id": run_id, "stage": stage})
-    return {"run_id": run_id, "items": len(data_ids), "stage": stage,
-            "mode": "dry_run" if dry_run else "execute"}
+
+    # A count is not a preview. "4,212 items" reads the same whether the
+    # selector caught the corpus you meant or every record in the project, and
+    # the way to tell them apart is to look at a few. The breakdown by state is
+    # the other half: for `interpret` it says how much of the selection is
+    # already enriched and would be re-done for nothing.
+    by_state: dict[str, int] = {}
+    for r in rows:
+        by_state[r["state"]] = by_state.get(r["state"], 0) + 1
+    return {
+        "run_id": run_id,
+        "items": len(data_ids),
+        "stage": stage,
+        "mode": "dry_run" if dry_run else "execute",
+        "by_state": by_state,
+        "samples": [
+            {"data_id": r["data_id"], "external_id": r["external_id"],
+             "state": r["state"], "data_type": r["data_type"], "preview": r["preview"]}
+            for r in rows[:8]
+        ],
+        "capped": len(data_ids) == 10000,
+    }
 
 
 class ReprocessWorker:
@@ -155,6 +186,45 @@ class ReprocessWorker:
     def register(self, queue: Queue, topic: str = REPROCESS_TOPIC) -> None:
         queue.subscribe(topic, self.handle)
 
+    async def _interpret(self, run_id: str, data_ids: list[str]) -> None:
+        """Ask for enrichment on work nobody ever asked for.
+
+        Through the event log rather than straight onto a topic, because that is
+        what makes the request repairable: the reconciler sweeps for items whose
+        state lags what their content warrants **and that have an
+        `enrichment.requested` event**, deliberately, so that it never spends
+        money nobody asked it to. A bulk interpret that skipped the log would be
+        the one kind of enrichment a dropped message loses for good.
+
+        One event per item, and each is idempotent at the far end: the enrich
+        worker deletes and rewrites the artifact for its generator rather than
+        appending, so a redelivery costs compute and changes nothing.
+        """
+        from .events import dispatch_pending, emit
+
+        for data_id in data_ids:
+            row = await self._pool.fetchrow(
+                "SELECT org_id, project_id FROM data_items WHERE data_id = $1", data_id
+            )
+            if row is None:
+                continue
+            async with self._pool.acquire() as conn, conn.transaction():
+                await emit(
+                    conn,
+                    event_type="enrichment.requested",
+                    org_id=row["org_id"],
+                    project_id=row["project_id"],
+                    data_id=data_id,
+                    payload={"embed": True, "summarize": True, "run_id": run_id,
+                             "requested_after_the_fact": True},
+                )
+                await conn.execute(
+                    "UPDATE run_items SET status = 'done', at = now() "
+                    "WHERE run_id = $1 AND data_id = $2",
+                    run_id, data_id,
+                )
+        await dispatch_pending(self._pool, self._queue)
+
     async def handle(self, message: Message) -> None:
         run_id, stage = message.body["run_id"], message.body.get("stage", "enrich")
         await self._pool.execute(
@@ -163,6 +233,16 @@ class ReprocessWorker:
         rows = await self._pool.fetch(
             "SELECT data_id FROM run_items WHERE run_id = $1 AND status = 'pending'", run_id
         )
+        if stage == "interpret":
+            await self._interpret(run_id, [r["data_id"] for r in rows])
+            await self._pool.execute(
+                """
+                UPDATE runs SET status = 'completed', done = total, finished_at = now()
+                WHERE run_id = $1
+                """,
+                run_id,
+            )
+            return
         topic = "embed" if stage == "embed" else "enrich"
         for row in rows:
             if stage == "embed":
