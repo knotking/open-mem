@@ -305,12 +305,6 @@ UNCALLED_ENDPOINTS: dict[str, str] = {
     "DELETE /api/v1/organizations/members/{user_id}":
         "removing a member; there is no member-administration screen",
 
-    # Groups: the principal type `shared_with` already resolves against, with
-    # no way to create one or put anybody in it.
-    "GET /api/v1/groups": "no groups surface",
-    "POST /api/v1/groups": "no groups surface",
-    "PUT /api/v1/groups/{group_id}/members": "no groups surface",
-
     # Connection administration.
     "PATCH /api/v1/connections/{connection_id}":
         "personal vs shared scope, which decides ACL inheritance; nothing sets it",
@@ -351,8 +345,6 @@ UNCALLED_ENDPOINTS: dict[str, str] = {
     "GET /api/v1/event-subscriptions/{subscription_id}/deliveries":
         "delivery attempts per subscription; the alerts screen does not read them",
 
-    # The erasure certificate: the artifact that proves a deletion happened.
-    "GET /api/v1/data/{data_id}/erasure": "nothing displays the certificate it issues",
 }
 
 

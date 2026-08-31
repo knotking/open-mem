@@ -45,6 +45,25 @@ import {
   describeTtl,
 } from "@/lib/types";
 
+/** `GET /data/{id}/erasure` — the artifact that proves a deletion completed. */
+type Certificate = {
+  data_id: string;
+  purged_at: string | null;
+  content_cleared: boolean;
+  remaining: Record<string, number>;
+  complete: boolean;
+};
+
+type Group = {
+  group_id: string;
+  name: string;
+  managed_by: string | null;
+  members: string[];
+};
+
+/** An organization member, as `GET /organizations/members` returns them. */
+type Member = { user_id: string; email: string | null; role: string };
+
 type Section =
   | "overview"
   | "add" | "update" | "search" | "ask" | "inbound" | "crawlers" | "mcp"
@@ -482,6 +501,22 @@ function AddData({
   // instruction block belongs.
   const [promptOverride, setPromptOverride] = useState("");
   const [modelOverride, setModelOverride] = useState("");
+  // Who can see it, decided at write time -- which is the only time it can be
+  // decided, since the ACL is sealed before any other phase runs and there is
+  // no endpoint that changes it afterwards. Re-writing the same external_id
+  // with a different level is the only path, and it raises `acl.changed`.
+  const [level, setLevel] = useState("");
+  const [principals, setPrincipals] = useState<string[]>([]);
+  const [audience, setAudience] = useState<{ groups: Group[]; members: Member[] }>(
+    { groups: [], members: [] });
+
+  useEffect(() => {
+    void Promise.all([
+      call<{ groups: Group[] }>("api/v1/groups").catch(() => ({ groups: [] as Group[] })),
+      call<{ members: Member[] }>("api/v1/organizations/members")
+        .catch(() => ({ members: [] as Member[] })),
+    ]).then(([g, m]) => setAudience({ groups: g.groups, members: m.members }));
+  }, []);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -515,7 +550,14 @@ function AddData({
         results: { data_id: string; memories: string[]; events: string[] }[];
       }>("api/v1/write", {
         producer_id: producerId,
-        items: [{ external_id: externalId, content, memory }],
+        // `access` is a property of the item, not of the request: one write can
+        // carry five hundred items with five hundred different ACLs.
+        items: [{
+          external_id: externalId, content, memory,
+          access: level
+            ? { level, principals: level === "shared" || level === "restricted" ? principals : [] }
+            : undefined,
+        }],
         options: {
           enrich,
           enrichment: {
@@ -640,6 +682,77 @@ function AddData({
             This write will stop at <code>stored</code>. You can ask for interpretation later, from
             the progress panel below or from Browse.
           </p>
+        )}
+      </section>
+
+      <section className="panel">
+        <h2>Who can see it</h2>
+        <p className="empty" style={{ marginTop: 0 }}>
+          Decided here because this is the only place it can be: the ACL is <strong>sealed before
+          any other phase runs</strong>, and no endpoint changes it afterwards — re-writing the same
+          external id with a different level is the only path, and it raises <code>acl.changed</code>.
+          Left alone, the producer&rsquo;s connection decides: a personal connection writes private
+          items, a shared one writes org-visible ones.
+        </p>
+        <div className="row">
+          <label>
+            Level
+            <select value={level} onChange={(e) => { setLevel(e.target.value); setPrincipals([]); }}>
+              <option value="">the producer&rsquo;s default</option>
+              <option value="private">private — only me</option>
+              <option value="restricted">restricted — only these principals</option>
+              <option value="shared">shared — me and these principals</option>
+              <option value="org">org — everyone in the organization</option>
+              <option value="public">public — everyone in the org, and share links</option>
+            </select>
+          </label>
+        </div>
+        {(level === "restricted" || level === "shared") && (
+          <>
+            <div className="row" style={{ marginTop: 8 }}>
+              {audience.groups.map((g) => (
+                <label className="check" key={g.group_id}
+                       title={`${g.members.length} member${g.members.length === 1 ? "" : "s"}`}>
+                  <input
+                    type="checkbox"
+                    /* `group:` and `user:` prefixes, because that is the shape
+                     * `acl_principals()` builds and the predicate compares
+                     * against. A bare id matches nothing -- including for the
+                     * person who wrote the record, who then cannot see their
+                     * own item and has no way to tell why. */
+                    checked={principals.includes(`group:${g.group_id}`)}
+                    onChange={(e) => setPrincipals(e.target.checked
+                      ? [...principals, `group:${g.group_id}`]
+                      : principals.filter((x) => x !== `group:${g.group_id}`))}
+                  />
+                  {g.name} <span className="empty">· group of {g.members.length}</span>
+                </label>
+              ))}
+              {audience.members.map((m) => (
+                <label className="check" key={m.user_id}>
+                  <input
+                    type="checkbox"
+                    checked={principals.includes(`user:${m.user_id}`)}
+                    onChange={(e) => setPrincipals(e.target.checked
+                      ? [...principals, `user:${m.user_id}`]
+                      : principals.filter((x) => x !== `user:${m.user_id}`))}
+                  />
+                  {m.email ?? m.user_id}
+                </label>
+              ))}
+            </div>
+            {principals.length === 0 && (
+              <p className="warned">
+                <strong>{level}</strong> needs at least one principal, and the write is refused
+                without one rather than quietly stored as something narrower.
+              </p>
+            )}
+            <p className="empty" style={{ marginBottom: 0 }}>
+              A group resolves inside the ACL query like a person does, so adding somebody to it
+              later gives them this record too — which is the reason to prefer one over naming
+              three people. Create groups under <strong>Projects &amp; members</strong>.
+            </p>
+          </>
         )}
       </section>
 
@@ -4466,6 +4579,8 @@ function DeletionSection({
   const [detachFrom, setDetachFrom] = useState<Membership[]>([]);
   const [preview, setPreview] = useState<Record<string, unknown> | null>(null);
   const [result, setResult] = useState<Record<string, unknown> | null>(null);
+  const [certId, setCertId] = useState("");
+  const [cert, setCert] = useState<Certificate | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -4756,6 +4871,77 @@ function DeletionSection({
           </p>
         </section>
       )}
+
+      <section className="panel">
+        <h2>Prove it</h2>
+        <p className="empty" style={{ marginTop: 0 }}>
+          A certificate is <strong>evidence rather than a claim</strong>: it re-queries every table
+          that holds item-scoped data instead of trusting that the cascade ran — the cascade being
+          the thing under test. It answers <em>after</em> the record is gone, which is the whole
+          point, and it is issued against <code>purged_at</code> rather than <code>deleted_at</code>
+          — a tombstone is a promise, and the purge is the thing that kept it.
+        </p>
+        <div className="row">
+          <input type="text" value={certId} placeholder="data_… — a record you deleted"
+                 onChange={(e) => setCertId(e.target.value)} style={{ flex: 1, minWidth: 260 }} />
+          <button
+            className="secondary"
+            disabled={busy || !certId.trim()}
+            onClick={async () => {
+              setBusy(true); setError(null); setCert(null);
+              try {
+                setCert(await call<Certificate>(
+                  `api/v1/data/${certId.trim()}/erasure`, undefined, "GET"));
+              } catch (e) {
+                setError((e as Error).message);
+              } finally { setBusy(false); }
+            }}
+          >
+            Check the erasure
+          </button>
+        </div>
+        {cert && (
+          <>
+            <p className={cert.complete ? "ok" : "warned"}>
+              {cert.complete
+                ? "Complete. Nothing item-scoped survives, the content is cleared, and the purge is recorded."
+                : "Not complete. This is the honest answer rather than a certificate that says what it was asked to say."}
+            </p>
+            <table className="kv">
+              <tbody>
+                <tr><td>record</td><td><code>{cert.data_id}</code></td></tr>
+                <tr>
+                  <td>purged</td>
+                  <td>{cert.purged_at
+                    ? new Date(cert.purged_at).toLocaleString()
+                    : "not yet — tombstoned, and the cascade has not finished"}</td>
+                </tr>
+                <tr>
+                  <td>content</td>
+                  <td>{cert.content_cleared
+                    ? "text, extraction and stored bytes all gone"
+                    : "still present"}</td>
+                </tr>
+                <tr>
+                  <td>what remains</td>
+                  <td>
+                    {Object.keys(cert.remaining).length === 0 ? "nothing" : (
+                      <code>{Object.entries(cert.remaining)
+                        .map(([table, n]) => `${table}: ${n}`).join(" · ")}</code>
+                    )}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <p className="empty" style={{ marginBottom: 0 }}>
+              The tables checked are chunks, embeddings, versions, artifact sources, query sources,
+              memory and case membership, entity mentions and edges, normalized records and share
+              links — plus one invariant: <strong>no derived fact may still be open with nothing
+              supporting it</strong>.
+            </p>
+          </>
+        )}
+      </section>
 
       {(preview || result) && (
         <section className="panel">
@@ -5728,6 +5914,9 @@ function ProjectsSection() {
   const [projects, setProjects] = useState<Record<string, unknown>[]>([]);
   const [members, setMembers] = useState<Record<string, unknown>[]>([]);
   const [invites, setInvites] = useState<Invite[] | null>(null);
+  const [groups, setGroups] = useState<Group[] | null>(null);
+  const [groupName, setGroupName] = useState("");
+  const [openGroup, setOpenGroup] = useState<string | null>(null);
   const [email, setEmail] = useState("");
   const [role, setRole] = useState("member");
   const [days, setDays] = useState("7");
@@ -5749,6 +5938,8 @@ function ProjectsSection() {
       // rather than one failed request taking the page down.
       setInvites((await call<{ invites: Invite[] }>("api/v1/invites")
         .catch(() => ({ invites: [] as Invite[] }))).invites);
+      setGroups((await call<{ groups: Group[] }>("api/v1/groups")
+        .catch(() => ({ groups: [] as Group[] }))).groups);
     } catch (e) {
       setError((e as Error).message);
     }
@@ -5777,6 +5968,104 @@ function ProjectsSection() {
           ))}
         </div>
       </section>
+      <section className="panel">
+        <h2>Groups</h2>
+        <p className="empty" style={{ marginTop: 0 }}>
+          A group is a <strong>principal</strong>, exactly like a person: the ACL predicate resolves
+          it inside the query, so <code>restricted</code> to a group is enforced where the rows are
+          selected rather than filtered afterwards. That has always worked — and there was no way to
+          create one, which made the whole of group-based sharing unreachable.
+        </p>
+        <div className="row">
+          <input type="text" value={groupName} placeholder="name — oncall, clinicians, legal"
+                 onChange={(e) => setGroupName(e.target.value)} />
+          <button
+            disabled={busy || !groupName.trim()}
+            onClick={async () => {
+              setBusy(true); setError(null); setNote(null);
+              try {
+                await call("api/v1/groups", { name: groupName.trim() });
+                setGroupName("");
+                setNote("Group created. It grants nothing until somebody shares with it.");
+                await load();
+              } catch (e) {
+                setError((e as Error).message);
+              } finally { setBusy(false); }
+            }}
+          >
+            Create a group
+          </button>
+        </div>
+        {groups === null ? (
+          <p className="empty">Loading…</p>
+        ) : groups.length === 0 ? (
+          <p className="empty" style={{ marginBottom: 0 }}>
+            None yet. A group is worth creating when the same set of people needs the same records
+            more than once — otherwise sharing with them individually says the same thing.
+          </p>
+        ) : (
+          <div className="excluded" style={{ marginTop: 12 }}>
+            {groups.map((g) => (
+              <Fragment key={g.group_id}>
+                <button
+                  className={`item memrow${openGroup === g.group_id ? " chosen" : ""}`}
+                  onClick={() => setOpenGroup(openGroup === g.group_id ? null : g.group_id)}
+                >
+                  <span className="chip on">{g.name}</span>
+                  <code>{g.group_id}</code>
+                  <span className="empty">
+                    {g.members.length} member{g.members.length === 1 ? "" : "s"}
+                  </span>
+                  {g.managed_by && <span className="chip">from {g.managed_by}</span>}
+                  <span className="empty far">{openGroup === g.group_id ? "close" : "members"}</span>
+                </button>
+                {openGroup === g.group_id && (
+                  <div className="setedit">
+                    {members.map((m) => {
+                      const uid = String(m.user_id);
+                      const inside = g.members.includes(uid);
+                      return (
+                        <label className="check" key={uid}>
+                          <input
+                            type="checkbox"
+                            checked={inside}
+                            disabled={busy}
+                            onChange={async (e) => {
+                              // The endpoint replaces the whole set, so the
+                              // whole set is sent. Posting only the box that
+                              // moved would empty the group -- the same trap as
+                              // a producer's defaults.
+                              const next = e.target.checked
+                                ? [...g.members, uid]
+                                : g.members.filter((x) => x !== uid);
+                              setBusy(true); setError(null);
+                              try {
+                                await call(`api/v1/groups/${g.group_id}/members`,
+                                           { user_ids: next }, "PUT");
+                                await load();
+                              } catch (err) {
+                                setError((err as Error).message);
+                              } finally { setBusy(false); }
+                            }}
+                          />
+                          {String(m.email ?? uid)}
+                        </label>
+                      );
+                    })}
+                    <p className="empty" style={{ marginBottom: 0 }}>
+                      Only members of this organization can be added — a group is a sharing
+                      principal, so an outsider in one would be a grant to an outsider. Membership
+                      is replaced wholesale on every change, which is why the list is checkboxes
+                      rather than an add button.
+                    </p>
+                  </div>
+                )}
+              </Fragment>
+            ))}
+          </div>
+        )}
+      </section>
+
       <section className="panel">
         <h2>Invites</h2>
         <p className="empty" style={{ marginTop: 0 }}>

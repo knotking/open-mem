@@ -103,6 +103,12 @@ const ALLOWED = [
   /^api\/v1\/producers\/[A-Za-z0-9_]+$/,
   /^api\/v1\/users\/me\/api-keys\/[A-Za-z0-9_]+$/,
   /^api\/v1\/invites$/,
+  // Groups: a sharing principal the ACL predicate already resolves, with no way
+  // to create one until now.
+  /^api\/v1\/groups$/,
+  /^api\/v1\/groups\/[A-Za-z0-9_]+\/members$/,
+  // The certificate a deletion is answered for with.
+  /^api\/v1\/data\/[A-Za-z0-9_]+\/erasure$/,
   /^api\/v1\/invites\/[A-Za-z0-9_]+$/,
   /^api\/v1\/projects\/[A-Za-z0-9_]+\/source-lag$/,
   /^api\/v1\/producers\/[A-Za-z0-9_]+\/inbound$/,
