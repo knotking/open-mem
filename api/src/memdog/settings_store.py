@@ -21,6 +21,7 @@ rather than being overridable-in-practice and forbidden-in-prose.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -42,6 +43,21 @@ class Definition:
     allowed_scopes: tuple[str, ...]
     lockable: bool
     description: str
+    # What a valid value looks like, and -- for an enum -- exactly which ones.
+    #
+    # `put` accepted any JSON for any key, so `registration_mode: "opne"` stored
+    # cleanly and then matched none of the three branches that read it: the
+    # deployment silently stopped admitting anyone and nothing anywhere said so.
+    # A settings *surface* makes that a two-keystroke mistake rather than a
+    # deliberate API call, which is why the validation lands with the editor.
+    #
+    # It is also what the console builds its controls from. A dropdown whose
+    # options are typed out in the UI is a second copy of a vocabulary, and the
+    # copy is the one that goes stale.
+    kind: str = "string"          # bool · int · enum · string · list · object
+    choices: tuple[Any, ...] = ()
+    # `None` is a value here, not an absence: no ceiling, no default project.
+    nullable: bool = False
 
 
 # The register. Kept small and explicit rather than open: a settings surface
@@ -52,20 +68,28 @@ REGISTER: dict[str, Definition] = {
         "media_interpretation", False, ("platform", "org", "project"), True,
         "Transcribe audio and video, describe images. The expensive tier -- "
         "opt-in per org, never on by platform default.",
+        kind="bool",
     ),
     "answer_storage": Definition(
         "answer_storage", "metadata", ("platform", "org", "project"), True,
         "Whether stored answers keep their text. Defaults to metadata-only "
         "because an answer corpus is often more sensitive than the source.",
+        # The vocabulary the column already enforces: `0001_spine.sql` has a
+        # CHECK on exactly these three, and `chat.py` keeps the text only
+        # for `full`.
+        kind="enum", choices=("none", "metadata", "full"),
     ),
     "allowed_providers": Definition(
         "allowed_providers", [], ("platform", "org"), True,
         "Model providers this org permits. Locked, this is how "
-        "'only our approved providers' is enforced rather than suggested.",
+        "'only our approved providers' is enforced rather than suggested. "
+        "Empty means every registered provider.",
+        kind="list",
     ),
     "public_sharing": Definition(
         "public_sharing", False, ("platform", "org"), True,
         "Genuinely external sharing. Off by default; some orgs never enable it.",
+        kind="bool",
     ),
     "enrich_by_default": Definition(
         # Was declared `True` and read by nothing, so the shipped behaviour was
@@ -74,7 +98,10 @@ REGISTER: dict[str, Definition] = {
         # switching every deployment's spending on to match the document.
         "enrich_by_default", False, ("platform", "org", "project", "user"), False,
         "Whether a write enqueues enrichment when it does not say either way. "
-        "Off, because enrichment is the part that costs money.",
+        "Off, because enrichment is the part that costs money -- and a write "
+        "that does not ask stops at `stored`, which is durable and not "
+        "searchable.",
+        kind="bool",
     ),
     "registration_mode": Definition(
         # Closed by default, and that is the whole point. Shipping `open` and
@@ -86,6 +113,7 @@ REGISTER: dict[str, Definition] = {
         "addresses holding a live invite; `open` lets anyone who can "
         "authenticate create an account, which still grants no membership; "
         "`disabled` refuses account creation entirely.",
+        kind="enum", choices=("invite_only", "open", "disabled"),
     ),
     "budget_daily_credits": Definition(
         # Null means no ceiling. Settable per user as well as per project --
@@ -98,7 +126,8 @@ REGISTER: dict[str, Definition] = {
         "Credits that may be spent on model calls per day. Every level binds: "
         "a user is held to the tightest of their own value, their "
         "organization's and the platform's, so setting a larger number lower "
-        "down cannot raise a ceiling set above it.",
+        "down cannot raise a ceiling set above it. Null is no ceiling.",
+        kind="int", nullable=True,
     ),
     "rate_limit_credits_per_minute": Definition(
         "rate_limit_credits_per_minute", 6000, ("platform", "org", "project"), True,
@@ -106,21 +135,25 @@ REGISTER: dict[str, Definition] = {
         "requests -- a hundred searches and a hundred generations are the same "
         "number to a request counter and a thousand times apart in cost. "
         "0 disables the limit.",
+        kind="int",
     ),
     "max_concurrent_requests": Definition(
         "max_concurrent_requests", 8, ("platform", "org", "project"), True,
         "Requests in flight per credential. A rate limit bounds arrival; this "
         "is what stops one client occupying the whole model tier. 0 disables.",
+        kind="int",
     ),
     "default_project": Definition(
         # A user setting an admin cannot set for them: it is a preference about
         # how one person works, not a policy about what they may do.
         "default_project", None, ("user",), False,
         "The project a user's tools act on by default.",
+        kind="string", nullable=True,
     ),
     "notifications": Definition(
         "notifications", {}, ("user",), False,
         "Connection failures, quota warnings, share access.",
+        kind="object",
     ),
 }
 
@@ -184,6 +217,50 @@ async def resolve(
     return Resolved(key, definition.default, "default", locked_by=None)
 
 
+def _validate(definition: Definition, value: Any) -> None:
+    """Refuse a value the readers cannot use.
+
+    Nothing checked this, so a typed setting was whatever the last caller sent:
+    `registration_mode: "opne"` matched none of the three branches that read it
+    and closed registration without saying so. A stored value that no reader
+    recognises is worse than a rejected one, because the rejection is visible
+    and the mismatch is not.
+
+    Deliberately not coercion. `"true"` is not `True` and `"8"` is not `8` --
+    accepting either would make the stored shape depend on which client wrote
+    it, and a JSON column keeps whatever it is given.
+    """
+    if value is None:
+        if definition.nullable:
+            return
+        raise SettingError(f"{definition.key!r} cannot be null", status=400)
+
+    kind = definition.kind
+    if kind == "enum":
+        if value not in definition.choices:
+            raise SettingError(
+                f"{definition.key!r} must be one of "
+                f"{', '.join(repr(c) for c in definition.choices)}",
+                status=400,
+            )
+    elif kind == "bool":
+        # `bool` before `int`, always: in Python `True` *is* an int, so the int
+        # branch would accept it and this one would never be reached.
+        if not isinstance(value, bool):
+            raise SettingError(f"{definition.key!r} must be true or false", status=400)
+    elif kind == "int":
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise SettingError(f"{definition.key!r} must be a whole number", status=400)
+    elif kind == "list":
+        if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+            raise SettingError(f"{definition.key!r} must be a list of strings", status=400)
+    elif kind == "object":
+        if not isinstance(value, dict):
+            raise SettingError(f"{definition.key!r} must be an object", status=400)
+    elif not isinstance(value, str):
+        raise SettingError(f"{definition.key!r} must be text", status=400)
+
+
 async def put(
     pool: asyncpg.Pool,
     key: str,
@@ -214,6 +291,8 @@ async def put(
     if lock and scope == "user":
         raise SettingError("a user cannot lock a setting against themselves", status=403)
 
+    _validate(definition, value)
+
     # Writing below a lock is refused, not silently accepted. Otherwise the UI
     # shows a value that has no effect, which is how people conclude a control
     # is broken.
@@ -228,12 +307,20 @@ async def put(
     await pool.execute(
         """
         INSERT INTO settings (setting_id, scope, scope_id, key, value, locked, set_by)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        VALUES ($1, $2, $3, $4, $5::text::jsonb, $6, $7)
         ON CONFLICT (scope, scope_id, key)
         DO UPDATE SET value = EXCLUDED.value, locked = EXCLUDED.locked,
                       set_by = EXCLUDED.set_by, updated_at = now()
         """,
-        new_id("set"), scope, scope_id, key, value, lock, set_by,
+        # Serialised here and cast, rather than handed to the pool's jsonb
+        # codec. asyncpg sends a Python `None` as SQL NULL without consulting
+        # the encoder, and `settings.value` is NOT NULL -- so **the one setting
+        # whose documented meaning is null could not be written at all**:
+        # `budget_daily_credits = null` is "no ceiling", and a project that
+        # wanted to clear an inherited one got an integrity error from the
+        # driver. JSON `null` is a value; SQL NULL is the absence of a row, and
+        # `resolve` already reads presence rather than content.
+        new_id("set"), scope, scope_id, key, json.dumps(value), lock, set_by,
     )
     return await resolve(pool, key, org_id=org_id, project_id=project_id,
                          user_id=scope_id if scope == "user" else None)
@@ -260,5 +347,11 @@ async def effective(
             "allowed_scopes": list(definition.allowed_scopes),
             "lockable": definition.lockable,
             "description": definition.description,
+            # What a valid value is, so an editor builds its control from the
+            # rule the server actually enforces rather than a second copy of it.
+            "kind": definition.kind,
+            "choices": list(definition.choices),
+            "nullable": definition.nullable,
+            "default": definition.default,
         })
     return out

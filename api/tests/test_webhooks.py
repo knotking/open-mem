@@ -851,3 +851,29 @@ async def test_a_webhook_with_enrichment_on_becomes_a_record_a_search_can_find(
         "a delivered webhook is not retrievable, so the one-write-path claim "
         "holds for every producer except the busiest one"
     )
+
+
+async def test_a_producer_can_ask_for_enrichment_and_for_half_of_it(
+    pool, queue, blobs, settings, tenant, envelope
+):
+    """The two halves are separately priced, so they are separately settable.
+
+    Reading only `enrich` made a feed choose between summarising every message
+    -- one model call per item, unbounded -- and being unsearchable, because
+    the embedding lives on the same flag.
+    """
+    from memdog.events import list_events
+
+    producer_id = await _webhook_producer(
+        pool, tenant, envelope, auth="url_secret", secret=None,
+        defaults={"enrich": True, "summarize": False},
+    )
+    result = await receive(pool, queue, blobs, settings, envelope, producer_id=producer_id,
+                           raw_body=b'{"id": "asked", "text": "the deploy rolled back"}',
+                           headers={})
+
+    events = [e for e in await list_events(pool, tenant.org_id, data_id=result.data_ids[0])
+              if e["event_type"] == "enrichment.requested"]
+    assert len(events) == 1
+    assert events[0]["payload"]["embed"] is True
+    assert events[0]["payload"]["summarize"] is False

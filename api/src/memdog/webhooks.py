@@ -39,7 +39,9 @@ import asyncpg
 from .audit import record_audit
 from .telemetry import record, span
 from . import providers as provider_registry
-from .contracts import Inline, MemoryRef, WriteItem, WriteOptions, WriteRequest
+from .contracts import (
+    EnrichmentOptions, Inline, MemoryRef, WriteItem, WriteOptions, WriteRequest
+)
 from .ids import new_id
 
 log = logging.getLogger(__name__)
@@ -436,7 +438,20 @@ async def _receive(
                 items=items,
                 # Enrichment stays opt-in here too, and per integration: a chatty
                 # webhook that summarises every message is an unbounded bill.
-                options=WriteOptions(enrich=bool(defaults.get("enrich", False))),
+                #
+                # The two halves are separately settable because they are
+                # separately priced. Embedding is one call per chunk and is what
+                # makes a delivery findable at all; summarising is one call per
+                # item and is the half a high-volume feed usually does not want.
+                # Reading only the `enrich` flag made that an all-or-nothing
+                # choice between an unbounded bill and an invisible corpus.
+                options=WriteOptions(
+                    enrich=bool(defaults.get("enrich", False)),
+                    enrichment=EnrichmentOptions(
+                        embed=bool(defaults.get("embed", True)),
+                        summarize=bool(defaults.get("summarize", True)),
+                    ),
+                ),
             ),
             idempotency_key=delivery_key,
         )

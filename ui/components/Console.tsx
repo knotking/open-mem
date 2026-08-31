@@ -32,6 +32,7 @@ import {
   CompactionRun,
   FullVersion,
   ObservedEvent,
+  Setting,
   Subscription,
   describeEvent,
   humanChars,
@@ -4560,12 +4561,29 @@ function DeletionSection({
 
 /* ---------------------------------------------------- 7. settings */
 
+/**
+ * Settings — read the effective value, and change it.
+ *
+ * It listed eleven settings and could set none of them, which made the one
+ * switch that governs whether writes are interpreted at all
+ * (`enrich_by_default`) reachable only by calling the API by hand. A screen
+ * that shows a value, its source and its lock state and then cannot write it
+ * is half a screen, and the missing half is the one people came for.
+ *
+ * Two things it refuses to hide. **The scope is chosen, never assumed** — the
+ * same key means different things set for a user and set for an org, and
+ * picking one silently would make the wrong one the easy one. And **a refusal
+ * is shown as the server phrased it**: locked above, not one of these three
+ * values, not a whole number. Those are the sentences that say what to do next.
+ */
 function SettingsSection({ projectId }: { projectId: string }) {
-  const [rows, setRows] = useState<Record<string, unknown>[]>([]);
+  const [rows, setRows] = useState<Setting[]>([]);
+  const [editing, setEditing] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
 
   const load = useCallback(() => {
-    call<{ settings: Record<string, unknown>[] }>(`api/v1/settings/effective?project_id=${projectId}`)
+    call<{ settings: Setting[] }>(`api/v1/settings/effective?project_id=${projectId}`)
       .then((d) => setRows(d.settings))
       .catch((e) => setError((e as Error).message));
   }, [projectId]);
@@ -4580,25 +4598,227 @@ function SettingsSection({ projectId }: { projectId: string }) {
         project can switch off is not a control.
       </p>
       {error && <p className="err">{error}</p>}
+      {note && <p className="empty">{note}</p>}
+
       <section className="panel">
         <h2>Effective values, and where each came from</h2>
-        <div className="excluded">
-          {rows.map((s) => (
-            <div className="item" key={String(s.key)}>
-              <code>{String(s.key)}</code>
-              <span className="chip on">{JSON.stringify(s.value)}</span>
-              <span className="chip">from {String(s.source)}</span>
-              {s.locked_by ? <span className="why">locked at {String(s.locked_by)}</span> : null}
-              <span className="empty">{(s.allowed_scopes as string[]).join(" · ")}</span>
-            </div>
-          ))}
-        </div>
+        {rows.length === 0 && <p className="empty">Loading…</p>}
+        {rows.map((s) => (
+          <SettingRow
+            key={s.key}
+            setting={s}
+            projectId={projectId}
+            open={editing === s.key}
+            onToggle={() => setEditing(editing === s.key ? null : s.key)}
+            onSaved={(message) => {
+              setNote(message);
+              setError(null);
+              setEditing(null);
+              load();
+            }}
+            onError={(message) => {
+              setError(message);
+              setNote(null);
+            }}
+          />
+        ))}
         <p className="empty">
           Provenance is the point. &ldquo;It is set to X&rdquo; is not actionable without &ldquo;by
           whom, at which level, and can I change it&rdquo;.
         </p>
       </section>
     </>
+  );
+}
+
+/** How a value reads at a glance. `null` is a value here, not an absence. */
+function showValue(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return value.length === 0 ? "[] — everything" : value.join(", ");
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
+/** The value, in whatever form its control edits. */
+function asDraft(setting: Setting): string {
+  if (setting.kind === "bool") return setting.value === true ? "true" : "false";
+  if (setting.kind === "list") {
+    return Array.isArray(setting.value) ? (setting.value as string[]).join(", ") : "";
+  }
+  if (setting.kind === "object") return JSON.stringify(setting.value ?? {});
+  return setting.value === null ? "" : String(setting.value);
+}
+
+function SettingRow({
+  setting,
+  projectId,
+  open,
+  onToggle,
+  onSaved,
+  onError,
+}: {
+  setting: Setting;
+  projectId: string;
+  open: boolean;
+  onToggle: () => void;
+  onSaved: (message: string) => void;
+  onError: (message: string) => void;
+}) {
+  // The most specific scope this setting is allowed at, which is the one a
+  // person on a project screen almost always means.
+  const preferred =
+    ["project", "user", "org", "platform"].find((s) => setting.allowed_scopes.includes(s)) ??
+    setting.allowed_scopes[0];
+  const [scope, setScope] = useState(preferred);
+  const [draft, setDraft] = useState(() => asDraft(setting));
+  const [lock, setLock] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  // The row stays mounted after a save, so without this the editor would
+  // reopen showing the value the setting used to have -- which is the reading
+  // people trust least and check hardest.
+  useEffect(() => setDraft(asDraft(setting)), [setting]);
+
+  // Locked above the scope being written, so the write would be refused with a
+  // 409. Said before the attempt rather than after it.
+  const order = ["user", "project", "org", "platform"];
+  const blocked =
+    setting.locked_by !== null &&
+    order.indexOf(scope) < order.indexOf(setting.locked_by);
+
+  async function save() {
+    setBusy(true);
+    try {
+      let value: unknown;
+      if (setting.kind === "bool") value = draft === "true";
+      else if (setting.kind === "int") value = draft === "" ? null : Number(draft);
+      else if (setting.kind === "list") {
+        value = draft.split(",").map((v) => v.trim()).filter(Boolean);
+      } else if (setting.kind === "object") value = JSON.parse(draft);
+      else if (setting.nullable && draft === "") value = null;
+      else value = draft;
+
+      const body: Record<string, unknown> = { value, lock };
+      if (scope === "project") body.project_id = projectId;
+      const saved = await call<{ value: unknown; source: string; locked_by: string | null }>(
+        `api/v1/settings/${scope}/${setting.key}`, body, "PUT",
+      );
+      onSaved(
+        `${setting.key} is now ${showValue(saved.value)}, from ${saved.source}` +
+          (saved.locked_by ? `, locked at ${saved.locked_by}.` : "."),
+      );
+    } catch (e) {
+      onError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="setrow">
+      <button className="setline" onClick={onToggle} aria-expanded={open}>
+        <code className="setkey">{setting.key}</code>
+        <span className="chip on">{showValue(setting.value)}</span>
+        <span className="chip">from {setting.source}</span>
+        {setting.locked_by && <span className="why">locked at {setting.locked_by}</span>}
+        <span className="empty far">{open ? "close" : "change"}</span>
+      </button>
+      <p className="setdesc">{setting.description}</p>
+      {open && (
+        <div className="setedit">
+          <div className="row">
+            <label>
+              Set at
+              <select value={scope} onChange={(e) => setScope(e.target.value)}>
+                {setting.allowed_scopes.map((s: string) => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
+              </select>
+            </label>
+
+            {setting.kind === "bool" && (
+              <label>
+                Value
+                <select value={draft} onChange={(e) => setDraft(e.target.value)}>
+                  <option value="true">true</option>
+                  <option value="false">false</option>
+                </select>
+              </label>
+            )}
+            {setting.kind === "enum" && (
+              <label>
+                Value
+                <select value={draft} onChange={(e) => setDraft(e.target.value)}>
+                  {setting.choices.map((c: unknown) => (
+                    <option key={String(c)} value={String(c)}>{String(c)}</option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {(setting.kind === "int" || setting.kind === "string" || setting.kind === "list" ||
+              setting.kind === "object") && (
+              <label style={{ flex: 1 }}>
+                Value
+                <input
+                  type={setting.kind === "int" ? "number" : "text"}
+                  value={draft}
+                  placeholder={
+                    setting.kind === "list"
+                      ? "comma separated — empty means every provider"
+                      : setting.nullable
+                        ? "empty means null"
+                        : ""
+                  }
+                  onChange={(e) => setDraft(e.target.value)}
+                />
+              </label>
+            )}
+
+            {setting.lockable && scope !== "user" && (
+              <label className="check">
+                <input type="checkbox" checked={lock} onChange={(e) => setLock(e.target.checked)} />
+                Lock it here
+              </label>
+            )}
+            <button
+              disabled={busy || blocked}
+              title={
+                blocked
+                  ? `Locked at ${setting.locked_by} scope. A write below a lock is refused, not quietly ignored.`
+                  : `Writes ${setting.key} at ${scope} scope and records who did it.`
+              }
+              onClick={() => void save()}
+            >
+              {busy ? "Saving…" : "Save"}
+            </button>
+          </div>
+          {blocked && (
+            <p className="warned">
+              Locked at <strong>{setting.locked_by}</strong>, so a value written at{" "}
+              <strong>{scope}</strong> would be refused rather than silently ignored — which is what
+              makes the lock a control. Change it at {setting.locked_by} scope, or unlock it there.
+            </p>
+          )}
+          {setting.kind === "bool" && setting.key === "enrich_by_default" && (
+            <p className="empty" style={{ marginBottom: 0 }}>
+              On, a write that says nothing either way is embedded and summarised. Off, it is stored
+              and durable and <strong>cannot be found by search</strong> — which is the right default
+              for a producer pushing volume and the wrong one for a project whose data people expect
+              to query.
+            </p>
+          )}
+          {!setting.lockable && (
+            <p className="empty" style={{ marginBottom: 0 }}>
+              Not lockable — it is a preference rather than a policy, so a level below can always
+              override it.
+            </p>
+          )}
+          <p className="empty" style={{ marginBottom: 0 }}>
+            Every write here is audited as <code>settings.set</code>, with the scope and the value.
+          </p>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -5321,6 +5541,8 @@ type Producer = {
   inbound_auth: string;
   connection_scope: string | null;
   seconds_since_last_item: number | null;
+  /** What this endpoint's writes ask for. `enrich` is off unless it says so. */
+  defaults: { enrich?: boolean; embed?: boolean; summarize?: boolean } | null;
 };
 
 type WebhookDelivery = {
@@ -5405,6 +5627,28 @@ function InboundSection({ projectId }: { projectId: string }) {
     }
   }
 
+  /**
+   * Change one flag without clearing the others.
+   *
+   * `defaults` is a jsonb column the API replaces wholesale, so sending the one
+   * box that moved would silently unset the rest -- which is how a screen
+   * teaches people not to trust it.
+   */
+  async function saveDefaults(change: Record<string, boolean>) {
+    if (!selected) return;
+    const defaults = { enrich: false, embed: true, summarize: true,
+                       ...(selected.defaults ?? {}), ...change };
+    await act("Saved. It applies to the next delivery.", async () => {
+      await call(
+        `api/v1/producers/${selected.producer_id}/inbound`,
+        { inbound_auth: selected.inbound_auth, defaults },
+        "PATCH",
+      );
+      setSelected({ ...selected, defaults });
+      await load();
+    });
+  }
+
   return (
     <>
       <h1>Inbound webhooks</h1>
@@ -5436,6 +5680,12 @@ function InboundSection({ projectId }: { projectId: string }) {
                     ? "never received anything"
                     : `last delivery ${Math.round(h.seconds_since_last_item)}s ago`}
                 </span>
+                {/* Two endpoints receiving identically differ entirely in
+                  * whether anything can find what they received, and the
+                  * listing said nothing about it. */}
+                <span className={h.defaults?.enrich ? "chip on far" : "chip far"}>
+                  {h.defaults?.enrich ? "interpreted" : "stored only"}
+                </span>
               </div>
             ))}
           </div>
@@ -5457,6 +5707,7 @@ function InboundSection({ projectId }: { projectId: string }) {
                   inbound_auth: "none",
                   connection_scope: null,
                   seconds_since_last_item: null,
+                  defaults: null,
                 });
               })
             }
@@ -5596,6 +5847,51 @@ function InboundSection({ projectId }: { projectId: string }) {
               Prefer <code>signature</code> where the provider supports it. A URL secret is
               unrevocable without re-registering the endpoint, and it leaks through logs and
               referrer headers.
+            </p>
+          </section>
+
+          <section className="panel">
+            <h2>What happens to what arrives</h2>
+            <p className="empty" style={{ marginTop: 0 }}>
+              Deliveries are <strong>stored and not interpreted</strong> unless this says otherwise,
+              so by default a provider can post all day and <strong>nothing it sent is findable by
+              search</strong>. Off is right for a chatty feed nobody queries and wrong for
+              everything else, and it is per endpoint because that is where the volume differs.
+            </p>
+            <div className="row">
+              <label className="check">
+                <input
+                  type="checkbox"
+                  checked={selected.defaults?.enrich ?? false}
+                  disabled={busy}
+                  onChange={(e) => void saveDefaults({ enrich: e.target.checked })}
+                />
+                Interpret deliveries
+              </label>
+              <label className="check">
+                <input
+                  type="checkbox"
+                  checked={selected.defaults?.embed ?? true}
+                  disabled={busy || !(selected.defaults?.enrich ?? false)}
+                  onChange={(e) => void saveDefaults({ embed: e.target.checked })}
+                />
+                Embed — one call per chunk, makes it searchable
+              </label>
+              <label className="check">
+                <input
+                  type="checkbox"
+                  checked={selected.defaults?.summarize ?? true}
+                  disabled={busy || !(selected.defaults?.enrich ?? false)}
+                  onChange={(e) => void saveDefaults({ summarize: e.target.checked })}
+                />
+                Summarise — one call per item
+              </label>
+            </div>
+            <p className="empty" style={{ marginBottom: 0 }}>
+              The two halves are separately priced, which is why they are separately settable: a
+              high-volume feed usually wants embedding and not a summary of every message. A change
+              here applies to the <strong>next</strong> delivery; what already arrived stays as it
+              landed — interpret those from Browse.
             </p>
           </section>
 

@@ -116,3 +116,66 @@ async def test_effective_reports_provenance_for_every_setting(pool, tenant):
     assert rows["media_interpretation"]["locked_by"] == "org"
     assert rows["answer_storage"]["value"] == "metadata"     # the safe default
     assert rows["default_project"]["allowed_scopes"] == ["user"]
+
+
+async def test_a_value_no_reader_recognises_is_refused(pool, tenant):
+    """`registration_mode: "opne"` used to store cleanly.
+
+    It then matched none of the three branches that read it, so the deployment
+    stopped admitting anyone and nothing anywhere said so. A stored value no
+    reader recognises is worse than a rejected one: the rejection is visible.
+    """
+    with pytest.raises(SettingError) as exc:
+        await put(pool, "registration_mode", "opne", scope="org", scope_id=tenant.org_id,
+                  set_by=tenant.user_id, org_id=tenant.org_id)
+    assert exc.value.status == 400
+    assert "invite_only" in str(exc.value)          # it names what is allowed
+    # And nothing was written: the previous value still resolves.
+    assert (await resolve(pool, "registration_mode", org_id=tenant.org_id)).value == "invite_only"
+
+
+async def test_a_string_that_looks_like_a_boolean_is_still_a_string(pool, tenant):
+    """Refused rather than coerced. `"true"` and `True` are different values in
+    a JSON column, and a reader doing `if value:` would treat `"false"` as on --
+    so accepting either would make behaviour depend on which client wrote it."""
+    with pytest.raises(SettingError) as exc:
+        await put(pool, "enrich_by_default", "true", scope="project",
+                  scope_id=tenant.project_id, set_by=tenant.user_id,
+                  org_id=tenant.org_id, project_id=tenant.project_id)
+    assert exc.value.status == 400
+
+
+async def test_a_boolean_is_not_a_number(pool, tenant):
+    """In Python `True` is an `int`, so an int check written the obvious way
+    accepts it and stores `true` in a credit ceiling."""
+    with pytest.raises(SettingError):
+        await put(pool, "max_concurrent_requests", True, scope="org",
+                  scope_id=tenant.org_id, set_by=tenant.user_id, org_id=tenant.org_id)
+
+
+async def test_null_is_a_value_where_it_means_something(pool, tenant):
+    """No ceiling is a ceiling setting people need to express. Everywhere else
+    null is a mistake, and the difference is declared per setting."""
+    await put(pool, "budget_daily_credits", None, scope="project",
+              scope_id=tenant.project_id, set_by=tenant.user_id,
+              org_id=tenant.org_id, project_id=tenant.project_id)
+    with pytest.raises(SettingError):
+        await put(pool, "max_concurrent_requests", None, scope="org",
+                  scope_id=tenant.org_id, set_by=tenant.user_id, org_id=tenant.org_id)
+
+
+async def test_effective_publishes_the_vocabulary_it_enforces(pool, tenant):
+    """So an editor builds its control from the server's rule rather than a
+    second copy of it -- the copy being the one that goes stale."""
+    rows = {r["key"]: r for r in await effective(
+        pool, org_id=tenant.org_id, project_id=tenant.project_id, user_id=tenant.user_id
+    )}
+    assert rows["registration_mode"]["kind"] == "enum"
+    assert rows["registration_mode"]["choices"] == ["invite_only", "open", "disabled"]
+    assert rows["enrich_by_default"]["kind"] == "bool"
+    assert rows["budget_daily_credits"]["nullable"] is True
+    # Every choice the register offers is one `put` accepts. A vocabulary the
+    # server would refuse is worse than none, because the UI offers it.
+    for value in rows["registration_mode"]["choices"]:
+        await put(pool, "registration_mode", value, scope="org", scope_id=tenant.org_id,
+                  set_by=tenant.user_id, org_id=tenant.org_id)

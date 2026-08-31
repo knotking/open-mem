@@ -306,6 +306,11 @@ async def list_producers(pool: asyncpg.Pool, principal: Principal) -> list[dict]
         """
         SELECT p.producer_id, p.type, p.project_id, p.status, p.inbound_auth,
                p.connection_id, c.scope AS connection_scope, p.last_item_at,
+               -- What this producer's writes ask for. Returned because a
+               -- console that cannot see it cannot set it, and every webhook
+               -- delivery landed unenriched and unsearchable with no screen
+               -- anywhere saying so.
+               p.defaults,
                -- The highest-value freshness detector: it catches a webhook
                -- that stopped, a crawler whose selector broke, and a client
                -- that quietly died, with one query.

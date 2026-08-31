@@ -10,6 +10,42 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 
 ## Unreleased
 
+### Fixed
+- **Nothing written from the console was ever searchable.** Enrichment is
+  opt-in — `enrich_by_default` resolves to `false` and embedding runs only off
+  `enrichment.requested` — and none of the three places the UI writes ever sent
+  `options.enrich`. So an item added through Add data stopped at `stored`:
+  durable, correct, and **invisible to retrieval, because no embedding was ever
+  produced for it to match on**. The sandbox had it too, which means its whole
+  write-then-find demonstration could only ever find nothing. **Browse had it
+  worse** — an edit committed a revision and nothing re-read it, so search kept
+  matching the text the edit had just replaced.
+- **A screen watching that write could not say so.** It polled sixty times over
+  two minutes, rendered nothing while it did, held the write button disabled
+  throughout, and returned in silence whether the item had arrived or never
+  would. **A deliberate refusal to spend money and a hang are indistinguishable
+  that way**, and the refusal is the ordinary case.
+
+### Added
+- **The climb, rendered — and it always ends in a sentence.** Reached the top,
+  refused by a sensitivity policy *with the reason*, failed after five dispatch
+  attempts *with the error*, the bytes could not be read, or nobody asked. The
+  panel reads `GET /events?data_id=…` beside the item rather than inferring
+  from the rung, because **`searchable` is the same row whether the summary is
+  queued, refused, or was never requested** and only the log separates them.
+  The two-minute ceiling now says *this screen stopped watching; the work did
+  not* — a different fact from settling, and it offers to keep watching.
+- **Interpretation is configurable where it is caused.** `enrich`, `embed`,
+  `summarize` and the two per-request overrides the API accepts and never
+  persists, on the Add data screen — **on by default**, because a person adding
+  one item by hand is not a producer pushing ten thousand. What the write will
+  do is said next to each button (*"stored only — not searchable"*), since the
+  panel sits below them and people write before they scroll.
+- **The console can now enrich something.** `POST /data/{id}/enrich` had
+  existed with no caller at all, so a corpus of items stranded at `stored` had
+  no way out of the state it was in. Browse offers it per item; the progress
+  panel offers it on the item just written.
+
 ### Added
 - **`GET /api/v1/projects/{id}/source-lag`** — per scope: when it last
   succeeded, how far behind that is, what it last failed on, and whether its

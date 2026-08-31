@@ -357,3 +357,27 @@ export type DomainEvent = {
   occurred_at: string;
   consumed_at: string | null;
 };
+
+/**
+ * One row of `GET /settings/effective` — the value, where it came from, and
+ * **what a valid value is**.
+ *
+ * `kind`, `choices` and `nullable` come from the server's register so an editor
+ * builds its control from the rule that is actually enforced. A dropdown whose
+ * options are typed out in the UI is a second copy of a vocabulary, and the
+ * copy is the one that goes stale.
+ */
+export type Setting = {
+  key: string;
+  value: unknown;
+  /** platform · org · project · user · default */
+  source: string;
+  locked_by: string | null;
+  allowed_scopes: string[];
+  lockable: boolean;
+  description: string;
+  kind: "bool" | "int" | "enum" | "string" | "list" | "object";
+  choices: unknown[];
+  nullable: boolean;
+  default: unknown;
+};

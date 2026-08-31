@@ -31,7 +31,12 @@ const ALLOWED = [
   /^api\/v1\/data\/[A-Za-z0-9_]+(\?.*)?$/,
   /^api\/v1\/data\/[A-Za-z0-9_]+\/artifacts$/,
   /^api\/v1\/data\/[A-Za-z0-9_]+\/content$/,
-  /^api\/v1\/settings\/(platform|org|project|user)\/[a-z_]+$/,
+  // The scope and the key are both variables at the call site -- the settings
+  // editor picks the scope per row -- so the pattern cannot spell the four
+  // scopes out. The API is the validator that matters: `put` refuses an unknown
+  // scope, an unknown key, a scope the setting is not allowed at, and a write
+  // below a lock. This is a route, not a second policy.
+  /^api\/v1\/settings\/[A-Za-z0-9_]+\/[A-Za-z0-9_]+$/,
   /^api\/v1\/models\/assignments$/,
   /^api\/v1\/reprocess$/,
   /^api\/v1\/artifacts\/stale(\?.*)?$/,
