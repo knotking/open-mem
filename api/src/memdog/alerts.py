@@ -132,9 +132,22 @@ async def in_scope(
         return {r["data_id"] for r in rows}
 
     if scope.get("memory_id"):
-        allowed = await _allowed(
-            "SELECT data_id FROM memory_members WHERE memory_id = $1 "
-            "AND data_id = ANY($2::text[])", scope["memory_id"])
+        # Through the hierarchy, not just the one container.
+        #
+        # A scope of one memory was single-level, so an alert on a parent never
+        # saw a child's changes -- and a scope that silently means less than it
+        # says is the same failure as one that silently means more. Resolved by
+        # reading `part_of` downward at match time: no new writes, no duplicated
+        # events, no propagation storm, and no cycle to worry about in the write
+        # path because nothing is being written. `link` refuses the cycle at the
+        # edge that would close it, so the walk terminates.
+        from .memories import contained_memories
+
+        scoped = await contained_memories(pool, scope["memory_id"])
+        rows = await pool.fetch(
+            "SELECT data_id FROM memory_members WHERE memory_id = ANY($1::text[]) "
+            "AND data_id = ANY($2::text[])", scoped, data_ids)
+        allowed = {r["data_id"] for r in rows}
         surviving &= {s for s, d in by_data.items() if d in allowed}
     if scope.get("case_id"):
         allowed = await _allowed(
@@ -245,6 +258,14 @@ def matches_selector(where_clause: dict, payload: dict) -> bool:
         value = dig(payload, path)
         if isinstance(condition, dict):
             op, arg = condition.get("op", "in"), condition.get("value")
+            # `{"op": "exists"}` means exists. It read as *absent*: the operator
+            # compares against `bool(arg)`, `validate` deliberately allows the
+            # value to be omitted for this operator, and omitting it therefore
+            # inverted the condition -- silently, since a rule that matches
+            # nothing looks exactly like a quiet week. Say it explicitly to
+            # mean the opposite: `{"op": "exists", "value": false}`.
+            if op == "exists" and "value" not in condition:
+                arg = True
         else:
             op, arg = "in", condition
         check = OPERATORS.get(op)

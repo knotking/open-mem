@@ -1847,6 +1847,27 @@ async def create_reprocess(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.get("/api/v1/memories/{memory_id}/tree")
+async def read_memory_tree(
+    request: Request, memory_id: str, relation: str = "part_of",
+    actor: Principal = Depends(principal),
+) -> dict:
+    """What this memory contains and what contains it, both directions.
+
+    `part_of` is containment: the parent's members *are* the children's, so
+    there is nothing to keep in sync. An alert scoped to a memory reads through
+    exactly this walk, which is why it is worth being able to see.
+    """
+    from .memories import tree
+
+    try:
+        return await tree(request.app.state.pool, actor, memory_id, relation=relation)
+    except MemoryError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
 @app.post("/api/v1/expiry/sweep")
 async def sweep_expiry(
     request: Request, body: dict, actor: Principal = Depends(principal)

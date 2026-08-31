@@ -52,6 +52,9 @@ const ALLOWED = [
   /^api\/v1\/memories\/[A-Za-z0-9_]+\/members\/[A-Za-z0-9_]+$/,
   /^api\/v1\/projects\/[A-Za-z0-9_]+\/memories$/,
   /^api\/v1\/memories\/[A-Za-z0-9_]+\/members$/,
+  // The hierarchy: `part_of` in both directions, and the link that builds it.
+  /^api\/v1\/memories\/[A-Za-z0-9_]+\/tree(\?.*)?$/,
+  /^api\/v1\/memories\/[A-Za-z0-9_]+\/links(\?.*)?$/,
   /^api\/v1\/data\/[A-Za-z0-9_]+\/versions$/,
   // One revision, read whole. The listing above only previews.
   /^api\/v1\/data\/[A-Za-z0-9_]+\/versions\/[A-Za-z0-9_]+$/,

@@ -979,3 +979,21 @@ async def test_a_name_can_be_selected_on(pool, tenant, principal_for):
     await _ingest(pool, tenant, "a", "Lisbon", event_time=NOW() - timedelta(days=9))
     await _ingest(pool, tenant, "b", "Berlin", event_time=NOW())
     assert (await evaluate_gap(pool, alert["alert_id"], trigger="tick"))["matches"] == 1
+
+
+def test_exists_with_no_value_means_exists():
+    """It meant the opposite.
+
+    `exists` compares against `bool(arg)` and `validate` allows the value to be
+    omitted for exactly this operator -- so `{"op": "exists"}`, the obvious way
+    to write it and the way the docs show it, matched only records where the
+    field was **absent**. A rule that silently matches nothing is
+    indistinguishable from a quiet week, which is the failure mode alerts exist
+    to remove.
+    """
+    from memdog.alerts import matches_selector
+
+    assert matches_selector({"memory_type": {"op": "exists"}}, {"memory_type": "session"})
+    assert not matches_selector({"memory_type": {"op": "exists"}}, {"other": 1})
+    # And the opposite is still sayable, explicitly.
+    assert matches_selector({"memory_type": {"op": "exists", "value": False}}, {"other": 1})

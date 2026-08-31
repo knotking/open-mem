@@ -25,6 +25,7 @@ import {
   AlertRun,
   Memory,
   MemoryMember,
+  MemoryTree,
   MemoryType,
   Algorithm,
   Backtest,
@@ -1716,14 +1717,20 @@ function AlertEditor({
               <option value="entity_id">one entity</option>
             </select>
             {scopeKind === "memory_id" && (
-              <select value={scopeValue} onChange={(e) => setScopeValue(e.target.value)}>
-                <option value="">choose a memory…</option>
-                {scopeOptions.memories.map((m) => (
-                  <option key={m.memory_id} value={m.memory_id}>
-                    {m.title || m.memory_key || m.memory_id} · {m.type}
-                  </option>
-                ))}
-              </select>
+              <>
+                <select value={scopeValue} onChange={(e) => setScopeValue(e.target.value)}>
+                  <option value="">choose a memory…</option>
+                  {scopeOptions.memories.map((m) => (
+                    <option key={m.memory_id} value={m.memory_id}>
+                      {m.title || m.memory_key || m.memory_id} · {m.type}
+                    </option>
+                  ))}
+                </select>
+                {/* A scope that silently means more than it says is this
+                  * screen's original sin repeated, so a hierarchical one says
+                  * so before it is saved rather than after it fires. */}
+                {scopeValue && <ScopeReach memoryId={scopeValue} />}
+              </>
             )}
             {scopeKind === "case_id" && (
               <select value={scopeValue} onChange={(e) => setScopeValue(e.target.value)}>
@@ -3777,6 +3784,8 @@ function MemorySection({ projectId }: { projectId: string }) {
   const [newTitle, setNewTitle] = useState("");
   const [due, setDue] = useState<ExpiryDue | null>(null);
   const [sweep, setSweep] = useState<SweepResult | null>(null);
+  const [tree, setTree] = useState<MemoryTree | null>(null);
+  const [parentOf, setParentOf] = useState("");
 
   const load = useCallback(async () => {
     try {
@@ -3811,6 +3820,7 @@ function MemorySection({ projectId }: { projectId: string }) {
         setMembers(mem.members);
         const inside = new Set(mem.members.map((x) => x.data_id));
         setAvailable(data.items.filter((i) => !inside.has(i.data_id)));
+        setTree(await call<MemoryTree>(`api/v1/memories/${memory.memory_id}/tree`));
       } catch (e) {
         setError((e as Error).message);
       }
@@ -4025,6 +4035,82 @@ function MemorySection({ projectId }: { projectId: string }) {
             <h2>
               {selected.type} · {selected.memory_key ?? selected.memory_id}
             </h2>
+
+            <h3>Where it sits</h3>
+            {tree === null ? (
+              <p className="empty">Loading…</p>
+            ) : tree.ancestors.length === 0 && tree.descendants.length === 0 ? (
+              <p className="empty">
+                Not part of anything, and nothing is part of it. Two memories converge into a third
+                by making each <code>part_of</code> it — the parent then has no separate contents to
+                keep in sync, because its members <em>are</em> theirs.
+              </p>
+            ) : (
+              <>
+                <div className="excluded">
+                  {tree.ancestors.map((a) => (
+                    <div className="item" key={a.memory_id}>
+                      <span className="chip">{"↑".repeat(a.depth)} contained by</span>
+                      <code>{a.title || a.memory_key || a.memory_id}</code>
+                      <span className="empty">{a.type} · {a.members} member{a.members === 1 ? "" : "s"}</span>
+                    </div>
+                  ))}
+                  {tree.descendants.map((d) => (
+                    <div className="item" key={d.memory_id}>
+                      <span className="chip on">{"↓".repeat(d.depth)} contains</span>
+                      <code>{d.title || d.memory_key || d.memory_id}</code>
+                      <span className="empty">{d.type} · {d.members} member{d.members === 1 ? "" : "s"}</span>
+                    </div>
+                  ))}
+                </div>
+                {tree.descendants.length > 0 && (
+                  <p className="empty">
+                    An alert scoped here sees changes in all {tree.descendants.length} of them —
+                    the scope is resolved through the hierarchy when it matches, so nothing is
+                    duplicated and nothing has to be kept in sync.
+                  </p>
+                )}
+                {tree.truncated && (
+                  <p className="warned">
+                    <strong>The walk stopped at {tree.max_depth} levels.</strong> There is more
+                    below; this is not the whole tree.
+                  </p>
+                )}
+              </>
+            )}
+            <div className="row">
+              <select value={parentOf} onChange={(e) => setParentOf(e.target.value)}>
+                <option value="">make it part of…</option>
+                {memories
+                  .filter((m) => m.memory_id !== selected.memory_id)
+                  .map((m) => (
+                    <option key={m.memory_id} value={m.memory_id}>
+                      {m.title || m.memory_key || m.memory_id} · {m.type}
+                    </option>
+                  ))}
+              </select>
+              <button
+                disabled={busy || !parentOf}
+                title={parentOf
+                  ? "Records a part_of link. A link that would close a cycle is refused."
+                  : "Choose the memory this one rolls up into."}
+                onClick={() =>
+                  act("Linked.", async () => {
+                    // The path carries the child; the body carries the parent.
+                    // `part_of` points from the part to the whole, and reversing
+                    // it says the programme is part of its workstream.
+                    await call(`api/v1/memories/${selected.memory_id}/links`, {
+                      to_memory: parentOf, relation: "part_of",
+                    });
+                    setParentOf("");
+                    setTree(await call<MemoryTree>(
+                      `api/v1/memories/${selected.memory_id}/tree`));
+                  })
+                }
+              >
+                Link
+              </button>
+            </div>
 
             <h3>Members</h3>
             {members.length === 0 ? (
@@ -4931,6 +5017,34 @@ function SettingRow({
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * What a memory scope actually covers.
+ *
+ * An alert on a parent now matches writes to every memory `part_of` it, which
+ * is the behaviour people expect and is nowhere visible in a dropdown that
+ * shows one name. Read at edit time from the same walk the matcher uses, so
+ * the sentence cannot drift from the behaviour.
+ */
+function ScopeReach({ memoryId }: { memoryId: string }) {
+  const [tree, setTree] = useState<MemoryTree | null>(null);
+  useEffect(() => {
+    let live = true;
+    void call<MemoryTree>(`api/v1/memories/${memoryId}/tree`)
+      .then((t) => live && setTree(t))
+      .catch(() => live && setTree(null));
+    return () => { live = false; };
+  }, [memoryId]);
+
+  if (tree === null || tree.descendants.length === 0) return null;
+  return (
+    <span className="chip on" title={tree.descendants
+      .map((d) => d.title || d.memory_key || d.memory_id).join(", ")}>
+      includes {tree.descendants.length} child memor
+      {tree.descendants.length === 1 ? "y" : "ies"}
+    </span>
   );
 }
 

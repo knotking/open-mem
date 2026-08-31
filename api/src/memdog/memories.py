@@ -491,6 +491,35 @@ async def link(
     if found != 2:
         raise MemoryError("no such memory", status=404)
 
+    # A cycle is refused at the edge that would close it, rather than survived
+    # by every reader. Both the tree and the alert scope walk `part_of`
+    # recursively, and a graph saying a memory contains its own container has
+    # no meaning worth protecting.
+    #
+    # Per relation, because the relations are independent: a memory legitimately
+    # derived from another can also be part of it, and rejecting that would be
+    # refusing a true statement to prevent a loop that does not exist.
+    closes = await pool.fetchval(
+        """
+        WITH RECURSIVE reachable(memory_id, depth) AS (
+            SELECT to_memory, 1 FROM memory_links
+            WHERE from_memory = $1 AND relation = $3
+            UNION
+            SELECT l.to_memory, r.depth + 1
+            FROM memory_links l JOIN reachable r ON l.from_memory = r.memory_id
+            WHERE l.relation = $3 AND r.depth < 64
+        )
+        SELECT 1 FROM reachable WHERE memory_id = $2 LIMIT 1
+        """,
+        to_memory, from_memory, relation,
+    )
+    if closes:
+        raise MemoryError(
+            f"that {relation} link would close a cycle: {to_memory} already leads back "
+            f"to {from_memory}",
+            status=409,
+        )
+
     async with pool.acquire() as conn, conn.transaction():
         await conn.execute(
             """
@@ -1007,3 +1036,114 @@ async def sweep_all(pool: asyncpg.Pool, queue, *, limit: int = 500) -> dict:
         for key in ("considered", "deleted", "archived", "refiled"):
             totals[key] += swept[key]
     return totals
+
+
+# --------------------------------------------------------------- hierarchy
+
+# A walk has to stop somewhere, and the number has to be visible in what it
+# returns. Silently truncating a tree produces the same shape as a tree that
+# really is that deep, and the two are very different facts.
+TREE_MAX_DEPTH = 12
+TREE_MAX_NODES = 200
+
+
+async def tree(
+    pool: asyncpg.Pool, principal, memory_id: str, *, relation: str = "part_of",
+) -> dict:
+    """What this memory contains, and what contains it.
+
+    Both directions, kept apart for the same reason `links_for` keeps them
+    apart: *what rolls up into this* and *what does this roll up into* are
+    different questions, and one merged list loses the direction that is the
+    whole content of the claim.
+
+    `part_of` by default because it is the only relation that means containment
+    -- a parent's members *are* its children's members, so there is nothing to
+    keep in sync and nothing to go stale. `derived_from` is a generated
+    artifact and a different problem: a child changing does not change the
+    parent, it makes the parent **wrong**.
+
+    Depth-limited and node-limited, and the limits report themselves.
+    """
+    from .auth import DATA_READ
+
+    principal.require(DATA_READ)
+    if relation not in RELATIONS:
+        raise MemoryError(f"relation must be one of {', '.join(RELATIONS)}")
+    owned = await pool.fetchval(
+        "SELECT 1 FROM memories WHERE memory_id = $1 AND org_id = $2 AND deleted_at IS NULL",
+        memory_id, principal.org_id,
+    )
+    if owned is None:
+        raise MemoryError("memory not found", status=404)
+
+    async def walk(direction: str) -> list[dict]:
+        # `descendants` walks against the arrow: a child says it is `part_of` a
+        # parent, so the parent's children are the rows pointing *at* it.
+        start, step_from, step_to = (
+            ("to_memory", "to_memory", "from_memory") if direction == "down"
+            else ("from_memory", "from_memory", "to_memory")
+        )
+        rows = await pool.fetch(
+            f"""
+            WITH RECURSIVE walk(memory_id, depth) AS (
+                SELECT l.{step_to}, 1 FROM memory_links l
+                WHERE l.{start} = $1 AND l.relation = $2
+                UNION
+                SELECT l.{step_to}, w.depth + 1
+                FROM memory_links l JOIN walk w ON l.{step_from} = w.memory_id
+                WHERE l.relation = $2 AND w.depth < $3
+            )
+            SELECT w.depth, m.memory_id, m.type, m.memory_key, m.title,
+                   (SELECT count(*) FROM memory_members mm
+                    WHERE mm.memory_id = m.memory_id) AS members
+            FROM walk w JOIN memories m ON m.memory_id = w.memory_id
+            WHERE m.org_id = $4 AND m.deleted_at IS NULL
+            ORDER BY w.depth, m.memory_id
+            LIMIT $5
+            """,
+            memory_id, relation, TREE_MAX_DEPTH, principal.org_id, TREE_MAX_NODES,
+        )
+        return [dict(r) for r in rows]
+
+    ancestors = await walk("up")
+    descendants = await walk("down")
+    return {
+        "memory_id": memory_id,
+        "relation": relation,
+        "ancestors": ancestors,
+        "descendants": descendants,
+        # Distinct memories, because a diamond -- two children of one parent
+        # both rolling into a third -- would otherwise count a shared ancestor
+        # twice and report more containers than exist.
+        "descendant_members": sum(d["members"] for d in descendants),
+        "max_depth": TREE_MAX_DEPTH,
+        "truncated": len(ancestors) == TREE_MAX_NODES or len(descendants) == TREE_MAX_NODES,
+    }
+
+
+async def contained_memories(pool: asyncpg.Pool, memory_id: str) -> list[str]:
+    """A memory and everything `part_of` it, transitively.
+
+    The read side of the hierarchy, used where a scope means *this container
+    and what is in it*. Nothing is written and nothing propagates: an alert on
+    a parent sees a child's changes because the scope is resolved through the
+    graph at match time, not because a parent transition was emitted for every
+    child write. The alternative costs an event per level per item, has to be
+    kept consistent, and is the mistake the alert system already made once and
+    had to undo.
+    """
+    rows = await pool.fetch(
+        """
+        WITH RECURSIVE walk(memory_id, depth) AS (
+            SELECT $1::text, 0
+            UNION
+            SELECT l.from_memory, w.depth + 1
+            FROM memory_links l JOIN walk w ON l.to_memory = w.memory_id
+            WHERE l.relation = 'part_of' AND w.depth < $2
+        )
+        SELECT DISTINCT memory_id FROM walk
+        """,
+        memory_id, TREE_MAX_DEPTH,
+    )
+    return [r["memory_id"] for r in rows]

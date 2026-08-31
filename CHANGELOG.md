@@ -11,6 +11,43 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **TTL is enforced.** `ttl_seconds` and `on_expiry` have been storable,
+  editable and computed since the memories slice shipped while **nothing
+  swept** — a `conversation` memory with a one-hour TTL was still there a year
+  later, and this changelog has carried it as *not built* through two releases.
+  The sweep runs with the scheduled reconcile, and on demand via
+  **`POST /api/v1/expiry/sweep`** where `dry_run` defaults to **true**.
+- **An item is due only when every memory holding it has expired**, and the
+  policy that applies is the one belonging to the membership that expired
+  **last** — the container that kept it alive. Sweeping per membership would
+  delete a record a permanent memory still depends on, which is the
+  `orphan_delete` bug in another form.
+- **`orphan_delete` goes through the ordinary deletion cascade**, so an expired
+  record gets the same tombstone, blob reclamation, legal hold and audit trail
+  as any other erasure. `archive` stamps the column compaction already uses;
+  `keep_members` re-files into the default **and drops the expired
+  memberships**, or the item is due again on the next pass forever.
+- **`GET /api/v1/projects/{id}/expiring`** — what is due and under which
+  policy, because a retention policy nobody can inspect before it runs is one
+  nobody will turn on. Shown on the Memories screen with a preview and a sweep.
+
+### Changed
+- **The scheduled pass sweeps per owner, not once as a superuser.** The
+  deletion cascade selects under the caller's own visibility, so a single
+  privileged-looking pass would **silently skip every private record** —
+  exactly the ones with the tightest retention need — and report a clean sweep.
+- **The reconcile job now registers the delete worker and drains
+  unconditionally.** It publishes deletions now: a tombstone whose reclamation
+  message nothing consumes leaves chunks, embeddings and blobs behind for a
+  record already promised gone.
+
+### Migrations
+- **`0040_expiry_actor.sql`** — `audit_events.actor_mode` admits `expiry`.
+  Additive, and the constraint is replaced rather than edited, as `0020` did
+  for `crawler`. Filing an unattended erasure under `platform` would put an
+  operator's fingerprint on something no person did.
+
+### Added
 - **Bulk interpretation — `stage: "interpret"` on `POST /reprocess`.** `embed`
   and `enrich` rebuild derived work that already exists; this asks for work
   that was **never requested**, which is exactly what a crawl or a feed run

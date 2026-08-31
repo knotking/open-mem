@@ -381,3 +381,27 @@ export type Setting = {
   nullable: boolean;
   default: unknown;
 };
+
+/**
+ * `part_of`, both directions. A parent's members *are* its children's, so a
+ * tree is a join rather than something kept in sync — and an alert scoped to a
+ * memory resolves through exactly this walk.
+ */
+export type MemoryTree = {
+  memory_id: string;
+  relation: string;
+  ancestors: TreeNode[];
+  descendants: TreeNode[];
+  descendant_members: number;
+  max_depth: number;
+  truncated: boolean;
+};
+
+export type TreeNode = {
+  depth: number;
+  memory_id: string;
+  type: string;
+  memory_key: string | null;
+  title: string | null;
+  members: number;
+};
