@@ -122,6 +122,14 @@ Each of these presents as a different bug than it is.
   plus `roles/iam.serviceAccountTokenCreator`.
 - **`Reauthentication failed` from any gcloud command.** Ask Parag to run
   `gcloud auth login` and wait. Do not attempt it — it needs a browser.
+- **The image build ends in `error getting credentials - err: exit status 1`,
+  with an empty `out:`.** That is the same expired login wearing a Docker
+  costume: `buildx` asks the gcloud credential helper for a registry token, the
+  helper fails silently, and the message names neither gcloud nor the registry.
+  `gcloud auth configure-docker` will say the helper is *already registered
+  correctly*, which is true and beside the point. Confirm with
+  `gcloud auth print-access-token` — if that fails, it is the login, not Docker.
+  Same fix, same constraint: it needs a browser.
 - **The image builds but Cloud Run will not start it.** `--platform linux/amd64`
   is not optional; dev machines are arm64 and the failure is silent until deploy.
 - **The scheduled reconcile never fires, with no error on the scheduler job.**
