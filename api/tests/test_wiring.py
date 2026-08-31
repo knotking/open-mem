@@ -279,3 +279,223 @@ def test_the_escape_hatch_cannot_be_tripped_by_accident(monkeypatch):
 
     monkeypatch.setenv("I_KNOW_THIS_DATABASE_IS_DISPOSABLE", "yes")
     assert conftest._guard(remote) == remote
+
+
+# --------------------------------------------------------------- endpoints
+
+REPO = SRC.parents[2]
+
+# Endpoints nothing anywhere issues a request to. Four defects in one day had
+# this exact shape -- `POST /data/{id}/enrich`, `POST /reprocess`,
+# `GET /artifacts/stale` and `PUT /settings/{scope}/{key}` all existed, were
+# tested at the function level, were documented, and were reachable by no
+# client we ship. Each read as a missing feature and was a missing wire.
+#
+# The list is a ratchet: it may shrink and it may not grow without a person
+# writing a reason. Wiring one and leaving it here fails too, so the reasons
+# cannot go stale quietly.
+UNCALLED_ENDPOINTS: dict[str, str] = {
+    # Not ours to call. Someone else's browser opens this.
+    "GET /s/{token}": "a share link, opened by whoever received it",
+
+    # An admin acting on somebody else. The console does the self-service half
+    # -- `/users/me/deletion` -- and has no member-administration surface.
+    "POST /api/v1/users/{user_id}/deletion":
+        "deleting another person's data; the console offers only /users/me/deletion",
+    "DELETE /api/v1/organizations/members/{user_id}":
+        "removing a member; there is no member-administration screen",
+
+    # Invites, entirely. `registration_mode` defaults to invite_only, so this
+    # is the whole path by which a second person joins -- and none of it is
+    # reachable from the console.
+    "DELETE /api/v1/invites/{invite_id}": "no invite surface in the console at all",
+
+    # A key that can be issued and not revoked. The Keys screen lists and
+    # creates; revocation is the half that matters after a laptop is lost.
+    "DELETE /api/v1/users/me/api-keys/{key_id}": "the Keys screen cannot revoke one",
+
+    # Groups: the principal type `shared_with` already resolves against, with
+    # no way to create one or put anybody in it.
+    "GET /api/v1/groups": "no groups surface",
+    "POST /api/v1/groups": "no groups surface",
+    "PUT /api/v1/groups/{group_id}/members": "no groups surface",
+
+    # Producer and connection administration.
+    "PATCH /api/v1/producers/{producer_id}":
+        "enable and disable a producer; the Inbound screen shows status and cannot change it",
+    "PATCH /api/v1/connections/{connection_id}":
+        "personal vs shared scope, which decides ACL inheritance; nothing sets it",
+
+    # Cases are read by the console -- timelines and scope pickers -- and
+    # declared only by a producer through the write path.
+    "PUT /api/v1/cases": "cases are declared by producers; the console only reads them",
+
+    # Configuration surfaces that read but do not write.
+    "POST /api/v1/agents/{data_type}/config/test":
+        "test-before-save for a prompt override; the Prompts screen has no save",
+    "GET /api/v1/schemas": "normalization schemas; no editor",
+    "POST /api/v1/schemas": "normalization schemas; no editor",
+    "POST /api/v1/models/assignments": "the Models screen is read-only",
+    "POST /api/v1/models/cards": "the Models screen is read-only",
+    "POST /api/v1/engines": "engine registration is a deployment step, not a screen",
+
+    # The ephemeral-token exchange, for hosts embedding the platform. Our own
+    # console holds a durable credential server-side and never needs it, which
+    # is exactly why it has no caller here.
+    "POST /api/v1/tokens/ephemeral": "for embedding hosts; the console holds its credential",
+
+    # Presigned upload. The console posts bytes inline instead, which is right
+    # for a paste and wrong for 500 MB.
+    "POST /api/v1/uploads": "the console uploads inline; presigned upload is Phase 4",
+    "POST /api/v1/uploads/{upload_id}/complete": "the other half of presigned upload",
+
+    # Graph and facts. The console reads entities and edges; asserting a fact
+    # by hand, reading one entity's history and listing contradictions have no
+    # surface.
+    "POST /api/v1/facts": "facts are asserted by enrichment; no manual surface",
+    "POST /api/v1/facts/{fact_id}/retract": "no manual retraction surface",
+    "GET /api/v1/entities/{entity_id}/history": "bitemporal history has no screen",
+    "GET /api/v1/graph/conflicts": "contradiction surfacing has no screen",
+    "GET /api/v1/graph/predicates":
+        "the vocabulary a condition builder should read; the alert editor still types one in",
+
+    # Observability that shipped without its reader.
+    "GET /api/v1/projects/{project_id}/source-lag":
+        "per-scope freshness; the Producers screen shows only seconds_since_last_item",
+    "GET /api/v1/crawlers/{crawler_id}/runs": "run history per crawler; the screen shows one run",
+    "GET /api/v1/event-subscriptions/{subscription_id}/deliveries":
+        "delivery attempts per subscription; the alerts screen does not read them",
+
+    # The erasure certificate: the artifact that proves a deletion happened.
+    "GET /api/v1/data/{data_id}/erasure": "nothing displays the certificate it issues",
+}
+
+
+def _routes() -> list[tuple[str, str]]:
+    app = (SRC / "app.py").read_text()
+    return [
+        (m.group(1).upper(), m.group(2))
+        for m in re.finditer(r'@app\.(get|post|put|patch|delete)\("([^"]+)"', app)
+    ]
+
+
+def _concrete(path: str) -> str:
+    """Drop `${...}` interpolations, brace-matched.
+
+    The same reduction `scripts/check-proxy-paths.mjs` performs, for the same
+    reason: an interpolation that is its own path segment is a parameter, and
+    anything else -- `${kind ? `?type=${kind}` : ""}` -- is a query fragment
+    glued on the end.
+    """
+    out, i = "", 0
+    while i < len(path):
+        if path[i] == "$" and path[i + 1:i + 2] == "{":
+            depth, j = 1, i + 2
+            while j < len(path) and depth:
+                depth += {"{": 1, "}": -1}.get(path[j], 0)
+                j += 1
+            out += "*" if out.endswith("/") else ""
+            i = j
+        else:
+            out += path[i]
+            i += 1
+    return out
+
+
+def _shape(path: str) -> str:
+    """Literal segments, every parameter collapsed, query dropped."""
+    path = path.split("?")[0].strip("/")
+    return "/".join(
+        "*" if seg.startswith("{") or seg == "*" else seg
+        for seg in path.split("/") if seg
+    )
+
+
+def _caller_text() -> list[str] | None:
+    """Everything that issues an HTTP request at our own API.
+
+    The proxy's allow-list is excluded on purpose: it routes requests, it does
+    not make them, and counting it would mean every path anyone remembered to
+    allow looked called.
+    """
+    ui = REPO / "ui"
+    if not ui.exists():
+        return None
+    texts = [p.read_text() for p in (ui / "components").glob("*.tsx")]
+    texts += [p.read_text() for p in (ui / "app").rglob("*.ts*") if "proxy" not in str(p)]
+    texts += [p.read_text() for p in (REPO / "api/tests").glob("*.py")]
+    texts += [p.read_text() for p in (REPO / "api/deploy").glob("*.sh")]
+    texts += [(SRC / "mcp.py").read_text(), (SRC / "__main__.py").read_text()]
+    return texts
+
+
+def _called_shapes() -> set[str] | None:
+    texts = _caller_text()
+    if texts is None:
+        return None
+    blob = "\n".join(texts)
+    called = set()
+    for m in re.finditer(
+        r"""["'`](/?(?:api/proxy/)?(?:api/v1|webhooks|s|healthz)[^"'`\s]*)""", blob
+    ):
+        raw = m.group(1).lstrip("/")
+        raw = raw[len("api/proxy/"):] if raw.startswith("api/proxy/") else raw
+        called.add(_shape(_concrete(raw)))
+    return called
+
+
+def test_every_endpoint_is_called_by_something():
+    """An endpoint no client reaches is a feature nobody can use.
+
+    It is the most expensive version of this file's subject, because the code
+    is *correct*: it has tests, it has documentation, and the only thing
+    missing is the one line that would let a person get to it. The failure
+    presents as "we never built that".
+    """
+    called = _called_shapes()
+    if called is None:
+        pytest.skip("the console is not present in this checkout")
+    missing = {
+        f"{method} {path}": ""
+        for method, path in _routes()
+        if _shape(path) not in called and f"{method} {path}" not in UNCALLED_ENDPOINTS
+    }
+    assert not missing, (
+        "these endpoints exist and nothing calls them -- wire one, or add it to "
+        f"UNCALLED_ENDPOINTS with a reason: {sorted(missing)}"
+    )
+
+
+@pytest.mark.parametrize("route,reason", sorted(UNCALLED_ENDPOINTS.items()))
+def test_an_exempted_endpoint_still_exists_and_is_still_uncalled(route, reason):
+    """The exemption list may shrink and may not rot.
+
+    Wiring an endpoint and leaving it listed here would be a lie that nobody
+    trips over, which is how an allow-list stops meaning anything.
+    """
+    method, path = route.split(" ", 1)
+    assert (method, path) in _routes(), f"{route} no longer exists; drop the exemption"
+    called = _called_shapes()
+    if called is None:
+        pytest.skip("the console is not present in this checkout")
+    assert _shape(path) not in called, (
+        f"{route} has a caller now -- remove it from UNCALLED_ENDPOINTS"
+    )
+    assert reason, "every exemption carries a reason"
+
+
+def test_the_endpoint_guard_would_notice_a_wired_route():
+    """The guard is only worth its exemption list if the extractor works.
+
+    Both halves: a route that is obviously wired must read as called, and the
+    interpolation reducer must survive the nested-template form the console
+    actually writes.
+    """
+    called = _called_shapes()
+    if called is None:
+        pytest.skip("the console is not present in this checkout")
+    assert ("POST", "/api/v1/write") in _routes()
+    assert _shape("/api/v1/write") in called
+    assert _shape("/api/v1/projects/{project_id}/staircase") in called
+    assert _concrete("api/v1/projects/${projectId}/entities${kind ? `?type=${kind}` : ``}") \
+        == "api/v1/projects/*/entities"
