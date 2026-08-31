@@ -2194,6 +2194,23 @@ async def retract_fact_endpoint(
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
 
 
+@app.get("/api/v1/projects/{project_id}/source-lag")
+async def source_lag_endpoint(
+    request: Request, project_id: str, actor: Principal = Depends(principal)
+) -> dict:
+    """How far behind each source is, per scope.
+
+    The number every project signal depends on. A signal computed over a source
+    that stopped syncing is confidently wrong, and *"no activity for seven
+    days"* is indistinguishable from *"the connector broke seven days ago"*
+    without it.
+    """
+    from .crawling import source_lag
+
+    actor.require(DATA_READ)
+    return {"sources": await source_lag(request.app.state.pool, project_id)}
+
+
 @app.get("/api/v1/compaction/algorithms")
 async def compaction_algorithms_endpoint(actor: Principal = Depends(principal)) -> dict:
     """What a job can be set to do, served rather than hardcoded in a console.

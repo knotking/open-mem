@@ -23,6 +23,7 @@ from .crawlers import (
     CrawlerConfig,
     CrawlerError,
     Discovered,
+    RateLimited,
     discover,
     fingerprint,
     next_watermark,
@@ -37,6 +38,10 @@ from .write import write_items
 # dead. The reaper marks it interrupted so the next tick resumes it from its
 # checkpoint rather than waiting on a process that will never return.
 STALE_HEARTBEAT_SECONDS = 300
+
+# How often the emit phase reports progress. Small enough that a run cannot
+# outlive its heartbeat, large enough that it is not a write per item.
+PROGRESS_EVERY = 25
 
 
 def _now() -> datetime:
@@ -468,7 +473,9 @@ class CrawlWorker:
         found: list[Discovered] = []
         try:
             found, budget, stopped = await discover(
-                config, watermark=claimed["watermark_before"], checkpoint=checkpoint,
+                config, watermark=await cursor_for(
+                self.pool, claimed["crawler_id"], config.scope_param or ""),
+            checkpoint=checkpoint,
                 auth=await self._auth(crawler),
             )
             if stopped:
@@ -476,6 +483,14 @@ class CrawlWorker:
                 # it complete would advance the watermark past records the
                 # crawl never reached.
                 status, reason = "partial", stopped
+        except RateLimited as exc:
+            # Recorded against the credential, not the crawler: the quota
+            # belongs to the token, so every other crawler sharing it should
+            # wait too rather than each discovering the limit for itself.
+            status, reason = "rate_limited", str(exc)
+            await mark_limited(
+                self.pool, crawler["connection_id"],
+                seconds=exc.retry_after, reason=str(exc))
         except CrawlerError as exc:
             # 401 means the credential is the problem. Failing loudly matters:
             # a run that ended 'completed' would advance the watermark and the
@@ -500,6 +515,16 @@ class CrawlWorker:
         )
 
         emitted = skipped = failed = 0
+        if status == "rate_limited":
+            # Not a failed crawl. The run stops, the cursor stays exactly where
+            # it was, and the credential carries the cooling-off so every other
+            # crawler sharing it waits too.
+            await self.pool.execute(
+                "UPDATE crawl_runs SET status = 'rate_limited', reason = $2, "
+                "finished_at = now(), heartbeat_at = now() WHERE run_id = $1",
+                run_id, reason,
+            )
+            return {"run_id": run_id, "status": "rate_limited", "reason": reason}
         if status != "failed":
             emitted, skipped, failed = await self._emit(
                 claimed, crawler, config, found, dry=claimed["mode"] == "dry"
@@ -511,12 +536,25 @@ class CrawlWorker:
                 reason = f"{failed} item(s) failed"
 
         advanced = claimed["watermark_before"]
+        scope = config.scope_param or ""
         if status == "completed" and claimed["mode"] == "live":
             advanced = next_watermark(config, found, claimed["watermark_before"])
             await self.pool.execute(
                 "UPDATE crawlers SET watermark = $2 WHERE crawler_id = $1",
                 claimed["crawler_id"], advanced,
             )
+            # Only on completion, and per scope. Same rule the crawler-level
+            # watermark has always had, one level down: a scope that
+            # half-finished must not record a position past records nobody
+            # looked at.
+            await advance_cursor(
+                self.pool, claimed["crawler_id"], scope, advanced,
+                kind="etag" if config.incremental == "etag" else "watermark",
+                items=emitted,
+            )
+        elif claimed["mode"] == "live" and status in ("failed", "partial", "interrupted"):
+            await record_scope_failure(
+                self.pool, claimed["crawler_id"], scope, reason or status)
 
         await self.pool.execute(
             """
@@ -555,7 +593,28 @@ class CrawlWorker:
         emitted = skipped = failed = 0
         batch: list[WriteItem] = []
 
-        for item in found:
+        # Progress is written *during* the run, not only at the end.
+        #
+        # `reap()` marks any run whose heartbeat is older than
+        # STALE_HEARTBEAT_SECONDS as interrupted, and this phase used to write
+        # none at all -- so an emit taking longer than five minutes reaped
+        # itself while still running. With `max_items` defaulting to 1000 that
+        # is the ordinary case for a real source, not an edge, and it presented
+        # as noise: runs randomly interrupted, a watermark that never advanced,
+        # and a next run that re-fetched everything.
+        #
+        # The same write also makes the counters move, so a run in flight can be
+        # watched rather than being a blank row until it finishes.
+        async def beat() -> None:
+            await self.pool.execute(
+                "UPDATE crawl_runs SET emitted = $2, skipped = $3, failed = $4, "
+                "heartbeat_at = now() WHERE run_id = $1",
+                run["run_id"], emitted, skipped, failed,
+            )
+
+        for index, item in enumerate(found):
+            if index % PROGRESS_EVERY == 0:
+                await beat()
             unchanged = await self.pool.fetchval(
                 "SELECT 1 FROM crawl_seen WHERE crawler_id = $1 AND external_id = $2 "
                 "AND version_hash = $3",
@@ -610,6 +669,9 @@ class CrawlWorker:
         # Chunked so a large discovery does not become one enormous
         # transaction, and so a failure loses one chunk rather than the run.
         for start in range(0, len(batch), 50):
+            # Every chunk, because a write with enrichment is the slow part and
+            # a chunk can easily outlast the stale threshold on its own.
+            await beat()
             chunk = batch[start:start + 50]
             try:
                 response = await write_items(
@@ -707,8 +769,23 @@ async def _tick(pool: asyncpg.Pool, conn, worker: CrawlWorker, limit: int,
         """,
         limit, org_id,
     )
-    started, skipped = [], []
+    started, skipped, limited = [], [], []
     for row in due:
+        # A run that cannot succeed should not consume the slot that says it
+        # tried. The credential is cooling, so this is neither a failure of the
+        # crawl nor a quiet source, and calling it either would misreport a
+        # healthy one.
+        cooling = await is_limited(pool, row["connection_id"])
+        if cooling:
+            limited.append({"crawler_id": row["crawler_id"], "reason": cooling})
+            await conn.execute(
+                "UPDATE crawlers SET next_due_at = $2 WHERE crawler_id = $1",
+                row["crawler_id"],
+                await conn.fetchval(
+                    "SELECT limited_until FROM connections WHERE connection_id = $1",
+                    row["connection_id"]),
+            )
+            continue
         live = await conn.fetchval(
             "SELECT run_id FROM crawl_runs WHERE crawler_id = $1 "
             "AND status IN ('pending', 'running') LIMIT 1",
@@ -733,7 +810,11 @@ async def _tick(pool: asyncpg.Pool, conn, worker: CrawlWorker, limit: int,
     for run_id in started:
         executed.append(await worker.execute(run_id))
     return {"started": started, "skipped": skipped, "reaped": reaped,
-            "runs": executed}
+            # Reported separately from `skipped`, which means "already running".
+            # A reader has to be able to tell a busy crawler from a throttled
+            # credential; both look like "did not run" and only one is a problem
+            # that will clear on its own.
+            "rate_limited": limited, "runs": executed}
 
 
 def _next_due(schedule: dict) -> datetime | None:
@@ -760,3 +841,120 @@ async def reap(pool: asyncpg.Pool) -> int:
         """,
         STALE_HEARTBEAT_SECONDS,
     ) or 0
+
+
+# -- sync state -------------------------------------------------------------
+
+
+async def cursor_for(pool, crawler_id: str, scope: str = "") -> str | None:
+    """Where this crawler got to, for this scope.
+
+    Falls back to `crawlers.watermark` so a crawler that predates per-scope
+    cursors keeps exactly the position it had -- the single-scope case is
+    `scope = ''`, and nothing has to be migrated for it to keep working.
+    """
+    found = await pool.fetchval(
+        "SELECT cursor FROM crawl_cursors WHERE crawler_id = $1 AND scope = $2",
+        crawler_id, scope)
+    if found is not None:
+        return found
+    return await pool.fetchval(
+        "SELECT watermark FROM crawlers WHERE crawler_id = $1", crawler_id)
+
+
+async def advance_cursor(
+    pool, crawler_id: str, scope: str, cursor: str | None, *,
+    kind: str = "watermark", items: int = 0,
+) -> None:
+    """Only when that scope completed.
+
+    Same rule the crawler-level watermark has always had, applied one level
+    down: a scope that half-finished must not record a position past records
+    nobody looked at, because nothing ever comes back for them.
+    """
+    await pool.execute(
+        """
+        INSERT INTO crawl_cursors (crawler_id, scope, cursor, kind, items_seen,
+            last_ok_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, now(), now())
+        ON CONFLICT (crawler_id, scope) DO UPDATE
+           SET cursor = EXCLUDED.cursor, kind = EXCLUDED.kind,
+               items_seen = crawl_cursors.items_seen + EXCLUDED.items_seen,
+               last_ok_at = now(), last_error = NULL, updated_at = now()
+        """,
+        crawler_id, scope, cursor, kind, items,
+    )
+
+
+async def record_scope_failure(pool, crawler_id: str, scope: str, reason: str) -> None:
+    """A scope that failed keeps its cursor and records why.
+
+    Keeping the cursor is the point: the next run retries the same range rather
+    than skipping it, and the reason is what tells a reader that the gap is a
+    failure rather than a quiet source.
+    """
+    await pool.execute(
+        """
+        INSERT INTO crawl_cursors (crawler_id, scope, last_error, updated_at)
+        VALUES ($1, $2, $3, now())
+        ON CONFLICT (crawler_id, scope) DO UPDATE
+           SET last_error = EXCLUDED.last_error, updated_at = now()
+        """,
+        crawler_id, scope, reason[:500],
+    )
+
+
+async def is_limited(pool, connection_id: str | None) -> str | None:
+    """Whether this credential is cooling, and until when.
+
+    On the connection rather than the crawler because the quota belongs to the
+    token: two crawlers sharing one Slack connection draw on the same allowance
+    and neither can see the other.
+    """
+    if not connection_id:
+        return None
+    row = await pool.fetchrow(
+        "SELECT limited_until, last_limit_reason FROM connections "
+        "WHERE connection_id = $1 AND limited_until > now()", connection_id)
+    if row is None:
+        return None
+    return (f"{row['last_limit_reason'] or 'rate limited'} until "
+            f"{row['limited_until'].isoformat(timespec='seconds')}")
+
+
+async def mark_limited(
+    pool, connection_id: str | None, *, seconds: int, reason: str,
+) -> None:
+    """Honour what the API said rather than guessing a backoff.
+
+    `Retry-After` is the source telling us exactly when it will answer again;
+    inventing a shorter interval is how a cooling token becomes a banned one.
+    """
+    if not connection_id:
+        return
+    await pool.execute(
+        "UPDATE connections SET limited_until = now() + make_interval(secs => $2), "
+        "last_limit_reason = $3 WHERE connection_id = $1",
+        connection_id, max(1, seconds), reason[:200])
+
+
+async def source_lag(pool, project_id: str) -> list[dict]:
+    """How far behind each source is, per scope.
+
+    The number every project signal depends on. One computed over a source that
+    stopped syncing is confidently wrong, and "no activity for seven days" is
+    indistinguishable from "the connector broke seven days ago" without it.
+    """
+    rows = await pool.fetch(
+        """
+        SELECT c.crawler_id, c.name, cu.scope, cu.last_ok_at, cu.last_error,
+               cu.items_seen,
+               EXTRACT(EPOCH FROM (now() - cu.last_ok_at))::bigint AS behind_seconds
+          FROM crawlers c
+          LEFT JOIN crawl_cursors cu ON cu.crawler_id = c.crawler_id
+         WHERE c.project_id = $1
+         ORDER BY cu.last_ok_at NULLS FIRST
+        """,
+        project_id,
+    )
+    return [dict(r) for r in rows]

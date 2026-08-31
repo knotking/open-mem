@@ -173,6 +173,10 @@ class CrawlerConfig(BaseModel):
 
     incremental: Literal["none", "watermark", "etag"] = "none"
     watermark_param: str | None = None
+    # Which placeholder in the request names the unit a cursor is kept for --
+    # "channel", "repo", "project". One crawler over forty channels needs forty
+    # cursors, or a busy one drags the quiet ones past their own history.
+    scope_param: str | None = None
 
     limits: Limits = Field(default_factory=Limits)
     politeness: Politeness = Field(default_factory=Politeness)
@@ -288,6 +292,30 @@ class Discovered:
         """
         material = self.version or self.text or self.url or self.external_id
         return hashlib.sha256((material or "").encode()).hexdigest()[:32]
+
+
+class RateLimited(CrawlerError):
+    """The source said to come back later, and said when.
+
+    Separate from `CrawlerError` because it is not a failure of the crawl: the
+    run did nothing wrong, the credential is simply out of allowance, and the
+    two must not be reported the same way -- one clears on its own.
+    """
+
+    def __init__(self, message: str, *, retry_after: int) -> None:
+        super().__init__(message, status=429)
+        self.retry_after = retry_after
+
+
+def _retry_after(headers) -> int:
+    """Seconds to wait, from whichever header the source chose to use."""
+    raw = headers.get("retry-after") or headers.get("x-ratelimit-reset-after")
+    try:
+        return max(1, int(float(raw)))
+    except (TypeError, ValueError):
+        # A date-formatted Retry-After, or none at all. A minute is short enough
+        # to recover promptly and long enough not to hammer a limiter.
+        return 60
 
 
 class Budget:
@@ -439,6 +467,15 @@ async def discover_http(
                 # must fail the run rather than end it quietly as complete,
                 # because a quiet completion advances the watermark.
                 raise CrawlerError(f"source returned {response.status_code}", status=401)
+            if response.status_code == 429:
+                # Surfaced as its own error so the caller can record it against
+                # the credential rather than the crawler. `Retry-After` is the
+                # source saying exactly when it will answer again; inventing a
+                # shorter backoff is how a cooling token becomes a banned one.
+                raise RateLimited(
+                    f"{response.request.url.host} refused: rate limited",
+                    retry_after=_retry_after(response.headers),
+                )
             if response.status_code >= 400:
                 raise CrawlerError(f"source returned {response.status_code}", status=502)
 

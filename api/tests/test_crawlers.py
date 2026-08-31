@@ -974,3 +974,163 @@ async def test_two_schedulers_do_not_both_start_the_same_crawl(
     assert len(locked_out) == 1, (
         "exactly one pass runs; the other must decline rather than duplicate it"
     )
+
+
+async def test_the_heartbeat_moves_during_emission(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """A crawl used to reap itself while still running.
+
+    `reap()` marks any run whose heartbeat is older than
+    STALE_HEARTBEAT_SECONDS as interrupted, and the emit phase wrote none at
+    all — so an emit taking more than five minutes killed its own run. With
+    `max_items` defaulting to 1000 that is the ordinary case for a real source,
+    and it presented as noise rather than as a bug: runs randomly interrupted,
+    a watermark that never advanced, and a next run that re-fetched everything.
+
+    Driven through `_emit` directly, with the run's heartbeat backdated, so the
+    only thing that can move it is the loop itself.
+    """
+    from memdog import crawling
+    from memdog.crawlers import Discovered
+    from memdog.ids import new_id
+
+    crawler = await pool.fetchrow(
+        """
+        INSERT INTO crawlers (crawler_id, producer_id, org_id, project_id, user_id,
+            name, strategy, config)
+        VALUES ($1, $2, $3, $4, $5, 'heartbeat', 'http', '{}'::jsonb)
+        RETURNING *
+        """,
+        new_id("crw"), tenant.producer_id, tenant.org_id, tenant.project_id,
+        tenant.user_id,
+    )
+    run_id = new_id("crun")
+    await pool.execute(
+        """
+        INSERT INTO crawl_runs (run_id, crawler_id, org_id, pinned_config,
+            pinned_version, status, heartbeat_at)
+        VALUES ($1, $2, $3, '{}'::jsonb, 1, 'running', now() - interval '1 hour')
+        """,
+        run_id, crawler["crawler_id"], tenant.org_id,
+    )
+
+    # More than one progress interval, so the loop must report at least once.
+    found = [
+        Discovered(external_id=f"item-{i}", title=f"Item {i}", text="body",
+                   url=None, fields={}, depth=0)
+        for i in range(crawling.PROGRESS_EVERY * 2)
+    ]
+
+    run = await pool.fetchrow("SELECT * FROM crawl_runs WHERE run_id = $1", run_id)
+    worker = CrawlWorker(pool, queue, blobs, settings)
+    # Dry, so nothing is written and the loop is the only thing under test.
+    await worker._emit(run, crawler, http_config("http://example.invalid"), found, dry=True)
+
+    beat = await pool.fetchval(
+        "SELECT heartbeat_at FROM crawl_runs WHERE run_id = $1", run_id)
+    stale_before = await pool.fetchval(
+        "SELECT now() - interval '1 hour' > $1", beat)
+    assert stale_before is False, "the emit loop must move the heartbeat"
+
+    # And with it moved, the reaper leaves the run alone.
+    assert await crawling.reap(pool) == 0
+
+
+# ------------------------------------------------------------- sync state
+
+
+async def _bare_crawler(pool, tenant, name="synced", connection_id=None):
+    from memdog.ids import new_id
+
+    return await pool.fetchrow(
+        """
+        INSERT INTO crawlers (crawler_id, producer_id, org_id, project_id, user_id,
+            name, strategy, config, connection_id)
+        VALUES ($1, $2, $3, $4, $5, $6, 'http', '{}'::jsonb, $7)
+        RETURNING *
+        """,
+        new_id("crw"), tenant.producer_id, tenant.org_id, tenant.project_id,
+        tenant.user_id, name, connection_id,
+    )
+
+
+async def test_a_cursor_is_kept_per_scope(pool, tenant):
+    """One crawler over forty channels needs forty positions.
+
+    With a single watermark a busy channel drags it forward and the quiet ones
+    are re-scanned from that point forever — or the reverse, and the busy one is
+    skipped.
+    """
+    from memdog.crawling import advance_cursor, cursor_for
+
+    crawler = await _bare_crawler(pool, tenant)
+    cid = crawler["crawler_id"]
+
+    await advance_cursor(pool, cid, "#eng", "2026-08-01T00:00:00Z", items=40)
+    await advance_cursor(pool, cid, "#random", "2026-06-01T00:00:00Z", items=2)
+
+    assert await cursor_for(pool, cid, "#eng") == "2026-08-01T00:00:00Z"
+    assert await cursor_for(pool, cid, "#random") == "2026-06-01T00:00:00Z"
+
+
+async def test_a_crawler_without_scopes_keeps_the_position_it_had(pool, tenant):
+    """`scope = ''` is today's behaviour, and it must not need migrating."""
+    from memdog.crawling import cursor_for
+
+    crawler = await _bare_crawler(pool, tenant)
+    await pool.execute("UPDATE crawlers SET watermark = $2 WHERE crawler_id = $1",
+                       crawler["crawler_id"], "2026-07-04T00:00:00Z")
+    assert await cursor_for(pool, crawler["crawler_id"]) == "2026-07-04T00:00:00Z"
+
+
+async def test_a_failed_scope_keeps_its_cursor_and_says_why(pool, tenant):
+    """The next run retries the same range rather than skipping it, and a reader
+    can tell a failure from a quiet source."""
+    from memdog.crawling import advance_cursor, cursor_for, record_scope_failure
+
+    crawler = await _bare_crawler(pool, tenant)
+    cid = crawler["crawler_id"]
+    await advance_cursor(pool, cid, "#eng", "2026-08-01T00:00:00Z")
+    await record_scope_failure(pool, cid, "#eng", "upstream 503")
+
+    assert await cursor_for(pool, cid, "#eng") == "2026-08-01T00:00:00Z"
+    assert await pool.fetchval(
+        "SELECT last_error FROM crawl_cursors WHERE crawler_id = $1 AND scope = '#eng'",
+        cid) == "upstream 503"
+
+
+async def test_a_cooling_credential_is_not_a_failed_crawl(pool, tenant, principal_for):
+    """Two crawlers sharing one token draw on the same quota.
+
+    So the limit is recorded on the connection, and a tick that fires while it
+    is cooling records that rather than burning a run — a throttled credential
+    and a broken crawler must not look the same.
+    """
+    from memdog.crawling import is_limited, mark_limited
+
+    connection_id = await pool.fetchval(
+        "SELECT connection_id FROM connections LIMIT 1")
+    assert connection_id, "the tenant fixture provides one"
+
+    assert await is_limited(pool, connection_id) is None
+    await mark_limited(pool, connection_id, seconds=120, reason="Retry-After: 120")
+    reason = await is_limited(pool, connection_id)
+    assert reason and "Retry-After" in reason
+
+
+async def test_lag_per_source_is_reportable(pool, tenant):
+    """Every project signal depends on it: one computed over a source that
+    stopped syncing is confidently wrong, and "no activity for 7 days" is
+    indistinguishable from "the connector broke 7 days ago"."""
+    from memdog.crawling import advance_cursor, source_lag
+
+    crawler = await _bare_crawler(pool, tenant, name="lagging")
+    await advance_cursor(pool, crawler["crawler_id"], "#eng", "x")
+    await pool.execute(
+        "UPDATE crawl_cursors SET last_ok_at = now() - interval '3 days' "
+        "WHERE crawler_id = $1", crawler["crawler_id"])
+
+    rows = await source_lag(pool, tenant.project_id)
+    mine = [r for r in rows if r["crawler_id"] == crawler["crawler_id"]]
+    assert mine and mine[0]["behind_seconds"] > 60 * 60 * 24 * 2
