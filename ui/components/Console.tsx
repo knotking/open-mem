@@ -1619,7 +1619,8 @@ type ConnectorScope = {
 type Connector = {
   key: string; label: string; category: string; pulls: string;
   auth_style: string; auth_name: string | null; auth_help: string;
-  available: boolean; requires: string | null; verified: boolean; notes: string;
+  available: boolean; requires: string | null; verified: boolean;
+  exercised_against: string | null; notes: string;
   scopes: ConnectorScope[];
 };
 
@@ -2990,6 +2991,21 @@ function CrawlersSection({ projectId }: { projectId: string }) {
             {chosenApp.notes && (
               <p className="empty" style={{ marginTop: 4 }}>{chosenApp.notes}</p>
             )}
+            {/* The catalog's honesty is stated here or it is not stated at all.
+                An entry that looks like a supported integration and has never
+                been run is the thing a person needs told before they wire it
+                to a credential and trust the count it returns. */}
+            <p className={chosenApp.verified ? "ok" : "hint"} style={{ marginTop: 6 }}>
+              {chosenApp.verified
+                ? "Run against a live account."
+                : chosenApp.exercised_against
+                  ? `Never run against a live account. Paging, field mapping and the incremental
+                     pull are exercised end to end against ${chosenApp.exercised_against} — which
+                     catches the mechanical mistakes, but cannot tell you the permissions or the
+                     rate limits are right.`
+                  : `Never run against a live account — written from ${chosenApp.label}'s published
+                     API. The dry run below is what turns it from a researched guess into a fact.`}
+            </p>
 
             {chosenApp.scopes.map((scope) => (
               <div className="row" style={{ marginTop: 9 }} key={scope.key}>

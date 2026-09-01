@@ -13,6 +13,9 @@ those down as data is what makes "we support Jira" a twenty-line entry rather th
 > says: nobody has run it against a live account, because that needs a credential. An entry is a
 > researched guess until the dry run every crawler must pass turns it into a fact. This is stated in
 > the console too.
+>
+> One entry now carries the weaker claim `exercised_against`. See
+> [Exercising a template without a tenant](#exercising-a-template-without-a-tenant).
 
 ---
 
@@ -188,6 +191,42 @@ declare how its credential is presented, and must not claim to be verified.
 
 **Declare what only the operator knows; never guess it.** A guessed subdomain authenticates,
 returns a 404, and reads as a broken integration.
+
+---
+
+## Exercising a template without a tenant
+
+Verification needs somebody's credential, which is why nothing has it. But most of what goes wrong
+in a template is *mechanical* — the paging shape, the field paths, the incremental clause — and none
+of that needs a real account to get wrong. It needs something that answers in the provider's shape.
+
+[`api/tools/fake_salesforce.py`](../../api/tools/fake_salesforce.py) is that, for Salesforce: the
+client-credentials token exchange, the `{totalSize, done, records, nextRecordsUrl}` envelope, a real
+`WHERE LastModifiedDate >` filter, and paging behind an opaque query locator.
+`api/tests/test_connector_salesforce.py` crawls it with the shipped template.
+
+**Running it found two defects that reading it could not.**
+
+- The template paged by putting `nextRecordsUrl` into a **query parameter**. Salesforce returns it
+  as a *path*, so the crawler re-requested page one until it hit `max_pages` — twenty pages, forty
+  records, four of them distinct, and a run that looks entirely successful. Nothing in the config
+  is wrong on its face; the type simply did not exist. It does now: `pagination.type: "next_url"`
+  follows a URL the body hands back, which is also how Microsoft Graph (`@odata.nextLink`) pages —
+  the Dynamics entry had a note admitting it "pulls one page", and no longer does.
+- The `soql` scope had no incremental clause, so every run re-read the whole object. It now ships
+  with `WHERE LastModifiedDate > {{ watermark_or_epoch }}`. The `_or_epoch` half matters: plain
+  `{{ watermark }}` renders empty on the first run and Salesforce answers `MALFORMED_QUERY`, so the
+  clause would work on every run except the one that sets it up.
+
+A next URL is attacker-controlled if the source is, so `_next_url` resolves it and then **refuses
+any move off the origin the run started on** — otherwise a source could redirect an authenticated
+crawler, carrying the connection's credential, at a host of its choosing.
+
+The limits are worth stating plainly, because this is exactly the kind of claim that decays into a
+stronger one. A simulator cannot tell you the scope names match what the provider calls them, that
+the permission model allows the read, that the rate limits are survivable, or that the connected app
+can be configured the way the `auth_help` says. `verified` still means a live account, and the test
+asserts an entry never claims both.
 
 ---
 

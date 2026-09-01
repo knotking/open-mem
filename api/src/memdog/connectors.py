@@ -14,10 +14,19 @@ knows -- their site, their board, their database.
 Three things this file is careful about.
 
 **`verified` is honest.** Every entry is written from the provider's documented
-API and almost none has been exercised against a live account, because that
-needs somebody's credential. `verified: False` says so rather than implying a
-test that never happened -- and the dry-run gate every crawler already passes
-through is where an entry stops being a guess.
+API and **none has been exercised against a live account**, because that needs
+somebody's credential. `verified: False` says so rather than implying a test
+that never happened -- and the dry-run gate every crawler already passes through
+is where an entry stops being a guess.
+
+`exercised_against` is the weaker claim that can actually be earned without a
+tenant: the template was run, end-to-end, against something that speaks the
+provider's API shape. Salesforce is the first, against
+`tools/fake_salesforce.py`, and it was worth doing -- running it found that the
+template paged by putting `nextRecordsUrl` in a query parameter, which fetches
+page one until the page limit and reports a plausible number of items. Reading
+the template could not have found that, and neither could a live tenant without
+someone counting the records by hand.
 
 **A blocked connector is listed, not hidden.** One entry still carries
 `requires: "oauth"` — Zoho, which issues a refresh token only through a one-time
@@ -65,6 +74,11 @@ class Connector:
     requires: str | None = None
     # Exercised against a live account by somebody. Almost nothing is.
     verified: bool = False
+    # A weaker, checkable claim: the template has been *run* end-to-end against
+    # the named thing. A simulator is not a tenant -- it cannot tell you the
+    # scope names are right or the permission model allows the read -- but it
+    # does catch the mechanical failures, and those turn out to be most of them.
+    exercised_against: str | None = None
     notes: str = ""
 
 
@@ -96,7 +110,8 @@ def _http(url: str, *, items: str, id_path: str, title: str | None = None,
           content: str | None = None, url_path: str | None = None,
           version: str | None = None, pagination: dict | None = None,
           query: dict | None = None, headers: dict | None = None,
-          method: str = "GET", body: dict | None = None) -> dict:
+          method: str = "GET", body: dict | None = None,
+          incremental: str | None = None) -> dict:
     """One templated request. `{placeholders}` are filled from scope values."""
     request: dict[str, Any] = {"method": method, "url": url}
     if query:
@@ -114,6 +129,8 @@ def _http(url: str, *, items: str, id_path: str, title: str | None = None,
                               "extract": extract}
     if pagination:
         config["pagination"] = pagination
+    if incremental:
+        config["incremental"] = incremental
     return config
 
 
@@ -250,19 +267,29 @@ CATALOG: tuple[Connector, ...] = (
                   "and auth_config needs your instance's token_url.",
         scopes=(
             Scope("instance", "Instance URL", "https://acme.my.salesforce.com"),
-            Scope("soql", "SOQL", "SELECT Id, Name, LastModifiedDate FROM Account"),
+            Scope("soql", "SOQL",
+                  "SELECT Id, Name, LastModifiedDate FROM Account "
+                  "WHERE LastModifiedDate > {{ watermark_or_epoch }} "
+                  "ORDER BY LastModifiedDate",
+                  "`{{ watermark_or_epoch }}` is where the last run got to, or "
+                  "1970 on the first run -- keep it, or every run re-reads the "
+                  "whole object. `{{ watermark }}` alone renders empty the "
+                  "first time and Salesforce answers MALFORMED_QUERY."),
         ),
         template=_http(
             "{instance}/services/data/v61.0/query",
             query={"q": "{soql}"},
             items="records[*]", id_path="Id", title="Name",
-            version="LastModifiedDate",
-            pagination={"type": "cursor", "cursor_path": "nextRecordsUrl",
-                        "cursor_param": "nextRecordsUrl",
+            version="LastModifiedDate", incremental="watermark",
+            pagination={"type": "next_url", "cursor_path": "nextRecordsUrl",
                         "stop_when": "done == `true`"},
         ),
+        exercised_against="tools/fake_salesforce.py",
         notes="Client credentials must be switched on for the connected app; "
-              "it is off by default.",
+              "it is off by default. Paging follows `nextRecordsUrl`, which "
+              "Salesforce returns as a path rather than a token -- treating it "
+              "as a cursor parameter re-fetches page one until the page limit, "
+              "which is what this template used to do.",
     ),
     Connector(
         key="dynamics365", label="Microsoft Dynamics 365", category="CRM",
@@ -284,13 +311,13 @@ CATALOG: tuple[Connector, ...] = (
             headers={"Accept": "application/json", "OData-Version": "4.0",
                      "OData-MaxVersion": "4.0"},
             items="value[*]", id_path="{id_field}", version="modifiedon",
+            pagination={"type": "next_url", "cursor_path": "\"@odata.nextLink\""},
         ),
         notes="The app registration must also exist as an application user "
               "inside Dynamics with a security role. Without that it "
               "authenticates cleanly and then sees nothing, which reads as an "
-              "empty CRM rather than a permissions problem. Paging is a whole "
-              "`@odata.nextLink` URL, which this pagination cannot template, "
-              "so this pulls one page.",
+              "empty CRM rather than a permissions problem. Paging follows "
+              "`@odata.nextLink`, the whole next URL rather than a token.",
     ),
     Connector(
         key="close", label="Close", category="CRM",
@@ -787,7 +814,8 @@ def catalog() -> list[dict]:
             "pulls": c.pulls, "auth_style": c.auth_style,
             "auth_name": c.auth_name, "auth_help": c.auth_help,
             "available": c.requires is None,
-            "requires": c.requires, "verified": c.verified, "notes": c.notes,
+            "requires": c.requires, "verified": c.verified,
+            "exercised_against": c.exercised_against, "notes": c.notes,
             "scopes": [
                 {"key": s.key, "label": s.label, "placeholder": s.placeholder,
                  "help": s.help}

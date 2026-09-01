@@ -249,10 +249,18 @@ request:
     Accept: application/json
 
 pagination:
-  type: cursor            # cursor | offset | page | link_header
+  type: cursor            # cursor | offset | page | link_header | next_url
   cursor_path: "meta.next_cursor"
   cursor_param: "cursor"
   stop_when: "length(data) == `0`"
+
+# `next_url` is the one that is not a token in a parameter: the body hands back the whole next URL,
+# absolute or as a path, and `cursor_path` says where. Salesforce (`nextRecordsUrl`) and Microsoft
+# Graph (`@odata.nextLink`) both page this way, and neither could be templated before it existed —
+# putting the URL in a query parameter re-requests page one until `max_pages`, which reports a
+# plausible item count and quietly omits the rest of the source. The resolved URL must stay on the
+# origin the run started against: it comes out of the response body, so following it across hosts
+# would hand the connection's credential to whoever the source names.
 
 extract:
   items_path:   "data[*]"

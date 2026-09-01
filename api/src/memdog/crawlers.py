@@ -81,7 +81,10 @@ class Politeness(BaseModel):
 
 
 class Pagination(BaseModel):
-    type: Literal["none", "cursor", "offset", "page", "link_header"] = "none"
+    type: Literal["none", "cursor", "offset", "page",
+                  "link_header", "next_url"] = "none"
+    # For `cursor`, where the next cursor is in the body. For `next_url`, where
+    # the next *URL* is -- `nextRecordsUrl`, `@odata.nextLink`, `paging.next`.
     cursor_path: str | None = None
     cursor_param: str | None = None
     page_param: str | None = None
@@ -425,7 +428,19 @@ async def discover_http(
     """
     assert config.request is not None
     request = config.request
-    variables = {"watermark": watermark or "", "now": _now_iso()}
+    # `epoch` is what makes an incremental clause safe on the first run.
+    #
+    # A template carrying `WHERE LastModifiedDate > {{ watermark }}` renders to
+    # `> ` before anything has been crawled, and a source answers that with a
+    # syntax error -- so the clause would work on every run except the one that
+    # matters, and the connector would look broken on the day it was set up.
+    # `{{ watermark|epoch }}` is not expression syntax; it is a second variable
+    # a template picks instead.
+    variables = {
+        "watermark": watermark or "",
+        "watermark_or_epoch": watermark or "1970-01-01T00:00:00Z",
+        "now": _now_iso(),
+    }
     found: list[Discovered] = []
     query = {k: _render(v, variables) for k, v in request.query.items()}
     if config.incremental == "watermark" and config.watermark_param and watermark:
@@ -511,16 +526,53 @@ async def discover_http(
                 checkpoint["cursor"] = cursor
                 if not cursor:
                     break
+            elif pagination.type == "next_url":
+                # The source hands back the whole next URL rather than a token
+                # to put in a parameter. Salesforce does this (`nextRecordsUrl`,
+                # and as a *path*), so does Graph (`@odata.nextLink`, absolute).
+                # Templating it was impossible, so those entries simply pulled
+                # one page and said so in a note -- a crawl that reports a
+                # plausible number of items and silently omits the rest.
+                nxt = _as_text(_search(pagination.cursor_path, payload))
+                if not nxt:
+                    break
+                url, call_query = _next_url(url, nxt), {}
+                # The query went into the URL the source gave us; sending it
+                # again would re-apply `q=` on top of a continuation that
+                # already encodes it.
+                query = {}
             elif pagination.type == "link_header":
                 link = response.headers.get("link", "")
                 match = re.search(r'<([^>]+)>;\s*rel="next"', link)
                 if not match:
                     break
-                url, call_query = match.group(1), {}
+                url, call_query = _next_url(url, match.group(1)), {}
             elif pagination.type == "none":
                 break
 
     return found
+
+
+def _next_url(current: str, candidate: str) -> str:
+    """Resolve a next-page URL that came out of a response, and refuse a move.
+
+    This value is **untrusted**: it arrives in a body or a `Link` header from
+    the source being crawled. Following it blindly would let any source it is
+    pointed at redirect an authenticated crawler -- carrying the connection's
+    credential in its headers -- at a host of the source's choosing. So the
+    resolved URL must stay on the origin the run started against; a source that
+    genuinely pages across hosts is a source this cannot crawl, which is the
+    right way round.
+    """
+    resolved = urljoin(current, candidate)
+    here, there = urlparse(current), urlparse(resolved)
+    if (there.scheme, there.hostname, there.port) != (here.scheme, here.hostname, here.port):
+        raise CrawlerError(
+            f"source paged to a different origin ({there.scheme}://{there.netloc}); "
+            "refusing to follow it with the connection's credential",
+            status=502,
+        )
+    return validate_url(resolved)
 
 
 def _map_item(config: CrawlerConfig, item: Any) -> Discovered:

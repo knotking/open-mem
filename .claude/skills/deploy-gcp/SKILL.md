@@ -31,6 +31,7 @@ reachable as `pagarwal@buildgeek.ai`.
 | Jobs | `memdog-reconcile`, `memdog-crawl-tick`, `memdog-alert-tick`, `memdog-seed`, `memdog-bootstrap` | |
 | Schedules | `memdog-reconcile-tick` every 10 min → `memdog-reconcile`; `memdog-alert-sweep` every 1 min → `memdog-alert-tick` | |
 | Secrets | `memdog-db-password`, `memdog-master-key`, `memdog-demo-key`, `memdog-web-api-key`, `gemini-api-key` | |
+| Console sign-in | `owner@memdog.dev` (owner), `demo@memdog.dev` (admin) | Identity Platform; passwords in `memdog-owner-password` / `memdog-demo-password` |
 
 **There is no GKE, no Kubernetes and no Supabase.** If a doc or an old memory
 says otherwise it is describing `memdog-dev` (project `204556389124`), which is
@@ -96,6 +97,46 @@ cd api && ./deploy/smoke.sh $URL <api_key> <producer_id> <project_id>
 item is durable → enrichment makes it findable → the answer cites it → a second
 tenant's credential cannot see it. Run it after any deploy that touched write,
 enrichment or retrieval.
+
+## Signing in to the console
+
+Two Identity Platform accounts exist on the project. Neither password was
+recorded when the accounts were made, so both were reset on 1 Sep 2026 and are
+now in Secret Manager — that is the only copy:
+
+```bash
+gcloud secrets versions access latest --secret memdog-owner-password --project memdog-dev-506718
+gcloud secrets versions access latest --secret memdog-demo-password  --project memdog-dev-506718
+```
+
+Three things have to line up or sign-in fails in a way that does not name the
+cause, because two of them are deliberately quiet:
+
+1. **The Identity Platform account exists and `emailVerified` is true.** The
+   verifier refuses an unverified address with 403 — an unverified email proves
+   nothing, and the address is what an admin invites against.
+2. **The address is admitted.** Registration is `invite_only` by default, which
+   admits an address holding a live invite *or* one that is already a `users`
+   row. `python -m memdog add-member <email> <role>` creates that row.
+3. **A membership exists.** Auto-provisioning creates a user and an identity but
+   **never a membership**, so a brand-new account authenticates cleanly and then
+   gets `403 this account is not a member of any organization`.
+
+Reset a password without touching the rest (the body goes in a file — a password
+in a command line is a password in the process table):
+
+```bash
+gcloud secrets versions access latest --secret memdog-web-api-key --project memdog-dev-506718  # for testing sign-in
+curl -X POST "https://identitytoolkit.googleapis.com/v1/projects/memdog-dev-506718/accounts:update" \
+  -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+  -H "x-goog-user-project: memdog-dev-506718" -H 'content-type: application/json' \
+  -d @body.json    # {"localId": "...", "password": "...", "emailVerified": true}
+```
+
+- **Any `identitytoolkit` call fails with "requires a quota project".** User
+  credentials carry no quota project of their own; add
+  `-H "x-goog-user-project: memdog-dev-506718"`. It reads as a permissions
+  problem and is not one.
 
 The demo credential is in Secret Manager, never in a log:
 

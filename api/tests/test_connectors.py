@@ -13,6 +13,8 @@ thing it needs does not exist.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from memdog import connectors
@@ -111,13 +113,36 @@ def test_google_and_microsoft_authenticate_without_a_person():
 
 
 def test_nothing_claims_to_be_verified_that_has_not_been():
-    """`verified` means somebody ran it against a live account. Almost nothing
-    has, because that needs a credential — and an entry that implies a test
-    which never happened is worse than one that admits it."""
+    """`verified` means somebody ran it against a live account. Nothing has,
+    because that needs a credential — and an entry that implies a test which
+    never happened is worse than one that admits it."""
     for connector in CATALOG:
         assert connector.verified is False, (
             f"{connector.key} claims verification — if that is real, say who "
             "ran it and against what"
+        )
+
+
+def test_a_connector_exercised_against_something_names_a_thing_that_exists():
+    """The weaker claim has to stay checkable or it decays into the stronger one.
+
+    `exercised_against` says the template was *run*, and names what against. If
+    the named file is gone the claim is stale, and a stale claim here is exactly
+    the failure `verified` exists to avoid — so it fails rather than ages.
+    """
+    root = Path(__file__).resolve().parents[1]
+    claimed = [c for c in CATALOG if c.exercised_against]
+    assert claimed, "if nothing is exercised, delete the field rather than keeping it empty"
+
+    for connector in claimed:
+        assert connector.verified is False, (
+            f"{connector.key} conflates the two: exercised against a simulator "
+            "is not verified against an account"
+        )
+        target = root / connector.exercised_against
+        assert target.exists(), (
+            f"{connector.key} claims it was exercised against "
+            f"{connector.exercised_against}, which is not there"
         )
 
 
