@@ -138,6 +138,26 @@ curl -X POST "https://identitytoolkit.googleapis.com/v1/projects/memdog-dev-5067
   `-H "x-goog-user-project: memdog-dev-506718"`. It reads as a permissions
   problem and is not one.
 
+Rehearse the inbound path against the deployment without waiting for a provider
+— this is the only thing that exercises the HTTP layer of `/webhooks/`:
+
+```bash
+# a throwaway producer, its own signing secret, then all nine providers
+curl -X POST -H "X-API-Key: $KEY" -H 'content-type: application/json' \
+  -d '{"project_id":"<prj>","type":"webhook"}' $URL/api/v1/producers
+curl -X POST -H "X-API-Key: $KEY" -H 'content-type: application/json' \
+  -d @secret.json $URL/api/v1/producers/<whk>/signing-secret
+curl -X PATCH -H "X-API-Key: $KEY" -H 'content-type: application/json' \
+  -d '{"inbound_auth":"signature","mapping":{"provider":"twilio"}}' \
+  $URL/api/v1/producers/<whk>/inbound
+cd api && python -m tools.fake_inbound twilio $URL/webhooks/<whk> "$SECRET"
+```
+
+Tear down afterwards: the items it writes are real. Disable the producer
+(`PATCH .../producers/<whk>` with `{"status":"disabled"}`) and delete the items
+it wrote — the project listing does not return `producer_id`, so match on each
+item's detail rather than on a time window.
+
 The demo credential is in Secret Manager, never in a log:
 
 ```bash
@@ -152,6 +172,16 @@ Each of these presents as a different bug than it is.
   intercepts exactly that path and answers before the container sees it —
   verified against Google's own `cloudrun/hello` image, where every path
   returns 200 except that one. Health is **`/api/v1/health`**.
+- **Twilio webhooks are refused with `signature verification failed`, and the
+  secret is correct.** Found 1 Sep 2026. Cloud Run terminates TLS and forwards
+  to the container over plain HTTP, so `request.url` reconstructs as `http://`
+  while Twilio signed the `https://` address configured in their console.
+  Twilio is the only provider that signs the **URL** rather than the body, so
+  it is the only one affected — every other provider keeps working, which makes
+  this look like a Twilio-specific credential problem. It is not: it is the
+  proxy. `_public_url()` now honours `X-Forwarded-Proto`. The general lesson is
+  the one worth keeping: **anything that signs or compares a URL is wrong by
+  default behind Cloud Run** until the forwarded scheme is applied.
 - **404 where you expected 403.** Cloud Run returns 404 when IAM rejects a
   request in some configurations, so an auth failure reads as a routing failure.
 - **Two credentials on one request.** When the service sits behind Cloud Run IAM

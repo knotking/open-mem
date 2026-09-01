@@ -10,6 +10,18 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 
 ## Unreleased
 
+### Fixed
+- **Every Twilio webhook would have been refused, permanently.** Twilio is the
+  one provider that signs the *URL* rather than the body. Cloud Run terminates
+  TLS and forwards over plain HTTP, so the reconstructed URL was `http://` while
+  Twilio signed the `https://` address configured in their console — and the
+  failure surfaces as `signature verification failed`, which reads as a wrong
+  secret. `X-Forwarded-Proto` is now honoured when rebuilding the signed URL.
+  No unit test could have caught it: a test hands the same URL to both sides.
+  Found by firing `tools/fake_inbound.py` at the deployed service.
+- The inbound route is `/webhooks/{producer_id}`. Two docs and the tool's own
+  usage line said `/hooks/`, which is the console page, not the endpoint.
+
 ### Added
 - **`api/tools/fake_sources.py`** — the four pagination mechanisms
   `fake_salesforce.py` did not cover, each because a real connector depends on
