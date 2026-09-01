@@ -40,7 +40,8 @@ from .audit import record_audit
 from .telemetry import record, span
 from . import providers as provider_registry
 from .contracts import (
-    EnrichmentOptions, Inline, MemoryRef, WriteItem, WriteOptions, WriteRequest
+    EnrichmentOptions, Inline, ItemAccess, MemoryRef, WriteItem, WriteOptions,
+    WriteRequest,
 )
 from .ids import new_id
 
@@ -156,6 +157,36 @@ def map_payload(payload: Any, mapping: dict) -> list[WriteItem]:
             memory=memory,
         ))
     return items
+
+
+def attendees_in(payload: Any, mapping: dict) -> list[str]:
+    """The addresses a delivery says were in the room.
+
+    Kept separate from `map_payload` because it is not a field on the item --
+    it decides who may *see* the item, and an ACL derived in the same pass that
+    builds content is one hook away from being derived from content.
+
+    Provider-agnostic on purpose. Zoom, Meet and Teams all send an attendee
+    list; they disagree about where it sits and what the key is called, and a
+    path plus a field name is the whole of that difference. Which means the
+    three providers are configuration rather than three more code paths -- and
+    a fourth one nobody has heard of works on the day it arrives.
+    """
+    path = mapping.get("attendees_path")
+    if not path:
+        return []
+    found = _dig(payload, path)
+    if isinstance(found, str):
+        found = [found]
+    if not isinstance(found, list):
+        return []
+    key = mapping.get("attendee_email_key", "email")
+    out = []
+    for entry in found:
+        value = entry.get(key) if isinstance(entry, dict) else entry
+        if isinstance(value, str) and "@" in value:
+            out.append(value)
+    return out
 
 
 def _parse_time(raw: Any):
@@ -413,7 +444,36 @@ async def _receive(
     # The provider's preset supplies the shape; anything configured on the
     # producer wins, because two workspaces of the same provider can
     # legitimately differ.
-    items = map_payload(payload, {**provider.mapping, **mapping})
+    resolved_mapping = {**provider.mapping, **mapping}
+    items = map_payload(payload, resolved_mapping)
+
+    # A meeting is not a ticket, and this is the one place that difference can
+    # be applied. Every other source inherits visibility from its connection
+    # scope -- right for a Jira issue, and a serious disclosure for a
+    # transcript, because four people in a room did not publish to the company.
+    #
+    # Derived from the delivery's attendee list rather than from anything the
+    # item carries: an ACL that could be influenced by content is an ACL a
+    # payload can widen.
+    attendees = attendees_in(payload, resolved_mapping)
+    if attendees:
+        from .meetings import meeting_access
+
+        access = await meeting_access(pool, producer["org_id"], attendees)
+        items = [item.model_copy(update={"access": ItemAccess(
+            level=access["level"], principals=access["principals"])}) for item in items]
+        if access["unresolved"]:
+            # Logged rather than swallowed: a transcript that resolved one of
+            # six attendees is technically correct and practically wrong, and
+            # the person who configured this needs to know before the corpus
+            # fills up with records only one person can read.
+            log.info(
+                "meeting delivery for %s resolved %d of %d attendees; the rest are not "
+                "members of this organisation and are not principals",
+                producer_id, len(access["resolved"]),
+                len(access["resolved"]) + len(access["unresolved"]),
+            )
+
     if not items:
         await _record_delivery(pool, producer, delivery_key, "accepted",
                                signature_verified, 0, len(raw_body), "no items in payload")

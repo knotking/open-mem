@@ -8005,6 +8005,16 @@ function InboundSection({ projectId }: { projectId: string }) {
               always correct. A mapping that misses a field keeps the record anyway, so a schema
               change on the provider&rsquo;s side is not an outage on ours.
             </p>
+            <p className="empty" style={{ marginTop: 0 }}>
+              <strong>For meetings, add <code>attendees_path</code></strong> — and{" "}
+              <code>attendee_email_key</code> when the addresses are not under{" "}
+              <code>email</code>. The transcript is then written{" "}
+              <strong>restricted to the people in the room</strong> rather than inheriting this
+              connection&rsquo;s visibility: four people in a room did not publish to the company.
+              An attendee outside the organisation resolves to nothing, which is the conservative
+              direction, and a meeting where nobody resolves is written private rather than
+              falling back to the default.
+            </p>
           </section>
 
           <section className="panel">

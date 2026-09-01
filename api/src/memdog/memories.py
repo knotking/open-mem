@@ -27,6 +27,11 @@ SHIPPED_TYPES: list[tuple[str, int | None, str]] = [
     ("session", 86_400, "archive"),
     ("tracing", 259_200, "orphan_delete"),
     ("activity", 7_776_000, "orphan_delete"),
+    # A transcript is unedited speech that nobody reviewed before it was
+    # stored, which makes retention a default rather than a preference here.
+    # Archived rather than deleted at ninety days: out of the working set,
+    # still answerable for.
+    ("meeting", 7_776_000, "archive"),
 ]
 
 

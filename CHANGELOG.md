@@ -10,6 +10,41 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 
 ## Unreleased
 
+### Added
+- **Workflows — long-running state machine instances, as a system of record.**
+  The engine lives outside and calls in; memdog holds the state, the history
+  and the deadlines and executes nothing. **A directed state graph that may
+  contain cycles**, not a DAG: `review → reject → draft` is a workflow, and a
+  DAG cannot express it.
+- **`POST /instances/{id}/input` is the only verb that moves state**, and the
+  update is conditional on the sequence the caller believed it was acting on.
+  Two actors racing resolve as **one winner and one `409` carrying the state it
+  actually found** — rather than two transitions out of the same state, which
+  is corruption a state machine cannot survive and cannot detect afterwards.
+- **The history is the record; `current_state` is a cache.**
+  `GET /instances/{id}/verify` re-folds the log and reports sequence gaps and
+  chain breaks — a denormalisation nobody can check is one people stop trusting
+  the first time something looks wrong.
+- **Validation refuses at definition time what cannot be fixed later**, since
+  an instance pins the version it started on: an unreachable state, a
+  transition to a state that does not exist, a terminal state with a way out,
+  and **a TTL with no `on_timeout`** — a deadline with nowhere to go fires
+  forever. Cycles pass, deliberately.
+- **A budget per instance**, because an infinite loop is indistinguishable from
+  a long legitimate one except by a number — and it is marked `errored` rather
+  than silently refusing, since an instance that stops moving for no stated
+  reason is the state nobody can diagnose.
+- **`@timeout` is not addressable from a request**, so nobody can claim the
+  clock fired; and `requires_actor_kind` keeps a key from performing an
+  approval a human is meant to perform. Deadlines fire on the sweep that
+  already runs.
+
+### Migrations
+- **`0044_workflows.sql`** — `workflow_definitions`, `workflow_instances`,
+  `workflow_transitions`, `workflow_instance_members`. Additive. A transition's
+  `data_id` is **nulled** rather than cascaded on erasure: erasing an email must
+  not erase the fact that the order was approved.
+
 ### Changed
 - **A connection's scope is now a ceiling, not a default.** `ItemAccess` has
   promised since the first release that a caller may never widen visibility and

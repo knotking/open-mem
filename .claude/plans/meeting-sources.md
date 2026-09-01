@@ -4,7 +4,21 @@
 what was decided — into the corpus, so it correlates with the project it is
 about.
 
-Status: **plan only, nothing implemented.** Confirm before `/implement`.
+Status: **the credential-independent core is shipped** (31 Aug 2026) — steps 2,
+3 and 6. The three provider integrations (1, 4, 5) are not, and are the part
+that needs OAuth apps nobody here can create.
+
+Two corrections the build made to this plan:
+
+- **§5's caveat is obsolete.** TTL is enforced now — the sweep landed the same
+  day — so the `meeting` type's ninety days with `archive` is a policy that
+  runs rather than one that is declared.
+- **The attendee ACL did not need the providers.** It is derived in the webhook
+  path from an `attendees_path` in the producer's mapping, so Zoom, Meet and
+  Teams differ only in where their attendee list sits and what the key is
+  called — configuration rather than three code paths, and a fourth provider
+  works on the day it arrives. What remains genuinely provider-specific is the
+  `Pending` recording reference and its fetch, which is step 1.
 
 ---
 

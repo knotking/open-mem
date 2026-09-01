@@ -459,6 +459,102 @@ def _unfold(raw: str) -> list[str]:
     return lines
 
 
+def parse_transcript(payload: bytes, *, mime: str, name: str) -> Parsed:
+    """WebVTT and SRT, as speaker-attributed text rather than timed cues.
+
+    A meeting transcript arrives as thousands of two-second cues, and indexing
+    them as cues is the wrong unit twice over: a sentence is split across three
+    of them, so no chunk contains a whole thought, and the timestamps outnumber
+    the words. So consecutive cues from one speaker are joined into a turn, and
+    the timestamps are dropped from the text and kept in `structure` -- a
+    citation wants an offset into what was said, not a clock reading.
+
+    Speaker attribution comes from two conventions and neither is guaranteed:
+    WebVTT's `<v Name>` voice span, and the `Name:` prefix every meeting tool
+    writes. When neither is present the text is still worth having, and the
+    turns are simply unattributed rather than guessed at.
+    """
+    raw, _ = decode(payload)
+    lines = [line.strip() for line in raw.replace("\r\n", "\n").split("\n")]
+
+    turns: list[tuple[str | None, list[str]]] = []
+    speakers: list[str] = []
+    cues = 0
+    for line in lines:
+        if not line or line == "WEBVTT" or line.startswith("NOTE "):
+            continue
+        # A cue's timing line, or the bare number SRT puts above it. Both are
+        # structure rather than speech.
+        if "-->" in line:
+            cues += 1
+            continue
+        if line.isdigit():
+            continue
+        if line.startswith("STYLE") or line.startswith("REGION"):
+            continue
+
+        speaker, text = _voice(line)
+        if text == "":
+            continue
+        if speaker and speaker not in speakers:
+            speakers.append(speaker)
+        # One turn per speaker, not one per cue: consecutive cues from the same
+        # person are one thing said, and splitting them is what makes a
+        # transcript unsearchable.
+        if turns and turns[-1][0] == speaker:
+            turns[-1][1].append(text)
+        else:
+            turns.append((speaker, [text]))
+
+    body = "\n\n".join(
+        (f"{speaker}: " if speaker else "") + " ".join(parts) for speaker, parts in turns)
+    return Parsed(
+        text=body,
+        structure={
+            "kind": "transcript",
+            "cues": cues,
+            "turns": len(turns),
+            # The attendee list as the transcript itself reports it. Not the
+            # ACL -- these are display names, and a name is not a principal.
+            # Resolving them is the caller's job precisely because getting it
+            # wrong would widen visibility.
+            "speakers": speakers,
+        },
+        warnings=[] if speakers else ["no speaker attribution found in this transcript"],
+    )
+
+
+def _voice(line: str) -> tuple[str | None, str]:
+    """`<v Dana>text` or `Dana: text`, and neither is guaranteed."""
+    if line.startswith("<v ") and ">" in line:
+        name, _, rest = line[3:].partition(">")
+        return name.strip(), _strip_tags(rest).strip()
+    head, sep, rest = line.partition(":")
+    # A speaker label, not a sentence that happens to contain a colon.
+    #
+    # Length alone is not enough -- "One thing was clear: it shipped" passes any
+    # reasonable character limit. Word count is the signal that works: a label
+    # is a name, and names are one to three words. The trade is deliberate and
+    # runs the safe way. A four-word name is read as unattributed speech, which
+    # **loses** attribution; the alternative misreads half a sentence as a
+    # speaker, which **invents** it, and invented attribution in a transcript is
+    # a quote put in somebody's mouth.
+    #
+    # None of this applies to `<v Name>`, which is unambiguous and is what the
+    # providers actually emit -- this is the fallback for the tools that do not.
+    words = head.split()
+    if (sep and words and len(words) <= 3 and len(head) <= 48
+            and not head.endswith((".", "?", "!", ","))):
+        return head.strip(), _strip_tags(rest).strip()
+    return None, _strip_tags(line).strip()
+
+
+def _strip_tags(text: str) -> str:
+    import re as _re
+
+    return _re.sub(r"<[^>]+>", "", text)
+
+
 def parse_ics(payload: bytes, *, mime: str, name: str) -> Parsed:
     """Highest value per unit cost in the whole format list.
 
@@ -599,6 +695,8 @@ BY_MIME: dict[str, Handler] = {
     "text/plain": parse_text,
     "text/markdown": parse_text,
     "text/html": parse_html,
+    "text/vtt": parse_transcript,
+    "application/x-subrip": parse_transcript,
     "text/csv": parse_delimited,
     "text/tab-separated-values": parse_delimited,
     "application/json": parse_json,
@@ -629,6 +727,7 @@ BY_EXTENSION: dict[str, Handler] = {
     ".docx": parse_docx, ".xlsx": parse_xlsx, ".pptx": parse_pptx,
     ".odt": parse_opendocument, ".ods": parse_opendocument,
     ".eml": parse_email, ".mbox": parse_mbox,
+    ".vtt": parse_transcript, ".srt": parse_transcript,
     ".ics": parse_ics, ".ical": parse_ics, ".vcf": parse_vcf, ".vcard": parse_vcf,
     ".zip": parse_archive, ".tar": parse_archive, ".gz": parse_archive, ".tgz": parse_archive,
 }
