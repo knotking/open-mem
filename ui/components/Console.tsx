@@ -67,7 +67,7 @@ type Member = { user_id: string; email: string | null; role: string };
 type Section =
   | "overview"
   | "add" | "update" | "search" | "ask" | "inbound" | "crawlers" | "mcp"
-  | "memory" | "cases" | "entities" | "compaction" | "reprocess"
+  | "memory" | "cases" | "entities" | "compaction" | "reprocess" | "workflows"
   | "alerts" | "standing"
   | "audit" | "sharing" | "deletion"
   | "settings" | "models" | "prompts"
@@ -131,6 +131,7 @@ const GROUPS: { title: string; items: { key: Section; label: string; hint: strin
     items: [
       { key: "memory", label: "Memories", hint: "lifecycle containers" },
       { key: "cases", label: "Cases", hint: "subjects and timelines" },
+      { key: "workflows", label: "Workflows", hint: "where a long process is" },
       { key: "entities", label: "Entities", hint: "who and what, with evidence" },
     ],
   },
@@ -308,6 +309,7 @@ export default function Console({
         {section === "audit" && <Audit projectId={projectId} />}
         {section === "memory" && <MemorySection projectId={projectId} />}
         {section === "cases" && <CasesSection projectId={projectId} />}
+        {section === "workflows" && <WorkflowsSection projectId={projectId} />}
         {section === "alerts" && <AlertsSection projectId={projectId} />}
         {section === "standing" && <StandingSection projectId={projectId} />}
         {section === "compaction" && <CompactionSection projectId={projectId} />}
@@ -5324,6 +5326,384 @@ function ScopeReach({ memoryId }: { memoryId: string }) {
       includes {tree.descendants.length} child memor
       {tree.descendants.length === 1 ? "y" : "ies"}
     </span>
+  );
+}
+
+/* ----------------------------------------------------------- workflows */
+
+type WorkflowDefinition = {
+  definition_id: string;
+  external_id: string;
+  name: string;
+  description: string | null;
+  config: {
+    initial: string;
+    states: Record<string, { ttl_seconds?: number; on_timeout?: string; terminal?: boolean }>;
+    transitions: { from: string; on: string; to: string; requires_actor_kind?: string }[];
+  };
+  config_version: number;
+  max_transitions: number;
+  running: number;
+};
+
+type Instance = {
+  instance_id: string;
+  external_id: string;
+  current_state: string;
+  current_seq: number;
+  status: string;
+  deadline_at: string | null;
+  transition_count: number;
+  overdue: boolean;
+  definition: string;
+  definition_name: string;
+};
+
+type Transition = {
+  transition_id: string;
+  seq: number;
+  from_state: string;
+  to_state: string;
+  trigger: string;
+  actor_kind: string;
+  data_id: string | null;
+  occurred_at: string;
+};
+
+type Verification = {
+  folded_state: string | null;
+  cached_state: string;
+  agrees: boolean;
+  sequence_gaps: number[];
+  chain_breaks: number[];
+  transitions: number;
+};
+
+const SAMPLE_WORKFLOW = JSON.stringify(
+  {
+    initial: "draft",
+    states: {
+      draft: {},
+      review: { ttl_seconds: 172800, on_timeout: "escalated" },
+      escalated: {},
+      approved: { terminal: true },
+    },
+    transitions: [
+      { from: "draft", on: "submit", to: "review" },
+      { from: "review", on: "approve", to: "approved", requires_actor_kind: "human" },
+      { from: "review", on: "reject", to: "draft" },
+      { from: "escalated", on: "approve", to: "approved" },
+    ],
+  },
+  null,
+  2,
+);
+
+/**
+ * Workflows — state a long-running process can be asked about.
+ *
+ * The engine lives outside; this is the system of record. So the screen shows
+ * the two things a record owes anyone: **where each instance is**, and **how it
+ * got there** — the history rather than the current state, because a graph that
+ * may contain cycles can visit `blocked` four times and "when did it enter
+ * blocked" then has four answers.
+ *
+ * Overdue is the number the dashboard exists for. With no topological order,
+ * *stuck* is not derivable from position: a deadline is the only thing that can
+ * say it, which is why a state with a TTL and no `on_timeout` is refused at
+ * definition time rather than firing forever.
+ */
+function WorkflowsSection({ projectId }: { projectId: string }) {
+  const [definitions, setDefinitions] = useState<WorkflowDefinition[] | null>(null);
+  const [instances, setInstances] = useState<Instance[]>([]);
+  const [onlyOverdue, setOnlyOverdue] = useState(false);
+  const [selected, setSelected] = useState<Instance | null>(null);
+  const [log, setLog] = useState<Transition[]>([]);
+  const [proof, setProof] = useState<Verification | null>(null);
+
+  const [config, setConfig] = useState(SAMPLE_WORKFLOW);
+  const [externalId, setExternalId] = useState("approval");
+  const [startId, setStartId] = useState("");
+  const [startFrom, setStartFrom] = useState("");
+  const [trigger, setTrigger] = useState("");
+
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const [defs, live] = await Promise.all([
+        call<{ workflows: WorkflowDefinition[] }>(`api/v1/projects/${projectId}/workflows`),
+        call<{ instances: Instance[] }>(
+          `api/v1/projects/${projectId}/instances?limit=100${onlyOverdue ? "&overdue=true" : ""}`),
+      ]);
+      setDefinitions(defs.workflows);
+      setInstances(live.instances);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, [projectId, onlyOverdue]);
+  useEffect(() => { void load(); }, [load]);
+
+  async function act(message: string, run: () => Promise<unknown>) {
+    setBusy(true); setError(null); setNote(null);
+    try {
+      await run();
+      setNote(message);
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function open(instance: Instance) {
+    setSelected(instance);
+    setProof(null);
+    setTrigger("");
+    try {
+      setLog((await call<{ transitions: Transition[] }>(
+        `api/v1/instances/${instance.instance_id}/history?limit=50`)).transitions);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  // What this instance can be told next, read from its own definition rather
+  // than typed by the reader. An input the state does not accept is a 409, and
+  // offering one is offering a mistake.
+  const accepted = (() => {
+    if (!selected) return [];
+    const def = definitions?.find((d) => d.external_id === selected.definition);
+    return (def?.config.transitions ?? [])
+      .filter((t) => t.from === selected.current_state)
+      .map((t) => t.on);
+  })();
+
+  return (
+    <>
+      <h1>Workflows</h1>
+      <p className="lede">
+        A long-running process, recorded rather than run: the engine lives outside and calls in.
+        The state graph <strong>may contain cycles</strong> — <code>review → reject → draft</code>{" "}
+        is a workflow, not a bug — so progress cannot be measured as depth and a deadline is the
+        only thing that can say an instance is stuck.
+      </p>
+      {error && <p className="err">{error}</p>}
+      {note && <p className="empty">{note}</p>}
+
+      <section className="panel">
+        <h2>Define one</h2>
+        <div className="row">
+          <label>
+            Key
+            <input type="text" value={externalId} placeholder="approval"
+                   onChange={(e) => setExternalId(e.target.value)} />
+          </label>
+          <button
+            disabled={busy || !externalId.trim()}
+            title="Redefining bumps the version and leaves running instances where they are — each pinned the version it started on."
+            onClick={() =>
+              act("Saved. Running instances stay on the version they started on.", async () => {
+                await call("api/v1/workflows", {
+                  project_id: projectId, external_id: externalId.trim(),
+                  name: externalId.trim(), config: JSON.parse(config),
+                }, "PUT");
+              })
+            }
+          >
+            Save definition
+          </button>
+        </div>
+        <textarea rows={14} value={config} onChange={(e) => setConfig(e.target.value)} />
+        <p className="empty" style={{ marginBottom: 0 }}>
+          Refused at definition time, because none of it can be fixed later for an instance
+          already sitting in it: a state nothing reaches, a transition to a state that does not
+          exist, a terminal state with a way out, and <strong>a TTL with no{" "}
+          <code>on_timeout</code></strong> — a deadline with nowhere to go fires forever. Cycles
+          pass, deliberately.
+        </p>
+      </section>
+
+      {definitions !== null && definitions.length > 0 && (
+        <section className="panel">
+          <h2>Defined here</h2>
+          <div className="excluded">
+            {definitions.map((d) => (
+              <div className="item" key={d.definition_id}>
+                <span className="chip on">{d.external_id}</span>
+                <span className="empty">
+                  {Object.keys(d.config.states).length} states ·{" "}
+                  {d.config.transitions.length} transitions
+                </span>
+                <span className="chip">v{d.config_version}</span>
+                <span className="empty">{d.running} running</span>
+                <span className="empty far">budget {d.max_transitions}</span>
+              </div>
+            ))}
+          </div>
+          <div className="row" style={{ marginTop: 10 }}>
+            <select value={startFrom} onChange={(e) => setStartFrom(e.target.value)}>
+              <option value="">start an instance of…</option>
+              {definitions.map((d) => (
+                <option key={d.definition_id} value={d.definition_id}>{d.external_id}</option>
+              ))}
+            </select>
+            <input type="text" value={startId} placeholder="its id — po-4471"
+                   onChange={(e) => setStartId(e.target.value)} />
+            <button
+              disabled={busy || !startFrom || !startId.trim()}
+              title="Idempotent on the id: starting twice returns the same instance, because an engine retrying after a timeout is the ordinary case."
+              onClick={() =>
+                act("Started.", async () => {
+                  await call(`api/v1/workflows/${startFrom}/instances`,
+                             { external_id: startId.trim() });
+                  setStartId("");
+                })
+              }
+            >
+              Start
+            </button>
+          </div>
+        </section>
+      )}
+
+      <section className="panel">
+        <h2>Running</h2>
+        <div className="row">
+          <label className="check">
+            <input type="checkbox" checked={onlyOverdue}
+                   onChange={(e) => setOnlyOverdue(e.target.checked)} />
+            Only what is past its deadline
+          </label>
+        </div>
+        {instances.length === 0 ? (
+          <p className="empty" style={{ marginBottom: 0 }}>
+            {onlyOverdue
+              ? "Nothing is overdue. That is the answer this filter exists to give quickly."
+              : "No instances yet."}
+          </p>
+        ) : (
+          <div className="excluded">
+            {instances.map((i) => (
+              <button
+                className={`item memrow${selected?.instance_id === i.instance_id ? " chosen" : ""}`}
+                key={i.instance_id}
+                onClick={() => void open(i)}
+              >
+                <span className={`chip ${i.status === "running" ? "on" : ""}`}>
+                  {i.current_state}
+                </span>
+                <strong>{i.external_id}</strong>
+                <span className="empty">{i.definition}</span>
+                <span className="empty">seq {i.current_seq}</span>
+                {i.overdue && <span className="chip warnchip">overdue</span>}
+                {i.status !== "running" && <span className="chip">{i.status}</span>}
+                <span className="empty far">
+                  {i.deadline_at
+                    ? `due ${new Date(i.deadline_at).toLocaleString()}`
+                    : "no deadline in this state"}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {selected && (
+        <>
+          <section className="panel">
+            <h2>{selected.external_id} · {selected.current_state}</h2>
+            <div className="row">
+              <select value={trigger} onChange={(e) => setTrigger(e.target.value)}>
+                <option value="">what happened…</option>
+                {accepted.map((t) => <option key={t} value={t}>{t}</option>)}
+              </select>
+              <button
+                disabled={busy || !trigger}
+                title={`Sends the input naming sequence ${selected.current_seq}. If somebody else moved it first this comes back 409 with where it actually is.`}
+                onClick={() =>
+                  act("Moved.", async () => {
+                    await call(
+                      `api/v1/instances/${selected.instance_id}/input`,
+                      { trigger, expected_seq: selected.current_seq });
+                    // Re-read rather than assume. Constructing the new state
+                    // client-side would be right until a deadline fired between
+                    // the two, and then the screen would be confidently wrong
+                    // about an instance somebody is acting on.
+                    const now = await call<Instance>(
+                      `api/v1/instances/${selected.instance_id}`);
+                    await open({ ...selected, ...now });
+                  })
+                }
+              >
+                Apply
+              </button>
+              <button
+                className="secondary"
+                disabled={busy}
+                title="Re-folds the transition log and compares it to the cached state."
+                onClick={() =>
+                  act("Verified.", async () => {
+                    setProof(await call<Verification>(
+                      `api/v1/instances/${selected.instance_id}/verify`));
+                  })
+                }
+              >
+                Prove the state
+              </button>
+            </div>
+            {accepted.length === 0 && (
+              <p className="empty">
+                Nothing is accepted here — a terminal state, or a state whose only way out is a
+                deadline.
+              </p>
+            )}
+            {proof && (
+              <p className={proof.agrees ? "ok" : "err"}>
+                {proof.agrees
+                  ? `Folded ${proof.transitions} transitions and got ${proof.folded_state} — the cached state agrees.`
+                  : `The log folds to ${proof.folded_state} and the cache says ${proof.cached_state}.`}
+                {proof.sequence_gaps.length > 0 &&
+                  ` Sequence gaps at ${proof.sequence_gaps.join(", ")} — a transition was lost.`}
+                {proof.chain_breaks.length > 0 &&
+                  ` Chain breaks at ${proof.chain_breaks.join(", ")} — two transitions disagree about where it was.`}
+              </p>
+            )}
+          </section>
+
+          <section className="panel">
+            <h2>How it got here</h2>
+            <div className="excluded">
+              {log.map((t) => (
+                <div className="item" key={t.transition_id}>
+                  <span className="chip">{t.seq}</span>
+                  <code>
+                    {t.from_state || "—"} → {t.to_state}
+                  </code>
+                  <span className={t.trigger.startsWith("@") ? "chip warnchip" : "chip on"}>
+                    {t.trigger}
+                  </span>
+                  <span className="empty">{t.actor_kind}</span>
+                  {t.data_id && <span className="empty">{t.data_id}</span>}
+                  <span className="empty far">
+                    {new Date(t.occurred_at).toLocaleString()}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <p className="empty" style={{ marginBottom: 0 }}>
+              The history is the record and the state is a cache of it. A state can be entered
+              many times, so <em>when did this enter review</em> has as many answers as there are
+              rows — which is why the log is stored well and the column is only checked against it.
+              A <code>@</code> trigger is the clock, and it is not something a caller can send.
+            </p>
+          </section>
+        </>
+      )}
+    </>
   );
 }
 

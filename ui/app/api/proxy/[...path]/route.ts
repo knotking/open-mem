@@ -70,6 +70,14 @@ const ALLOWED = [
   /^api\/v1\/alert-events(\?.*)?$/,
   // Standing queries: the same shape as alerts, matching on the record rather
   // than on a transition.
+  // Workflows: definitions, instances, and the one verb that moves state.
+  /^api\/v1\/workflows$/,
+  /^api\/v1\/workflows\/[A-Za-z0-9_]+\/instances$/,
+  /^api\/v1\/projects\/[A-Za-z0-9_]+\/workflows$/,
+  /^api\/v1\/projects\/[A-Za-z0-9_]+\/instances(\?.*)?$/,
+  /^api\/v1\/instances\/[A-Za-z0-9_]+$/,
+  /^api\/v1\/instances\/[A-Za-z0-9_]+\/(input|history|verify)(\?.*)?$/,
+
   /^api\/v1\/standing-queries$/,
   /^api\/v1\/standing-queries\/[A-Za-z0-9_]+$/,
   /^api\/v1\/standing-queries\/[A-Za-z0-9_]+\/(backtest|enabled|matches)(\?.*)?$/,

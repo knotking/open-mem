@@ -191,6 +191,13 @@ async def _alert_tick(limit: int) -> None:
         result = await tick(pool, limit=limit,
                             envelope=Envelope.from_settings(settings))
         result["standing"] = standing
+        # Deadlines, on the same pass. In a state graph with no topological
+        # order a deadline is the only thing that can say an instance is stuck,
+        # so a clock that does not run makes `stuck` unobservable rather than
+        # merely late.
+        from .workflows import tick as workflow_tick
+
+        result["workflows"] = await workflow_tick(pool)
         # Compaction jobs ride the same sweep rather than adding a fourth job.
         # They are due at most daily, so a per-minute pass costs one indexed
         # lookup that usually returns nothing.

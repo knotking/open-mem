@@ -10,6 +10,25 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 
 ## Unreleased
 
+### Changed
+- **A connection's scope is now a ceiling, not a default.** `ItemAccess` has
+  promised since the first release that a caller may never widen visibility and
+  that a forbidden level is a **rejected item** — and nothing checked, so a
+  producer reading somebody's personal mailbox could ask for `public` and get
+  it. Enforced in `acl_for_write`, the one place an ACL is assigned. A producer
+  with **no** connection is unrestricted, which is the rule rather than an
+  exception: a direct client write has no scope to exceed.
+- **`bootstrap` no longer attaches a personal connection to the operator's own
+  API key** — in the library *and* in the CLI, which had its own default.
+  Harmless while a scope was only a default; under a ceiling it silently caps
+  every write made with that key at `private`, and it is why the console's
+  producer on an existing deployment cannot publish to its own organisation.
+  **Existing deployments need that producer's connection re-scoped or
+  detached.**
+- **The console offers only the levels the producer may write.** Wider ones are
+  disabled and named, and a producer with a connection says so — a control that
+  offers what will be refused is worse than one that offers less.
+
 ### Added
 - **Standing matches are pushed, through the sender the alerts already use.** A
   monitoring product whose only delivery is polling is not finished. Same

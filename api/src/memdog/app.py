@@ -2059,6 +2059,163 @@ async def standing_matches(
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
 
 
+@app.put("/api/v1/workflows")
+async def put_workflow(
+    request: Request, body: dict, actor: Principal = Depends(principal)
+) -> dict:
+    """Define a workflow, or redefine it.
+
+    A redefinition bumps the version and leaves running instances where they
+    are: each pinned the version it started on, and moving a thousand live
+    instances onto a graph they never entered is what the pin prevents.
+    """
+    from .workflows import WorkflowError, upsert_definition
+
+    try:
+        return await upsert_definition(
+            request.app.state.pool, actor,
+            project_id=body["project_id"], external_id=body["external_id"],
+            name=body.get("name", body["external_id"]), config=body["config"],
+            description=body.get("description"),
+            max_transitions=int(body.get("max_transitions", 1000)),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=400, detail=f"missing {exc}") from exc
+    except (WorkflowError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/projects/{project_id}/workflows")
+async def get_workflows(
+    request: Request, project_id: str, actor: Principal = Depends(principal)
+) -> dict:
+    from .workflows import WorkflowError, list_definitions
+
+    try:
+        return {"workflows": await list_definitions(request.app.state.pool, actor, project_id)}
+    except (WorkflowError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/workflows/{definition_id}/instances", status_code=201)
+async def post_instance(
+    request: Request, definition_id: str, body: dict,
+    actor: Principal = Depends(principal),
+) -> dict:
+    """Start one. Idempotent on `external_id`, because an engine retrying a
+    start after a timeout is the ordinary case rather than the exception."""
+    from .workflows import WorkflowError, start_instance
+
+    try:
+        return await start_instance(
+            request.app.state.pool, actor, definition_id,
+            external_id=body["external_id"], case_id=body.get("case_id"),
+            payload=body.get("payload"),
+            access_level=body.get("access_level", "private"),
+            shared_with=body.get("shared_with"),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=400, detail=f"missing {exc}") from exc
+    except (WorkflowError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/instances/{instance_id}/input")
+async def post_input(
+    request: Request, instance_id: str, body: dict,
+    actor: Principal = Depends(principal),
+) -> dict:
+    """The one verb that moves state.
+
+    `expected_seq` is optional and is how a caller says which version of the
+    instance it decided against. Losing that race is a **409 carrying the
+    current state**, so the caller can decide rather than re-read.
+    """
+    from .workflows import Conflict, WorkflowError, apply_input
+
+    try:
+        return await apply_input(
+            request.app.state.pool, actor, instance_id,
+            trigger=body["trigger"],
+            expected_seq=body.get("expected_seq"),
+            data_id=body.get("data_id"), payload=body.get("payload"),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=400, detail=f"missing {exc}") from exc
+    except Conflict as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": str(exc), "current_state": exc.current_state,
+                    "current_seq": exc.current_seq},
+        ) from exc
+    except (WorkflowError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/instances/{instance_id}")
+async def get_instance(
+    request: Request, instance_id: str, actor: Principal = Depends(principal)
+) -> dict:
+    from .workflows import WorkflowError, get_state
+
+    try:
+        return await get_state(request.app.state.pool, actor, instance_id)
+    except (WorkflowError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/instances/{instance_id}/history")
+async def get_instance_history(
+    request: Request, instance_id: str, limit: int = 200,
+    actor: Principal = Depends(principal),
+) -> dict:
+    from .workflows import WorkflowError, history
+
+    try:
+        return await history(request.app.state.pool, actor, instance_id, limit=limit)
+    except (WorkflowError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/instances/{instance_id}/verify")
+async def get_instance_verify(
+    request: Request, instance_id: str, actor: Principal = Depends(principal)
+) -> dict:
+    """Re-fold the log and compare it to the cached state.
+
+    `current_state` is a denormalisation, and one nobody can check is one people
+    stop trusting the first time something looks wrong.
+    """
+    from .workflows import WorkflowError, verify_state
+
+    try:
+        return await verify_state(request.app.state.pool, actor, instance_id)
+    except (WorkflowError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/projects/{project_id}/instances")
+async def get_instances(
+    request: Request, project_id: str, state: str | None = None,
+    definition_id: str | None = None, overdue: bool = False, limit: int = 100,
+    actor: Principal = Depends(principal),
+) -> dict:
+    """The dashboard query: what is running, and what is past its deadline.
+
+    `overdue` is the one that matters. In a graph with no topological order,
+    *stuck* is not derivable from position — a deadline is the only thing that
+    can say it.
+    """
+    from .workflows import WorkflowError, list_instances
+
+    try:
+        return {"instances": await list_instances(
+            request.app.state.pool, actor, project_id, state=state,
+            definition_id=definition_id, overdue=overdue, limit=limit)}
+    except (WorkflowError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
 @app.get("/api/v1/artifacts/stale")
 async def read_stale(
     request: Request, actor: Principal = Depends(principal), limit: int = 100
