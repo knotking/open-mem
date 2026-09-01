@@ -5337,6 +5337,9 @@ function StandingSection({ projectId }: { projectId: string }) {
   const [queries, setQueries] = useState<StandingQuery[] | null>(null);
   const [selected, setSelected] = useState<StandingQuery | null>(null);
   const [feed, setFeed] = useState<{ matches: StandingMatch[]; withheld: number } | null>(null);
+  const [subs, setSubs] = useState<Subscription[]>([]);
+  const [hookUrl, setHookUrl] = useState("");
+  const [secret, setSecret] = useState<string | null>(null);
   const [backtest, setBacktest] = useState<StandingBacktest | null>(null);
 
   const [name, setName] = useState("");
@@ -5379,6 +5382,9 @@ function StandingSection({ projectId }: { projectId: string }) {
     try {
       setFeed(await call<{ matches: StandingMatch[]; withheld: number }>(
         `api/v1/standing-queries/${q.query_id}/matches?limit=50`));
+      const all = await call<{ subscriptions: Subscription[] }>(
+        `api/v1/projects/${projectId}/event-subscriptions`);
+      setSubs(all.subscriptions.filter((sub) => sub.standing_query_id === q.query_id));
     } catch (e) {
       setError((e as Error).message);
     }
@@ -5602,6 +5608,67 @@ function StandingSection({ projectId }: { projectId: string }) {
               </p>
             </section>
           )}
+
+          <section className="panel">
+            <h2>Be told, rather than asked</h2>
+            <p className="empty" style={{ marginTop: 0 }}>
+              A match is POSTed to your endpoint, signed with a secret shown once, retried with
+              backoff and dead-lettered when it will not go — <strong>the same sender the alerts
+              use</strong>, because four controls are only worth something when they are the same
+              four everywhere. The body carries a preview and the ids, never the record: a webhook
+              body is the least controlled copy of anything here.
+            </p>
+            <div className="row">
+              <input type="text" value={hookUrl} placeholder="https://…"
+                     style={{ flex: 1, minWidth: 280 }}
+                     onChange={(e) => setHookUrl(e.target.value)} />
+              <button
+                disabled={busy || !hookUrl.trim()}
+                title="https only, and the URL is re-checked on every send — a host that resolves publicly today can resolve to a private address tomorrow."
+                onClick={() =>
+                  act("Subscribed. The secret is shown once.", async () => {
+                    const r = await call<{ signing_secret: string }>(
+                      "api/v1/event-subscriptions", {
+                        project_id: projectId, url: hookUrl.trim(),
+                        standing_query_id: selected.query_id,
+                      });
+                    setSecret(r.signing_secret);
+                    setHookUrl("");
+                    await open(selected);
+                  })
+                }
+              >
+                Send matches here
+              </button>
+            </div>
+            {secret && (
+              <div className="notice" style={{ marginTop: 12 }}>
+                <strong>Shown once.</strong> <code>{secret}</code>
+                <span className="empty"> Sign with it to verify the delivery came from here;
+                it cannot be read back, only rotated.</span>
+              </div>
+            )}
+            {subs.length === 0 ? (
+              <p className="empty" style={{ marginBottom: 0 }}>
+                Nothing subscribed — matches wait in the feed below until something asks.
+              </p>
+            ) : (
+              <div className="excluded">
+                {subs.map((sub) => (
+                  <div className="item" key={sub.subscription_id}>
+                    <span className={`chip ${sub.enabled ? "on" : ""}`}>
+                      {sub.enabled ? "live" : "paused"}
+                    </span>
+                    <code>{sub.url}</code>
+                    {sub.dead > 0 && (
+                      <span className="chip warnchip">{sub.dead} undeliverable</span>
+                    )}
+                    <span className="empty far">{sub.delivered} delivered</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
 
           <section className="panel">
             <h2>What it has caught</h2>

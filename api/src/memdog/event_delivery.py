@@ -71,12 +71,43 @@ async def enqueue(conn, event_id: str, *, project_id: str, alert_id: str) -> int
         SELECT 'wfx_' || substr(md5(random()::text || s.subscription_id), 1, 26),
                s.subscription_id, $1
           FROM event_subscriptions s
-         WHERE s.project_id = $2 AND s.enabled
+         WHERE s.project_id = $2 AND s.enabled AND s.kind = 'alert'
            AND (s.alert_id IS NULL OR s.alert_id = $3)
         ON CONFLICT (subscription_id, event_id) DO NOTHING
         RETURNING delivery_id
         """,
         event_id, project_id, alert_id,
+    )
+    return len(rows)
+
+
+async def enqueue_match(conn, match_id: str, *, project_id: str, query_id: str) -> int:
+    """The same, for a standing query's match.
+
+    Deliberately the same table, sender, signature, backoff and dead-letter
+    rule. A second pipeline would need its own version of each, and four
+    controls are only worth anything when they are the same four everywhere.
+
+    `kind = 'standing'` is required rather than inferred from a null
+    `standing_query_id`: `alert_id IS NULL` already means *every alert in this
+    project*, and letting that also mean *and every standing query* would start
+    posting a payload shape a subscriber registered last month has never seen.
+    """
+    rows = await conn.fetch(
+        """
+        INSERT INTO event_deliveries (delivery_id, subscription_id, match_id)
+        SELECT 'wfx_' || substr(md5(random()::text || s.subscription_id), 1, 26),
+               s.subscription_id, $1
+          FROM event_subscriptions s
+         WHERE s.project_id = $2 AND s.enabled AND s.kind = 'standing'
+           AND (s.standing_query_id IS NULL OR s.standing_query_id = $3)
+        -- The index is partial, so the conflict target has to repeat its
+        -- predicate: without it Postgres cannot infer which index this means
+        -- and refuses the statement outright.
+        ON CONFLICT (subscription_id, match_id) WHERE match_id IS NOT NULL DO NOTHING
+        RETURNING delivery_id
+        """,
+        match_id, project_id, query_id,
     )
     return len(rows)
 
@@ -90,8 +121,8 @@ async def deliver_owed(pool: asyncpg.Pool, envelope, *, limit: int = 100) -> dic
     """
     owed = await pool.fetch(
         """
-        SELECT d.delivery_id, d.event_id, d.attempts, s.subscription_id, s.url,
-               s.org_id, s.owner_id, s.signing_secret_ct
+        SELECT d.delivery_id, d.event_id, d.match_id, d.attempts, s.subscription_id,
+               s.url, s.org_id, s.owner_id, s.signing_secret_ct
           FROM event_deliveries d
           JOIN event_subscriptions s ON s.subscription_id = d.subscription_id
          WHERE d.status = 'pending' AND d.next_attempt_at <= now() AND s.enabled
@@ -111,7 +142,10 @@ async def deliver_owed(pool: asyncpg.Pool, envelope, *, limit: int = 100) -> dic
 
 
 async def _attempt(pool: asyncpg.Pool, envelope, row) -> str:
-    body = await _payload(pool, row["event_id"], row["owner_id"])
+    body = (
+        await _match_payload(pool, row["match_id"], row["owner_id"])
+        if row["match_id"] else await _payload(pool, row["event_id"], row["owner_id"])
+    )
     if body is None:
         # The reader lost sight of the subject between matching and sending --
         # revoked, re-scoped or erased. Not a failure to retry: the delivery is
@@ -204,12 +238,74 @@ async def _payload(pool: asyncpg.Pool, event_id: str, owner_id: str) -> dict | N
     return None
 
 
+async def _match_payload(pool: asyncpg.Pool, match_id: str, owner_id: str) -> dict | None:
+    """A standing-query match, as the subscription's owner may see it **now**.
+
+    Re-resolved rather than trusted from match time, for the same reason the
+    alert payload is: the standing query recorded whether *its* owner could see
+    the record when it matched, and the subscription's owner is a different
+    person whose rights may have changed since. A match that is no longer
+    visible is not a failure to retry -- the delivery is no longer owed, and
+    sending it anyway is the leak this whole design exists to prevent.
+    """
+    from .acl import visibility_params, visibility_sql
+    from .auth import DATA_READ, Principal
+
+    row = await pool.fetchrow(
+        """
+        SELECT m.match_id, m.data_id, m.sequence, m.matched_at, q.query_id, q.name,
+               q.org_id, q.project_id
+          FROM standing_matches m JOIN standing_queries q ON q.query_id = m.query_id
+         WHERE m.match_id = $1
+        """,
+        match_id,
+    )
+    if row is None:
+        return None
+
+    groups = await pool.fetch(
+        "SELECT group_id FROM group_members WHERE user_id = $1", owner_id)
+    reader = Principal(
+        user_id=owner_id, org_id=row["org_id"], capabilities=frozenset({DATA_READ}),
+        project_id=row["project_id"],
+        groups=frozenset(g["group_id"] for g in groups),
+    )
+    org_id, user_id, principals = visibility_params(reader)
+    item = await pool.fetchrow(
+        f"""
+        SELECT d.data_id, d.external_id, d.data_type, d.event_time,
+               left(coalesce(d.indexable_text, ''), 500) AS preview
+          FROM data_items d
+         WHERE d.data_id = $4 AND {visibility_sql("d", 1, 2, 3)}
+        """,
+        org_id, user_id, principals, row["data_id"],
+    )
+    if item is None:
+        return None
+    return {
+        "event": "standing_query.matched",
+        "query_id": row["query_id"],
+        "query": row["name"],
+        "match_id": row["match_id"],
+        "sequence": row["sequence"],
+        "data_id": item["data_id"],
+        "external_id": item["external_id"],
+        "data_type": item["data_type"],
+        # A preview rather than the record. A webhook body is the least
+        # controlled copy of anything here -- it lands in somebody's logs -- so
+        # it carries enough to decide whether to fetch the item, and no more.
+        "preview": item["preview"],
+        "event_time": item["event_time"],
+        "matched_at": row["matched_at"],
+    }
+
+
 # -- subscriptions ----------------------------------------------------------
 
 
 async def create_subscription(
     pool: asyncpg.Pool, principal, envelope, *, project_id: str, url: str,
-    alert_id: str | None = None,
+    alert_id: str | None = None, standing_query_id: str | None = None,
 ) -> dict:
     """Register an endpoint. The secret is returned **once**.
 
@@ -230,11 +326,12 @@ async def create_subscription(
     row = await pool.fetchrow(
         """
         INSERT INTO event_subscriptions (subscription_id, org_id, project_id,
-            alert_id, url, owner_id, signing_secret_ct)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        RETURNING subscription_id, url, alert_id, created_at
+            alert_id, standing_query_id, kind, url, owner_id, signing_secret_ct)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        RETURNING subscription_id, url, alert_id, standing_query_id, kind, created_at
         """,
-        new_id("wfs"), principal.org_id, project_id, alert_id, url,
+        new_id("wfs"), principal.org_id, project_id, alert_id, standing_query_id,
+        "standing" if standing_query_id else "alert", url,
         principal.user_id,
         envelope.encrypt(secret.encode(), aad=principal.org_id.encode()),
     )
@@ -277,10 +374,13 @@ async def list_subscriptions(pool: asyncpg.Pool, principal, project_id: str) -> 
     principal.require(CONFIG_WRITE)
     rows = await pool.fetch(
         """
-        SELECT s.subscription_id, s.url, s.alert_id, s.owner_id, s.enabled,
-               s.signing_secret_rotated_at, s.created_at,
+        SELECT s.subscription_id, s.url, s.alert_id, s.standing_query_id, s.kind,
+               s.owner_id, s.enabled, s.signing_secret_rotated_at, s.created_at,
                count(d.delivery_id) FILTER (WHERE d.status = 'dead') AS dead,
-               count(d.delivery_id) FILTER (WHERE d.status = 'pending') AS pending
+               count(d.delivery_id) FILTER (WHERE d.status = 'pending') AS pending,
+               -- What has actually arrived. A screen showing only failures says
+               -- nothing about whether the endpoint has ever worked.
+               count(d.delivery_id) FILTER (WHERE d.status = 'delivered') AS delivered
           FROM event_subscriptions s
           LEFT JOIN event_deliveries d ON d.subscription_id = s.subscription_id
          WHERE s.project_id = $1 AND s.org_id = $2

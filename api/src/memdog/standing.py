@@ -443,10 +443,12 @@ async def _owner_principal(pool, query) -> Principal:
 
 
 async def _record_matches(pool, query, run_id: str, matches: list[dict]) -> None:
+    from .event_delivery import enqueue_match
+
     delivery = _loads(query["delivery"])
     async with pool.acquire() as conn, conn.transaction():
         for match in matches:
-            await conn.execute(
+            match_id = await conn.fetchval(
                 """
                 INSERT INTO standing_matches (match_id, query_id, run_id, data_id,
                     sequence, visible)
@@ -455,10 +457,21 @@ async def _record_matches(pool, query, run_id: str, matches: list[dict]) -> None
                 -- second match: a re-crawl of the same record must not fill a
                 -- feed with copies of what it already said.
                 ON CONFLICT (query_id, data_id) DO NOTHING
+                RETURNING match_id
                 """,
                 new_id("stm"), query["query_id"], run_id, match["data_id"],
                 match["sequence"], match["visible"],
             )
+            # Queued in the same transaction as the match, so "matched but
+            # never queued" cannot happen -- and only for a match the query's
+            # own owner could see, because a subscriber cannot be told about
+            # something the query itself was not entitled to. The subscription
+            # owner's rights are checked again at send time, since they are a
+            # different person.
+            if match_id is not None and match["visible"]:
+                await enqueue_match(
+                    conn, match_id, project_id=query["project_id"],
+                    query_id=query["query_id"])
         if delivery.get("kind") == "memory":
             await _promote(conn, query, delivery, matches)
 

@@ -279,9 +279,16 @@ export type Subscription = {
   subscription_id: string;
   url: string;
   alert_id: string | null;
+  /** Set when this endpoint receives a standing query's matches instead of
+   *  alert events. `kind` decides which family it belongs to — a null
+   *  `alert_id` has always meant *every alert*, and must not quietly start
+   *  meaning every standing query too. */
+  standing_query_id: string | null;
+  kind: string;
   enabled: boolean;
   dead: number;
   pending: number;
+  delivered: number;
   signing_secret_rotated_at: string | null;
 };
 

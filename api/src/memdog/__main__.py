@@ -180,17 +180,20 @@ async def _alert_tick(limit: int) -> None:
         # The envelope is what lets the sweep sign a delivery. Without it the
         # tick would evaluate and then quietly deliver nothing, which is the
         # failure that looks most like success.
+        # Standing queries first, and the order is load-bearing: they queue
+        # deliveries, and `tick` is what sends everything owed. Evaluated after
+        # it, a match found this minute would sit until the next one -- a
+        # minute of latency that would look like the sweep being slow rather
+        # than like two steps in the wrong order.
+        standing = await _standing_in(pool)
         result = await tick(pool, limit=limit,
                             envelope=Envelope.from_settings(settings))
+        result["standing"] = standing
         # Compaction jobs ride the same sweep rather than adding a fourth job.
         # They are due at most daily, so a per-minute pass costs one indexed
         # lookup that usually returns nothing.
         result["compaction"] = await compaction_tick(
             pool, extractor=build_extractor(settings))
-        # And standing queries, for the same reason: a bounded window per pass,
-        # no model call anywhere in the path, and one indexed lookup when
-        # nothing is due.
-        result["standing"] = await _standing_in(pool)
         print(jsonlib.dumps(result, default=str))
     finally:
         await pool.close()

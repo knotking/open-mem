@@ -16,6 +16,15 @@ from memdog.write import write_items
 pytestmark = pytest.mark.asyncio
 
 
+@pytest.fixture
+def envelope():
+    import os
+
+    from memdog.crypto import Envelope
+
+    return Envelope(os.urandom(32))
+
+
 async def _write(pool, queue, blobs, settings, actor, tenant, external_id, text, **kw):
     response = await write_items(
         pool, queue, blobs, settings, actor,
@@ -207,3 +216,103 @@ async def test_the_sweep_evaluates_only_enabled_queries_that_are_behind(
     await standing.set_enabled(pool, actor, query_id, True)
     swept = await standing.tick(pool)
     assert len(swept["evaluated"]) == 1 and swept["evaluated"][0]["matches"] == 1
+
+
+# ------------------------------------------------------------------- push
+
+
+async def test_a_match_is_queued_for_a_standing_subscription(
+    pool, queue, blobs, settings, tenant, principal_for, envelope
+):
+    """The same sender, signature, backoff and dead-letter rule as alerts.
+
+    A second pipeline would need its own version of each, and four controls are
+    only worth something when they are the same four everywhere.
+    """
+    from memdog.event_delivery import create_subscription
+
+    actor = await principal_for(tenant.api_key)
+    query_id = await _query(pool, actor, tenant, {"query": "outage"})
+    await create_subscription(
+        pool, actor, envelope, project_id=tenant.project_id,
+        url="https://example.com/hook", standing_query_id=query_id)
+
+    await _write(pool, queue, blobs, settings, actor, tenant, "o-1", "A checkout outage")
+    await standing.evaluate(pool, query_id, trigger="manual")
+
+    queued = await pool.fetchval(
+        "SELECT count(*) FROM event_deliveries WHERE match_id IS NOT NULL")
+    assert queued == 1
+
+
+async def test_an_alert_subscription_does_not_receive_standing_matches(
+    pool, queue, blobs, settings, tenant, principal_for, envelope
+):
+    """`alert_id IS NULL` has always meant *every alert in this project*.
+
+    Letting it also mean *and every standing query* would start posting a
+    payload shape a subscriber registered last month has never seen.
+    """
+    from memdog.event_delivery import create_subscription
+
+    actor = await principal_for(tenant.api_key)
+    query_id = await _query(pool, actor, tenant, {"query": "outage"})
+    await create_subscription(
+        pool, actor, envelope, project_id=tenant.project_id,
+        url="https://example.com/alerts")          # no standing_query_id: alert kind
+
+    await _write(pool, queue, blobs, settings, actor, tenant, "o-2", "Another outage")
+    await standing.evaluate(pool, query_id, trigger="manual")
+
+    assert await pool.fetchval(
+        "SELECT count(*) FROM event_deliveries WHERE match_id IS NOT NULL") == 0
+
+
+async def test_a_withheld_match_is_never_queued(
+    pool, queue, blobs, settings, tenant, principal_for, envelope
+):
+    """A subscriber cannot be told about something the query itself was not
+    entitled to see."""
+    from memdog.event_delivery import create_subscription
+
+    actor = await principal_for(tenant.api_key)
+    query_id = await _query(pool, actor, tenant, {"query": "confidential"})
+    await create_subscription(
+        pool, actor, envelope, project_id=tenant.project_id,
+        url="https://example.com/hook", standing_query_id=query_id)
+
+    await _write(pool, queue, blobs, settings, actor, tenant, "secret",
+                 "A confidential matter", access=ItemAccess(
+                     level="restricted", principals=["user:somebody-else"]))
+    result = await standing.evaluate(pool, query_id, trigger="manual")
+
+    assert result["withheld"] == 1
+    assert await pool.fetchval(
+        "SELECT count(*) FROM event_deliveries WHERE match_id IS NOT NULL") == 0
+
+
+async def test_the_payload_is_rebuilt_against_the_subscriber_rights_now(
+    pool, queue, blobs, settings, tenant, principal_for, envelope
+):
+    """Visibility at match time belongs to the query's owner; the subscription's
+    owner is a different person whose rights may have changed since. A match
+    they can no longer see is not owed, and sending it anyway is the leak."""
+    from memdog.event_delivery import _match_payload
+
+    actor = await principal_for(tenant.api_key)
+    query_id = await _query(pool, actor, tenant, {"query": "outage"})
+    data_id = await _write(pool, queue, blobs, settings, actor, tenant, "o-3",
+                           "A payment outage")
+    await standing.evaluate(pool, query_id, trigger="manual")
+    match_id = await pool.fetchval(
+        "SELECT match_id FROM standing_matches WHERE data_id = $1", data_id)
+
+    body = await _match_payload(pool, match_id, tenant.user_id)
+    assert body is not None and body["event"] == "standing_query.matched"
+    assert body["data_id"] == data_id and body["preview"]
+
+    # The record is re-scoped away from them; the delivery stops being owed.
+    await pool.execute(
+        "UPDATE data_items SET access_level = 'restricted', "
+        "shared_with = '[\"user:somebody-else\"]'::jsonb WHERE data_id = $1", data_id)
+    assert await _match_payload(pool, match_id, tenant.user_id) is None

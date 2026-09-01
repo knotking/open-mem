@@ -10,6 +10,39 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 
 ## Unreleased
 
+### Added
+- **Standing queries (W10) — the one primitive that speaks first.** Say once
+  what you want to be told about; each new record is checked against it as it
+  arrives. Four published use cases were blocked on this and **media monitoring
+  is only this**, so shipping it without delivery shipped nothing.
+- **The matcher is `websearch_to_tsquery`, not an alert condition.** Alerts
+  match on an event's payload; this matches on the item. Reusing `contains`
+  over a preview would mean no stemming and no phrases — **missing "Acme's" and
+  matching "acmeism"** — and a brand monitor that cannot find a plural is not
+  one. Quoted phrases, `or` and `-exclusion` work, and it is the same lexical
+  engine retrieval uses, so a query and a search agree about what words mean.
+- **It never re-scans.** Each item is seen exactly once, walking forward from
+  the sequence the query was registered at — starting at zero would replay the
+  whole corpus into a feed on the first tick. Looking backwards is what the
+  **backtest** is for, and enabling before one is a `409`.
+- **Delivery is a read.** A match handed to somebody who cannot see the record
+  is a leak through the notification channel. Visibility resolves under the
+  **owner's rights at match time**, and a withheld match is **recorded and
+  counted** rather than dropped: a feed that silently omits what it could not
+  deliver is incomplete in a way nobody can explain.
+- **Delivery into a memory needs no network** — no URL, no secret, no retry,
+  and the memory it fills can then be rolled up, compacted, expired and alerted
+  on. Poll feed alongside it; webhook push is the next commit.
+- **Time is not a selector, and the screen says so.** *"Thirty days before a due
+  date"* cannot be a predicate over new writes because nothing arrives that
+  day — that is a scheduled sweep over dates, which expiry already
+  demonstrates. Conflating them is how this engine would quietly become a
+  scanner.
+
+### Migrations
+- **`0042_standing_queries.sql`** — `standing_queries`, `standing_runs`,
+  `standing_matches`. Additive. Rides the existing minute sweep; no new job.
+
 ### Fixed
 - **A compaction job on a parent memory reported "0 members"** beside a run that
   would consider three — the count was single-level while the run reads through

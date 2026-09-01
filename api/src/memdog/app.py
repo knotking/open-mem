@@ -2742,7 +2742,8 @@ async def create_subscription_endpoint(
         return await create_subscription(
             state.pool, actor, state.envelope,
             project_id=body["project_id"], url=body["url"],
-            alert_id=body.get("alert_id"))
+            alert_id=body.get("alert_id"),
+            standing_query_id=body.get("standing_query_id"))
     except KeyError as exc:
         raise HTTPException(status_code=400, detail=f"missing {exc}") from exc
     except (DeliveryError, AuthError) as exc:
