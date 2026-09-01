@@ -28,22 +28,33 @@ type Capabilities = {
 };
 
 /**
- * Two anchors, not seven.
+ * The bar, and the page it navigates.
  *
- * The bar was a table of contents for a page that is one argument: the
- * sections chain — "How a record moves", then "It knows what connects to
- * what", then *"And* a working set that stops growing", *"And* a source you
- * can tell is still working". Copy that continues with "and" is not seven
- * destinations, and offering them as tabs asked a first-time reader to choose
- * between things they have no basis to choose between.
+ * This was cut to two anchors once, on the reasoning that a list of seven
+ * undifferentiated destinations asks a first-time reader to choose between
+ * things they have no basis to choose between. The reasoning was half right:
+ * the problem was never the count, it was that the bar said nothing about
+ * *where you were* — so it read as seven equivalent choices rather than as a
+ * position in an argument.
  *
- * So the bar marks the two genuine turns — how it works, and how it compares —
- * and everything between them is reached by reading on, which is what the page
- * was written for. The sections keep their ids: a link somebody already has
- * still lands.
+ * So it is the whole page again, and the bar tracks the reader: the section
+ * currently on screen is marked, which is the job a table of contents does and
+ * the reason a long page can have one.
+ *
+ * **This list is the only source of truth for the bar, and dead links cannot
+ * render.** The nav is filtered at mount to ids that actually exist in the
+ * document, so renaming a section's id removes its anchor rather than leaving
+ * one that scrolls nowhere — the failure that is invisible until somebody
+ * clicks.
  */
-const TABS = [
+const SECTIONS = [
   { id: "flow", label: "How it works" },
+  { id: "graph", label: "Connections" },
+  { id: "time", label: "Time" },
+  { id: "alerts", label: "Alerts" },
+  { id: "compaction", label: "Working set" },
+  { id: "sources", label: "Sources" },
+  { id: "principles", label: "Principles" },
   { id: "compare", label: "Where this sits" },
 ];
 
@@ -461,12 +472,124 @@ function Pipeline() {
   );
 }
 
+/**
+ * Which section the reader is looking at, and which anchors are real.
+ *
+ * Returns only the sections that exist in the document, so the bar cannot show
+ * a link that scrolls nowhere. The observer's `rootMargin` pulls the top edge
+ * down past the sticky bar and the bottom edge up to a third of the viewport,
+ * so "current" means *the heading you are reading*, not the last one that
+ * happened to touch the fold.
+ */
+function useSectionSpy() {
+  // Starts as the whole list and *narrows* after mount, rather than starting
+  // empty and growing. The first version grew, and the nav was consequently
+  // absent from the server-rendered HTML entirely -- no links without
+  // JavaScript, and a visible pop-in for everyone else. A correction that can
+  // only remove is safe to apply late; one that has to add is not.
+  const [present, setPresent] = useState<typeof SECTIONS>(SECTIONS);
+  const [active, setActive] = useState<string>("");
+
+  useEffect(() => {
+    const found = SECTIONS.filter((s) => document.getElementById(s.id));
+    setPresent(found);
+    if (found.length === 0) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const onscreen = entries
+          .filter((e) => e.isIntersecting)
+          .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
+        if (onscreen[0]) setActive(onscreen[0].target.id);
+      },
+      { rootMargin: "-76px 0px -66% 0px", threshold: 0 },
+    );
+    found.forEach((s) => {
+      const node = document.getElementById(s.id);
+      if (node) observer.observe(node);
+    });
+    return () => observer.disconnect();
+  }, []);
+
+  return { present, active };
+}
+
+/**
+ * What comes back, including what did not.
+ *
+ * The headline claims the system shows its work, and a claim in a headline is
+ * the cheapest thing on a page. This renders the actual shape of a result: the
+ * passages returned with which arm matched them, and — the part no comparable
+ * product produces — the records that were considered and **dropped, with the
+ * reason for each**.
+ *
+ * It is an illustration, and it says so. Nothing can be queried before signing
+ * in, so rendering a fabricated trace *as if* it were live would be the one
+ * dishonest thing on a page whose whole argument is that its claims are
+ * checkable.
+ */
+function Receipt() {
+  const returned = [
+    { score: "0.81", arm: "vector + lexical", where: "Email · 14 Jul",
+      quote: "Legal flagged the indemnity cap and procurement will not move until the security review closes." },
+    { score: "0.74", arm: "vector", where: "Call transcript · 2 Aug",
+      quote: "They asked twice whether it can run inside their own tenancy." },
+    { score: "0.62", arm: "lexical", where: "Deal note · 29 Aug",
+      quote: "Security review still open; finance wants the cap at twelve months." },
+  ];
+  const dropped = [
+    { where: "Slack thread · 30 Aug", why: "below the score threshold", detail: "0.31" },
+    { where: "Contract PDF · 31 Aug", why: "not yet searchable", detail: "enrichment queued" },
+    { where: "Invoice · 12 Jun", why: "you cannot read it", detail: "restricted to finance" },
+  ];
+
+  return (
+    <figure className="receipt">
+      <figcaption className="receipt-head">
+        <span className="receipt-ask">&ldquo;why did the Northwind deal slip?&rdquo;</span>
+        <span className="receipt-note">the shape of an answer — not a live query</span>
+      </figcaption>
+
+      <div className="receipt-band">Returned · 3</div>
+      {returned.map((r) => (
+        <div className="receipt-row" key={r.where}>
+          <span className="receipt-score">{r.score}</span>
+          <span className="receipt-body">
+            <span className="receipt-quote">{r.quote}</span>
+            <span className="receipt-meta">{r.where} · matched on {r.arm}</span>
+          </span>
+        </div>
+      ))}
+
+      <div className="receipt-band receipt-band-out">
+        Considered and dropped · 3
+      </div>
+      {dropped.map((d) => (
+        <div className="receipt-row receipt-row-out" key={d.where}>
+          <span className="receipt-score receipt-score-out">&mdash;</span>
+          <span className="receipt-body">
+            <span className="receipt-quote">{d.why}</span>
+            <span className="receipt-meta">{d.where} · {d.detail}</span>
+          </span>
+        </div>
+      ))}
+
+      <p className="receipt-foot">
+        The bottom half is the difference. &ldquo;It found nothing&rdquo;,
+        &ldquo;it is still indexing&rdquo; and &ldquo;you are not allowed to see it&rdquo; are
+        three different situations, and they need three different fixes.
+      </p>
+    </figure>
+  );
+}
+
 export default function Landing({ authEnabled }: { authEnabled: boolean }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [caps, setCaps] = useState<Capabilities | null>(null);
+  const { present, active } = useSectionSpy();
 
   useEffect(() => {
     fetch("/api/capabilities")
@@ -515,8 +638,17 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
           mem-dog
         </div>
         <nav className="tabs" aria-label="Sections">
-          {TABS.map((tab) => (
-            <a key={tab.id} href={`#${tab.id}`}>{tab.label}</a>
+          {present.map((section) => (
+            <a
+              key={section.id}
+              href={`#${section.id}`}
+              /* `aria-current` rather than a class: the state is "this is the
+                 page section you are in", which is exactly what the attribute
+                 means, and it reaches a screen reader as well as the eye. */
+              aria-current={active === section.id ? "true" : undefined}
+            >
+              {section.label}
+            </a>
           ))}
         </nav>
         <div className="row">
@@ -529,12 +661,13 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
         <div>
           <p className="eyebrow">Memory layer · sandbox</p>
           <h1>
-            A memory layer that can <em>show its work</em>.
+            It answers — then tells you what it <em>left out</em>.
           </h1>
           <p className="hero-lede">
-            Write anything — documents, spreadsheets, calendars, email, audio, video — and get it
-            back by meaning, with a trace of exactly why each result was returned and what was
-            considered and dropped.
+            Documents, spreadsheets, calendars, email, audio, video: written once, retrieved by
+            meaning. Every result carries the passage behind it, and every record that was
+            considered and dropped carries the reason it was dropped — which is the half that
+            turns an answer you have to believe into one you can check.
           </p>
           {numbers.length > 0 && (
             <div className="numbers">
@@ -620,6 +753,8 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
           </div>
         )}
       </section>
+
+      <Receipt />
 
       <Pipeline />
 

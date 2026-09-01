@@ -587,6 +587,84 @@ select {
 .counted { font-size: 12.5px; color: var(--muted); margin: 14px 0 0; }
 .counted code { font-size: 12px; }
 
+/* The receipt.
+ *
+ * The headline claims the system shows its work; this is the page showing it.
+ * Two bands, deliberately given equal weight -- what came back, and what was
+ * considered and dropped -- because the second half is the part no comparable
+ * product renders and the reason the first half can be trusted. */
+.receipt {
+  margin: 0 0 34px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  overflow: hidden;
+}
+.receipt-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 14px;
+  padding: 15px 18px;
+  border-bottom: 1px solid var(--line);
+}
+.receipt-ask {
+  font-size: 15.5px;
+  font-weight: 560;
+  letter-spacing: -0.012em;
+}
+.receipt-note { font-size: 12px; color: var(--muted); margin-left: auto; }
+
+.receipt-band {
+  font-size: 11px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--accent);
+  background: var(--accent-soft);
+  padding: 7px 18px;
+  font-weight: 600;
+}
+.receipt-band-out { color: var(--warn); background: var(--warn-soft); }
+
+.receipt-row {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr);
+  gap: 14px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--line);
+  align-items: baseline;
+}
+.receipt-row:first-of-type { border-top: none; }
+
+.receipt-score {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+  font-weight: 500;
+}
+.receipt-score-out { color: var(--warn); }
+
+.receipt-body { display: grid; gap: 3px; min-width: 0; }
+.receipt-quote { font-size: 14px; line-height: 1.5; }
+.receipt-row-out .receipt-quote { color: var(--ink); font-weight: 540; }
+.receipt-meta { font-size: 12px; color: var(--muted); }
+
+.receipt-foot {
+  margin: 0;
+  padding: 14px 18px 16px;
+  border-top: 1px solid var(--line);
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--muted);
+  background: var(--bg);
+}
+
+@media (max-width: 560px) {
+  .receipt-row { grid-template-columns: 42px minmax(0, 1fr); gap: 10px; }
+  .receipt-note { margin-left: 0; }
+}
+
 .signin-card {
   border: 1px solid var(--line);
   background: var(--panel);
@@ -627,6 +705,11 @@ select {
   max-width: 74ch;
   margin: 6px 0 0;
 }
+
+/* The sticky bar is 57px tall, so an anchor jump lands with the heading tucked
+   underneath it -- the reader arrives at a section whose title is invisible and
+   concludes the link is broken. */
+.landing section[id] { scroll-margin-top: 76px; }
 
 .section-title {
   font-size: 13px;
@@ -707,10 +790,21 @@ select {
  * missing element. */
 .tabs { display: flex; gap: 22px; margin-right: auto; margin-left: 8px; }
 
-/* Below the fold of a phone the bar is a wordmark and a way in. Two anchors on
- * a page that is read top to bottom are not worth the row they cost. */
-@media (max-width: 560px) {
-  .tabs { display: none; }
+/* On a phone the bar scrolls sideways rather than disappearing. Hiding it was
+ * defensible when it held two links; a bar that tracks position is the reader's
+ * only sense of how much page is left, and that is worth more on a small screen
+ * than on a large one. */
+@media (max-width: 720px) {
+  .tabs {
+    overflow-x: auto;
+    scrollbar-width: none;
+    margin-left: 0;
+    gap: 16px;
+    /* The fade says there is more to the right without spending a row on a
+       scrollbar the platform may not draw. */
+    mask-image: linear-gradient(to right, #000 88%, transparent);
+  }
+  .tabs::-webkit-scrollbar { display: none; }
 }
 .tabs a {
   color: var(--muted);
@@ -721,6 +815,9 @@ select {
   white-space: nowrap;
 }
 .tabs a:hover { color: var(--ink); border-bottom-color: var(--line); }
+/* Where you are, not where you could go. Without this the bar is a list of
+   equivalent destinations; with it, it is a position in the argument. */
+.tabs a[aria-current] { color: var(--ink); border-bottom-color: var(--accent); }
 .tabs a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 2px; }
 .tab-cta {
   color: var(--accent);
