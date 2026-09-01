@@ -10,6 +10,25 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 
 ## Unreleased
 
+### Added
+- **`api/tools/fake_sources.py`** — the four pagination mechanisms
+  `fake_salesforce.py` did not cover, each because a real connector depends on
+  it: a `Link` header that lists `rel="last"` first, `startAt` offset
+  arithmetic, an absolute `@odata.nextLink`, a `page=N` source where only
+  `stop_when` ends the crawl, and an RSS feed with a bare `&` in it. Run with
+  `python -m tools.fake_sources`. It **counts requests**, and the tests assert
+  on the count — the crawler's own `Budget` counts items, so nothing could tell
+  five records in three requests from five in twenty, which is exactly how the
+  Salesforce paging defect stayed invisible.
+- **`api/tools/fake_inbound.py`** — a signer for all nine webhook providers,
+  written from each provider's published scheme rather than from
+  `providers.py`, so the two have to agree. It also sends a real signed POST at
+  a running deployment: `python -m tools.fake_inbound github <url> <secret>`.
+  Nothing else in the repo does that, so the HTTP layer of
+  `/hooks/{producer_id}` had only ever been reached by an actual provider.
+  The test iterates the registry, so **a provider added with no signing rule
+  now fails on the day it is added.**
+
 ### Changed
 - **The sign-in page drops its “Where the others are ahead” closing block.** The
   paragraph above the comparison already concedes the same two things — that

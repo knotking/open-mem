@@ -242,7 +242,13 @@ def deliver(provider: str, url: str, secret: str, *, body: bytes | None = None,
         with urllib.request.urlopen(request) as response:
             return response.status, response.read().decode(errors="replace")
     except urllib.error.HTTPError as error:
+        # A refusal is a result, not a failure -- 401 is what this tool exists
+        # to provoke half the time.
         return error.code, error.read().decode(errors="replace")
+    except urllib.error.URLError as error:
+        # Not reaching the deployment at all is the most common way this is run
+        # wrong, and a stack trace is a worse answer than a sentence.
+        return 0, f"could not reach {url}: {error.reason}"
 
 
 def main(argv: list[str]) -> int:
@@ -253,7 +259,7 @@ def main(argv: list[str]) -> int:
         return 2
     provider, url, secret = argv[1], argv[2], argv[3]
     status, text = deliver(provider, url, secret)
-    print(f"{provider} -> {status}")
+    print(f"{provider} -> {status or 'no response'}")
     print(text[:600])
     return 0 if 200 <= status < 300 else 1
 
