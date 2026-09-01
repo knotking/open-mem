@@ -51,6 +51,25 @@ SOURCE_EVENT = "data.recorded"
 
 DELIVERY_KINDS = ("poll", "memory")
 
+# What makes a query fire. Two mechanisms, one surface.
+#
+# `arrival` matches new writes and never re-scans -- each record is seen once.
+# `date` fires when a record's *date* comes within reach, which cannot be a
+# predicate over new writes because nothing arrives on the day a deadline
+# approaches. Keeping them apart is what stops the arrival engine quietly
+# becoming a scanner; sharing the matches, the feed and the delivery is what
+# stops the date rule becoming a second product.
+QUERY_KINDS = ("arrival", "date")
+
+# The dates a rule may read. Deliberately closed: `event_time` is the record's
+# own time, `ingested_at` is when it arrived -- which is what retention ageing
+# actually means -- and anything else is a key the producer put in `metadata`.
+#
+# Model-extracted `key_dates` are **not** here yet. They exist in the envelope
+# as text and nothing normalises them to a date, so a rule over them would be
+# comparing strings and would silently match nothing.
+DATE_FIELDS = ("event_time", "ingested_at")
+
 
 class StandingError(Exception):
     def __init__(self, message: str, status: int = 400) -> None:
@@ -62,7 +81,11 @@ def _loads(value):
     return json.loads(value) if isinstance(value, str) else (value or {})
 
 
-def validate(selector: dict, delivery: dict) -> None:
+def validate(
+    selector: dict, delivery: dict, *, kind: str = "arrival",
+    date_field: str | None = None, offset_days: int | None = None,
+    window_days: int = 1,
+) -> None:
     """Refuse a query that would match everything or deliver nowhere.
 
     A selector narrowing nothing is not a standing query, it is a copy of the
@@ -70,6 +93,31 @@ def validate(selector: dict, delivery: dict) -> None:
     indistinguishable from the corpus. Refused rather than accepted and
     regretted, for the same reason `reprocess` refuses one.
     """
+    if kind not in QUERY_KINDS:
+        raise StandingError(f"kind must be one of {', '.join(QUERY_KINDS)}")
+    if kind == "date":
+        if not date_field:
+            raise StandingError(
+                f"a date rule needs a date_field: {', '.join(DATE_FIELDS)}, or "
+                "metadata.<key> for something the producer supplied")
+        if date_field not in DATE_FIELDS and not date_field.startswith("metadata."):
+            raise StandingError(
+                f"unknown date field {date_field!r}; use {', '.join(DATE_FIELDS)} "
+                "or metadata.<key>")
+        if offset_days is None:
+            raise StandingError(
+                "a date rule needs offset_days -- how far ahead to look. Negative is "
+                "the past, which is what retention ageing is")
+        if window_days < 1:
+            raise StandingError(
+                "window_days must be at least 1: a rule matching a date exactly N days "
+                "away to the second fires never")
+        # A date rule needs no selector -- the date *is* the selector -- so the
+        # narrowing check below does not apply to it.
+        if not isinstance(selector, dict):
+            raise StandingError("selector must be an object")
+        _validate_delivery(delivery)
+        return
     if not isinstance(selector, dict):
         raise StandingError("selector must be an object")
     known = {"query", "data_type", "tags", "producer_id"}
@@ -84,6 +132,10 @@ def validate(selector: dict, delivery: dict) -> None:
     if selector.get("tags") is not None and not isinstance(selector["tags"], list):
         raise StandingError("tags must be a list")
 
+    _validate_delivery(delivery)
+
+
+def _validate_delivery(delivery: dict) -> None:
     kind = delivery.get("kind", "poll")
     if kind not in DELIVERY_KINDS:
         raise StandingError(f"delivery must be one of {', '.join(DELIVERY_KINDS)}")
@@ -93,12 +145,15 @@ def validate(selector: dict, delivery: dict) -> None:
 
 async def create(
     pool: asyncpg.Pool, principal: Principal, *, project_id: str, name: str,
-    selector: dict, delivery: dict | None = None,
+    selector: dict, delivery: dict | None = None, kind: str = "arrival",
+    date_field: str | None = None, offset_days: int | None = None,
+    window_days: int = 1,
 ) -> dict:
     """Created disabled, like a crawler. Enabling requires a backtest."""
     principal.require(CONFIG_WRITE)
     delivery = delivery or {"kind": "poll"}
-    validate(selector, delivery)
+    validate(selector, delivery, kind=kind, date_field=date_field,
+             offset_days=offset_days, window_days=window_days)
 
     query_id = new_id("stq")
     # From here, not from the beginning of the corpus. A query registered today
@@ -110,19 +165,22 @@ async def create(
         await conn.execute(
             """
             INSERT INTO standing_queries (query_id, org_id, project_id, owner_id, name,
-                selector, delivery, watermark)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                selector, delivery, watermark, kind, date_field, offset_days, window_days)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
             """,
             query_id, principal.org_id, project_id, principal.user_id, name,
             json.dumps(selector), json.dumps(delivery), head,
+            kind, date_field, offset_days, window_days,
         )
         await record_audit(
             conn, principal, action="standing_query.created", project_id=project_id,
             target_type="standing_query", target_id=query_id,
             detail={"name": name, "selector": selector, "delivery": delivery},
         )
-    return {"query_id": query_id, "name": name, "enabled": False,
-            "watermark": head, "selector": selector, "delivery": delivery}
+    return {"query_id": query_id, "name": name, "enabled": False, "kind": kind,
+            "watermark": head, "selector": selector, "delivery": delivery,
+            "date_field": date_field, "offset_days": offset_days,
+            "window_days": window_days}
 
 
 async def update(
@@ -139,7 +197,8 @@ async def update(
     row = await _owned(pool, principal, query_id)
     new_selector = selector if selector is not None else _loads(row["selector"])
     new_delivery = delivery if delivery is not None else _loads(row["delivery"])
-    validate(new_selector, new_delivery)
+    validate(new_selector, new_delivery, kind=row["kind"], date_field=row["date_field"],
+             offset_days=row["offset_days"], window_days=row["window_days"])
 
     async with pool.acquire() as conn, conn.transaction():
         await conn.execute(
@@ -431,6 +490,132 @@ async def _evaluate_inner(
     }
 
 
+async def evaluate_date(
+    pool: asyncpg.Pool, query_id: str, *, trigger: str, record: bool = True,
+) -> dict:
+    """Fire on records whose date has come within reach.
+
+    The half W10 cannot do. *"Thirty days before a due date"* is not a predicate
+    over new writes, because nothing arrives on that day -- the record showed up
+    months earlier and the only thing that changed is the calendar. So this
+    scans, deliberately, and the honesty is in the bound: a **window** around
+    the offset, which is an index range on a date column rather than a walk of
+    the corpus.
+
+    Retention ageing is the same rule pointed backwards. *"Older than seven
+    years"* is a negative offset, and one column saying so beats two mechanisms
+    that would drift apart.
+
+    Idempotent by the same unique key the arrival path uses: an item matches a
+    given rule once, so a sweep running daily over an overlapping window does
+    not refill the feed with what it already said.
+    """
+    query = await pool.fetchrow(
+        "SELECT * FROM standing_queries WHERE query_id = $1 AND deleted_at IS NULL", query_id)
+    if query is None:
+        raise StandingError("standing query not found", status=404)
+    if query["kind"] != "date":
+        raise StandingError("this is not a date rule", status=400)
+
+    selector = _loads(query["selector"])
+    field = query["date_field"]
+    # Constructed from a closed vocabulary rather than interpolated: a date
+    # field is the one selector value that reaches the FROM clause, and a
+    # producer-supplied key goes through the jsonb operator rather than into
+    # the SQL text.
+    if field == "event_time":
+        column, params_extra = "d.event_time", []
+    elif field == "ingested_at":
+        column, params_extra = "d.ingested_at", []
+    else:
+        column, params_extra = "(d.metadata ->> $5)::timestamptz", [field.split(".", 1)[1]]
+
+    predicate, extra = _predicate(selector, 6 if params_extra else 5)
+    run_id = new_id("stq_run")
+    if record:
+        await pool.execute(
+            """
+            INSERT INTO standing_runs (run_id, query_id, config_version, trigger,
+                from_sequence, status)
+            VALUES ($1, $2, $3, $4, 0, 'running')
+            """,
+            run_id, query_id, query["config_version"], trigger,
+        )
+
+    with span("standing.date", query_id=query_id, trigger=trigger):
+        rows = await pool.fetch(
+            f"""
+            SELECT d.data_id, d.external_id, d.data_type, {column} AS due_at,
+                   left(coalesce(d.indexable_text, ''), 160) AS preview
+              FROM data_items d
+             WHERE d.project_id = $1 AND d.deleted_at IS NULL
+               AND {column} IS NOT NULL
+               -- The window, and the whole reason this is bounded: everything
+               -- whose date lands within `window_days` of the offset from now.
+               -- Cast because both sides arrive as untyped parameters and
+               -- Postgres cannot pick an operator for `unknown - unknown`.
+               AND {column} >= now() + make_interval(days => $2::int - $3::int)
+               AND {column} <  now() + make_interval(days => $2::int + $3::int)
+               {("AND " + predicate) if predicate else ""}
+             ORDER BY {column}
+             LIMIT $4
+            """,
+            query["project_id"], query["offset_days"], query["window_days"],
+            query["batch_cap"], *params_extra, *extra,
+        )
+
+        owner = await _owner_principal(pool, query)
+        _, user_id, principals = visibility_params(owner)
+        visible_ids = set()
+        if rows:
+            seen = await pool.fetch(
+                f"""
+                SELECT d.data_id FROM data_items d
+                 WHERE d.data_id = ANY($4::text[]) AND {visibility_sql("d", 1, 2, 3)}
+                """,
+                owner.org_id, user_id, principals, [r["data_id"] for r in rows],
+            )
+            visible_ids = {r["data_id"] for r in seen}
+
+        matches = [{
+            "data_id": r["data_id"], "external_id": r["external_id"],
+            "data_type": r["data_type"], "sequence": 0,
+            "preview": r["preview"], "visible": r["data_id"] in visible_ids,
+            "due_at": r["due_at"],
+        } for r in rows]
+
+        if record and matches:
+            await _record_matches(pool, query, run_id, matches)
+
+    result = {
+        "candidates": len(rows),
+        "matches": sum(1 for m in matches if m["visible"]),
+        "withheld": sum(1 for m in matches if not m["visible"]),
+        # A capped run is not "nothing else matched". Reported so a window that
+        # is too wide is visible as a number rather than as a feed that seems
+        # to stop for no reason.
+        "deferred": len(rows) if len(rows) == query["batch_cap"] else 0,
+        "to_sequence": query["watermark"],
+        "samples": matches[:10],
+    }
+    if record:
+        await pool.execute(
+            """
+            UPDATE standing_runs SET status = 'completed', to_sequence = $2, candidates = $3,
+                   matches = $4, withheld = $5, deferred = $6, finished_at = now()
+             WHERE run_id = $1
+            """,
+            run_id, query["watermark"], result["candidates"], result["matches"],
+            result["withheld"], result["deferred"],
+        )
+    else:
+        await pool.execute(
+            "UPDATE standing_queries SET backtested_version = config_version WHERE query_id = $1",
+            query_id)
+    return {"query_id": query_id, "run_id": run_id if record else None,
+            "mode": "live" if record else "backtest", **result}
+
+
 async def _owner_principal(pool, query) -> Principal:
     groups = await pool.fetch(
         "SELECT group_id FROM group_members WHERE user_id = $1", query["owner_id"])
@@ -446,8 +631,26 @@ async def _record_matches(pool, query, run_id: str, matches: list[dict]) -> None
     from .event_delivery import enqueue_match
 
     delivery = _loads(query["delivery"])
+    # What `sequence` means, per kind, and why it is not one thing.
+    #
+    # For an arrival query it is the domain-event sequence the match was found
+    # at -- naturally monotonic, and shared with the watermark. A date rule has
+    # no such number: what moved is the calendar, and every match in one sweep
+    # would carry the same head. So a date match takes the next position in
+    # *this query's own feed*, which is the only property the `since` cursor
+    # actually needs: monotonic within the query being polled.
+    #
+    # Without it every date match landed at sequence 0, `sequence > 0` excluded
+    # all of them, and the feed was empty while the matches were recorded and
+    # the memory promotion worked -- the failure that looks like nothing at all.
+    dated = query["kind"] == "date"
     async with pool.acquire() as conn, conn.transaction():
-        for match in matches:
+        base = await conn.fetchval(
+            "SELECT coalesce(max(sequence), 0) FROM standing_matches WHERE query_id = $1",
+            query["query_id"]) if dated else 0
+        for offset, match in enumerate(matches, start=1):
+            if dated:
+                match["sequence"] = base + offset
             match_id = await conn.fetchval(
                 """
                 INSERT INTO standing_matches (match_id, query_id, run_id, data_id,
@@ -556,7 +759,7 @@ async def tick(pool: asyncpg.Pool, *, limit: int = 20) -> dict:
     behind = await pool.fetch(
         """
         SELECT query_id FROM standing_queries
-         WHERE enabled AND deleted_at IS NULL AND watermark < $1
+         WHERE enabled AND deleted_at IS NULL AND kind = 'arrival' AND watermark < $1
          ORDER BY watermark
          LIMIT $2
          FOR UPDATE SKIP LOCKED
@@ -569,4 +772,24 @@ async def tick(pool: asyncpg.Pool, *, limit: int = 20) -> dict:
             evaluated.append(await evaluate(pool, row["query_id"], trigger="tick"))
         except Exception as exc:  # noqa: BLE001 -- one bad query must not stop the sweep
             log.warning("standing query %s failed: %s", row["query_id"], exc)
+
+    # Date rules are not selected by a watermark -- there is no watermark to be
+    # behind, because what moved is the calendar rather than the corpus. Every
+    # enabled one is evaluated on every pass, which is affordable precisely
+    # because each is a bounded range scan and matches are idempotent.
+    dated = await pool.fetch(
+        """
+        SELECT query_id FROM standing_queries
+         WHERE enabled AND deleted_at IS NULL AND kind = 'date'
+         ORDER BY created_at
+         LIMIT $1
+         FOR UPDATE SKIP LOCKED
+        """,
+        limit,
+    )
+    for row in dated:
+        try:
+            evaluated.append(await evaluate_date(pool, row["query_id"], trigger="tick"))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("date rule %s failed: %s", row["query_id"], exc)
     return {"evaluated": evaluated}

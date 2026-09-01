@@ -343,3 +343,30 @@ async def test_a_second_tenant_cannot_read_a_revision(
 
     listed = await get_versions(pool, owner, data_id)
     assert await one_version(pool, stranger, data_id, listed[0]["version_id"]) == {}
+
+
+async def test_metadata_is_queryable_from_sql(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """It was stored as a JSON string containing JSON.
+
+    The write path serialised it and the pool's jsonb codec serialised it
+    again, so `jsonb_typeof` reported `string` and `metadata ->> 'key'`
+    returned NULL for every row -- a column whose entire purpose is being
+    queried, and which nothing could query. It read back correctly in Python,
+    which is why it survived: the round trip through `json.loads` undid the
+    damage, and only SQL ever saw it.
+    """
+    actor = await principal_for(tenant.api_key)
+    response = await _write(
+        pool, queue, blobs, settings, actor, tenant.producer_id,
+        [WriteItem(external_id="meta-1", content=Inline(text=TEXT),
+                   metadata={"deadline": "2027-01-01T00:00:00+00:00", "matter": "A-12"})],
+    )
+    data_id = response.results[0].data_id
+
+    kind = await pool.fetchval(
+        "SELECT jsonb_typeof(metadata) FROM data_items WHERE data_id = $1", data_id)
+    assert kind == "object", "an object, not a string of one"
+    assert await pool.fetchval(
+        "SELECT metadata ->> 'matter' FROM data_items WHERE data_id = $1", data_id) == "A-12"

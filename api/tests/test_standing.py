@@ -316,3 +316,163 @@ async def test_the_payload_is_rebuilt_against_the_subscriber_rights_now(
         "UPDATE data_items SET access_level = 'restricted', "
         "shared_with = '[\"user:somebody-else\"]'::jsonb WHERE data_id = $1", data_id)
     assert await _match_payload(pool, match_id, tenant.user_id) is None
+
+
+# ------------------------------------------------------------- date rules
+
+
+async def _dated(pool, queue, blobs, settings, actor, tenant, external_id, days_out):
+    """A record whose own time is `days_out` days from now."""
+    from datetime import datetime, timedelta, timezone
+
+    response = await write_items(
+        pool, queue, blobs, settings, actor,
+        WriteRequest(
+            producer_id=tenant.producer_id,
+            items=[WriteItem(
+                external_id=external_id, content=Inline(text=f"contract {external_id}"),
+                event_time=datetime.now(timezone.utc) + timedelta(days=days_out),
+            )],
+            options=WriteOptions(enrich=False),
+        ),
+    )
+    return response.results[0].data_id
+
+
+async def test_a_deadline_fires_when_the_calendar_reaches_it_not_when_it_arrives(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """The half an arrival query cannot do.
+
+    Nothing arrives on the day a deadline approaches -- the record showed up
+    months earlier and the only thing that changed is the calendar.
+    """
+    actor = await principal_for(tenant.api_key)
+    due_soon = await _dated(pool, queue, blobs, settings, actor, tenant, "renews-soon", 30)
+    await _dated(pool, queue, blobs, settings, actor, tenant, "renews-later", 200)
+
+    created = await standing.create(
+        pool, actor, project_id=tenant.project_id, name="renewals",
+        selector={}, kind="date", date_field="event_time", offset_days=30, window_days=3)
+
+    result = await standing.evaluate_date(pool, created["query_id"], trigger="manual")
+    assert result["matches"] == 1
+    assert [m["data_id"] for m in result["samples"]] == [due_soon]
+
+
+async def test_retention_ageing_is_the_same_rule_pointed_backwards(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """"Older than seven years" is a negative offset. One column saying so beats
+    two mechanisms that would drift apart."""
+    actor = await principal_for(tenant.api_key)
+    old = await _dated(pool, queue, blobs, settings, actor, tenant, "ancient", -400)
+    await _dated(pool, queue, blobs, settings, actor, tenant, "recent", -2)
+
+    created = await standing.create(
+        pool, actor, project_id=tenant.project_id, name="ageing",
+        selector={}, kind="date", date_field="event_time",
+        offset_days=-400, window_days=5)
+
+    result = await standing.evaluate_date(pool, created["query_id"], trigger="manual")
+    assert [m["data_id"] for m in result["samples"]] == [old]
+
+
+async def test_a_date_rule_matches_an_item_once_however_often_it_sweeps(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """A daily sweep over an overlapping window would otherwise refill the feed
+    with what it already said."""
+    actor = await principal_for(tenant.api_key)
+    await _dated(pool, queue, blobs, settings, actor, tenant, "renews", 30)
+    created = await standing.create(
+        pool, actor, project_id=tenant.project_id, name="renewals",
+        selector={}, kind="date", date_field="event_time", offset_days=30, window_days=5)
+
+    first = await standing.evaluate_date(pool, created["query_id"], trigger="tick")
+    second = await standing.evaluate_date(pool, created["query_id"], trigger="tick")
+    assert first["matches"] == 1 and second["matches"] == 1, "it still sees it"
+    assert await pool.fetchval("SELECT count(*) FROM standing_matches") == 1, (
+        "and records it once")
+
+
+async def test_a_producer_supplied_date_is_reachable(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """The field a legal deadline actually lives in: whatever the producer put
+    in `metadata`, not a column the platform invented."""
+    from datetime import datetime, timedelta, timezone
+
+    actor = await principal_for(tenant.api_key)
+    due = (datetime.now(timezone.utc) + timedelta(days=14)).isoformat()
+    response = await write_items(
+        pool, queue, blobs, settings, actor,
+        WriteRequest(
+            producer_id=tenant.producer_id,
+            items=[WriteItem(external_id="matter-1", content=Inline(text="a filing"),
+                             metadata={"deadline": due})],
+            options=WriteOptions(enrich=False),
+        ),
+    )
+    created = await standing.create(
+        pool, actor, project_id=tenant.project_id, name="filings", selector={},
+        kind="date", date_field="metadata.deadline", offset_days=14, window_days=2)
+
+    result = await standing.evaluate_date(pool, created["query_id"], trigger="manual")
+    assert [m["data_id"] for m in result["samples"]] == [response.results[0].data_id]
+
+
+async def test_a_date_rule_is_refused_without_a_field_or_an_offset(pool, tenant, principal_for):
+    actor = await principal_for(tenant.api_key)
+    for kwargs in ({"date_field": None, "offset_days": 30},
+                   {"date_field": "event_time", "offset_days": None},
+                   {"date_field": "nonsense", "offset_days": 30},
+                   {"date_field": "event_time", "offset_days": 30, "window_days": 0}):
+        with pytest.raises(StandingError):
+            await standing.create(
+                pool, actor, project_id=tenant.project_id,
+                name=f"bad-{kwargs}", selector={}, kind="date", **kwargs)
+
+
+async def test_the_sweep_runs_both_kinds(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """Two mechanisms, one surface. A date rule has no watermark to be behind --
+    what moved is the calendar -- so it is evaluated on every pass, which is
+    affordable because each is a bounded range scan."""
+    actor = await principal_for(tenant.api_key)
+    await _dated(pool, queue, blobs, settings, actor, tenant, "renews", 30)
+    dated = await standing.create(
+        pool, actor, project_id=tenant.project_id, name="renewals", selector={},
+        kind="date", date_field="event_time", offset_days=30, window_days=5)
+    await standing.evaluate_date(pool, dated["query_id"], trigger="backtest", record=False)
+    await standing.set_enabled(pool, actor, dated["query_id"], True)
+
+    swept = await standing.tick(pool)
+    assert len(swept["evaluated"]) == 1 and swept["evaluated"][0]["matches"] == 1
+
+
+async def test_a_date_match_appears_in_the_feed(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """It did not, and everything else about it worked.
+
+    A date rule has no domain-event sequence -- what moved is the calendar --
+    so every match landed at 0, `sequence > 0` excluded all of them, and the
+    feed was empty while the matches were recorded and the memory promotion
+    ran. The failure that looks like nothing at all.
+    """
+    actor = await principal_for(tenant.api_key)
+    await _dated(pool, queue, blobs, settings, actor, tenant, "renews", 30)
+    created = await standing.create(
+        pool, actor, project_id=tenant.project_id, name="renewals", selector={},
+        kind="date", date_field="event_time", offset_days=30, window_days=5)
+    await standing.evaluate_date(pool, created["query_id"], trigger="manual")
+
+    feed = await standing.matches_for(pool, actor, created["query_id"])
+    assert [m["external_id"] for m in feed["matches"]] == ["renews"]
+    # And the cursor advances, so a poller resuming from it does not re-read.
+    assert feed["cursor"] > 0
+    resumed = await standing.matches_for(
+        pool, actor, created["query_id"], since=feed["cursor"])
+    assert resumed["matches"] == []

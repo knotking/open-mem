@@ -1971,6 +1971,10 @@ async def create_standing(
             request.app.state.pool, actor,
             project_id=body.get("project_id", ""), name=body.get("name", "untitled"),
             selector=body.get("selector") or {}, delivery=body.get("delivery"),
+            kind=body.get("kind", "arrival"),
+            date_field=body.get("date_field"),
+            offset_days=body.get("offset_days"),
+            window_days=int(body.get("window_days", 1)),
         )
     except (StandingError, AuthError) as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
@@ -2042,9 +2046,19 @@ async def backtest_standing(
     """
     from .standing import StandingError, evaluate
 
+    from .standing import evaluate_date
+
     body = body or {}
     try:
         actor.require(DATA_READ)
+        kind = await request.app.state.pool.fetchval(
+            "SELECT kind FROM standing_queries WHERE query_id = $1", query_id)
+        # A date rule has no sequence to walk from: what would have caught
+        # something is the window, so the backtest is the same window with its
+        # writes withheld.
+        if kind == "date":
+            return await evaluate_date(
+                request.app.state.pool, query_id, trigger="backtest", record=False)
         return await evaluate(
             request.app.state.pool, query_id, trigger="backtest", record=False,
             from_sequence=int(body.get("from_sequence", 0)),

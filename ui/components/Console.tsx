@@ -5771,6 +5771,10 @@ function WorkflowsSection({ projectId }: { projectId: string }) {
 type StandingQuery = {
   query_id: string;
   name: string;
+  kind: string;
+  date_field: string | null;
+  offset_days: number | null;
+  window_days: number;
   selector: { query?: string; data_type?: string; tags?: string[]; producer_id?: string };
   delivery: { kind: string; memory_key?: string; memory_type?: string };
   enabled: boolean;
@@ -5828,6 +5832,13 @@ function StandingSection({ projectId }: { projectId: string }) {
   const [dataType, setDataType] = useState("");
   const [tags, setTags] = useState("");
   const [deliverTo, setDeliverTo] = useState("");
+  // Two mechanisms, one surface. `arrival` matches new writes and never
+  // re-scans; `date` fires when the calendar reaches a record, which no
+  // predicate over new writes can do because nothing arrives that day.
+  const [kind, setKind] = useState<"arrival" | "date">("arrival");
+  const [dateField, setDateField] = useState("event_time");
+  const [offsetDays, setOffsetDays] = useState("30");
+  const [windowDays, setWindowDays] = useState("3");
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -5892,6 +5903,59 @@ function StandingSection({ projectId }: { projectId: string }) {
 
       <section className="panel">
         <h2>Watch for something</h2>
+        <div className="scopes">
+          <button className={`scope${kind === "arrival" ? " active" : ""}`}
+                  onClick={() => setKind("arrival")}>
+            <span className="scope-label">When it arrives</span>
+            <span className="scope-blast">
+              Each new record is checked as it is written. Never re-scans, so it costs nothing
+              per record however many rules you register.
+            </span>
+          </button>
+          <button className={`scope${kind === "date" ? " active" : ""}`}
+                  onClick={() => setKind("date")}>
+            <span className="scope-label">When it comes due</span>
+            <span className="scope-blast">
+              Fires when the calendar reaches a record — a renewal, a deadline, or something
+              old enough to retire. No predicate over new writes can do this: nothing arrives
+              on the day a deadline approaches.
+            </span>
+          </button>
+        </div>
+        {kind === "date" && (
+          <div className="row">
+            <label>
+              Which date
+              <select value={dateField} onChange={(e) => setDateField(e.target.value)}>
+                <option value="event_time">event_time — the record&rsquo;s own time</option>
+                <option value="ingested_at">ingested_at — when it arrived</option>
+                <option value="metadata.deadline">metadata.deadline</option>
+                <option value="metadata.renewal_date">metadata.renewal_date</option>
+                <option value="metadata.due_date">metadata.due_date</option>
+              </select>
+            </label>
+            <label>
+              Days from now
+              <input type="number" value={offsetDays} style={{ width: 110 }}
+                     onChange={(e) => setOffsetDays(e.target.value)} />
+            </label>
+            <label>
+              Window (± days)
+              <input type="number" min="1" value={windowDays} style={{ width: 110 }}
+                     onChange={(e) => setWindowDays(e.target.value)} />
+            </label>
+          </div>
+        )}
+        {kind === "date" && (
+          <p className="empty" style={{ marginTop: 0 }}>
+            <strong>Negative is the past</strong> — <code>-2555</code> is &ldquo;older than seven
+            years&rdquo;, which is what retention ageing means. Retention and deadlines are the
+            same rule pointed opposite ways. The window matters: a rule matching a date exactly N
+            days away <em>to the second</em> fires never. Model-extracted dates are not selectable
+            yet — nothing normalises them to a date, so a rule over them would compare strings and
+            silently match nothing.
+          </p>
+        )}
         <div className="row">
           <label style={{ flex: 1 }}>
             Name
@@ -5922,14 +5986,19 @@ function StandingSection({ projectId }: { projectId: string }) {
                    onChange={(e) => setDeliverTo(e.target.value)} />
           </label>
           <button
-            disabled={busy || !narrows || !name.trim()}
-            title={!narrows
+            disabled={busy || (kind === "arrival" && !narrows) || !name.trim()}
+            title={kind === "arrival" && !narrows
               ? "Narrow it first. A selector matching everything makes the feed a copy of the project."
               : "Created disabled — it has to be backtested before it can start."}
             onClick={() =>
               act("Created. Backtest it, then enable it.", async () => {
                 await call("api/v1/standing-queries", {
                   project_id: projectId, name: name.trim(), selector: selector(),
+                  kind,
+                  ...(kind === "date"
+                    ? { date_field: dateField, offset_days: Number(offsetDays),
+                        window_days: Number(windowDays) }
+                    : {}),
                   delivery: deliverTo.trim()
                     ? { kind: "memory", memory_key: deliverTo.trim() }
                     : { kind: "poll" },
@@ -5975,7 +6044,11 @@ function StandingSection({ projectId }: { projectId: string }) {
                   {q.enabled ? "watching" : q.approved ? "ready" : "not backtested"}
                 </span>
                 <strong>{q.name}</strong>
-                <code>{q.selector.query ?? Object.keys(q.selector).join(" · ")}</code>
+                <code>
+                  {q.kind === "date"
+                    ? `${q.date_field} ${(q.offset_days ?? 0) >= 0 ? "+" : ""}${q.offset_days}d ±${q.window_days}`
+                    : q.selector.query ?? Object.keys(q.selector).join(" · ")}
+                </code>
                 {q.delivery.kind === "memory" && (
                   <span className="chip">→ {q.delivery.memory_key}</span>
                 )}

@@ -449,7 +449,15 @@ async def _write_one(
         item.identifiers,
         tags,
         run_id,
-        json.dumps(item.metadata or {}),
+        # Passed as an object, not as a string of one.
+        #
+        # The pool encodes jsonb with `json.dumps`, so serialising here too
+        # stored a JSON *string containing* the object: `jsonb_typeof` reported
+        # `string`, `metadata ->> 'key'` returned NULL for every row, and no
+        # query could reach inside a column whose entire purpose is being
+        # queried. It read back correctly in Python, which is why it survived --
+        # the round trip through `json.loads` hid it.
+        item.metadata or {},
     )
     data_id, created = row["data_id"], row["created"]
 
