@@ -4031,6 +4031,15 @@ function MemorySection({ projectId }: { projectId: string }) {
   const [sweep, setSweep] = useState<SweepResult | null>(null);
   const [tree, setTree] = useState<MemoryTree | null>(null);
   const [parentOf, setParentOf] = useState("");
+  // What can be made from this memory's members, served rather than typed here
+  // — a list in a console is a second copy of a vocabulary.
+  const [generators, setGenerators] = useState<{ name: string; label: string;
+                                                 describe: string; archivable: boolean }[]>([]);
+  const [generator, setGenerator] = useState("summary");
+  const [derived, setDerived] = useState<{ artifact_id: string; kind: string;
+                                           title: string | null; summary: string | null;
+                                           sources: number; access_level: string;
+                                           created_at: string }[]>([]);
 
   const load = useCallback(async () => {
     try {
@@ -4039,6 +4048,8 @@ function MemorySection({ projectId }: { projectId: string }) {
         call<{ types: MemoryType[] }>(`api/v1/projects/${projectId}/memory-types`),
         call<ExpiryDue>(`api/v1/projects/${projectId}/expiring?limit=200`),
       ]);
+      setGenerators((await call<{ generators: typeof generators }>("api/v1/generators")
+        .catch(() => ({ generators: [] }))).generators);
       setMemories(m.memories);
       setTypes(t.types);
       setDue(d);
@@ -4066,6 +4077,8 @@ function MemorySection({ projectId }: { projectId: string }) {
         const inside = new Set(mem.members.map((x) => x.data_id));
         setAvailable(data.items.filter((i) => !inside.has(i.data_id)));
         setTree(await call<MemoryTree>(`api/v1/memories/${memory.memory_id}/tree`));
+        setDerived((await call<{ artifacts: typeof derived }>(
+          `api/v1/memories/${memory.memory_id}/artifacts`)).artifacts);
       } catch (e) {
         setError((e as Error).message);
       }
@@ -4378,6 +4391,56 @@ function MemorySection({ projectId }: { projectId: string }) {
                 Link
               </button>
             </div>
+
+            <h3>Make something from it</h3>
+            <div className="row">
+              <label style={{ flex: 1 }}>
+                Generator
+                <select value={generator} onChange={(e) => setGenerator(e.target.value)}>
+                  {generators.map((g) => (
+                    <option key={g.name} value={g.name}>{g.label}</option>
+                  ))}
+                </select>
+              </label>
+              <button
+                disabled={busy}
+                title="Reads the members and produces one artifact. Nothing is archived — that is what compaction adds, and only a summary may do it."
+                onClick={() =>
+                  act("Derived.", async () => {
+                    await call(`api/v1/memories/${selected.memory_id}/derive`,
+                               { generator });
+                    setDerived((await call<{ artifacts: typeof derived }>(
+                      `api/v1/memories/${selected.memory_id}/artifacts`)).artifacts);
+                  })
+                }
+              >
+                Derive
+              </button>
+            </div>
+            <p className="empty">
+              {generators.find((g) => g.name === generator)?.describe}
+              {" "}It reads <strong>through the hierarchy</strong> — a parent covers what its
+              children hold — and takes the <strong>strictest access level among its
+              sources</strong>, so one built over a private record is private. Nothing is
+              archived: that is compaction&rsquo;s policy, and <strong>only a summary is allowed
+              to do it</strong> — a flashcard deck that folded the course away would leave itself
+              as the only remaining copy of it.
+            </p>
+            {derived.length > 0 && (
+              <div className="excluded">
+                {derived.map((a) => (
+                  <div className="item" key={a.artifact_id}>
+                    <span className="chip on">{a.kind}</span>
+                    <strong>{a.title}</strong>
+                    <span className="chip">{a.access_level}</span>
+                    <span className="empty">{a.sources} source{a.sources === 1 ? "" : "s"}</span>
+                    <span className="empty far">
+                      {new Date(a.created_at).toLocaleString()}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
 
             <h3>Members</h3>
             {members.length === 0 ? (

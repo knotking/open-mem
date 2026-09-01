@@ -55,6 +55,10 @@ const ALLOWED = [
   /^api\/v1\/memories\/[A-Za-z0-9_]+\/members\/[A-Za-z0-9_]+$/,
   /^api\/v1\/projects\/[A-Za-z0-9_]+\/memories$/,
   /^api\/v1\/memories\/[A-Za-z0-9_]+\/members$/,
+  // Deriving: what can be made from a memory, and what has been.
+  /^api\/v1\/generators$/,
+  /^api\/v1\/memories\/[A-Za-z0-9_]+\/derive$/,
+  /^api\/v1\/memories\/[A-Za-z0-9_]+\/artifacts$/,
   // The hierarchy: `part_of` in both directions, and the link that builds it.
   /^api\/v1\/memories\/[A-Za-z0-9_]+\/tree(\?.*)?$/,
   /^api\/v1\/memories\/[A-Za-z0-9_]+\/links(\?.*)?$/,

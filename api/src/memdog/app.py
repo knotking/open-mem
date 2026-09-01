@@ -2283,6 +2283,68 @@ async def resolve_attendees(
     return await meeting_access(request.app.state.pool, actor.org_id, attendees)
 
 
+@app.get("/api/v1/generators")
+async def list_generators(actor: Principal = Depends(principal)) -> dict:
+    """What can be made from a set of records.
+
+    Served rather than documented twice, for the same reason the predicates and
+    the compaction algorithms are: a list typed into a console is a second copy
+    of a vocabulary, and the copy is the one that goes stale.
+    """
+    from .derive import GENERATORS
+
+    return {"generators": [
+        {"name": name, "label": spec["label"], "describe": spec["describe"],
+         # Only a summary may archive what it read. A flashcard deck that folded
+         # the course away would leave itself as the only remaining copy of it.
+         "archivable": spec["archivable"]}
+        for name, spec in sorted(GENERATORS.items())
+    ]}
+
+
+@app.post("/api/v1/memories/{memory_id}/derive")
+async def derive_from_memory(
+    request: Request, memory_id: str, body: dict | None = None,
+    actor: Principal = Depends(principal),
+) -> dict:
+    """Make an artifact from a memory's members.
+
+    `compress` was this with `generator=summary` and `archive=true` welded
+    together. Archiving is a policy about the originals, not a property of
+    having derived something, and separating them is what turns a study guide,
+    a flashcard deck and an obligations extract into configuration rather than
+    three more endpoints.
+    """
+    from .derive import DeriveError, derive
+    from .memories import MemoryError as MemErr
+
+    body = body or {}
+    state = request.app.state
+    try:
+        return await derive(
+            state.pool, actor, memory_id,
+            generator=body.get("generator", "summary"),
+            extractor=getattr(state, "extractor", None),
+            archive=bool(body.get("archive")),
+            max_members=int(body.get("max_members", 200)),
+            dry_run=bool(body.get("dry_run")),
+        )
+    except (DeriveError, MemErr, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/memories/{memory_id}/artifacts")
+async def memory_artifacts(
+    request: Request, memory_id: str, actor: Principal = Depends(principal)
+) -> dict:
+    from .derive import artifacts_for
+
+    try:
+        return {"artifacts": await artifacts_for(request.app.state.pool, actor, memory_id)}
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
 @app.get("/api/v1/artifacts/stale")
 async def read_stale(
     request: Request, actor: Principal = Depends(principal), limit: int = 100

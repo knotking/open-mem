@@ -384,7 +384,7 @@ async def _members(pool, principal, memory_id: str) -> list[dict]:
         rows = await pool.fetch(
             f"""
             SELECT d.data_id, d.external_id, d.checksum, d.content_text,
-                   d.access_level, d.shared_with,
+                   d.access_level, d.shared_with, d.owner_id,
                    length(coalesce(d.content_text, '')) AS content_chars, d.created_at
               FROM memory_members mm JOIN data_items d ON d.data_id = mm.data_id
              WHERE mm.memory_id = ANY($4::text[]) AND d.archived_at IS NULL
@@ -400,7 +400,7 @@ async def _members(pool, principal, memory_id: str) -> list[dict]:
         rows = await pool.fetch(
             """
             SELECT d.data_id, d.external_id, d.checksum, d.content_text,
-                   d.access_level, d.shared_with,
+                   d.access_level, d.shared_with, d.owner_id,
                    length(coalesce(d.content_text, '')) AS content_chars, d.created_at
               FROM memory_members mm JOIN data_items d ON d.data_id = mm.data_id
              WHERE mm.memory_id = ANY($1::text[]) AND d.archived_at IS NULL
@@ -419,6 +419,20 @@ async def _members(pool, principal, memory_id: str) -> list[dict]:
         seen.add(row["data_id"])
         unique.append(dict(row))
     return unique
+
+
+def _owner_of(members: list[dict], level: str) -> str | None:
+    """Whose record set the level this artifact inherited.
+
+    Precise rather than convenient: a private artifact should be readable by
+    exactly the person who could read the private source it came from, and
+    attributing it to whoever happened to run the job would hand them a record
+    they may not have been able to read.
+    """
+    for member in members:
+        if member.get("access_level") == level and member.get("owner_id"):
+            return member["owner_id"]
+    return next((m.get("owner_id") for m in members if m.get("owner_id")), None)
 
 
 async def _archive(pool, data_ids: list[str], run_id: str) -> None:
@@ -510,14 +524,23 @@ async def _summarize(
             """
             INSERT INTO artifacts (artifact_id, org_id, project_id, kind, title,
                 summary, model_id, generator_version, served_by_model,
-                access_level, shared_with)
-            VALUES ($1, $2, $3, 'compaction', $4, $5, $6, $7, $6, $8, $9::jsonb)
+                access_level, shared_with, owner_id)
+            VALUES ($1, $2, $3, 'compaction', $4, $5, $6, $7, $6, $8, $9::jsonb, $10)
             """,
             artifact_id, org_id, project_id,
             (getattr(envelope, "title", None) or "Compacted memory")[:200],
             getattr(envelope, "summary", None) or "",
             getattr(extractor, "model_id", None) or "unknown",
             generator, acl.access_level, json.dumps(acl.shared_with),
+            # Owned by whoever owns the record whose ACL this inherited.
+            #
+            # Without an owner a `private` artifact is readable by nobody: the
+            # predicate is `access_level = 'private' AND owner_id = $user`, and
+            # NULL matches no user. Every compaction summary over private
+            # records has been invisible to everyone including the person who
+            # compacted them -- and invisible is exactly how a working summary
+            # and a missing one look the same.
+            _owner_of(batch, acl.access_level),
         )
         for data_id, start, end in offsets:
             await conn.execute(

@@ -248,3 +248,28 @@ async def test_compacting_twice_does_not_re_archive(pool, tenant, principal_for)
     first = await run(pool, actor, memory_id=memory_id, algorithm="dedupe")
     second = await run(pool, actor, memory_id=memory_id, algorithm="dedupe")
     assert first["archived"] == 1 and second["archived"] == 0
+
+
+async def test_a_private_summary_is_readable_by_its_owner(
+    pool, tenant, principal_for
+):
+    """It was readable by nobody.
+
+    The predicate for a private record is `access_level = 'private' AND
+    owner_id = $user`, and the artifact insert never set an owner -- so NULL
+    matched no user and every compaction summary over private records was
+    invisible to everyone, including the person who compacted them. Invisible
+    is exactly how a working summary and a missing one look the same.
+    """
+    from memdog.derive import artifacts_for
+
+    actor = await principal_for(tenant.api_key)
+    memory_id = await _memory(pool, tenant)
+    for i, text in enumerate(["one thing", "another thing", "a third"]):
+        await _member(pool, tenant, memory_id, f"p-{i}", text, access="private")
+
+    await run(pool, actor, memory_id=memory_id, algorithm="summarize", mode="live",
+              extractor=FakeExtractor())
+    listed = await artifacts_for(pool, actor, memory_id)
+    assert listed, "the person who compacted it can see what it produced"
+    assert listed[0]["access_level"] == "private"
