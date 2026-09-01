@@ -11,6 +11,33 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **A meeting transcript is written restricted to the room**, not to whatever
+  its connection scope would give it. That inheritance is right for a Jira
+  ticket and a **serious disclosure for a recording** — four people in a room
+  did not publish to the company, and nothing downstream knows the difference.
+  Opt-in per integration via `attendees_path` in the producer's mapping, since
+  one key that silently re-ACLed a project's whole ingestion would be a worse
+  bug than the one it fixes.
+- **Zoom, Meet and Teams are configuration, not three code paths.** They differ
+  only in where the attendee list sits and what the key is called, so a
+  provider nobody has heard of works on the day it arrives. Two conservative
+  directions: an attendee outside the organisation resolves to **nothing**
+  rather than having a principal invented, and a meeting where nobody resolves
+  is written **private** — `restricted` to no principals is refused, and
+  falling back to the connection default is the disclosure this prevents.
+- **A transcript parser — `.vtt` and `.srt` — that produces turns, not cues.**
+  Indexing cues is the wrong unit twice: a sentence spans three of them so no
+  chunk holds a whole thought, and the timestamps outnumber the words. Speaker
+  attribution accepts `<v Name>` and a `Name:` prefix, and **the heuristic runs
+  the safe way**: a four-word name is read as unattributed speech, losing
+  attribution, rather than reading *"One thing was clear:"* as a speaker and
+  inventing it — invented attribution in a transcript is a quote put in
+  somebody's mouth.
+- **A `meeting` memory type**, ninety days and `archive`. The plan's caveat that
+  TTL is unenforced is obsolete: the sweep shipped the same day, so this is a
+  retention policy that runs.
+
+### Added
 - **Workflows — long-running state machine instances, as a system of record.**
   The engine lives outside and calls in; memdog holds the state, the history
   and the deadlines and executes nothing. **A directed state graph that may

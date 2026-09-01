@@ -455,8 +455,19 @@ async def _receive(
     # Derived from the delivery's attendee list rather than from anything the
     # item carries: an ACL that could be influenced by content is an ACL a
     # payload can widen.
-    attendees = attendees_in(payload, resolved_mapping)
-    if attendees:
+    # Configured, not populated. The two are different facts and only one of
+    # them is safe to treat as "not a meeting".
+    #
+    # Zoom is what exposes this: `recording.completed` carries no participant
+    # list at all -- attendees are a second API call -- so a mapping that
+    # declares `attendees_path` gets an empty list on every delivery. Keying
+    # the behaviour on whether attendees were *found* meant a transcript then
+    # fell through to the connection default, which for a shared connection is
+    # org-visible. The disclosure this whole path exists to prevent, arriving
+    # through the one provider most likely to be configured first.
+    is_meeting = bool(resolved_mapping.get("attendees_path"))
+    attendees = attendees_in(payload, resolved_mapping) if is_meeting else []
+    if is_meeting:
         from .meetings import meeting_access
 
         access = await meeting_access(pool, producer["org_id"], attendees)

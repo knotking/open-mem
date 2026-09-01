@@ -246,3 +246,51 @@ async def test_a_delivery_with_no_attendees_path_is_untouched(
     level = await pool.fetchval(
         "SELECT access_level FROM data_items WHERE data_id = $1", result.data_ids[0])
     assert level == "private", "the producer's default, unchanged"
+
+
+async def test_a_meeting_mapping_with_no_attendees_in_the_payload_is_private(
+    pool, queue, blobs, settings, tenant
+):
+    """Configured and unpopulated are different facts.
+
+    Zoom's `recording.completed` carries no participant list -- attendees are a
+    second API call -- so a correctly configured meeting producer gets an empty
+    list on every delivery. Keying on whether attendees were *found* let the
+    transcript fall through to the connection default, which on a shared
+    connection is org-visible: the disclosure this path exists to prevent,
+    arriving through the provider most likely to be configured first.
+    """
+    import os
+
+    from memdog.crypto import Envelope
+    from memdog.ids import new_id
+    from memdog.webhooks import receive
+
+    envelope = Envelope(os.urandom(32))
+    producer_id = new_id("whk")
+    conn_id = new_id("conn")
+    await pool.execute(
+        """
+        INSERT INTO connections (connection_id, org_id, project_id, user_id, provider, scope)
+        VALUES ($1, $2, $3, $4, 'manual', 'shared')
+        """,
+        conn_id, tenant.org_id, tenant.project_id, tenant.user_id)
+    await pool.execute(
+        """
+        INSERT INTO producers (producer_id, type, user_id, org_id, project_id, status,
+                               inbound_auth, inbound_mapping, defaults, connection_id)
+        VALUES ($1, 'webhook', $2, $3, $4, 'enabled', 'url_secret', $5, '{}', $6)
+        """,
+        producer_id, tenant.user_id, tenant.org_id, tenant.project_id,
+        {"text_path": "topic", "attendees_path": "participants"}, conn_id)
+
+    result = await receive(
+        pool, queue, blobs, settings, envelope, producer_id=producer_id,
+        raw_body=json.dumps({"topic": "Performance review", "uuid": "z-1"}).encode(),
+        headers={})
+
+    level = await pool.fetchval(
+        "SELECT access_level FROM data_items WHERE data_id = $1", result.data_ids[0])
+    assert level == "private", (
+        "a shared connection would have made this org-visible; a transcript nobody "
+        "could be resolved for is private")
