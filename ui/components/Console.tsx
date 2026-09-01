@@ -535,6 +535,12 @@ function AddData({
   // with a different level is the only path, and it raises `acl.changed`.
   const [level, setLevel] = useState("");
   const [principals, setPrincipals] = useState<string[]>([]);
+  // A transcript is not a document like the others: it is speech four people
+  // did not publish to the company. Naming the room here is what lets one be
+  // uploaded by hand without a provider integration at all.
+  const [attendees, setAttendees] = useState("");
+  const [room, setRoom] = useState<{ level: string; principals: string[];
+                                     resolved: string[]; unresolved: string[] } | null>(null);
   const [audience, setAudience] = useState<{ groups: Group[]; members: Member[] }>(
     { groups: [], members: [] });
   // What this producer's connection permits. A connection's scope is a ceiling
@@ -581,8 +587,14 @@ function AddData({
     setError(null);
     setNote(null);
     try {
-      const memory =
-        memoryType || memoryKey
+      // A named room decides both the container and the visibility. Set here
+      // rather than left to the general controls below, because a transcript
+      // filed as `default` and visible to the project is the failure the
+      // meeting type and its ninety-day retention exist to prevent.
+      const meeting = room !== null && attendees.trim() !== "";
+      const memory = meeting
+        ? { type: "meeting", key: memoryKey || externalId }
+        : memoryType || memoryKey
           ? { type: memoryType || "default", key: memoryKey || null }
           : undefined;
       const response = await call<{
@@ -593,9 +605,12 @@ function AddData({
         // carry five hundred items with five hundred different ACLs.
         items: [{
           external_id: externalId, content, memory,
-          access: level
-            ? { level, principals: level === "shared" || level === "restricted" ? principals : [] }
-            : undefined,
+          access: meeting
+            ? { level: room.level, principals: room.principals }
+            : level
+              ? { level, principals: level === "shared" || level === "restricted"
+                                     ? principals : [] }
+              : undefined,
         }],
         options: {
           enrich,
@@ -653,6 +668,50 @@ function AddData({
           described and their text transcribed. That costs tokens per file, recorded per revision.
         </div>
         <p className={enrich ? "empty" : "warntext"} style={{ marginTop: 0 }}>{willDo}</p>
+
+        <div className="row">
+          <label style={{ flex: 1 }}>
+            Was this a meeting? Name the room
+            <input
+              type="text"
+              value={attendees}
+              placeholder="dana@example.com, priya@example.com — leave blank for anything else"
+              onChange={(e) => { setAttendees(e.target.value); setRoom(null); }}
+              onBlur={async () => {
+                const list = attendees.split(/[,;\s]+/).map((a) => a.trim()).filter(Boolean);
+                if (list.length === 0) { setRoom(null); return; }
+                try {
+                  setRoom(await call("api/v1/meetings/attendees", { attendees: list }));
+                } catch (e) {
+                  setError((e as Error).message);
+                }
+              }}
+            />
+          </label>
+        </div>
+        {room && (
+          <>
+            <p className="empty" style={{ marginTop: 0 }}>
+              Filed as a <code>meeting</code> memory — <strong>ninety days, then archived</strong> —
+              and written <strong>{room.level}</strong>
+              {room.principals.length > 0
+                ? ` to ${room.resolved.join(", ")}`
+                : ", because nobody in the room is a member here"}
+              . A transcript is unedited speech nobody reviewed before it was stored, which is why
+              the retention is a default rather than a preference.
+            </p>
+            {room.unresolved.length > 0 && (
+              <p className="warned">
+                <strong>{room.unresolved.length} of {room.resolved.length + room.unresolved.length}{" "}
+                did not resolve</strong> — {room.unresolved.join(", ")}. They are not members here,
+                so no principal exists for them and they will not see this. That is the
+                conservative direction; the alternative is inventing a principal for somebody
+                outside the organisation.
+              </p>
+            )}
+          </>
+        )}
+
         <Capture
           busy={busy}
           onSubmit={(name, mime, base64, size) =>

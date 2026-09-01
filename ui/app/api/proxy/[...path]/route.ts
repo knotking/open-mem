@@ -41,6 +41,9 @@ const ALLOWED = [
   /^api\/v1\/reprocess$/,
   // Expiry: the sweep, and the forecast of what it would take.
   /^api\/v1\/expiry\/sweep$/,
+  // Who in the room is a principal here, answered before the write rather
+  // than discovered after it.
+  /^api\/v1\/meetings\/attendees$/,
   /^api\/v1\/projects\/[A-Za-z0-9_]+\/expiring(\?.*)?$/,
   /^api\/v1\/artifacts\/stale(\?.*)?$/,
   /^api\/v1\/projects\/[A-Za-z0-9_]+\/staircase$/,

@@ -2242,6 +2242,33 @@ async def get_instances(
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
 
 
+@app.post("/api/v1/meetings/attendees")
+async def resolve_attendees(
+    request: Request, body: dict, actor: Principal = Depends(principal)
+) -> dict:
+    """Who in this room is a principal here, and who is not.
+
+    Answered **before** the write rather than after it, because the number that
+    matters is how many attendees did not resolve: a transcript restricted to
+    one of six people is technically correct and practically useless, and the
+    moment to see that is while deciding, not while wondering why nobody can
+    find it.
+
+    Discloses nothing new — a member can already list the organisation's
+    members. It reports which of *these* addresses are among them.
+    """
+    from .meetings import meeting_access
+
+    try:
+        actor.require(DATA_READ)
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    attendees = body.get("attendees") or []
+    if not isinstance(attendees, list):
+        raise HTTPException(status_code=400, detail="attendees must be a list of addresses")
+    return await meeting_access(request.app.state.pool, actor.org_id, attendees)
+
+
 @app.get("/api/v1/artifacts/stale")
 async def read_stale(
     request: Request, actor: Principal = Depends(principal), limit: int = 100

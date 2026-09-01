@@ -294,3 +294,15 @@ async def test_a_meeting_mapping_with_no_attendees_in_the_payload_is_private(
     assert level == "private", (
         "a shared connection would have made this org-visible; a transcript nobody "
         "could be resolved for is private")
+
+
+async def test_attendees_resolve_before_the_write_not_after(pool, tenant, principal_for):
+    """The number that matters is how many did *not* resolve, and the moment to
+    see it is while deciding -- not while wondering why nobody can find the
+    transcript afterwards."""
+    actor = await principal_for(tenant.api_key)
+    access = await meetings.meeting_access(
+        pool, tenant.org_id, ["a@example.com", "outside@elsewhere.test"])
+    assert access["level"] == "restricted"
+    assert access["resolved"] == ["a@example.com"]
+    assert access["unresolved"] == ["outside@elsewhere.test"]
