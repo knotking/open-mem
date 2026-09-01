@@ -67,18 +67,6 @@ architectural one — and it is **very hard to change once habits form**.
 
 ## Tier 2 · Scope decisions with a stated trade
 
-### 5 · Scope W10 standing queries?
-
-**The question.** Does the platform push, or only answer when asked?
-
-**Why it matters.** Retrieval is pull-only, and **four published use cases need push** — media
-monitoring, IoT thresholds, legal deadlines, compliance retention. **Media monitoring is *only* a
-push product**; shipping it without delivery ships nothing.
-
-**Recommend:** scope W10 with media monitoring, and **state the deferral explicitly** for the other
-three rather than letting it be discovered. Two of three pieces already exist — a saved selector
-and a webhook — the missing part is the evaluation loop.
-
 ### 6 · `compress` → `derive`?
 
 **The question.** Is summarisation the only artifact derivable from a memory?

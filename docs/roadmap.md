@@ -380,6 +380,8 @@ the audit record, costs a question that can never be answered.
 | Auth provider? | **Firebase for login; user-created API keys validated at the gateway; both resolved to one identity.** Air-gap is served by a local password verifier behind the same seam — so **air-gapped operation is a self-hosted capability, not a property of the hosted product** |
 | Inbound authentication? | **The same user-created keys** where the provider can present one; signature or URL secret otherwise, declared per producer |
 | Separate batch endpoint? | **No** — one write verb, `items[]` |
+| Scope W10 standing queries? | **Yes, scoped and shipped.** A selector over new writes only, never a re-scan; delivery by poll, by promotion into a memory, and by webhook through the sender the alerts already use. **The time-based half is deliberately not W10** — "thirty days before a due date" is not a predicate over new writes, so legal deadlines and retention ageing remain a scheduled sweep over date facets, stated rather than discovered |
+| Is a connection scope a default or a ceiling? | **A ceiling.** `ItemAccess` always said so and nothing enforced it, so a producer on somebody's personal mailbox could publish `public`. A producer with **no** connection is unrestricted — the rule is about a connection's scope, and a direct client write has none |
 | Which models in MVP? | **Gemini Flash for generation and Gemini embeddings for RAG, plus Ollama Cloud (token-authenticated) as a second generation engine.** **Embeddings stay on one engine — not negotiable**, since mixed vectors corrupt an index silently. No tiering policy yet. **All versions pinned, never a rolling alias**, or `generator_version` lies. Two engines exercises the catalog seam, and Ollama Cloud's local twin speaks the same protocol — so restoring air-gap later is a base-URL change against an adapter already in production |
 
 ### Still open
@@ -389,7 +391,6 @@ the audit record, costs a question that can never be answered.
 
 | **Add write phase 5 — transform / redact?** | The one customization request the design cannot serve at all. Not-storing beats storing-then-erasing on every axis. Recommend yes; cost is a declarative rule type and the discipline that it never calls a model inline |
 | **Allow `reject` as a validation policy?** | Recommend yes, but **blocked for webhook producers** — enabling it there converts a compliance preference into silent data loss |
-| **Scope W10 standing queries?** | Four published use cases need push; media monitoring is *only* a push product, so shipping it without delivery ships nothing. Recommend scoping W10 with media monitoring and stating the deferral for the rest |
 | **`compress` → `derive`?** | Study guides, flashcards, obligation extracts and customer briefings are one operation with different output schemas. Recommend yes — reuses the existing generator registry, and the endpoint has no clients yet |
 | **Materialisation policy** | Always store (recommended) / threshold / derived-only |
 | **Default ACL for a team upload** | Private-by-default is consistent; users dragging into a *team* space often expect team visibility |
