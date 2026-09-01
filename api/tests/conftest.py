@@ -147,6 +147,22 @@ async def tenant(pool):
 
 
 @pytest.fixture
+async def connected_tenant(pool):
+    """A tenant whose producer writes through a personal connection.
+
+    The default tenant has none, because a bootstrap key is a direct client
+    rather than a credential to somebody else's system -- and a connection's
+    scope is a *ceiling* on what its producer may publish, so attaching one by
+    default silently capped every test's writes at `private`. The tests whose
+    subject is the connection itself ask for it here.
+    """
+    from memdog.bootstrap import bootstrap_tenant
+
+    return await bootstrap_tenant(
+        pool, org_name="connected", email="c@example.com", connection_scope="personal")
+
+
+@pytest.fixture
 async def other_tenant(pool):
     return await bootstrap_tenant(pool, org_name="globex", email="b@example.com")
 

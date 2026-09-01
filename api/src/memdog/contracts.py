@@ -85,10 +85,18 @@ class CaseRef(BaseModel):
 
 
 class ItemAccess(BaseModel):
-    """A caller may narrow visibility, never silently widen the default.
+    """A caller may narrow visibility, never widen it.
 
     Requesting a level the producer's connection scope does not permit is a
-    rejected item, not a downgraded one.
+    rejected item, not a downgraded one -- a caller told their write succeeded
+    would never discover it had landed narrower than they asked.
+
+    The rule is about a *connection*: a personal one caps its producer at
+    `private` and a shared one at `org`. A producer with **no** connection --
+    a direct client write, an upload -- is unrestricted, because there is no
+    scope to exceed and the caller is the owner deciding about their own
+    record. Enforced in `acl_for_write`, which is the only place an ACL is
+    assigned.
     """
 
     level: str | None = None

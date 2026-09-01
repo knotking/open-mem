@@ -144,17 +144,17 @@ async def test_producer_freshness_is_reported(pool, tenant, queue, blobs, settin
 
 
 async def test_changing_a_connection_scope_does_not_rewrite_history(
-    pool, tenant, queue, blobs, settings, principal_for
+    pool, connected_tenant, queue, blobs, settings, principal_for
 ):
     """Those items were assigned an ACL at write time; silently re-filing them
     would change who can see existing data."""
     from memdog.contracts import Inline, WriteItem, WriteRequest, WriteOptions
     from memdog.write import write_items
 
-    owner = await principal_for(tenant.api_key)
+    owner = await principal_for(connected_tenant.api_key)
     written = await write_items(
         pool, queue, blobs, settings, owner,
-        WriteRequest(producer_id=tenant.producer_id, items=[
+        WriteRequest(producer_id=connected_tenant.producer_id, items=[
             WriteItem(external_id="scoped-1", content=Inline(text="written while personal")),
         ],
                         options=WriteOptions(enrich=True)),
@@ -162,7 +162,7 @@ async def test_changing_a_connection_scope_does_not_rewrite_history(
     before = await pool.fetchval(
         "SELECT access_level FROM data_items WHERE data_id = $1", written.results[0].data_id
     )
-    result = await control.set_connection_scope(pool, owner, tenant.connection_id, "shared")
+    result = await control.set_connection_scope(pool, owner, connected_tenant.connection_id, "shared")
     assert result["applies_to"] == "future writes only"
 
     after = await pool.fetchval(

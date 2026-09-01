@@ -68,6 +68,28 @@ def acl_for_write(
     level = requested_level or default
     if level not in LEVELS:
         raise ValueError(f"unknown access level {level!r}")
+
+    # A connection is a ceiling, not merely a default.
+    #
+    # `ItemAccess` has always said a caller may narrow visibility and never
+    # widen it, and that a level the producer's connection scope does not
+    # permit is a rejected item -- and nothing checked, so a producer reading
+    # somebody's personal mailbox could ask for `public` and get it. That is
+    # precisely the leak connection-scoped ACLs exist to prevent: personal data
+    # in a team org stays private whatever anything else says.
+    #
+    # A producer with **no** connection is unrestricted, and that is the rule
+    # rather than an exception to it. The sentence is about a *connection's*
+    # scope; a direct client write has no connection, so there is no scope to
+    # exceed and the caller is the owner deciding about their own record.
+    #
+    # Rejected rather than quietly narrowed: a caller told their write
+    # succeeded will never discover it landed narrower than they asked.
+    if connection_scope is not None and _RESTRICTIVENESS[level] > _RESTRICTIVENESS[default]:
+        raise ValueError(
+            f"access level {level!r} is wider than a {connection_scope!r} connection allows "
+            f"(at most {default!r}); a caller may narrow visibility, never widen it"
+        )
     principals = sorted(set(requested_principals or []))
     if level in (SHARED, RESTRICTED) and not principals:
         raise ValueError(f"access level {level!r} requires principals")

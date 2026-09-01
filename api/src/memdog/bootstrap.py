@@ -83,7 +83,15 @@ async def bootstrap_tenant(
     org_name: str = "acme",
     project_name: str = "default",
     email: str = "owner@example.com",
-    connection_scope: str | None = "personal",
+    # No connection, because a bootstrap key is not one.
+    #
+    # A connection is a credential to somebody else's system, and its scope is
+    # now a *ceiling* on what the producer using it may publish -- so attaching
+    # a personal one to the operator's own API key silently capped every write
+    # made through it at `private`. That was invisible while the scope was only
+    # a default, and it is the reason the console's own producer cannot publish
+    # to its organisation on deployments bootstrapped before this.
+    connection_scope: str | None = None,
     capabilities: list[str] | None = None,
     producer_type: str = "client",
 ) -> Tenant:

@@ -1100,7 +1100,7 @@ async def test_a_failed_scope_keeps_its_cursor_and_says_why(pool, tenant):
         cid) == "upstream 503"
 
 
-async def test_a_cooling_credential_is_not_a_failed_crawl(pool, tenant, principal_for):
+async def test_a_cooling_credential_is_not_a_failed_crawl(pool, connected_tenant, principal_for):
     """Two crawlers sharing one token draw on the same quota.
 
     So the limit is recorded on the connection, and a tick that fires while it

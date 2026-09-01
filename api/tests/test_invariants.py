@@ -373,18 +373,18 @@ async def test_an_item_is_owned_by_who_wrote_it_not_who_made_the_producer(
 
 
 async def test_a_personal_connections_producer_is_not_a_shared_entry_point(
-    pool, queue, blobs, settings, tenant, principal_for
+    pool, queue, blobs, settings, connected_tenant, principal_for
 ):
     """Writing through it would attribute data to someone else's mailbox."""
     from memdog.write import AdmissionError
 
-    _, colleague_key = await _second_member(pool, tenant)
+    _, colleague_key = await _second_member(pool, connected_tenant)
     colleague = await principal_for(colleague_key)
 
     # The bootstrap tenant's producer carries a personal-scope connection.
     with pytest.raises(AdmissionError) as exc:
         await _write(
-            pool, queue, blobs, settings, colleague, tenant.producer_id,
+            pool, queue, blobs, settings, colleague, connected_tenant.producer_id,
             [WriteItem(external_id="not-mine", content=Inline(text=SECRET))],
         )
     assert exc.value.status == 403
@@ -411,3 +411,61 @@ async def test_a_project_producer_is_usable_by_any_member(
     assert written.accepted == 1
     # And they can see what they wrote, because they own it.
     assert await get_item(pool, colleague, written.results[0].data_id)
+
+
+async def test_a_connection_is_a_ceiling_not_a_default(
+    pool, queue, blobs, settings, connected_tenant, principal_for
+):
+    """`ItemAccess` promised this from the first release and nothing enforced it.
+
+    A producer reading somebody's personal mailbox could ask for `public` and
+    get it, which is precisely the disclosure connection-scoped ACLs exist to
+    prevent. Rejected rather than quietly narrowed: a caller told their write
+    succeeded would never discover it landed narrower than they asked.
+    """
+    from memdog.contracts import Inline, ItemAccess, WriteItem, WriteOptions, WriteRequest
+    from memdog.write import write_items
+
+    actor = await principal_for(connected_tenant.api_key)
+
+    async def _write(level):
+        return await write_items(
+            pool, queue, blobs, settings, actor,
+            WriteRequest(
+                producer_id=connected_tenant.producer_id,
+                items=[WriteItem(external_id=f"acl-{level}", content=Inline(text="a note"),
+                                 access=ItemAccess(level=level))],
+                options=WriteOptions(enrich=False),
+            ),
+        )
+
+    for wider in ("org", "public"):
+        result = (await _write(wider)).results[0]
+        assert result.status == "failed", f"a personal connection must not publish {wider}"
+        assert "narrow" in (result.error or "")
+
+    # Narrowing is the direction that stays open, and so is the default itself.
+    assert (await _write("private")).results[0].status == "created"
+
+
+async def test_a_producer_with_no_connection_chooses_its_own_level(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """The rule is about a *connection's* scope. A direct client write has no
+    connection, so there is no scope to exceed -- the caller is the owner
+    deciding what to do with their own record, which is what the console does
+    every time somebody picks 'everyone in the organization'."""
+    from memdog.contracts import Inline, ItemAccess, WriteItem, WriteOptions, WriteRequest
+    from memdog.write import write_items
+
+    actor = await principal_for(tenant.api_key)
+    response = await write_items(
+        pool, queue, blobs, settings, actor,
+        WriteRequest(
+            producer_id=tenant.producer_id,
+            items=[WriteItem(external_id="direct-org", content=Inline(text="a note"),
+                             access=ItemAccess(level="org"))],
+            options=WriteOptions(enrich=False),
+        ),
+    )
+    assert response.results[0].status == "created"

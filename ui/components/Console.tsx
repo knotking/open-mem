@@ -472,6 +472,30 @@ function StoredMedia({ item }: { item: Item }) {
 
 /* --------------------------------------------------------------- 1. add */
 
+/** Ordered least to most visible — the same order `acl.py` ranks them by. */
+const LEVELS = [
+  { key: "private", rank: 0, label: "private — only me" },
+  { key: "restricted", rank: 1, label: "restricted — only these principals" },
+  { key: "shared", rank: 2, label: "shared — me and these principals" },
+  { key: "org", rank: 3, label: "org — everyone in the organization" },
+  { key: "public", rank: 4, label: "public — everyone in the org, and share links" },
+] as const;
+
+/**
+ * How far a producer may widen, given its connection.
+ *
+ * A connection is a credential to somebody else's system and its scope is a
+ * **ceiling**, not a default: a personal one caps its writes at `private`,
+ * because personal data in a team organisation stays personal whatever the
+ * project says. A producer with no connection is a direct client write and is
+ * unrestricted — the caller is the owner, deciding about their own record.
+ */
+function ceilingFor(scope: string | null | undefined): number {
+  if (scope === "personal") return 0;
+  if (scope === "shared") return 3;
+  return 4;
+}
+
 function AddData({
   projectId,
   producerId,
@@ -511,14 +535,23 @@ function AddData({
   const [principals, setPrincipals] = useState<string[]>([]);
   const [audience, setAudience] = useState<{ groups: Group[]; members: Member[] }>(
     { groups: [], members: [] });
+  // What this producer's connection permits. A connection's scope is a ceiling
+  // on what its writes may publish, so offering a level the API will refuse
+  // would turn a choice into a failed item and a message nobody expected.
+  const [scope, setScope] = useState<string | null | undefined>(undefined);
 
   useEffect(() => {
     void Promise.all([
       call<{ groups: Group[] }>("api/v1/groups").catch(() => ({ groups: [] as Group[] })),
       call<{ members: Member[] }>("api/v1/organizations/members")
         .catch(() => ({ members: [] as Member[] })),
-    ]).then(([g, m]) => setAudience({ groups: g.groups, members: m.members }));
-  }, []);
+      call<{ producers: { producer_id: string; connection_scope: string | null }[] }>(
+        "api/v1/producers").catch(() => ({ producers: [] })),
+    ]).then(([g, m, p]) => {
+      setAudience({ groups: g.groups, members: m.members });
+      setScope(p.producers.find((x) => x.producer_id === producerId)?.connection_scope ?? null);
+    });
+  }, [producerId]);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -529,6 +562,8 @@ function AddData({
   // configures it is further down the page and a person writes before they
   // scroll. "Stored only" is the sentence that would otherwise be discovered
   // afterwards, in a search that finds nothing.
+  const ceiling = ceilingFor(scope);
+
   const willDo = !enrich
     ? "stored only — not searchable"
     : embed && summarize
@@ -693,19 +728,26 @@ function AddData({
           Decided here because this is the only place it can be: the ACL is <strong>sealed before
           any other phase runs</strong>, and no endpoint changes it afterwards — re-writing the same
           external id with a different level is the only path, and it raises <code>acl.changed</code>.
-          Left alone, the producer&rsquo;s connection decides: a personal connection writes private
-          items, a shared one writes org-visible ones.
         </p>
+        {scope !== undefined && scope !== null && (
+          <p className="warned">
+            This producer writes through a <strong>{scope}</strong> connection, which is a{" "}
+            <strong>ceiling</strong> rather than a default: it can narrow visibility and never
+            widen it past <code>{LEVELS[ceiling].key}</code>. Personal data in a team organisation
+            stays personal whatever the project says, and a wider level is refused rather than
+            quietly stored as something narrower.
+          </p>
+        )}
         <div className="row">
           <label>
             Level
             <select value={level} onChange={(e) => { setLevel(e.target.value); setPrincipals([]); }}>
               <option value="">the producer&rsquo;s default</option>
-              <option value="private">private — only me</option>
-              <option value="restricted">restricted — only these principals</option>
-              <option value="shared">shared — me and these principals</option>
-              <option value="org">org — everyone in the organization</option>
-              <option value="public">public — everyone in the org, and share links</option>
+              {LEVELS.map((l) => (
+                <option key={l.key} value={l.key} disabled={ceiling < l.rank}>
+                  {l.label}{ceiling < l.rank ? " — not allowed by this connection" : ""}
+                </option>
+              ))}
             </select>
           </label>
         </div>

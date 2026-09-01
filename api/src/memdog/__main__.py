@@ -13,7 +13,7 @@ from . import usage
 from .db import create_pool, migrate
 
 
-async def _bootstrap(email: str, scope: str) -> int:
+async def _bootstrap(email: str, scope: str | None) -> int:
     settings = load_settings()
     pool = await create_pool(settings)
     await migrate(pool, settings)
@@ -128,7 +128,9 @@ async def _revoke_key(prefix: str) -> None:
     print(f"revoke {prefix}: {updated}")
 
 
-async def _bootstrap_to_secret(email: str, scope: str, project: str, secret: str) -> int:
+async def _bootstrap_to_secret(
+    email: str, scope: str | None, project: str, secret: str
+) -> int:
     settings = load_settings()
     pool = await create_pool(settings)
     await migrate(pool, settings)
@@ -488,7 +490,8 @@ def main() -> int:
         "crawl-tick", "seed", "alert-tick",
         "grant-key", "add-member",
     ):
-        print("usage: python -m memdog bootstrap [email] [personal|shared]",
+        print("usage: python -m memdog bootstrap [email] [personal|shared] "
+              "(default: no connection)",
               file=sys.stderr)
         print("       python -m memdog smoke <url> <key> <producer_id> <project_id>",
               file=sys.stderr)
@@ -529,7 +532,13 @@ def main() -> int:
     if sys.argv[1] == "bootstrap-to-secret":
         return asyncio.run(_bootstrap_to_secret(*sys.argv[2:6]))
     email = sys.argv[2] if len(sys.argv) > 2 else "owner@example.com"
-    scope = sys.argv[3] if len(sys.argv) > 3 else "personal"
+    # No connection unless one is asked for. A bootstrap key is the operator's
+    # own credential, not a credential to somebody else's system -- and a
+    # connection's scope is now a ceiling on what its producer may publish, so
+    # the old default silently capped every write made with this key at
+    # `private`. `personal` and `shared` are still accepted, for standing up a
+    # tenant that really does write on somebody's behalf.
+    scope = sys.argv[3] if len(sys.argv) > 3 else None
     return asyncio.run(_bootstrap(email, scope))
 
 

@@ -11,6 +11,38 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **Standing matches are pushed, through the sender the alerts already use.** A
+  monitoring product whose only delivery is polling is not finished. Same
+  signing, backoff, dead-lettering and SSRF re-check — a second pipeline would
+  need its own version of each, and **four controls are only worth something
+  when they are the same four everywhere**.
+- **The subject of a delivery is one of two things**, as two nullable foreign
+  keys with a `CHECK`, not a polymorphic `(kind, id)` pair: the FKs are what
+  make a delivery vanish when its subject is erased, and **a dangling reference
+  there means a record the platform promised was gone being POSTed to somebody's
+  URL**.
+- **`kind` on a subscription.** `alert_id IS NULL` has always meant *every alert
+  in this project*; letting it also mean *every standing query* would start
+  posting a payload shape a subscriber registered last month has never seen.
+- **Visibility is re-resolved at send time against the subscription's owner** —
+  a different person from the query's owner, whose rights may have changed. A
+  match they can no longer see is not a retry, it is a delivery no longer owed.
+  The body carries a preview and ids, **never the record**: a webhook body is
+  the least controlled copy of anything here.
+
+### Fixed
+- **A match found this minute waited until the next one.** The sweep evaluated
+  standing queries *after* the tick that sends what is owed — a minute of
+  latency that reads as a slow sweep rather than as two steps in the wrong
+  order.
+
+### Migrations
+- **`0043_standing_delivery.sql`** — `event_subscriptions.kind` and
+  `standing_query_id`, `event_deliveries.match_id`, and a partial unique index
+  for at-least-once deduplication. Additive; every existing row keeps its
+  meaning.
+
+### Added
 - **Standing queries (W10) — the one primitive that speaks first.** Say once
   what you want to be told about; each new record is checked against it as it
   arrives. Four published use cases were blocked on this and **media monitoring
