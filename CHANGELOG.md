@@ -10,6 +10,13 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 
 ## Unreleased
 
+### Changed
+- **The sign-in page drops its “Where the others are ahead” closing block.** The
+  paragraph above the comparison already concedes the same two things — that
+  self-hosting is not a differentiator and that Onyx is ahead on permissions —
+  so the block restated them at length and ended the page on reasons to pick
+  something else. The matrix keeps every unflattering cell.
+
 ### Added
 - **`pagination.type: "next_url"`** — the source hands back the *whole* next URL
   in the body and `cursor_path` says where. This could not be templated before,

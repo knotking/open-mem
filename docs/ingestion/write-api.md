@@ -54,6 +54,47 @@ a URL secret is none of those. See [auth](../security/auth.md).
 | **Upload session** | presign request | `upl_<ulid>` |
 | **External crawler / ETL** | a project-scoped key | `key_<ulid>` |
 
+### Rehearsing a delivery without the provider
+
+A webhook cannot be pointed at a simulator the way a crawl can — it arrives. So the only way to
+exercise the inbound path was to hand-build headers inside a test, which made every scenario worth
+checking (a retry, a rotation window, a replay, a handshake) cost more to set up than it was worth.
+
+[`api/tools/fake_inbound.py`](../../api/tools/fake_inbound.py) signs the way each of the nine
+providers signs, and `api/tests/test_inbound_shapes.py` pairs it against `providers.verify()`.
+No two schemes are the same, which is the reason this is a file rather than a helper:
+
+| Provider | Signs | Encoding | The part that surprises people |
+|---|---|---|---|
+| `slack` | `v0:{ts}:{body}` | hex | the `v0:` prefix is *inside* the signed string |
+| `github` | the bare body | hex | no timestamp at all — replay protection is the delivery id |
+| `stripe` | `{ts}.{body}` | hex | `t=` and `v1=` arrive in one header, as a list |
+| `linear` | the bare body | hex | |
+| `shopify` | the bare body | **base64** | |
+| `twilio` | URL + form params, sorted | **base64**, **SHA-1** | signs the *URL*, not the body |
+| `microsoft_graph` | nothing | — | returns the `clientState` it was given |
+| `zoom` | `v0:{ts}:{body}` | hex | the handshake is *computed*, not echoed |
+| `generic` | `{ts}.{body}` | hex | |
+
+Two properties make this worth having rather than decorative:
+
+- **The signer is written from each provider's published scheme, not from `providers.py`.** A test
+  that signs with `_digest()` and verifies with `verify()` proves the module agrees with itself,
+  which it would also do if the scheme were wrong.
+- **The test iterates `PROVIDERS`.** A provider added to the registry with no signing rule fails on
+  the day it is added, rather than the day a real subscription is pointed at it.
+
+It also fires at a running deployment, which nothing else in the repository does — the HTTP layer
+of `/hooks/{producer_id}` had only ever been reached by a real provider or not at all:
+
+```bash
+python -m tools.fake_inbound github http://localhost:8000/hooks/<producer_id> <secret>
+```
+
+The limit, stated because it is easy to overstate: signer and verifier were read off the same
+documentation by the same person. This catches drift between them, and a mistake in one. It does
+not catch a shared misreading — only a real delivery does that.
+
 ### What this unifies
 
 Seven things that were specified separately now have one home:

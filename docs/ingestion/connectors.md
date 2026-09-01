@@ -218,6 +218,30 @@ client-credentials token exchange, the `{totalSize, done, records, nextRecordsUr
   `{{ watermark }}` renders empty on the first run and Salesforce answers `MALFORMED_QUERY`, so the
   clause would work on every run except the one that sets it up.
 
+### The other four pagination shapes
+
+Salesforce covered one mechanism. [`api/tools/fake_sources.py`](../../api/tools/fake_sources.py)
+covers the rest, because each is a different code path through `discover_http` and each has
+connectors depending on it — and paging is where templates are wrong.
+
+| Path | Shape | Who pages this way | What the simulator makes go wrong |
+|---|---|---|---|
+| `/gh` | `Link: <…>; rel="next"` | GitHub, most of REST | sends `rel="last"` **first**, so a parser that takes the first `<…>` jumps to the end and stops |
+| `/jira` | `startAt` / `maxResults` / `total` | Jira, Confluence, Zendesk | the client does the arithmetic, so an off-by-one repeats or skips a record per page |
+| `/graph` | `@odata.nextLink`, **absolute** | Graph, Dynamics | resolves down a different branch than Salesforce's *path*, though both are `next_url` |
+| `/pages` | `page=N` + `has_more` | Notion, Linear, Front | no cursor and no total: only `stop_when` ends the crawl |
+| `/feed.xml` | RSS with `pubDate` | every feed connector | contains a bare `&` — invalid XML, and extremely common |
+
+**The simulator counts requests, and the tests assert on the count.** The crawler's own `Budget`
+counts *items*, so nothing in-process can tell "five records in three requests" from "five records
+in twenty" — and that distinction is the whole Salesforce defect. Over-fetching returns the right
+items and raises nothing, so an item count can never detect it.
+
+Every source also applies a real incremental filter, so a template claiming `incremental` and not
+having it fails here rather than on somebody's rate limit.
+
+### The origin guard
+
 A next URL is attacker-controlled if the source is, so `_next_url` resolves it and then **refuses
 any move off the origin the run started on** — otherwise a source could redirect an authenticated
 crawler, carrying the connection's credential, at a host of its choosing.
