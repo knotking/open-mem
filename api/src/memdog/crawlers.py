@@ -368,27 +368,61 @@ class Throttle:
 
 
 async def _get(client: httpx.AsyncClient, url: str, *, headers: dict[str, str],
-               max_bytes: int) -> httpx.Response:
+               max_bytes: int, method: str = "GET",
+               json_body: dict | None = None) -> httpx.Response:
     """Every outbound request re-validates, including redirect targets.
 
     The crawler is the one component whose whole job is following URLs it was
     given, so it is the one that most needs the SSRF check the fetch worker
     already has.
+
+    `method` and `json_body` exist because `HttpRequest` has always declared
+    them and this function has always ignored them -- so four catalog entries
+    (Linear, Notion, Attio, Copper) declared a POST with a search body and were
+    issued as a bodyless GET. Linear is GraphQL, where that is not a degraded
+    request but a meaningless one.
     """
     validate_url(url)
-    response = await client.get(url, headers=headers, follow_redirects=False)
+
+    async def send(target: str, verb: str) -> httpx.Response:
+        if verb == "POST":
+            return await client.post(target, headers=headers, json=json_body,
+                                     follow_redirects=False)
+        return await client.get(target, headers=headers, follow_redirects=False)
+
+    response = await send(url, method)
     hops = 0
     while response.status_code in (301, 302, 303, 307, 308) and hops < 3:
         location = response.headers.get("location")
         if not location:
             break
         url = validate_url(str(response.url.join(location)))
-        response = await client.get(url, headers=headers, follow_redirects=False)
+        # 307 and 308 preserve the method; 301, 302 and 303 famously do not, and
+        # a POST body replayed as a GET is how a search silently becomes a list.
+        verb = method if response.status_code in (307, 308) else "GET"
+        response = await send(url, verb)
         hops += 1
     declared = response.headers.get("content-length")
     if declared and declared.isdigit() and int(declared) > max_bytes:
         raise FetchError(f"{declared} bytes exceeds the {max_bytes} limit")
     return response
+
+
+def _render_deep(value: Any, variables: dict[str, str]) -> Any:
+    """`_render` over a nested structure, leaving non-strings alone.
+
+    A request body is JSON, so the variable may be several levels down inside a
+    filter object -- `{"filter": {"updated_at": {"gt": "{{ watermark }}"}}}` --
+    and rendering only the top level would leave the placeholder in the payload,
+    where the provider reads it as a literal date and returns nothing.
+    """
+    if isinstance(value, str):
+        return _render(value, variables)
+    if isinstance(value, dict):
+        return {k: _render_deep(v, variables) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_render_deep(v, variables) for v in value]
+    return value
 
 
 def _render(template: str, variables: dict[str, str]) -> str:
@@ -443,6 +477,10 @@ async def discover_http(
     }
     found: list[Discovered] = []
     query = {k: _render(v, variables) for k, v in request.query.items()}
+    # The body is templated like the query is. Without this, every provider
+    # whose incremental filter lives in a POST body -- which is most of the
+    # search-style APIs -- could not express one at all.
+    body = _render_deep(request.body, variables) if request.body else None
     if config.incremental == "watermark" and config.watermark_param and watermark:
         query[config.watermark_param] = watermark
     headers = {k: _render(v, variables) for k, v in request.headers.items()}
@@ -476,7 +514,8 @@ async def discover_http(
             await throttle.wait(url)
             target = str(httpx.URL(url, params=call_query)) if call_query else url
             response = await _get(client, target, headers=headers,
-                                  max_bytes=config.limits.max_bytes_per_item)
+                                  max_bytes=config.limits.max_bytes_per_item,
+                                  method=request.method, json_body=body)
             if response.status_code == 401 or response.status_code == 403:
                 # Distinguished from other failures upstream: an auth failure
                 # must fail the run rather than end it quietly as complete,

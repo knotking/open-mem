@@ -13,6 +13,7 @@ thing it needs does not exist.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -357,3 +358,101 @@ def test_the_graph_tree_roots_are_paths_graph_actually_serves():
         assert config.tree is not None
         assert config.tree.root == expected
         assert config.tree.api == "microsoft_graph"
+
+
+# ---------------------------------------------------------- incremental
+
+# Every entry that has a modified-time field but does not use it, and the reason.
+#
+# Thirty-six of thirty-seven templates re-read their whole source on every
+# scheduled run. That is not a missing feature, it is a cost and rate-limit
+# problem that surfaces on day two of a pilot — and it was invisible, because a
+# full re-read returns the right records and raises nothing.
+#
+# This list makes the remainder visible and shrinking. An entry may sit here
+# only with a reason naming what is actually in the way; "not done yet" is not
+# a reason, it is the thing being recorded.
+NO_INCREMENTAL: dict[str, str] = {
+    # The filter lives in a POST body. The body is templated now, so these are
+    # unblocked — what is missing is the provider's exact filter grammar, and
+    # guessing it wrong is silent: the request succeeds and matches nothing.
+    "linear": "GraphQL: needs the IssueFilter shape confirmed against a real workspace",
+    "attio": "POST body filter; Attio's query grammar not confirmed",
+    "copper": "POST body search; also pages by page_number in the body",
+    "notion": "POST body filter on last_edited_time; needs confirming",
+
+    # Real query parameters, but with a format or endpoint mismatch that would
+    # make a naive clause wrong rather than merely absent.
+    "stripe": "created[gte] is a unix timestamp; version_path returns one too, "
+              "but the watermark is compared as a string — needs a numeric mode",
+    "zendesk": "incremental reads come from a different endpoint (start_time "
+               "on /incremental/), not a filter on this one",
+    "intercom": "scroll API rather than a filter; a scroll is a cursor with a TTL",
+    "confluence": "CQL lastmodified is date-granular, so an hourly run would "
+                  "re-read the day; needs a day-boundary watermark to be honest",
+
+    # Not yet researched. Named individually rather than hidden in a count.
+    "hubspot": "search endpoint takes filterGroups in a POST body; not researched",
+    "pipedrive": "since_timestamp exists but the format is not confirmed",
+    "freshsales": "view-scoped; unclear whether a filter applies",
+    "zendesk_sell": "sort_by exists; a filter parameter is not confirmed",
+    "capsule": "`since` exists but the unit (epoch ms vs ISO) is not confirmed",
+}
+
+
+def test_a_template_claiming_incremental_actually_carries_one():
+    """A claim with no mechanism is worse than no claim.
+
+    `incremental="watermark"` with nothing to put the watermark in produces a
+    run that re-reads everything while reporting itself as incremental — the
+    same failure as before, now with a label saying it was fixed.
+    """
+    for connector in CATALOG:
+        if connector.template.get("incremental") != "watermark":
+            continue
+        # Built, not raw. Salesforce and Jira carry the clause inside a *scope*
+        # the operator fills in, so the raw template shows `{soql}` and proves
+        # nothing. Building with the shipped placeholders also checks the
+        # example people actually start from, which is the thing that ships.
+        built = connectors.build(
+            connector.key,
+            {scope.key: scope.placeholder for scope in connector.scopes},
+        )
+        rendered = json.dumps(built.get("request") or {})
+        assert built.get("watermark_param") or "{{ watermark" in rendered, (
+            f"{connector.key} claims incremental but nothing consumes the "
+            "watermark — no watermark_param, and no {{ watermark }} surviving "
+            "into the built request"
+        )
+
+
+def test_a_template_with_a_modified_time_field_either_uses_it_or_says_why():
+    """The ratchet.
+
+    A connector that knows when each record changed and re-reads all of them
+    anyway is the expensive default, and it stayed invisible because it is not
+    an error. Adding an entry here is allowed; adding one without a reason is
+    not, and removing one is the work.
+    """
+    unexplained = []
+    for connector in CATALOG:
+        template = connector.template
+        version = (template.get("extract") or {}).get("version_path")
+        if not version or template.get("incremental"):
+            continue
+        if connector.key not in NO_INCREMENTAL:
+            unexplained.append(connector.key)
+
+    assert not unexplained, (
+        f"{unexplained} know when their records changed and re-read everything "
+        "anyway. Give them an incremental clause, or add them to "
+        "NO_INCREMENTAL with the reason it is not possible yet."
+    )
+
+    stale = [k for k in NO_INCREMENTAL
+             if k not in {c.key for c in CATALOG}
+             or connectors.BY_KEY[k].template.get("incremental")]
+    assert not stale, (
+        f"{stale} are exempted from incremental and no longer need to be — "
+        "delete the entry so the list keeps meaning something"
+    )

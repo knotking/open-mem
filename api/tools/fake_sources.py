@@ -209,6 +209,33 @@ def feed(query: dict, base: str) -> tuple[str, dict]:
             + "</channel></rss>"), {"Content-Type": "application/rss+xml"}
 
 
+def graphql(query: dict, base: str, body: dict | None = None) -> tuple[dict, dict]:
+    """A POST with a JSON body, and a filter that lives inside it.
+
+    Here to prove a request shape rather than a pagination shape. `HttpRequest`
+    declared `method` and `body` for months and `discover_http` never read
+    either, so four catalog entries -- Linear, Notion, Attio, Copper -- were
+    issued as a bodyless GET. For Linear, which is GraphQL, that is not a
+    degraded request: there is no query, so there is no meaning.
+
+    The incremental filter is nested two levels down, because that is where
+    these APIs put it and because a renderer that only walked the top level
+    would leave `{{ watermark }}` in the payload as a literal.
+    """
+    if not body:
+        return {"errors": [{"message": "a GraphQL request needs a query"}]}, {}
+    after = (((body.get("variables") or {}).get("filter") or {})
+             .get("updatedAt") or {}).get("gt")
+    if after and "{{" in str(after):
+        # The placeholder arrived unrendered. Answering it as though it were a
+        # date would make a broken template look like an empty result set.
+        return {"errors": [{"message": f"unrendered template in filter: {after}"}]}, {}
+    rows = _after(after)
+    return {"data": {"issues": {"nodes": [
+        {"id": f"lin-{r['n']}", "title": r["title"], "description": r["body"],
+         "updatedAt": r["updated"]} for r in rows]}}}, {}
+
+
 ROUTES = {
     "/gh/repos/acme/widgets/issues": github,
     "/jira/rest/api/3/search": jira,
@@ -216,6 +243,8 @@ ROUTES = {
     "/pages/items": pages,
     "/feed.xml": feed,
 }
+
+POST_ROUTES = {"/graphql": graphql}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -239,6 +268,26 @@ class Handler(BaseHTTPRequestHandler):
         base = f"http://{self.headers.get('host')}"
         body, headers = route(parse_qs(url.query), base)
         self._send(200, body, headers)
+
+    def do_POST(self) -> None:  # noqa: N802 -- BaseHTTPRequestHandler's contract
+        url = urlparse(self.path)
+        route = POST_ROUTES.get(url.path)
+        if route is None:
+            self._send(404, {"error": f"no source at {url.path}"}, {})
+            return
+        if not self.headers.get("authorization"):
+            self._send(401, {"error": "unauthorized"}, {})
+            return
+        REQUESTS[url.path] = REQUESTS.get(url.path, 0) + 1
+        length = int(self.headers.get("content-length") or 0)
+        raw = self.rfile.read(length) if length else b""
+        try:
+            body = json.loads(raw) if raw else None
+        except ValueError:
+            body = None
+        payload, headers = route(parse_qs(url.query),
+                                 f"http://{self.headers.get('host')}", body)
+        self._send(200, payload, headers)
 
     def _send(self, status: int, payload, headers: dict) -> None:
         if isinstance(payload, str):

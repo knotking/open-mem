@@ -111,7 +111,7 @@ def _http(url: str, *, items: str, id_path: str, title: str | None = None,
           version: str | None = None, pagination: dict | None = None,
           query: dict | None = None, headers: dict | None = None,
           method: str = "GET", body: dict | None = None,
-          incremental: str | None = None) -> dict:
+          incremental: str | None = None, watermark_param: str | None = None) -> dict:
     """One templated request. `{placeholders}` are filled from scope values."""
     request: dict[str, Any] = {"method": method, "url": url}
     if query:
@@ -131,6 +131,11 @@ def _http(url: str, *, items: str, id_path: str, title: str | None = None,
         config["pagination"] = pagination
     if incremental:
         config["incremental"] = incremental
+    if watermark_param:
+        # The watermark goes in the query rather than into a template variable.
+        # Both are "incremental"; which one a provider wants is not something a
+        # reader of this file should have to infer.
+        config["watermark_param"] = watermark_param
     return config
 
 
@@ -151,12 +156,21 @@ CATALOG: tuple[Connector, ...] = (
         auth_help="An Atlassian API token, as `you@example.com:token`.",
         scopes=(
             Scope("site", "Site URL", "https://acme.atlassian.net"),
-            Scope("jql", "JQL", "project = ENG ORDER BY updated DESC",
-                  "What to pull. Narrow it first — a whole instance is a lot."),
+            Scope("jql", "JQL",
+                  "project = ENG AND updated > \"{{ watermark_or_epoch }}\" "
+                  "ORDER BY updated ASC",
+                  "What to pull. Narrow it first — a whole instance is a lot. "
+                  "Keep the `{{ watermark_or_epoch }}` clause or every run "
+                  "re-reads the project; `{{ watermark }}` alone renders empty "
+                  "on the first run and Jira rejects the JQL. Order ascending: "
+                  "the watermark is the highest value actually seen, so a "
+                  "descending sort that hits the page limit advances it past "
+                  "issues never read."),
         ),
         template=_http(
             "{site}/rest/api/3/search",
             query={"jql": "{jql}", "maxResults": "50"},
+            incremental="watermark",
             items="issues[*]", id_path="key",
             title="fields.summary", content="fields.description",
             version="fields.updated",
@@ -177,6 +191,8 @@ CATALOG: tuple[Connector, ...] = (
             url_path="html_url", version="updated_at",
             headers={"Accept": "application/vnd.github+json"},
             pagination={"type": "page", "page_param": "page", "page_size": 100},
+            # GitHub's own `since`: "issues updated at or after this time".
+            incremental="watermark", watermark_param="since",
         ),
     ),
     Connector(
@@ -210,6 +226,7 @@ CATALOG: tuple[Connector, ...] = (
             url_path="permalink_url", version="modified_at",
             pagination={"type": "cursor", "cursor_path": "next_page.offset",
                         "cursor_param": "offset"},
+            incremental="watermark", watermark_param="modified_since",
         ),
     ),
 
@@ -312,6 +329,9 @@ CATALOG: tuple[Connector, ...] = (
                      "OData-MaxVersion": "4.0"},
             items="value[*]", id_path="{id_field}", version="modifiedon",
             pagination={"type": "next_url", "cursor_path": "\"@odata.nextLink\""},
+            # OData wants an unquoted ISO datetime literal in `$filter`.
+            query={"$filter": "modifiedon gt {{ watermark_or_epoch }}"},
+            incremental="watermark",
         ),
         notes="The app registration must also exist as an application user "
               "inside Dynamics with a security role. Without that it "
@@ -333,6 +353,7 @@ CATALOG: tuple[Connector, ...] = (
             pagination={"type": "offset", "page_param": "_skip",
                         "size_param": "_limit", "page_size": 100,
                         "stop_when": "has_more == `false`"},
+            incremental="watermark", watermark_param="date_updated__gt",
         ),
     ),
     Connector(
@@ -530,6 +551,7 @@ CATALOG: tuple[Connector, ...] = (
             items="@", id_path="id", title="subject", content="description_text",
             version="updated_at",
             pagination={"type": "page", "page_param": "page", "page_size": 100},
+            incremental="watermark", watermark_param="updated_since",
         ),
     ),
 
@@ -545,6 +567,7 @@ CATALOG: tuple[Connector, ...] = (
             query={"status": "any", "limit": "100"},
             items="orders[*]", id_path="id", title="name", version="updated_at",
             pagination={"type": "link_header"},
+            incremental="watermark", watermark_param="updated_at_min",
         ),
     ),
     Connector(
@@ -574,6 +597,7 @@ CATALOG: tuple[Connector, ...] = (
             query={"per_page": "100"},
             items="@", id_path="id", version="updated_at",
             pagination={"type": "page", "page_param": "page", "page_size": 100},
+            incremental="watermark", watermark_param="updated_after",
         ),
     ),
     Connector(
@@ -652,13 +676,15 @@ CATALOG: tuple[Connector, ...] = (
         ),
         template=_http(
             "https://www.googleapis.com/drive/v3/files",
-            query={"q": "'{folder}' in parents and trashed = false",
+            query={"q": "'{folder}' in parents and trashed = false"
+                        " and modifiedTime > '{{ watermark_or_epoch }}'",
                    "fields": "nextPageToken,files(id,name,mimeType,modifiedTime,webViewLink)",
                    "pageSize": "100"},
             items="files[*]", id_path="id", title="name",
             url_path="webViewLink", version="modifiedTime",
             pagination={"type": "cursor", "cursor_path": "nextPageToken",
                         "cursor_param": "pageToken"},
+            incremental="watermark",
         ),
         notes="Lists one folder and stores each file's metadata. For "
               "subfolders and the documents themselves, use Google Drive "
@@ -697,6 +723,9 @@ CATALOG: tuple[Connector, ...] = (
             content="description", url_path="htmlLink", version="updated",
             pagination={"type": "cursor", "cursor_path": "nextPageToken",
                         "cursor_param": "pageToken"},
+            # `updatedMin` is RFC3339, which is what `version_path: updated`
+            # returns. The two formats must agree or the filter is silent.
+            incremental="watermark", watermark_param="updatedMin",
         ),
     ),
 
@@ -749,6 +778,9 @@ CATALOG: tuple[Connector, ...] = (
             "https://graph.microsoft.com/v1.0/sites/{site}/drive/root/children",
             items="value[*]", id_path="id", title="name",
             url_path="webUrl", version="lastModifiedDateTime",
+            # OData wants an unquoted ISO datetime literal in `$filter`.
+            query={"$filter": "lastModifiedDateTime gt {{ watermark_or_epoch }}"},
+            incremental="watermark",
         ),
         notes="Lists the root of the library only. For the whole library and "
               "the documents themselves, use SharePoint (library tree).",
@@ -762,6 +794,9 @@ CATALOG: tuple[Connector, ...] = (
             "https://graph.microsoft.com/v1.0/users/{user}/drive/root/children",
             items="value[*]", id_path="id", title="name",
             url_path="webUrl", version="lastModifiedDateTime",
+            # OData wants an unquoted ISO datetime literal in `$filter`.
+            query={"$filter": "lastModifiedDateTime gt {{ watermark_or_epoch }}"},
+            incremental="watermark",
         ),
         notes="Root only. For the whole drive, use OneDrive (drive tree).",
     ),
@@ -773,10 +808,13 @@ CATALOG: tuple[Connector, ...] = (
         template=_http(
             "https://graph.microsoft.com/v1.0/users/{user}/messages",
             query={"$top": "50",
-                   "$select": "subject,bodyPreview,webLink,lastModifiedDateTime"},
+                   "$select": "subject,bodyPreview,webLink,lastModifiedDateTime",
+                   # OData wants an unquoted ISO datetime literal in `$filter`.
+                   "$filter": "lastModifiedDateTime gt {{ watermark_or_epoch }}"},
             items="value[*]", id_path="id", title="subject",
             content="bodyPreview", url_path="webLink",
             version="lastModifiedDateTime",
+            incremental="watermark",
         ),
     ),
     Connector(
@@ -791,6 +829,9 @@ CATALOG: tuple[Connector, ...] = (
             "https://graph.microsoft.com/v1.0/teams/{team}/channels/{channel}/messages",
             items="value[*]", id_path="id", content="body.content",
             url_path="webUrl", version="lastModifiedDateTime",
+            # OData wants an unquoted ISO datetime literal in `$filter`.
+            query={"$filter": "lastModifiedDateTime gt {{ watermark_or_epoch }}"},
+            incremental="watermark",
         ),
         notes="Teams also arrives as a webhook today — see Inbound, which "
               "needs none of this.",

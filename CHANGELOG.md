@@ -10,7 +10,22 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 
 ## Unreleased
 
+### Changed
+- **The sign-in page shows a result instead of describing one.** A panel renders
+  the shape of an answer — the passages returned with the arm that matched each,
+  and the records considered and *dropped* with the reason for each. It is
+  labelled an illustration, since nothing is queryable before sign-in.
+- **The top bar navigates the whole page and marks where you are.** It had been
+  cut to two anchors; the count was never the problem, the missing sense of
+  position was. `SECTIONS` is the single source of truth and the nav narrows at
+  mount to ids that exist, so a renamed section loses its anchor rather than
+  keeping one that scrolls nowhere. Below 560px the bar now scrolls sideways
+  instead of disappearing.
+
 ### Fixed
+- Anchor jumps on the sign-in page landed with the heading hidden under the
+  sticky bar, which reads as a broken link. Every landing section now carries
+  `scroll-margin-top`.
 - **Every Twilio webhook would have been refused, permanently.** Twilio is the
   one provider that signs the *URL* rather than the body. Cloud Run terminates
   TLS and forwards over plain HTTP, so the reconstructed URL was `http://` while

@@ -235,3 +235,60 @@ async def test_every_source_refuses_an_unauthenticated_crawl(sources):
     with pytest.raises(CrawlerError) as exc:
         await discover(config, watermark=None, checkpoint={}, auth=None)
     assert exc.value.status == 401
+
+
+# --------------------------------------------------------- POST and a body
+
+async def test_a_post_connector_sends_its_body(sources):
+    """The field that was declared and never read.
+
+    `HttpRequest` has carried `method` and `body` all along, and `discover_http`
+    issued `client.get()` unconditionally — so Linear, Notion, Attio and Copper
+    were sending a bodyless GET to a POST search endpoint. Linear is GraphQL,
+    where a request with no query is not degraded but meaningless.
+
+    The simulator answers a bodyless request with an error rather than an empty
+    list, because an empty list is how this stayed invisible: a connector that
+    returns nothing looks like a source with nothing new in it.
+    """
+    config = CrawlerConfig(
+        name="issues", strategy="http",
+        request=HttpRequest(
+            url=f"{sources}/graphql", method="POST",
+            body={"query": "query($f:IssueFilter){issues(filter:$f){nodes{id}}}",
+                  "variables": {"filter": {"updatedAt": {"gt": "{{ watermark_or_epoch }}"}}}},
+        ),
+        pagination=Pagination(type="none"),
+        extract=Extract(items_path="data.issues.nodes[*]", id_path="id",
+                        title_path="title", content_path="description",
+                        version_path="updatedAt"),
+        incremental="watermark",
+        limits=Limits(rate_per_sec=50, max_items=100),
+    )
+    found, _b, _c = await _crawl(config)
+    assert sorted(f.external_id for f in found) == [
+        "lin-1", "lin-2", "lin-3", "lin-4", "lin-5"], (
+        "the body did not arrive — this is the bodyless-GET bug")
+
+
+async def test_a_watermark_nested_in_a_body_is_rendered(sources):
+    """Rendering only the top level of a body leaves `{{ watermark }}` in the
+    payload, where the provider reads it as a literal date and returns nothing —
+    an incremental filter that silently matches nothing looks exactly like a
+    source with no changes."""
+    config = CrawlerConfig(
+        name="issues", strategy="http",
+        request=HttpRequest(
+            url=f"{sources}/graphql", method="POST",
+            body={"query": "query($f:IssueFilter){issues(filter:$f){nodes{id}}}",
+                  "variables": {"filter": {"updatedAt": {"gt": "{{ watermark_or_epoch }}"}}}},
+        ),
+        pagination=Pagination(type="none"),
+        extract=Extract(items_path="data.issues.nodes[*]", id_path="id",
+                        version_path="updatedAt"),
+        incremental="watermark",
+        limits=Limits(rate_per_sec=50, max_items=100),
+    )
+    found, _b, _c = await _crawl(config, watermark=MIDPOINT)
+    assert sorted(f.external_id for f in found) == ["lin-4", "lin-5"], (
+        "the placeholder reached the provider unrendered, or was ignored")

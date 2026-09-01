@@ -958,22 +958,44 @@ async def test_two_schedulers_do_not_both_start_the_same_crawl(
     nightly crawls. A second tick selects nothing rather than racing for rows —
     and a row lock would not help here anyway, since the selection runs outside
     an explicit transaction and would release at statement end.
-    """
-    import asyncio
 
+    **Written against a held lock rather than as two racing ticks**, which is
+    what this was and why it failed intermittently in a full run while passing
+    alone. `tick` takes the lock on a *pooled* connection, and a Postgres
+    advisory lock is session-scoped and re-entrant: when both ticks happened to
+    be served the same connection, the second `pg_try_advisory_lock` returned
+    true, neither declined, and the assertion failed on scheduling rather than
+    on behaviour.
+
+    That re-entrancy is worth knowing beyond this test. The guard holds between
+    *processes* — which is how the scheduler actually runs — and does **not**
+    hold between two ticks sharing one connection inside a single process.
+    """
     from memdog import crawling
 
     class Idle:
         async def execute(self, run_id):
             return {"run_id": run_id}
 
-    first, second = await asyncio.gather(
-        crawling.tick(pool, Idle()), crawling.tick(pool, Idle()),
-    )
-    locked_out = [r for r in (first, second) if r.get("skipped_lock")]
-    assert len(locked_out) == 1, (
-        "exactly one pass runs; the other must decline rather than duplicate it"
-    )
+    # Held on its own checked-out connection, so `tick` cannot be handed the
+    # same session and cannot re-enter the lock.
+    async with pool.acquire() as holder:
+        taken = await holder.fetchval(
+            "SELECT pg_try_advisory_lock(hashtext('memdog.crawl'))"
+        )
+        assert taken, "the lock was already held — the test cannot mean anything"
+        try:
+            declined = await crawling.tick(pool, Idle())
+            assert declined.get("skipped_lock"), (
+                "a second pass ran while the first held the lock — a nightly "
+                "crawl becomes two nightly crawls"
+            )
+        finally:
+            await holder.execute("SELECT pg_advisory_unlock(hashtext('memdog.crawl'))")
+
+    # And once it is released, a pass runs again rather than being wedged shut.
+    resumed = await crawling.tick(pool, Idle())
+    assert not resumed.get("skipped_lock"), "the lock was not released"
 
 
 async def test_the_heartbeat_moves_during_emission(

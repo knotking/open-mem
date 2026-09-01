@@ -218,6 +218,63 @@ client-credentials token exchange, the `{totalSize, done, records, nextRecordsUr
   `{{ watermark }}` renders empty on the first run and Salesforce answers `MALFORMED_QUERY`, so the
   clause would work on every run except the one that sets it up.
 
+### Incremental, and the 13 that still are not
+
+Thirty-six of thirty-seven templates re-read their whole source on every
+scheduled run. That is not a missing feature — it is a cost and rate-limit
+problem that surfaces on day two of a pilot, and it was invisible because a full
+re-read returns the right records and raises nothing.
+
+**Fourteen now pull incrementally.** Two mechanisms, and which one a provider
+wants is not something a reader should have to infer, so both are declared:
+
+- `watermark_param` — the watermark goes in a query parameter the provider
+  defines: `since` (GitHub), `modified_since` (Asana), `updatedMin` (Calendar),
+  `updated_at_min` (Shopify), `updated_since` (Freshdesk), `updated_after`
+  (Greenhouse), `date_updated__gt` (Close).
+- `{{ watermark_or_epoch }}` inside a query value — Salesforce's SOQL, Jira's
+  JQL, Drive's `q`, and the OData `$filter` family (Dynamics, Outlook,
+  SharePoint, OneDrive, Teams).
+
+The `_or_epoch` half is not decoration: plain `{{ watermark }}` renders empty on
+the first run, and a provider handed `updated > ""` answers with a syntax error.
+The clause would work on every run except the one that sets it up.
+
+**The remaining 13 are exempted individually, with the reason**, in
+`NO_INCREMENTAL` in `api/tests/test_connectors.py`. That list is the point: a
+wrong filter parameter is *silent* — the request succeeds, matches nothing, and
+now carries a label claiming it was fixed. Stripe's `created` is a unix
+timestamp compared as a string; Zendesk's incremental reads come from a
+different endpoint entirely; Confluence's CQL is date-granular, so an hourly run
+would re-read the whole day.
+
+Two tests keep it honest, and both are ratchets rather than one-off sweeps:
+
+- A template claiming `incremental` must actually consume the watermark —
+  checked against the **built** config, not the raw template, because Salesforce
+  and Jira carry the clause inside a scope the operator fills in. It caught both
+  on its first run.
+- A template with a modified-time field must either use it or be named in
+  `NO_INCREMENTAL`. Adding an entry is allowed; adding one without a reason is
+  not, and removing one is the work.
+
+### `method` and `body` were declared and never read
+
+Found while surveying the catalog for the above. `HttpRequest` has always had
+`method` and `body`; `discover_http` called `client.get()` unconditionally. Four
+entries — Linear, Notion, Attio and Copper — declared a POST with a search body
+and were issued as a **bodyless GET**. For Linear, which is GraphQL, that is not
+a degraded request but a meaningless one.
+
+The body is also templated now (recursively, since these filters nest two levels
+down), which is what makes an incremental clause expressible for any provider
+whose filter lives in the body rather than the query string.
+
+`fake_sources.py` serves a GraphQL-shaped POST endpoint so this is run rather
+than asserted — and it answers an **unrendered** `{{ watermark }}` with an error
+rather than an empty list, because a placeholder reaching a provider as a
+literal date returns nothing and reads as "no changes".
+
 ### The other four pagination shapes
 
 Salesforce covered one mechanism. [`api/tools/fake_sources.py`](../../api/tools/fake_sources.py)
