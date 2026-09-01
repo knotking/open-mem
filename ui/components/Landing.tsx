@@ -142,20 +142,30 @@ const PILLARS = [
 ];
 
 
-/* Every mem-dog cell is verifiable in this repository. Every other cell
-   reflects what that product publicly documents as of August 2026 — and where
-   something simply is not part of a product's stated scope it is marked so,
-   rather than asserted absent. That distinction is the difference between a
-   comparison and a smear, and it is also the difference between a table that
-   survives a reader who knows the space and one that does not. */
-const COMPETITORS = ["mem-dog", "Mem0", "Zep", "Letta", "Cognee", "Supermemory"];
+/* The comparison, against the products people actually weigh this against.
+ *
+ * It used to compare with agent-memory SDKs — Mem0, Zep, Letta, Cognee,
+ * Supermemory. That set is real but it is not the one a person asks about:
+ * the question that arrives is "we already have Notion, why would we run
+ * this?", and answering a question nobody asked is how a comparison table
+ * becomes decoration.
+ *
+ * So the columns are Notion AI, the open-source workspaces people move to when
+ * they leave it, and Onyx — which is the closest thing to mem-dog in this set
+ * and beats it on the row that matters most to a team.
+ *
+ * The first two rows exist to stop the rest being read as a scoreboard. These
+ * are **different categories**: a workspace owns what you write in it, and
+ * mem-dog owns nothing and reads what you wrote elsewhere. A table that hid
+ * that would be flattering itself with a category error. */
+const COMPETITORS = ["mem-dog", "Notion AI", "AppFlowy", "AFFiNE", "Docmost", "Onyx"];
 
 type Mark = "yes" | "part" | "scope" | "no";
 
 /**
- * The comparison, with the one number in it left as a placeholder.
+ * The one number in the table, left as a placeholder.
  *
- * `54 formats` was typed here and was 58 by the time anyone read it -- four
+ * `54 formats` was typed here and was 58 by the time anyone read it — four
  * rows above a stat tile that reads the same figure from `GET /capabilities`
  * and has never once been wrong, because nobody types it. So this row is
  * filled in at render time from the same source.
@@ -165,110 +175,115 @@ const FORMATS = "FORMATS";
 const MATRIX: { row: string; note?: string; cells: [Mark, string][] }[] = [
   {
     row: "What it is",
+    note: "Two categories, not six competitors. Four of these are places you write things; two are systems that read what you wrote somewhere else.",
     cells: [
-      ["yes", "Memory platform with an audit trail"],
-      ["yes", "Memory layer you bolt onto an agent"],
-      ["yes", "Temporal graph built from conversation"],
-      ["yes", "Runtime where the agent is its memory"],
-      ["yes", "Graph built from everything else"],
-      ["yes", "Memory plus RAG over user context"],
+      ["yes", "Reads your existing tools, and shows its working"],
+      ["yes", "A workspace with an assistant in it"],
+      ["yes", "Open-source workspace, AI in the open-core tier"],
+      ["yes", "Docs and whiteboard, with AI writing"],
+      ["yes", "Team wiki, Confluence-shaped"],
+      ["yes", "Open-source AI search across your tools"],
     ],
   },
   {
-    row: "Runs on your infrastructure",
-    note: "Table stakes, not a moat — Onyx is MIT and air-gapped with SOC 2, Khoj runs fully local. Listed for completeness, not as an advantage. Zep retired its self-hosted Community Edition in 2025.",
+    row: "Where the content lives",
+    note: "The distinction the rest of the table depends on. A workspace answers over what people remembered to put in it — which is the constraint, not the feature.",
     cells: [
-      ["yes", "Your own cloud project"],
-      ["yes", "Apache-2.0, needs a vector store"],
-      ["part", "Graphiti only, Neo4j burden"],
-      ["yes", "Apache-2.0"],
-      ["yes", "Apache-2.0, embedded stores"],
-      ["scope", "Managed service"],
+      ["scope", "Nowhere new — it indexes your sources"],
+      ["yes", "In Notion. That is the point of Notion"],
+      ["yes", "In AppFlowy"],
+      ["yes", "In AFFiNE"],
+      ["yes", "In Docmost"],
+      ["scope", "Nowhere new — it indexes your sources"],
     ],
   },
   {
-    row: "Knowledge graph",
+    row: "You can write documents in it",
+    note: "Where mem-dog is straightforwardly worse. It has no editor and will not get one — if your team needs a place to write, one of these is the answer and mem-dog sits behind it.",
     cells: [
-      ["yes", "Typed edges, evidence per edge"],
-      ["part", "Graph memory available"],
-      ["yes", "Graphiti, graph-native"],
-      ["scope", "Not the model"],
-      ["yes", "Graph-native"],
-      ["scope", "Not emphasised"],
+      ["no", "No editor. Not the job"],
+      ["yes", "Docs, databases, the lot"],
+      ["yes", "Docs, kanban, databases"],
+      ["yes", "Docs and an infinite canvas"],
+      ["yes", "Wiki pages with permissions"],
+      ["no", "Search and chat, not authoring"],
     ],
   },
   {
-    row: "Tell me when it changes",
-    note: "Retrieval answers a question; this says something happened. Different failure modes — a search returning nothing is visible, an alert firing nothing is silence.",
+    row: "Answers over things you never wrote there",
+    note: "Email, tickets, calls, calendars, CRM records. The material a question usually spans, and the material a workspace never contains.",
     cells: [
-      ["yes", "Rules or a description, replayed before it runs"],
-      ["scope", "Not the model"],
-      ["scope", "Not the model"],
-      ["scope", "Not the model"],
-      ["scope", "Not emphasised"],
-      ["scope", "Not emphasised"],
-    ],
-  },
-  {
-    row: "Point-in-time facts",
-    note: "Two clocks, not one: when a thing was true, and when we learned it.",
-    cells: [
-      ["yes", "Bi-temporal, in Postgres"],
-      ["part", "Timestamps, no past state"],
-      ["yes", "Bi-temporal validity windows"],
-      ["scope", "Not the model"],
-      ["part", "Graph-native, time not a strategy"],
-      ["scope", "Not emphasised"],
-    ],
-  },
-  {
-    row: "Correct a wrong merge",
-    cells: [
-      ["yes", "Reversible, evidence retained"],
-      ["scope", "Not documented"],
-      ["yes", "Merge and cleanup tools"],
-      ["part", "Edit core memory by hand"],
-      ["yes", "Merge and cleanup tools"],
-      ["scope", "Not documented"],
-    ],
-  },
-  {
-    row: "Why a result was excluded",
-    note: "Ranked results are common. Reporting what was considered and dropped, with the reason, is not.",
-    cells: [
-      ["yes", "Per record: threshold, or not yet searchable"],
-      ["scope", "Not documented"],
-      ["scope", "Not documented"],
-      ["scope", "Not documented"],
-      ["scope", "Not documented"],
-      ["scope", "Not documented"],
+      ["yes", `${FORMATS} formats; audio and video transcribed`],
+      ["part", "A handful of official connectors"],
+      ["scope", "Imports, not live sources"],
+      ["scope", "Imports, not live sources"],
+      ["scope", "Imports, not live sources"],
+      ["yes", "40+ connectors, synced"],
     ],
   },
   {
     row: "Access control",
+    note: "Onyx is ahead here and it is the row a team should care about most: it inherits each document's permissions from the system it came from, so a person cannot retrieve what they could not open.",
     cells: [
-      ["yes", "Predicate inside the query"],
-      ["part", "Per-user scoping"],
-      ["part", "Per-user scoping"],
-      ["part", "Per-agent"],
+      ["part", "Predicate inside the query; source permissions not yet synced"],
+      ["yes", "Notion's own sharing model"],
+      ["part", "Workspace and page level"],
+      ["part", "Workspace level"],
+      ["yes", "Spaces and page permissions"],
+      ["yes", "Document-level, synced from the source"],
+    ],
+  },
+  {
+    row: "Why a result was excluded",
+    note: "Ranked results are universal. Reporting what was considered and dropped, and the reason for each, is not — and it is the difference between an answer you can check and one you have to believe.",
+    cells: [
+      ["yes", "Per record: below threshold, or not yet searchable"],
       ["scope", "Not documented"],
-      ["part", "Per-user scoping"],
+      ["scope", "Not documented"],
+      ["scope", "Not documented"],
+      ["scope", "Not documented"],
+      ["part", "Cites its sources; exclusions not reported"],
+    ],
+  },
+  {
+    row: "Point-in-time facts",
+    note: "Two clocks, not one: when a thing was true, and when we came to believe it. A wiki holds the current page and its revisions, which answers neither.",
+    cells: [
+      ["yes", "Bi-temporal, in Postgres"],
+      ["scope", "Page history, not fact validity"],
+      ["scope", "Page history"],
+      ["scope", "Page history"],
+      ["scope", "Page history"],
+      ["scope", "Not the model"],
+    ],
+  },
+  {
+    row: "Tell me when it changes",
+    note: "Retrieval answers a question; this says something happened. Different failure modes — a search returning nothing is visible, an alert that never fires is silence.",
+    cells: [
+      ["yes", "On a change, or when a date comes due"],
+      ["part", "Reminders and database automations"],
+      ["scope", "Not emphasised"],
+      ["scope", "Not emphasised"],
+      ["scope", "Not emphasised"],
+      ["scope", "Not the model"],
     ],
   },
   {
     row: "Erasure you can evidence",
+    note: "Every product here deletes. The question is whether anything re-checks afterwards and hands you the result.",
     cells: [
       ["yes", "Async purge, then a re-queried certificate"],
-      ["part", "Delete APIs"],
-      ["part", "Delete APIs"],
-      ["part", "Delete APIs"],
-      ["part", "Delete APIs"],
-      ["part", "Delete APIs"],
+      ["part", "Delete and retention settings"],
+      ["part", "Delete"],
+      ["part", "Delete"],
+      ["part", "Delete"],
+      ["part", "Delete and re-index"],
     ],
   },
   {
     row: "Provenance on derived rows",
-    note: "Which model, which build, and a fingerprint of prompt + model + schema + parser, so a changed default makes old output detectably stale.",
+    note: "Which model, which build, and a fingerprint of prompt + model + schema + parser — so changing a default makes old output detectably stale instead of quietly wrong.",
     cells: [
       ["yes", "On every artifact and vector"],
       ["scope", "Not documented"],
@@ -279,26 +294,15 @@ const MATRIX: { row: string; note?: string; cells: [Mark, string][] }[] = [
     ],
   },
   {
-    row: "Ingestion breadth",
+    row: "Runs on your infrastructure",
+    note: "Table stakes in this set rather than an advantage — four of the six are self-hostable and one is MIT. Listed because it is the first thing people ask, not because it separates anything.",
     cells: [
-      ["yes", "FORMATS formats, audio and video transcribed"],
-      ["part", "Text and messages"],
-      ["part", "Conversation"],
-      ["part", "Conversation"],
-      ["yes", "Documents and structured data"],
-      ["part", "Documents and text"],
-    ],
-  },
-  {
-    row: "Adoption",
-    note: "Where mem-dog is furthest behind, and by a very long way.",
-    cells: [
-      ["no", "Prototype. No users"],
-      ["yes", "~48k stars, 186M calls a quarter"],
-      ["yes", "Widely deployed"],
-      ["yes", "Large community"],
-      ["part", "Growing"],
-      ["part", "Growing"],
+      ["yes", "Your own cloud project, or a laptop"],
+      ["no", "Hosted only"],
+      ["yes", "AGPL-3.0, open-core AI"],
+      ["yes", "Open-core; enterprise pieces proprietary"],
+      ["yes", "AGPL-3.0, open-core"],
+      ["yes", "MIT"],
     ],
   },
 ];
@@ -844,21 +848,26 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
       <section className="steps" id="compare">
         <h2 className="section-title">Where this sits</h2>
         <p className="hero-lede" style={{ marginBottom: 8 }}>
-          Agent memory is a crowded category — Mem0, Zep, Letta, Supermemory and a steady stream of
-          YC batches are all building it. They are mostly optimising for adoption, latency and how
-          fast an agent can start remembering.
+          The question that actually arrives is <strong>&ldquo;we already have Notion — why would
+          we run this?&rdquo;</strong> So this compares against Notion AI, the open-source
+          workspaces people move to when they leave it, and Onyx, which is the closest thing here
+          to what mem-dog does.
         </p>
         <p className="hero-lede" style={{ marginBottom: 26 }}>
-          mem-dog optimises for a different question: <strong>can you prove what the system knew,
-          why it answered that, and that you actually deleted it?</strong> That is a worse trade if
-          you are shipping a chatbot this week, and the right one if the data is regulated, shared
-          across a team, or subject to erasure requests.
+          The honest answer starts with a category difference rather than a feature. <strong>A
+          workspace answers over what people remembered to put in it.</strong> That is not a
+          shortcoming of Notion — it is what a workspace is — but it means the answer is bounded by
+          the discipline of everybody who did or did not write something down. mem-dog owns no
+          documents and has no editor. It reads the email, the tickets, the calls and the calendar
+          that were never going to be pasted into a page, and it shows what it considered.
         </p>
         <p className="hero-lede" style={{ marginBottom: 26 }}>
-          One thing this deliberately does <em>not</em> claim: self-hosting is not a
-          differentiator. Onyx is MIT-licensed, air-gapped and SOC&nbsp;2 Type&nbsp;II with 40+
-          connectors; Khoj runs entirely on local models. Private deployment is table stakes here,
-          and treating it as a moat is the most common way this category oversells itself.
+          Two things this deliberately does <em>not</em> claim. <strong>Self-hosting is not a
+          differentiator</strong> — four of the six run on your own infrastructure and Onyx is MIT.
+          And <strong>Onyx is ahead on permissions</strong>: it inherits each document&rsquo;s
+          access rules from the system it came from, so a person cannot retrieve what they could not
+          open. mem-dog enforces its own ACL inside the query and does not yet sync source
+          permissions. If that is your requirement today, Onyx is the better answer today.
         </p>
 
         <Matrix formats={caps?.formats ?? null} />
@@ -871,7 +880,7 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
         </p>
         <p className="caveat">
           Every mem-dog cell is verifiable in this repository. Every other cell reflects what that
-          product publicly documents as of August&nbsp;2026 — and where something is simply not part
+          product publicly documents as of September&nbsp;2026 — and where something is simply not part
           of a product&rsquo;s stated scope it is marked so, rather than asserted absent. Those are
           different claims, and only one of them is defensible.
         </p>
@@ -879,15 +888,17 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
         <h3 style={{ marginTop: 30 }}>Where the others are ahead</h3>
         <p className="hero-lede" style={{ marginBottom: 0 }}>
           A comparison that only flatters itself is not worth reading.
-          <strong> Zep is further along on graph reasoning</strong> — multi-hop traversal over time
-          is its whole design, where mem-dog stops at filtering a neighbourhood by when a claim
-          held.
-          <strong> Mem0&rsquo;s adoption dwarfs this</strong> — tens of thousands of stars and
-          hundreds of millions of API calls a quarter, against a system with none.
-          <strong> Supermemory is faster.</strong> <strong>Letta</strong> manages an agent&rsquo;s
-          working context, which mem-dog does not attempt at all. If you want a memory layer that
-          works this afternoon with a large community behind it, pick one of those. If you need to
-          answer an auditor, come back here.
+          <strong> Notion is a better place to write than this will ever be</strong> — mem-dog has
+          no editor, no databases, no canvas, and no plan for any of them; it sits behind whatever
+          you write in.
+          <strong> Onyx has permission-aware retrieval today</strong>, synced from the source
+          systems, which is the single most-requested thing here and is not built yet.
+          <strong> AppFlowy and AFFiNE have communities</strong> in the tens of thousands of stars,
+          against a system with none.
+          <strong> Docmost is a finished wiki</strong> and this is not a wiki at all.
+          If your team needs somewhere to write, pick one of those — and if you then want to ask
+          questions that span the fifteen places your team did <em>not</em> write it down, and check
+          the answer afterwards, come back here.
         </p>
       </section>
 
