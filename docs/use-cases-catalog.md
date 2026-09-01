@@ -25,16 +25,18 @@ equally supported.
 | 3 | Customer Intelligence | B | facets + claim | **Designed** — needs generator-pinned sentiment |
 | 4 | Research & Analysis | A/B | **claim index** | **Designed** — claim index deferred past MVP |
 | 5 | Compliance & Audit | E | version + access log | **Designed** — no alerting |
-| 6 | IoT & Sensor Data | B/D | facets only | **Designed** — thresholds need standing queries |
-| 7 | Legal & Contract Intelligence | B/E | facets + case | **Designed** — deadlines need standing queries |
+| 6 | IoT & Sensor Data | B/D | facets only | **Partly** — standing queries are built; a threshold over a facet is not |
+| 7 | Legal & Contract Intelligence | B/E | facets + case | **Built** — a date rule fires ahead of a deadline; obligations are one of the generators |
 | 8 | Healthcare & Clinical Notes | B/E | case + facets | **Partly** — imaging out of v1 |
-| 9 | Education & Training | A/B | derived artifacts | **Gap** — needs a generator registry over memories |
+| 9 | Education & Training | A/B | derived artifacts | **Built** — six generators over a memory's members |
 | 10 | Sales Enablement | B | summary hierarchy | **Designed** |
-| 11 | Media Monitoring | A/B | **standing queries** | **Gap** — needs a new worker class |
+| 11 | Media Monitoring | A/B | **standing queries** | **Built** — matched on arrival, delivered by poll, memory or webhook |
 | 12 | Meeting Intelligence | B | intent index | **Designed** — media gated on a v1 decision |
 
-Two structural gaps fall out, covered at the [end of this document](#the-two-gaps-this-catalog-exposes).
-Neither is large. Both are invisible until you write the twelve out.
+Two structural gaps fell out, and **both are now closed** — the section at the
+[end of this document](#the-two-gaps-this-catalog-exposes) records what they were and what was
+built. Neither was large. Both were invisible until the twelve were written out, which is the
+argument for writing them out.
 
 ---
 
@@ -364,7 +366,17 @@ becomes an independently retryable job under a depth cap and a per-root budget.
 Writing twelve use cases out surfaced exactly two things the design does not do. Both are small.
 Neither was visible from the five families.
 
-### Gap 1 — retrieval is pull-only, and four use cases need push
+### Gap 1 — retrieval was pull-only, and four use cases needed push · **closed**
+
+Standing queries ship in two kinds, because *"tell me when this arrives"* and *"tell me when this
+comes due"* cannot be one mechanism. An **arrival** rule matches each new write once and never
+re-scans; a **date** rule fires when the calendar reaches a record, which no predicate over new
+writes can do, because nothing arrives on the day a deadline approaches. Delivery is by poll, by
+promotion into a memory, or by signed webhook through the sender the alerts already use.
+
+The original text follows, because the reasoning is what made the shape obvious.
+
+#### As it stood
 
 | Use case | What it actually wants |
 |----------|------------------------|
@@ -399,7 +411,19 @@ Two consequences worth stating now:
   which is W4's shape, not W10's. **Two mechanisms, not one** — conflating them produces a
   standing-query engine that quietly re-scans.
 
-### Gap 2 — derived artifacts are hardcoded to "summary"
+### Gap 2 — derived artifacts were hardcoded to "summary" · **closed**
+
+`POST /memories/{id}/derive` takes a named generator: summary, study guide, flashcards,
+obligations, briefing or timeline. A generator is a prompt and a name, so adding one is
+configuration — and the prompt is in the fingerprint, so editing one detectably invalidates
+everything it wrote.
+
+**Deriving and compressing became two things**, which is the part worth keeping. Deriving produces
+an artifact; compression is the policy of archiving the originals behind one, and only a summary is
+allowed to do it. A flashcard deck that folded the course away would leave itself as the only
+remaining copy of it.
+
+#### As it stood
 
 Covered in full at §9. `compress` becomes `derive` with a pluggable generator, reusing the existing
 generator registry. Turns study guides, flashcards, obligation extracts and customer briefings into

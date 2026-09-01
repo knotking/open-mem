@@ -2472,6 +2472,7 @@ async def capabilities(request: Request) -> dict:
     from .alerts import SURFACES
     from .classify import _EXTENSION_MAP, _MIME_MAP
     from .connectors import CATALOG
+    from .derive import GENERATORS
     from .crawlers import STRATEGIES
     from .parsers import supported_formats
     from .prompts import BY_DATA_TYPE, registry
@@ -2495,8 +2496,21 @@ async def capabilities(request: Request) -> dict:
         # silently dropped it would read as complete coverage.
         "connectors": len(CATALOG),
         "connectors_available": sum(1 for c in CATALOG if c.requires is None),
+        # What can be derived from a memory. Served for the same reason the
+        # alert surfaces are: a console that types its own list is a second
+        # copy of a vocabulary.
+        "generators": len(GENERATORS),
         "embed_model": request.app.state.embedder.model_id,
         "media_interpretation": request.app.state.multimodal.enabled,
+        # How somebody gets an account here. Unauthenticated on purpose: the
+        # sign-in page needs it *before* anyone signs in, and it discloses
+        # nothing an attempt to register would not.
+        #
+        # Without it the page had to describe both possibilities and commit to
+        # neither, which is the copy-that-hedges the rest of this build avoids
+        # by counting things.
+        "registration_mode": (await resolve_setting(
+            request.app.state.pool, "registration_mode")).value,
     }
 
 

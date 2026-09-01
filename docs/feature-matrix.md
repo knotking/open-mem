@@ -28,7 +28,12 @@ Every feature in the platform, with the phase that ships it and whether it is in
 | **`deleted_at` / `purged_at`** | Two timestamps; the erasure certificate is issued against the second | 1 | ● |
 | **Selector-based delete** | Deletion by query, as a resumable job, **with a mandatory preview** | 1 | ● |
 | **Account data deletion** | **Revoke first**, then cascade · `personal` deleted, `shared` retained with attribution removed | 1 | ● |
-| **W10 standing query** | Match new writes against saved selectors, deliver to a target | — | △ |
+| **W10 standing query** | Match new writes against a selector, deliver to a target | 1 | ● |
+| **Date rules** | Fire when the calendar reaches a record — deadlines and retention ageing, which no predicate over new writes can catch | 1 | ● |
+| **`derive` over a memory** | Six generators: summary · study guide · flashcards · obligations · briefing · timeline. Compression is the policy of archiving behind one, not the only way to get one | 1 | ● |
+| **Workflows** | Long-running state machine instances; the engine is outside, this is the record | 1 | ● |
+| **TTL enforcement** | The sweep that applies `on_expiry` — `orphan_delete` · `keep_members` · `archive` | 1 | ● |
+| **Meeting transcripts** | VTT and SRT as speaker turns, restricted to the attendees rather than the connection scope | 1 | ● |
 | Source adapters | `resolve` / `materialise` / `export` / `read` per source family | 3 | ○ |
 | Connector catalog | 300+ documented, ~900 reachable through the credential broker | 3 | ○ |
 | Direct upload | Text, file, URL, camera, voice, video | 4 | ○ |

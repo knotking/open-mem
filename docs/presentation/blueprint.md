@@ -1,13 +1,40 @@
 # mem-dog — Platform Blueprint
 
-*A design document, not a description of something running.* Parts of this exist today; most is
-designed and unbuilt, and several sections record defects found in the existing design rather than
-features to add.
+*A design document that a running system has caught up with.* When this was written most of it was
+designed and unbuilt; that is no longer the honest framing, and the correction matters more than
+the flattery — a blueprint that claims to be aspirational while describing shipped behaviour is as
+misleading as the reverse.
 
 Single-file assembly of the documentation set. The
 [published artifact](https://claude.ai/code/artifact/c8a9e266-fef7-4b68-b521-dceef8d0574e) is the
 same material as a web page; the individual documents under [`docs/`](../README.md) are the source
-of truth.
+of truth, **and where this file disagrees with them, they are right** — this is a copy, and copies
+drift.
+
+## What is actually running (1 September 2026)
+
+Counted from the build rather than claimed: `GET /api/v1/capabilities` reports the formats, data
+types, prompts, providers, connectors, alert surfaces and generators, and the landing page reads
+that endpoint rather than quoting a number somebody typed.
+
+Shipped and deployed, in the order it was built:
+
+| | |
+|---|---|
+| **The spine** | Write → store → retrieve, with the trace, the readiness staircase and audit on every read |
+| **Enrichment** | Classification, the core envelope, entities and edges — **opt-in**, per write or per project, because it is the part that spends money |
+| **Memories** | Types with TTL and expiry policy, mutable membership, `part_of` hierarchies read where they are used, and **expiry that runs** |
+| **Compaction & derive** | Fold a memory down, or make something from it — six generators, and archiving is a policy rather than the price of getting an artifact |
+| **Alerts** | Eight transition surfaces, debounced evaluation, a backtest that returns what it caught, signed delivery with replay |
+| **Standing queries** | Two kinds — matched on arrival, or fired when the calendar reaches a record |
+| **Workflows** | Long-running state machines whose engine lives outside; the history is the record and the state is a cache of it |
+| **Crawlers** | Scheduled pull with per-scope cursors, rate-limit state on the credential, and a dry run that gates enabling |
+| **Erasure** | Selector deletion, account deletion, and a **certificate that re-checks every table** rather than asserting |
+| **The console** | Every one of the above, on the principle that a capability nothing can reach is not shipped |
+
+What is **not** running is stated in the same places it always was: the connector integrations that
+need credentials, the enterprise tier — SSO, invoicing, hash-chained audit, bulk export — and
+project signals. See [roadmap.md](../roadmap.md) and [TBD.md](../../TBD.md).
 
 ---
 

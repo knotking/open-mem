@@ -69,6 +69,10 @@ capability →  what may this key do     (missing)
 | Organizations | `/organizations` | control | `admin:*` |
 | API keys | `/api-keys` | control | `admin:*` |
 | Infrastructure | `/pods` | control | `admin:*` |
+| **Standing queries** | `/standing-queries` | control | `config:write` to define · `data:read` to poll |
+| **Workflows** | `/workflows` · `/instances` | control · data | `config:write` to define · `data:write` to move one |
+| **Derive** | `/memories/{id}/derive` · `/generators` | data | `data:write` |
+| **Expiry** | `/expiry/sweep` · `/projects/{id}/expiring` | control | `data:write` to sweep · `data:read` to look |
 | MCP | `/mcp/sse` | **data only** | `data:read` · `data:write` |
 
 Capability scope becomes a property of the **key**, checked at the router. An MCP key is
@@ -104,6 +108,12 @@ because the credential does not carry the scope.
 | `PATCH /connections/{id}` | Set `personal` / `shared` scope — the ACL-inheritance root |
 | `POST /tokens/ephemeral` | Short-lived project-bound token for embeddable widgets |
 | **`DELETE /data/{id}`** · **`POST /deletions`** with a selector · project and org purge | Cleanup and erasure. Beyond one item it is a job — see [deletion](operations/deletion.md) |
+| **`CRUD /standing-queries`** · `/backtest` · `/enabled` · `/matches` | The one primitive that speaks first. Two kinds: **arrival** matches each new write once and never re-scans; **date** fires when the calendar reaches a record, which no predicate over new writes can do |
+| **`POST /memories/{id}/derive`** · `GET /generators` | Six things derivable from a member set. Compression is the policy of archiving behind one, and only a summary may |
+| **`POST /expiry/sweep`** · `GET /projects/{id}/expiring` | What a TTL actually does. `dry_run` defaults to **true** — the difference between the two is a deletion cascade |
+| **`PUT /workflows`** · `POST /instances/{id}/input` · `/history` · `/verify` | Long-running state machines. The input verb is conditional on the sequence the caller acted on, so two actors racing give one winner and one `409` |
+| **`GET /memories/{id}/tree`** · `CRUD /memories/{id}/links` | The hierarchy, read where it is used rather than propagated |
+| **`POST /meetings/attendees`** | Who in a room is a principal here — answered before the write, because a transcript restricted to one of six people is useless and the moment to see that is while deciding |
 
 ## Six personas, not four roles
 

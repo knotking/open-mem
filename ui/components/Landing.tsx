@@ -14,6 +14,8 @@ import { useEffect, useState } from "react";
 import ThemeToggle from "./ThemeToggle";
 
 type Capabilities = {
+  generators: number;
+  registration_mode: string;
   formats: number;
   data_types: number;
   prompts: number;
@@ -140,6 +142,16 @@ const COMPETITORS = ["mem-dog", "Mem0", "Zep", "Letta", "Cognee", "Supermemory"]
 
 type Mark = "yes" | "part" | "scope" | "no";
 
+/**
+ * The comparison, with the one number in it left as a placeholder.
+ *
+ * `54 formats` was typed here and was 58 by the time anyone read it -- four
+ * rows above a stat tile that reads the same figure from `GET /capabilities`
+ * and has never once been wrong, because nobody types it. So this row is
+ * filled in at render time from the same source.
+ */
+const FORMATS = "FORMATS";
+
 const MATRIX: { row: string; note?: string; cells: [Mark, string][] }[] = [
   {
     row: "What it is",
@@ -259,7 +271,7 @@ const MATRIX: { row: string; note?: string; cells: [Mark, string][] }[] = [
   {
     row: "Ingestion breadth",
     cells: [
-      ["yes", "54 formats, audio and video transcribed"],
+      ["yes", "FORMATS formats, audio and video transcribed"],
       ["part", "Text and messages"],
       ["part", "Conversation"],
       ["part", "Conversation"],
@@ -288,7 +300,14 @@ const MARK_LABEL: Record<Mark, string> = {
   no: "no",
 };
 
-function Matrix() {
+function Matrix({ formats }: { formats: number | null }) {
+  // The placeholder resolved once, here, rather than the table carrying a
+  // number somebody has to remember to update.
+  const matrix = MATRIX.map((row) => ({
+    ...row,
+    cells: row.cells.map(([mark, text]) =>
+      [mark, text.replace(FORMATS, String(formats ?? 58))] as [Mark, string]),
+  }));
   return (
     <div className="scroll">
       <table className="matrix">
@@ -301,7 +320,7 @@ function Matrix() {
           </tr>
         </thead>
         <tbody>
-          {MATRIX.map((row) => (
+          {matrix.map((row) => (
             <tr key={row.row}>
               <th scope="row">
                 {row.row}
@@ -470,6 +489,7 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
         { value: caps.webhook_providers, label: "webhook providers" },
         { value: caps.connectors, label: "app connectors" },
         { value: caps.alert_surfaces, label: "kinds of change you can watch" },
+        { value: caps.generators, label: "things derivable from a memory" },
       ]
     : [];
 
@@ -554,6 +574,27 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
               Your session is an httpOnly cookie. The browser never holds a token, and requests are
               attributed to you rather than to a shared key.
             </p>
+            {/* Read from the deployment rather than described in both
+              * directions. The page used to say nothing at all about how a
+              * person gets an account, which is the first question somebody
+              * without one has. */}
+            {caps?.registration_mode === "invite_only" && (
+              <p className="empty">
+                <strong>New accounts are invite-only here.</strong> Somebody already inside issues
+                one; it is single-use, expiring, and bound to your address.
+              </p>
+            )}
+            {caps?.registration_mode === "open" && (
+              <p className="empty">
+                Anyone who can authenticate may create an account on this deployment — which grants
+                an identity and <strong>no access to anything</strong> until a member adds you.
+              </p>
+            )}
+            {caps?.registration_mode === "disabled" && (
+              <p className="empty">
+                New accounts are closed on this deployment. Existing members can still sign in.
+              </p>
+            )}
           </form>
         ) : (
           <div className="signin-card" id="signin">
@@ -810,7 +851,7 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
           and treating it as a moat is the most common way this category oversells itself.
         </p>
 
-        <Matrix />
+        <Matrix formats={caps?.formats ?? null} />
 
         <p className="legend">
           <span><span className="mark yes" aria-hidden="true" /> yes</span>
