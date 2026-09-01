@@ -185,3 +185,37 @@ def test_slack_ignores_what_it_posted_itself():
 
     payload["event"]["bot_id"] = "B0SELF"
     assert providers.get("slack").ignore(payload), "a bot echo would have been ingested"
+
+
+def test_the_signed_url_is_the_one_the_provider_sent_to():
+    """The bug a unit test structurally cannot find, so it gets one anyway.
+
+    Twilio signs the URL. Cloud Run terminates TLS and forwards over plain
+    HTTP, so `request.url` inside the container reconstructs as `http://` while
+    the provider signed `https://` — and every delivery is refused as
+    `signature verification failed`, which reads as a wrong secret.
+
+    It survived every existing test because a test hands the *same* URL to the
+    signer and the verifier. It was found by firing `tools/fake_inbound.py` at
+    the deployed service, where the two URLs are not the same.
+    """
+    from memdog.app import _public_url
+
+    class _Req:
+        def __init__(self, url, headers):
+            from starlette.datastructures import URL
+            self.url = URL(url)
+            self.headers = headers
+
+    behind_proxy = _Req("http://memdog.internal/webhooks/whk_1",
+                        {"x-forwarded-proto": "https"})
+    assert _public_url(behind_proxy) == "https://memdog.internal/webhooks/whk_1"
+
+    # A proxy chain sends a list, and the first entry is the original client.
+    chained = _Req("http://memdog.internal/webhooks/whk_1",
+                   {"x-forwarded-proto": "https, http"})
+    assert _public_url(chained).startswith("https://")
+
+    # Nothing in front: the request's own scheme is the only truth there is.
+    direct = _Req("http://localhost:8080/webhooks/whk_1", {})
+    assert _public_url(direct) == "http://localhost:8080/webhooks/whk_1"

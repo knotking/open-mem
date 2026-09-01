@@ -85,10 +85,10 @@ Two properties make this worth having rather than decorative:
   the day it is added, rather than the day a real subscription is pointed at it.
 
 It also fires at a running deployment, which nothing else in the repository does — the HTTP layer
-of `/hooks/{producer_id}` had only ever been reached by a real provider or not at all:
+of `/webhooks/{producer_id}` had only ever been reached by a real provider or not at all:
 
 ```bash
-python -m tools.fake_inbound github http://localhost:8000/hooks/<producer_id> <secret>
+python -m tools.fake_inbound github http://localhost:8000/webhooks/<producer_id> <secret>
 ```
 
 The limit, stated because it is easy to overstate: signer and verifier were read off the same

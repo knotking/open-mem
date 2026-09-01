@@ -1279,6 +1279,32 @@ async def post_engine(request: Request, body: dict, actor: Principal = Depends(p
     )
 
 
+def _public_url(request: Request) -> str:
+    """The URL the *provider* sent to, not the one this process received.
+
+    Cloud Run terminates TLS and forwards over plain HTTP, so `request.url`
+    reconstructs as `http://` while Twilio signed the `https://` address the
+    customer configured. The signature then fails on every single delivery, and
+    it fails as `signature verification failed` -- which reads as a wrong
+    secret, so the time goes on rotating a secret that was always correct.
+
+    Found by firing `tools/fake_inbound.py` at the deployed service: the same
+    request verified locally and was refused in production, because a unit test
+    hands the same URL to the signer and the verifier and can never see this.
+
+    Trusting a client-supplied header is safe *here* specifically: the platform
+    overwrites `X-Forwarded-Proto` on every request, and spoofing it changes
+    only which string gets signed -- an attacker still needs the secret, so this
+    grants nothing that forging the whole signature would not already require.
+    """
+    forwarded = request.headers.get("x-forwarded-proto")
+    if not forwarded:
+        return str(request.url)
+    # A proxy chain sends a list; the first entry is the original client.
+    scheme = forwarded.split(",")[0].strip()
+    return str(request.url.replace(scheme=scheme)) if scheme else str(request.url)
+
+
 @app.post("/webhooks/{producer_id}")
 async def inbound_webhook(request: Request, producer_id: str) -> JSONResponse:
     """The provider-facing surface.
@@ -1313,7 +1339,7 @@ async def inbound_webhook(request: Request, producer_id: str) -> JSONResponse:
             producer_id=producer_id, raw_body=raw, headers=headers,
             # Twilio signs the URL, and Graph validates via a query parameter,
             # so the adapter needs more than the bytes.
-            url=str(request.url), query=dict(request.query_params),
+            url=_public_url(request), query=dict(request.query_params),
         )
     except WebhookError as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc

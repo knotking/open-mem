@@ -33,7 +33,7 @@ Nine schemes, and no two are the same:
 
 Fire one at a running deployment:
 
-    python -m tools.fake_inbound github http://localhost:8000/hooks/<producer_id> <secret>
+    python -m tools.fake_inbound github http://localhost:8000/webhooks/<producer_id> <secret>
 """
 
 from __future__ import annotations
