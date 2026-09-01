@@ -884,22 +884,6 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
           of a product&rsquo;s stated scope it is marked so, rather than asserted absent. Those are
           different claims, and only one of them is defensible.
         </p>
-
-        <h3 style={{ marginTop: 30 }}>Where the others are ahead</h3>
-        <p className="hero-lede" style={{ marginBottom: 0 }}>
-          A comparison that only flatters itself is not worth reading.
-          <strong> Notion is a better place to write than this will ever be</strong> — mem-dog has
-          no editor, no databases, no canvas, and no plan for any of them; it sits behind whatever
-          you write in.
-          <strong> Onyx has permission-aware retrieval today</strong>, synced from the source
-          systems, which is the single most-requested thing here and is not built yet.
-          <strong> AppFlowy and AFFiNE have communities</strong> in the tens of thousands of stars,
-          against a system with none.
-          <strong> Docmost is a finished wiki</strong> and this is not a wiki at all.
-          If your team needs somewhere to write, pick one of those — and if you then want to ask
-          questions that span the fifteen places your team did <em>not</em> write it down, and check
-          the answer afterwards, come back here.
-        </p>
       </section>
 
       <footer className="landfoot">

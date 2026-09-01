@@ -11,6 +11,34 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **`pagination.type: "next_url"`** — the source hands back the *whole* next URL
+  in the body and `cursor_path` says where. This could not be templated before,
+  and two catalog entries carried notes admitting they pulled one page.
+  Salesforce returns `nextRecordsUrl` as a **path**, Microsoft Graph returns
+  `@odata.nextLink` absolute; both work now. A next URL is attacker-controlled
+  if the source is, and the crawler carries the connection's credential in its
+  headers, so the resolved URL **must stay on the origin the run started
+  against** — a source that genuinely pages across hosts is one this cannot
+  crawl, which is the right way round.
+- **`api/tools/fake_salesforce.py`** — a Salesforce-shaped API you can crawl
+  without a tenant: the client-credentials exchange, the
+  `{totalSize, done, records, nextRecordsUrl}` envelope, a real
+  `WHERE LastModifiedDate >` filter, and paging behind a server-side query
+  locator. `python -m tools.fake_salesforce` runs it on `127.0.0.1:8787`.
+- **`exercised_against` on a catalog entry**, and the console now states it.
+  `verified` still means somebody ran it against a live account and is still
+  false everywhere; this is the weaker claim that can be earned without a
+  credential — the template was *run*, against a named thing that exists, which
+  a test checks. The console previously said nothing at all about verification
+  while the docs claimed it did.
+- **Two Secret Manager secrets for console sign-in** — `memdog-owner-password`
+  and `memdog-demo-password`, on `memdog-dev-506718`. The two Identity Platform
+  accounts existed with memberships already; their passwords had never been
+  recorded anywhere, so neither could actually be used. These are the only copy.
+  The deploy skill also now writes down the three conditions a sign-in needs,
+  because auto-provisioning satisfies two of them and the third fails quietly:
+  it creates a user and an identity but **never a membership**, so a new account
+  authenticates cleanly and then gets `403 not a member of any organization`.
 - **A meeting transcript is written restricted to the room**, not to whatever
   its connection scope would give it. That inheritance is right for a Jira
   ticket and a **serious disclosure for a recording** — four people in a room
@@ -36,6 +64,19 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 - **A `meeting` memory type**, ninety days and `archive`. The plan's caveat that
   TTL is unenforced is obsolete: the sweep shipped the same day, so this is a
   retention policy that runs.
+
+### Fixed
+- **The Salesforce connector re-read page one until it hit the page limit.** It
+  put `nextRecordsUrl` into a query parameter, and Salesforce returns a path —
+  so a crawl of four accounts fetched twenty pages, reported forty items, and
+  looked entirely successful. Reading the config could not find this; running it
+  against the simulator did, in one assertion.
+- **The Salesforce `soql` scope now ships an incremental clause**, so a run
+  reads what changed rather than the whole object every time. It is
+  `WHERE LastModifiedDate > {{ watermark_or_epoch }}` — the `_or_epoch` half
+  matters, because plain `{{ watermark }}` renders empty on the first run and
+  Salesforce answers `MALFORMED_QUERY`, which would work on every run except the
+  one that sets it up. `{{ watermark_or_epoch }}` is available to any template.
 
 ### Added
 - **Workflows — long-running state machine instances, as a system of record.**
