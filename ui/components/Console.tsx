@@ -7658,6 +7658,7 @@ function InboundSection({ projectId }: { projectId: string }) {
   const [selected, setSelected] = useState<Producer | null>(null);
   const [deliveries, setDeliveries] = useState<WebhookDelivery[]>([]);
   const [secret, setSecret] = useState<string | null>(null);
+  const [theirSecret, setTheirSecret] = useState("");
   const [payload, setPayload] = useState(SAMPLE);
   const [mapping, setMapping] = useState(
     '{\n  "items_path": "events",\n  "external_id_path": "id",\n  "text_path": "text",\n  "event_time_path": "ts"\n}',
@@ -7904,6 +7905,7 @@ function InboundSection({ projectId }: { projectId: string }) {
               <button
                 className="secondary"
                 disabled={busy}
+                title="Mints one for a provider that will accept ours. Zoom, Stripe, GitHub and Slack generate their own — paste theirs instead."
                 onClick={() =>
                   act("New signing secret issued.", async () => {
                     const r = await call<{ signing_secret: string }>(
@@ -7917,6 +7919,35 @@ function InboundSection({ projectId }: { projectId: string }) {
                 }
               >
                 Rotate signing secret
+              </button>
+              {/* The other direction, and the one the presets need. Zoom,
+                * Stripe, GitHub and Slack each generate their own secret, so a
+                * producer holding one we minted is configured, looks correct,
+                * and rejects every real delivery. */}
+              <input
+                type="password"
+                value={theirSecret}
+                placeholder="or paste the provider's own secret"
+                style={{ flex: 1, minWidth: 220 }}
+                onChange={(e) => setTheirSecret(e.target.value)}
+              />
+              <button
+                className="secondary"
+                disabled={busy || theirSecret.trim().length < 8}
+                title="Stores the secret the provider generated. It is never shown again and never returned."
+                onClick={() =>
+                  act("Stored. It is not readable back — only replaced.", async () => {
+                    await call(
+                      `api/v1/producers/${selected.producer_id}/signing-secret`,
+                      { secret: theirSecret.trim() },
+                    );
+                    setTheirSecret("");
+                    setSelected({ ...selected, inbound_auth: "signature" });
+                    await load();
+                  })
+                }
+              >
+                Store theirs
               </button>
             </div>
             {secret && (

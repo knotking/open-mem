@@ -1418,10 +1418,24 @@ async def webhook_deliveries(
 
 @app.post("/api/v1/producers/{producer_id}/signing-secret")
 async def rotate_signing_secret(
-    request: Request, producer_id: str, actor: Principal = Depends(principal)
+    request: Request, producer_id: str, body: dict | None = None,
+    actor: Principal = Depends(principal),
 ) -> dict:
     """Rotate with an overlap: the previous secret keeps verifying until the
-    next rotation, or a rotation is an outage for everything in flight."""
+    next rotation, or a rotation is an outage for everything in flight.
+
+    **A supplied `secret` is stored instead of a minted one**, and that is not a
+    convenience. Zoom, Stripe, GitHub and Slack each generate their own secret
+    and expect you to hold it — so a producer using one of those presets could
+    be configured as `signature`, look correct in every listing, and reject
+    every real delivery, because the stored secret was one we invented and the
+    provider had never seen. The presets existed; the only way to use them did
+    not.
+
+    A supplied secret is never echoed back. There is nothing to show: whoever
+    pasted it already has it, and returning it would put a provider's
+    credential in a response body for no reason.
+    """
     import secrets as secrets_module
 
     from .auth import CONFIG_WRITE
@@ -1441,7 +1455,12 @@ async def rotate_signing_secret(
     if producer is None:
         raise HTTPException(status_code=404, detail="not found")
 
-    secret = secrets_module.token_urlsafe(32)
+    supplied = (body or {}).get("secret")
+    if supplied is not None and (not isinstance(supplied, str) or len(supplied) < 8):
+        raise HTTPException(
+            status_code=400,
+            detail="a supplied signing secret must be a string of at least 8 characters")
+    secret = supplied or secrets_module.token_urlsafe(32)
     try:
         ciphertext = state.envelope.encrypt(secret.encode(), aad=actor.org_id.encode())
     except CryptoUnavailable as exc:
@@ -1460,10 +1479,17 @@ async def rotate_signing_secret(
         """,
         producer_id, ciphertext,
     )
+    if supplied:
+        # Nothing to show. Echoing a provider's own credential back into a
+        # response body would put it in one more log for no reason at all.
+        return {"producer_id": producer_id, "stored": True, "source": "provider",
+                "previous_secret_valid_until_next_rotation":
+                    producer["signing_secret_ct"] is not None}
     return {
         "producer_id": producer_id,
         # Shown once, like any other credential.
         "signing_secret": secret,
+        "source": "minted",
         "algorithm": "hmac-sha256",
         "header": "X-Signature",
         "timestamp_header": "X-Signature-Timestamp",

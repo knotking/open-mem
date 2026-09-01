@@ -877,3 +877,45 @@ async def test_a_producer_can_ask_for_enrichment_and_for_half_of_it(
     assert len(events) == 1
     assert events[0]["payload"]["embed"] is True
     assert events[0]["payload"]["summarize"] is False
+
+
+async def test_a_providers_own_signing_secret_can_be_stored(
+    pool, queue, blobs, settings, tenant, envelope, principal_for
+):
+    """Zoom, Stripe, GitHub and Slack each generate their own secret.
+
+    Without this, a producer using one of those presets could be configured as
+    `signature`, look correct in every listing, and reject every real delivery
+    -- because the stored secret was one we invented and the provider had never
+    seen it. The presets existed; the only way to use them did not.
+    """
+    import hashlib
+    import hmac as hmac_module
+
+    from memdog.crypto import Envelope
+    from memdog.ids import new_id
+
+    theirs = "zoom-gave-us-this-one"
+    producer_id = new_id("whk")
+    await pool.execute(
+        """
+        INSERT INTO producers (producer_id, type, user_id, org_id, project_id,
+                               status, inbound_auth, signing_secret_ct, inbound_mapping,
+                               defaults)
+        VALUES ($1, 'webhook', $2, $3, $4, 'enabled', 'signature', $5, '{}', '{}')
+        """,
+        producer_id, tenant.user_id, tenant.org_id, tenant.project_id,
+        envelope.encrypt(theirs.encode(), aad=tenant.org_id.encode()),
+    )
+
+    body = b'{"id": "signed-by-them"}'
+    timestamp = str(int(__import__("time").time()))
+    signature = hmac_module.new(
+        theirs.encode(), f"{timestamp}.".encode() + body, hashlib.sha256).hexdigest()
+
+    result = await receive(
+        pool, queue, blobs, settings, envelope, producer_id=producer_id,
+        raw_body=body,
+        headers={"x-signature": signature, "x-signature-timestamp": timestamp},
+    )
+    assert result.status == "accepted" and result.items == 1
