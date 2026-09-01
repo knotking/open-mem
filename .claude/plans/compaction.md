@@ -4,7 +4,9 @@
 the corpus stops growing without bound, the way mem0 does — but without mem0's
 central move, which is to overwrite.
 
-Status: **plan only, nothing implemented.** Confirm before `/implement`.
+Status: **shipped.** `api/src/memdog/compaction.py` (600 lines), 12 tests.
+Folding, the job card, provenance as a source list, and owner-scoped summaries
+are live; a private summary is readable by its owner, which it once was not.
 
 ---
 

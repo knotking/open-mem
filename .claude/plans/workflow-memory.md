@@ -6,7 +6,9 @@ instance whose state advances on input from heterogeneous actors (robots, AI
 agents, humans) or on the expiry of a deadline, and a read path any permitted
 user can query for current state and history.
 
-Status: **plan only, nothing implemented.** Confirm before `/implement`.
+Status: **shipped.** `api/src/memdog/workflows.py` (648 lines), 15 tests.
+Definitions, conditional transitions, the race check, actor guards, deadlines
+and re-folding state from the log are live, with a Workflows console section.
 
 **Confirmed architecture (Parag).** The workflow **engine lives outside
 memdog**. It calls memdog's API to record input, and it **receives triggers**

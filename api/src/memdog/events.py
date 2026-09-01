@@ -54,8 +54,11 @@ for _surface in ("fact.asserted", "fact.superseded", "fact.retracted",
 #
 # `entity.extraction.requested` now has one: entities are resolved inside the
 # enrichment transaction, so the event is consumed rather than logged for a
-# worker that does not exist. `graph.build.requested` remains unconsumed -- the
-# edge layer is not built, and pretending otherwise would make the log lie.
+# worker that does not exist. Edges followed it there -- `record_edges` runs in
+# the same transaction -- so `graph.build.requested` is **not** evidence that
+# the edge layer is missing. It is not. The event now marks each write as a
+# candidate for a rebuild pass that has not been written, and its unconsumed
+# status has twice been read as a broken graph.
 NO_CONSUMER = {"graph.build.requested", "enrichment.refused"}
 
 MAX_ATTEMPTS = 5

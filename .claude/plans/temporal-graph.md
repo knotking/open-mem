@@ -4,7 +4,25 @@
 believed when* — bitemporally, with supersession instead of accumulation, and
 with facts that an agent can assert directly without an LLM.
 
-Status: **plan only, nothing implemented.** Confirm before `/implement`.
+Status: **shipped.** `api/src/memdog/graph.py` (685 lines) and `entities.py`
+are live, with 54 tests across `test_graph.py`, `test_temporal_graph.py`,
+`test_graph_retrieval.py` and `test_entities.py`. Bitemporal facts with
+`valid_from` / `valid_to`, supersession rather than accumulation, `valid_at` and
+`as_of` asking the two different questions, conflicts, fact history, and facts an
+agent can assert directly through the API without a model.
+
+Edges are recorded automatically: `record_edges` runs inside the enrichment
+worker, in the same transaction as entity resolution, because a relation names
+its endpoints by name and only that resolution can turn a name into an id.
+Verified against the live deployment — entity neighbourhoods return nodes at
+depth 1 and co-mentions resolve.
+
+One piece of debris worth knowing, because it has now caused two wrong
+diagnoses: `graph.build.requested` is still emitted on every write and still
+sits in `events.NO_CONSUMER`, carrying a comment saying *"the graph is not built
+yet"*. That comment predates edges moving into enrichment and is false. An
+unconsumed event beside a working feature reads as a missing feature, which is
+exactly the wrong conclusion it invited.
 
 ---
 

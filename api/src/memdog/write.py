@@ -590,9 +590,21 @@ async def _write_one(
             },
         ))
 
-    # Emitted with no consumer. The graph is not built yet, and a graph that
-    # begins on the day someone writes the consumer has lost everything before
-    # it -- so the intent is recorded now and drained later.
+    # Emitted with no consumer, and **not** because the graph is unbuilt -- it
+    # is. `record_edges` runs inside the enrichment worker, in the same
+    # transaction as entity resolution, so edges exist and neighbourhoods
+    # return them.
+    #
+    # This event predates that and is now a record of intent rather than a
+    # queue: it marks every write as a candidate for a *rebuild* pass that does
+    # not exist yet, so a future edge generator can be run over everything
+    # rather than starting from the day it was written.
+    #
+    # The comment here used to say "the graph is not built yet", which stopped
+    # being true and then caused two separate wrong diagnoses of an empty
+    # graph -- an unconsumed event beside a working feature reads as a missing
+    # feature. If the rebuild pass is never written, delete this event rather
+    # than leaving it to be misread a third time.
     events.append(await emit(
         conn,
         event_type="graph.build.requested",

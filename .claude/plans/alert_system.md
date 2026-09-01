@@ -4,7 +4,9 @@
 them as data is written. Record every match as a durable event. Make each event
 reachable two ways — **pushed** to a subscriber, or **polled** from a cursor.
 
-Status: **plan only, nothing implemented.** Confirm before `/implement`.
+Status: **shipped.** `api/src/memdog/alerts.py` (862 lines), 44 tests in
+`tests/test_alerts.py`, and an Alerts section in the console. Surfaces, the
+condition builder, backtest-before-enable and delivery state are all live.
 
 ---
 

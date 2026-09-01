@@ -4,7 +4,11 @@
 API allows, be schedulable against those limits, and be watchable while they
 run. Then add the connectors the project-signals work needs and does not have.
 
-Status: **plan only, nothing implemented.** Confirm before `/implement`.
+Status: **shipped.** Sync state is per scope, a run reports itself while it
+runs, and the heartbeat defect this plan opens with is fixed. See
+`crawling.py` and `crawlers.py` (1,072 lines), 45 tests in `test_crawlers.py`
+plus `test_source_shapes.py` and `test_connector_salesforce.py`, which crawl
+simulators rather than reading templates.
 
 ---
 

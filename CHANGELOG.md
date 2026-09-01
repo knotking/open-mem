@@ -10,6 +10,23 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 
 ## Unreleased
 
+### Fixed
+- **A connector declaring `method: POST` was issued as a bodyless GET.**
+  `HttpRequest` has always carried `method` and `body`; the crawler read
+  neither. Linear, Notion, Attio and Copper were affected — Linear is GraphQL,
+  so it was not a degraded request but a meaningless one. Request bodies are
+  now sent, and templated recursively, which is what makes an incremental
+  clause expressible for any provider whose filter lives in the body.
+- **14 of 37 connectors now pull incrementally, up from 1.** The rest re-read
+  their whole source on every scheduled run — a cost and rate-limit problem
+  that shows up on day two of a pilot and raises nothing while it happens. The
+  remaining 13 are listed with the specific obstacle in `NO_INCREMENTAL`; a
+  wrong filter parameter is silent, so a guessed clause is worse than none.
+- A crawler-scheduler test failed under full-suite load and passed alone. The
+  advisory lock is taken on a pooled connection and is re-entrant per session,
+  so two racing ticks sharing a connection both proceeded. The lock holds
+  between processes, which is how the scheduler runs.
+
 ### Changed
 - **The sign-in page shows a result instead of describing one.** A panel renders
   the shape of an answer — the passages returned with the arm that matched each,
