@@ -701,7 +701,17 @@ select {
 
 /* ---------------------------------------------------------------- tabs */
 .topbar { gap: 20px; }
-.tabs { display: flex; gap: 20px; margin-right: auto; }
+/* Two links now, so they can sit with the wordmark rather than being pushed to
+ * the far side of an empty bar. `margin-right: auto` made sense holding seven
+ * of them apart from the CTA; with two it left a gap wide enough to read as a
+ * missing element. */
+.tabs { display: flex; gap: 22px; margin-right: auto; margin-left: 8px; }
+
+/* Below the fold of a phone the bar is a wordmark and a way in. Two anchors on
+ * a page that is read top to bottom are not worth the row they cost. */
+@media (max-width: 560px) {
+  .tabs { display: none; }
+}
 .tabs a {
   color: var(--muted);
   text-decoration: none;

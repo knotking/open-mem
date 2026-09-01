@@ -27,14 +27,24 @@ type Capabilities = {
   media_interpretation: boolean;
 };
 
+/**
+ * Two anchors, not seven.
+ *
+ * The bar was a table of contents for a page that is one argument: the
+ * sections chain — "How a record moves", then "It knows what connects to
+ * what", then *"And* a working set that stops growing", *"And* a source you
+ * can tell is still working". Copy that continues with "and" is not seven
+ * destinations, and offering them as tabs asked a first-time reader to choose
+ * between things they have no basis to choose between.
+ *
+ * So the bar marks the two genuine turns — how it works, and how it compares —
+ * and everything between them is reached by reading on, which is what the page
+ * was written for. The sections keep their ids: a link somebody already has
+ * still lands.
+ */
 const TABS = [
   { id: "flow", label: "How it works" },
-  { id: "graph", label: "Graph" },
-  { id: "alerts", label: "Alerts" },
-  { id: "compaction", label: "Compaction" },
-  { id: "sources", label: "Sources" },
-  { id: "compare", label: "Comparison" },
-  { id: "principles", label: "Principles" },
+  { id: "compare", label: "Where this sits" },
 ];
 
 const STEPS = [
