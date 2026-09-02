@@ -515,6 +515,42 @@ function useSectionSpy() {
 }
 
 /**
+ * How far down the page the reader is, 0 to 1.
+ *
+ * The bar already says *which* section you are in; this says how much is left,
+ * which is the other half of the question a long page raises and the reason a
+ * reader bails halfway. Measured on scroll behind `requestAnimationFrame` so a
+ * fast scroll does not queue a layout read per event.
+ */
+function useScrollProgress() {
+  const [progress, setProgress] = useState(0);
+
+  useEffect(() => {
+    let queued = false;
+    function measure() {
+      queued = false;
+      const doc = document.documentElement;
+      const travel = doc.scrollHeight - doc.clientHeight;
+      setProgress(travel <= 0 ? 0 : Math.min(1, Math.max(0, doc.scrollTop / travel)));
+    }
+    function onScroll() {
+      if (queued) return;
+      queued = true;
+      requestAnimationFrame(measure);
+    }
+    measure();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("resize", onScroll, { passive: true });
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      window.removeEventListener("resize", onScroll);
+    };
+  }, []);
+
+  return progress;
+}
+
+/**
  * What comes back, including what did not.
  *
  * The headline claims the system shows its work, and a claim in a headline is
@@ -590,6 +626,7 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
   const [error, setError] = useState<string | null>(null);
   const [caps, setCaps] = useState<Capabilities | null>(null);
   const { present, active } = useSectionSpy();
+  const progress = useScrollProgress();
 
   useEffect(() => {
     fetch("/api/capabilities")
@@ -655,6 +692,13 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
           <ThemeToggle />
           <a className="tab-cta" href="#signin">Sign in</a>
         </div>
+        {/* Sits on the bar's own bottom edge, so it reads as the bar filling
+            rather than as a second rule under it. */}
+        <div
+          className="railfill"
+          style={{ transform: `scaleX(${progress})` }}
+          aria-hidden="true"
+        />
       </header>
 
       <section className="hero-split">
@@ -815,7 +859,7 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
       </section>
 
       <section className="steps" id="time">
-        <h2 className="section-title">And when each thing was true</h2>
+        <h2 className="section-title">When each thing was true</h2>
         <p className="hero-lede" style={{ marginBottom: 22 }}>
           A claim carries two clocks: when it was true in the world, and when we learned it. A
           document imported today about last year is visible as of last year, and invisible as of
@@ -833,21 +877,12 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
             </p>
           </article>
           <article>
-            <span className="step-n">RULES</span>
+            <span className="step-n">CLOSE</span>
             <h3>No model decides what stopped being true</h3>
             <p>
               Some relationships hold one value at a time and some do not. A second address
               supersedes the first; a second employer does not, because people hold two jobs.
               That is declared, not inferred.
-            </p>
-          </article>
-          <article>
-            <span className="step-n">ALERTS</span>
-            <h3>Say what matters, and be told</h3>
-            <p>
-              A location changing, a record becoming org-visible, a guess being confirmed. Recorded
-              when it happens, then polled or pushed to a signed endpoint — and nothing runs until
-              you have replayed it against history and read what it would have caught.
             </p>
           </article>
         </div>
@@ -893,7 +928,7 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
       </section>
 
       <section className="steps" id="compaction">
-        <h2 className="section-title">And a working set that stops growing</h2>
+        <h2 className="section-title">A working set that stops growing</h2>
         <p className="hero-lede" style={{ marginBottom: 22 }}>
           Memory layers usually keep the corpus small by overwriting: a newer memory replaces an
           older one and the old one is gone. That is a reasonable trade if nobody will ever ask
@@ -910,7 +945,7 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
             </p>
           </article>
           <article>
-            <span className="step-n">FREE</span>
+            <span className="step-n">CHEAP</span>
             <h3>The cheap half first</h3>
             <p>
               Most of what a corpus accumulates is the same record written twice — a re-crawl, a
@@ -931,7 +966,7 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
       </section>
 
       <section className="steps" id="sources">
-        <h2 className="section-title">And a source you can tell is still working</h2>
+        <h2 className="section-title">A source you can tell is still working</h2>
         <p className="hero-lede" style={{ marginBottom: 22 }}>
           A connector that quietly stopped syncing looks exactly like a project that went quiet.
           Both present as no new records. Only one is a problem, and nothing downstream can tell

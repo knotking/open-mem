@@ -10,6 +10,18 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 
 ## Unreleased
 
+### Fixed
+- **Admin → Platform said `credential lacks admin:*` and left it there.** No
+  signed-in session ever carries that capability — the endpoint counts across
+  every tenant, so an organization owner is deliberately not a platform
+  operator. The screen now says so, says the rest of Admin is org-scoped and
+  works, and names the operator command that grants it
+  (`python -m memdog grant-key <prefix> 'admin:*'`). A failure that is *not*
+  about the capability is reported as itself.
+- The same screen rendered its results as `JSON.stringify` over
+  `Object.entries`. Unpurged tombstones now read "a delete is recorded but the
+  bytes are still there".
+
 ### Added
 - **`npm test` in `ui/`** — the console had no test runner at all. Node 22 runs
   TypeScript directly, so this adds no dependency and no config. Ten tests cover

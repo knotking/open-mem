@@ -815,9 +815,46 @@ select {
   white-space: nowrap;
 }
 .tabs a:hover { color: var(--ink); border-bottom-color: var(--line); }
+
+/* The bar fills as the page is read. `scaleX` from the left edge, so it is one
+   composited property and costs nothing on a fast scroll -- animating `width`
+   here would lay out the sticky header on every frame. */
+.railfill {
+  position: absolute;
+  left: 0;
+  bottom: -1px;                 /* over the bar's own border, not under it */
+  height: 2px;
+  width: 100%;
+  transform-origin: 0 50%;
+  transform: scaleX(0);
+  background: var(--accent);
+  will-change: transform;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .railfill { transition: transform 90ms linear; }
+}
 /* Where you are, not where you could go. Without this the bar is a list of
-   equivalent destinations; with it, it is a position in the argument. */
-.tabs a[aria-current] { color: var(--ink); border-bottom-color: var(--accent); }
+   equivalent destinations; with it, it is a position in the argument.
+
+   The dot rather than a thicker underline: the rail along the bar's bottom edge
+   already owns that line, and two horizontal marks 2px apart read as a mistake. */
+.tabs a[aria-current] {
+  color: var(--ink);
+  font-weight: 560;
+  border-bottom-color: transparent;
+}
+.tabs a[aria-current]::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: -3px;
+  width: 4px;
+  height: 4px;
+  margin-left: -2px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.tabs a { position: relative; }
 .tabs a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 2px; }
 .tab-cta {
   color: var(--accent);
