@@ -10,6 +10,16 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 
 ## Unreleased
 
+### Added
+- **`npm test` in `ui/`** — the console had no test runner at all. Node 22 runs
+  TypeScript directly, so this adds no dependency and no config. Ten tests cover
+  `assess`, the function that decides what the write-progress panel says, moved
+  to `lib/progress.ts` so it can be imported without a DOM. `npm run verify` now
+  runs them.
+- `tsconfig` included `**/*.ts` but not `**/*.mts`, so the new test file was not
+  typechecked. Fixed — and it immediately caught fixtures cast through
+  `as DomainEvent` while missing five required fields.
+
 ### Changed
 - Six plan files under `.claude/plans/` claimed *"plan only, nothing
   implemented"* for features that shipped — alerts, compaction, standing

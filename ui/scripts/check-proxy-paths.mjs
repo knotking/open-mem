@@ -12,11 +12,14 @@
  * `npm run build` runs it.
  */
 import { readFileSync, readdirSync } from "node:fs";
+import { ALLOWED, CALLER_CREDENTIAL, GET_ONLY } from "../lib/proxy-allow.ts";
 import { join } from "node:path";
 
-const route = readFileSync("app/api/proxy/[...path]/route.ts", "utf8");
-const patterns = [...route.matchAll(/\/\^([^/]*(?:\\\/[^/]*)*)\$\//g)]
-  .map((m) => new RegExp("^" + m[1].replace(/\\\//g, "/") + "$"));
+// Imported, not scraped. This used to read the route file and pull `/^…$/` out
+// with a regular expression, which cannot distinguish the three lists and
+// silently misses any pattern written in a shape it does not anticipate -- and
+// a missed pattern makes this check wrong in the direction nobody notices.
+const patterns = [...ALLOWED, ...GET_ONLY, ...CALLER_CREDENTIAL];
 
 const called = new Set();
 for (const file of readdirSync("components")) {
@@ -59,7 +62,7 @@ const missing = [...called].filter((p) => !patterns.some((re) => re.test(concret
 if (missing.length) {
   console.error("These paths are called by the console and refused by the proxy:\n");
   for (const p of missing) console.error("  " + p);
-  console.error("\nAdd them to ALLOWED in app/api/proxy/[...path]/route.ts.");
+  console.error("\nAdd them to ALLOWED in lib/proxy-allow.ts.");
   process.exit(1);
 }
 console.log(`proxy allow-list covers all ${called.size} console call sites`);
