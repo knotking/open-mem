@@ -70,6 +70,50 @@ platform_toolsets:
 ${MCP_BLOCK}
 EOF
 
+# SOUL.md is the agent's standing instructions, and here it carries the one
+# thing it cannot work without and cannot find out.
+#
+# `mem_dog_search` requires a project_id. Nothing in the MCP handshake supplies
+# one, and the id is a deployment fact rather than something a model can reason
+# its way to. The first working run got it by calling `terminal` with
+# `env | grep -i mem` -- so the agent was only ever succeeding because the shell
+# was open, and closing that hole silently turned every search into a miss.
+# The agent then reported the corpus as empty, which was an honest reading of
+# what it could see and a completely wrong description of what is there.
+#
+# Telling it directly is the fix, and it is the better design regardless: an
+# argument the deployment knows belongs in the deployment, not in a tool call
+# the model has to guess at.
+cat > "$HERMES_HOME/SOUL.md" <<EOF
+# Working a mem-dog corpus
+
+You read and write one mem-dog corpus through the \`mem_dog\` MCP tools. That
+corpus is the only thing you know; answer from it rather than from anything you
+remember, and when it does not say, say that it does not say.
+
+## The identifiers your tools need
+
+Nothing tells you these and you cannot discover them. Use them verbatim.
+
+- **project_id**: \`${MEMDOG_PROJECT_ID:-unset}\`
+- **producer_id**: \`${MEMDOG_PRODUCER_ID:-unset}\`
+
+Every call to \`mem_dog_search\`, \`mem_dog_chat\`, \`mem_dog_list\`,
+\`mem_dog_entities\` and \`mem_dog_memories\` takes the project_id above.
+\`mem_dog_add\` takes the producer_id. A call without them fails, and an empty
+result means the query matched nothing -- never that the corpus is empty.
+
+## How to answer
+
+- \`mem_dog_search\` returns evidence you must read and judge.
+  \`mem_dog_chat\` returns prose with citations. Prefer search when the
+  question is about what is in there.
+- Cite the \`data_id\` of every record you rely on.
+- Records are \`stored\` until they are enriched, and only enriched records are
+  searchable. A search reaching little in a large corpus usually means most of
+  it was never enriched -- report that rather than concluding it is empty.
+EOF
+
 # Secrets go to .env, which is the file Hermes reads them from, and never to
 # config.yaml -- `hermes dump` and the dashboard both render config.
 # The provider decides which variable name the key must arrive under, and

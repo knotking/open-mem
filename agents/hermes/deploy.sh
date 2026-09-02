@@ -47,7 +47,7 @@ gcloud run deploy "$SERVICE" \
   --project "$PROJECT" --region "$REGION" \
   --image "$IMAGE" \
   --service-account "$SA" \
-  --set-env-vars "MEMDOG_API_URL=${API_URL},MEMDOG_PROJECT_ID=${MEMDOG_PROJECT_ID},HERMES_MODEL=${HERMES_MODEL:-hermes-4-405b},HERMES_PROVIDER=${HERMES_PROVIDER:-nous-api},HERMES_TOOLSETS=${HERMES_TOOLSETS:-todo},IMAGE_TAG=${TAG}" \
+  --set-env-vars "MEMDOG_API_URL=${API_URL},MEMDOG_PROJECT_ID=${MEMDOG_PROJECT_ID},MEMDOG_PRODUCER_ID=${MEMDOG_PRODUCER_ID:-},HERMES_MODEL=${HERMES_MODEL:-hermes-4-405b},HERMES_PROVIDER=${HERMES_PROVIDER:-nous-api},HERMES_TOOLSETS=${HERMES_TOOLSETS:-todo},IMAGE_TAG=${TAG}" \
   --set-secrets "MEMDOG_API_KEY=memdog-demo-key:latest,MODEL_API_KEY=${MODEL_SECRET:-hermes-api-key}:latest,API_SERVER_KEY=hermes-server-key:latest" \
   --allow-unauthenticated \
   --min-instances 0 --max-instances 2 \
