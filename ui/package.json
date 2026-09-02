@@ -8,7 +8,8 @@
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "check:proxy": "node scripts/check-proxy-paths.mjs",
-    "verify": "npm run check:proxy && npm run typecheck && npm run build"
+    "verify": "npm run check:proxy && npm run typecheck && npm test && npm run build",
+    "test": "node --test \"lib/**/*.test.mts\""
   },
   "dependencies": {
     "next": "15.1.6",

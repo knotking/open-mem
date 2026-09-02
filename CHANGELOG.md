@@ -10,6 +10,18 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 
 ## Unreleased
 
+### Changed
+- Six plan files under `.claude/plans/` claimed *"plan only, nothing
+  implemented"* for features that shipped — alerts, compaction, standing
+  queries, workflows, the temporal graph and connector sync. They now say what
+  is built and what is not.
+- `graph.build.requested` is still emitted and still unconsumed, but the comment
+  beside it no longer says the graph is unbuilt. **It is built** — `record_edges`
+  runs inside the enrichment worker, in the same transaction as entity
+  resolution. The stale comment produced two separate wrong diagnoses of an
+  empty graph. The event now documents what it actually is: a marker that each
+  write is a candidate for a rebuild pass nobody has written yet.
+
 ### Fixed
 - **A connector declaring `method: POST` was issued as a bodyless GET.**
   `HttpRequest` has always carried `method` and `body`; the crawler read
