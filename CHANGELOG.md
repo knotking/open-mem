@@ -10,6 +10,16 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 
 ## Unreleased
 
+### Fixed
+- **The Hermes agent reported the mem-dog corpus as empty.** `mem_dog_search`
+  requires a `project_id`, nothing in the MCP handshake supplies one, and the
+  agent had been discovering it by shelling out to `env | grep -i mem` — so it
+  only ever worked because the terminal tool was open, and closing that hole
+  turned every search into a silent miss. The ids are now seeded into `SOUL.md`
+  at boot. Prompt tokens for the same question fell from 366,821 to 12,163,
+  most of which was the agent hunting for an identifier it could have been
+  handed.
+
 ### Added
 - **`docs/limit.md` — every ceiling on the way in, in one place.** Admission
   caps that return 413 (500 items, 32 MiB inline, 512 MiB upload, crawler

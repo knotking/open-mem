@@ -1,0 +1,66 @@
+# A smaller Hermes image, for a service that cold-starts.
+#
+# Cloud Run pulls the whole image before the container runs, so image size is
+# cold-start latency. The published image carries 2.68GB, and a third of
+# /opt/hermes is things this deployment has explicitly turned off: a bundled
+# Chromium for a browser toolset that is disabled, messaging-platform plugins
+# for gateways that are never started, and the web/TUI front-ends that only the
+# dashboard renders.
+#
+# **The deletions have to be flattened to count.** Layers are additive: an
+# `RUN rm -rf` in a derived image adds a layer recording the removal and leaves
+# the bytes in the parent, so the naive version of this file makes the image
+# *larger*. Copying a trimmed filesystem into `scratch` is what actually drops
+# them.
+#
+# The cost of flattening is that every layer becomes one, so a rebuild re-pushes
+# everything and nothing is shared with the base image. That is the right trade
+# here -- this image is rebuilt rarely and pulled on every cold start.
+FROM nousresearch/hermes-agent:latest AS trimmed
+
+# Each of these is gated behind something cloudrun-boot.sh switches off. If a
+# toolset is ever re-enabled, its files have to come back with it -- which is
+# why this list mirrors the toolset restriction rather than being a generic
+# "make it smaller" sweep.
+# Only Chromium. The first version of this list also took
+# `plugins/platforms`, `web` and `ui-tui` -- another 210MB -- and the container
+# stalled: it seeded config, started s6, initialised the tool registry, and then
+# sat at 1% CPU forever without ever binding a port. `api_server` is itself a
+# *platform*, so removing the platform plugin tree takes out the thing serving
+# the endpoint. It failed silently rather than crashing, which is the worst
+# shape for a trim to fail in: a smaller image that deploys and never answers.
+#
+# Chromium is safe because it is reached only through the browser toolset, which
+# `platform_toolsets` already disables, and its absence is what
+# `check_browser_requirements` is for -- it degrades to "unavailable" instead of
+# breaking startup.
+RUN rm -rf /opt/hermes/.playwright /root/.cache /tmp/* /var/tmp/*
+
+FROM scratch
+COPY --from=trimmed / /
+
+# Re-declared because `scratch` inherits no metadata. These are copied verbatim
+# from the base image; PLAYWRIGHT_BROWSERS_PATH and HERMES_TUI_DIR are kept
+# pointing at paths that no longer exist on purpose -- Hermes reads them only on
+# the code paths this deployment does not run, and a missing directory there is
+# a clearer failure than an unset variable.
+ENV PATH=/opt/hermes/bin:/opt/hermes/.venv/bin:/opt/data/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PLAYWRIGHT_BROWSERS_PATH=/opt/hermes/.playwright \
+    npm_config_install_links=false \
+    HERMES_WEB_DIST=/opt/hermes/hermes_cli/web_dist \
+    HERMES_TUI_DIR=/opt/hermes/ui-tui \
+    HERMES_HOME=/opt/data \
+    HERMES_WRITE_SAFE_ROOT=/opt/data \
+    HERMES_DISABLE_LAZY_INSTALLS=1 \
+    HERMES_LAZY_INSTALL_TARGET=/opt/data/lazy-packages \
+    HERMES_NONINTERACTIVE=1
+
+WORKDIR /opt/hermes
+VOLUME ["/opt/data"]
+USER root
+
+COPY --chmod=0755 cloudrun-boot.sh /opt/hermes/docker/cloudrun-boot.sh
+ENTRYPOINT ["/opt/hermes/docker/cloudrun-boot.sh"]
+CMD ["gateway"]
