@@ -37,6 +37,18 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   bytes are still there".
 
 ### Added
+- **[docs/blog/README.md](docs/blog/README.md) — the negative space.** A short
+  piece on the one bug report every retrieval system gets, *"it's missing
+  something I know is in there"*, and the four unrelated causes it collapses:
+  ranked too low, never indexed, not visible to you, not there at all. Reads the
+  response shape that separates them — `excluded` with its two reasons, `corpus`
+  by state, `matched_by` per arm, `generator_version` — and says why an ACL
+  exclusion is the one that may never be listed, because naming a withheld
+  result is the disclosure. It records one limit the README does not: the
+  `not_yet_enriched` list stops at 25 rows, so it is a diagnostic and
+  `corpus.stored` is the number to trust for scale.
+  [docs/presentation/blog.md](docs/presentation/blog.md) stays the long read;
+  this one links to it.
 - **`npm test` in `ui/`** — the console had no test runner at all. Node 22 runs
   TypeScript directly, so this adds no dependency and no config. Ten tests cover
   `assess`, the function that decides what the write-progress panel says, moved
