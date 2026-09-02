@@ -15,6 +15,9 @@ import { Fragment, useCallback, useEffect, useState } from "react";
 import Capture, { humanBytes } from "./Capture";
 import ThemeToggle from "./ThemeToggle";
 import { WriteProgress, useTracked } from "./Progress";
+// The ceiling rule is mirrored from `acl.py` and tested against it there.
+// Two copies of an access rule is how they drift.
+import { LEVELS, ceilingFor } from "@/lib/acl";
 import {
   ARMS,
   ArmKey,
@@ -474,29 +477,8 @@ function StoredMedia({ item }: { item: Item }) {
 
 /* --------------------------------------------------------------- 1. add */
 
-/** Ordered least to most visible — the same order `acl.py` ranks them by. */
-const LEVELS = [
-  { key: "private", rank: 0, label: "private — only me" },
-  { key: "restricted", rank: 1, label: "restricted — only these principals" },
-  { key: "shared", rank: 2, label: "shared — me and these principals" },
-  { key: "org", rank: 3, label: "org — everyone in the organization" },
-  { key: "public", rank: 4, label: "public — everyone in the org, and share links" },
-] as const;
-
-/**
- * How far a producer may widen, given its connection.
- *
- * A connection is a credential to somebody else's system and its scope is a
- * **ceiling**, not a default: a personal one caps its writes at `private`,
- * because personal data in a team organisation stays personal whatever the
- * project says. A producer with no connection is a direct client write and is
- * unrestricted — the caller is the owner, deciding about their own record.
- */
-function ceilingFor(scope: string | null | undefined): number {
-  if (scope === "personal") return 0;
-  if (scope === "shared") return 3;
-  return 4;
-}
+// The ceiling rule lives in `lib/acl.ts`, mirrored from `acl.py` and tested
+// against it there. Two copies of an access rule is how they drift.
 
 function AddData({
   projectId,

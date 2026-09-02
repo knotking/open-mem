@@ -469,3 +469,42 @@ async def test_a_producer_with_no_connection_chooses_its_own_level(
         ),
     )
     assert response.results[0].status == "created"
+
+
+async def test_the_console_ceiling_table_matches_this_one():
+    """The console encodes this rule too, and two copies is how they drift.
+
+    `ui/lib/acl.ts` decides which levels the "Who can see it" picker offers. If
+    it is more permissive than this, the console offers a level `acl_for_write`
+    rejects and the write fails for a reason nobody can see. If it is less
+    permissive, it silently hides a level somebody meant to use and the record
+    lands narrower than they intended.
+
+    This is the server half of that correspondence: the table below is exactly
+    what `ceilingFor` returns. **If you change this, change `ui/lib/acl.ts`.**
+    """
+    from memdog.acl import _RESTRICTIVENESS, PRIVATE, ORG, PUBLIC, acl_for_write
+
+    ceilings = {
+        "personal": PRIVATE,
+        "shared": ORG,
+        None: PUBLIC,          # no connection: nothing to exceed
+        "team": PRIVATE,       # any other non-null scope fails closed
+    }
+
+    for scope, highest in ceilings.items():
+        # Everything at or below the ceiling is accepted.
+        for level, rank in _RESTRICTIVENESS.items():
+            allowed = rank <= _RESTRICTIVENESS[highest]
+            principals = ["user:someone"] if level in ("shared", "restricted") else None
+            try:
+                acl_for_write(connection_scope=scope, requested_level=level,
+                              requested_principals=principals)
+                refused = False
+            except ValueError as exc:
+                refused = "wider than" in str(exc)
+            assert refused != allowed, (
+                f"scope={scope!r} level={level!r}: server "
+                f"{'refused' if refused else 'accepted'} it, and ui/lib/acl.ts "
+                f"says the ceiling is {highest!r} — the two must agree"
+            )

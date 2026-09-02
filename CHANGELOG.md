@@ -19,6 +19,13 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 - `tsconfig` included `**/*.ts` but not `**/*.mts`, so the new test file was not
   typechecked. Fixed — and it immediately caught fixtures cast through
   `as DomainEvent` while missing five required fields.
+- **The proxy allow-list has tests**, and moved to `lib/proxy-allow.ts`.
+  `check-proxy-paths.mjs` now imports the arrays instead of scraping the route
+  file with a regex, which could not tell the three lists apart. Nine tests,
+  mostly refusals: traversal, segment-swallowing ids, unopted query strings,
+  unanchored patterns, and `.+` wildcards that span path separators.
+- `ui/package.json` declares `"type": "module"`, so Node stops reparsing every
+  `.ts` it loads and warning on each build.
 
 ### Changed
 - Six plan files under `.claude/plans/` claimed *"plan only, nothing
