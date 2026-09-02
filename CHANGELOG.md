@@ -10,6 +10,20 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 
 ## Unreleased
 
+### Changed
+- **The sign-in page is about half its former length** — ~1,700 words of prose
+  down to ~930, with the fourteen section cards going 560 → 269. No claim was
+  dropped; what went is the second sentence of almost every paragraph, the one
+  explaining why the first mattered.
+- **The top bar shows how far into the page you are**, as a rail along its own
+  bottom edge, and marks the current section with a dot rather than a heavier
+  underline. Driven by `scaleX` behind `requestAnimationFrame`, so a fast scroll
+  costs nothing.
+- **Three repetitions removed from the sign-in page.** The alerts story was told
+  twice — a preview card and then the section covering the same ground; `RULES`
+  and `FREE` each labelled two unrelated things; and three section titles began
+  with "And", which reads as a fragment now that the bar links straight to them.
+
 ### Fixed
 - **Admin → Platform said `credential lacks admin:*` and left it there.** No
   signed-in session ever carries that capability — the endpoint counts across
