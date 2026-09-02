@@ -7550,36 +7550,136 @@ function ProducersSection({ projectId }: { projectId: string }) {
   );
 }
 
+type PlatformHealth = {
+  queue_depth: number;
+  unpurged_tombstones: number;
+  orgs: number;
+  projects: number;
+  items: number;
+  items_by_state: Record<string, number>;
+  parse_problems: Record<string, number>;
+  live_shares: number;
+};
+
+/**
+ * The one screen a signed-in person cannot use, and it now says so.
+ *
+ * It reported `credential lacks admin:* — this view requires admin:*`, which
+ * restates the error and leaves the reader to work out whether they had done
+ * something wrong. They had not, and there is nothing they can do here:
+ * **no browser session ever carries `admin:*`.** The token verifier grants a
+ * human at most `config:write`, and deliberately — this endpoint counts across
+ * *every* tenant, so an organization's owner is not a platform operator and
+ * granting it to them would be a cross-tenant leak wearing a bug fix.
+ *
+ * So the empty state distinguishes the three situations the skill asks for:
+ * you are signed in and never can (the usual case), the call failed for some
+ * other reason, and it worked.
+ */
 function PlatformSection() {
-  const [data, setData] = useState<Record<string, unknown> | null>(null);
+  const [data, setData] = useState<PlatformHealth | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
-    call<Record<string, unknown>>("api/v1/platform/health").then(setData).catch((e) =>
+    call<PlatformHealth>("api/v1/platform/health").then(setData).catch((e) =>
       setError((e as Error).message),
     );
   }, []);
+
+  const denied = error !== null && /admin|forbidden|403/i.test(error);
+
   return (
     <>
       <h1>Platform</h1>
       <p className="lede">
-        Operational shape only — counts, queue depth, unpurged tombstones. A platform admin does not
-        get tenant content by default; support tooling that shows customer data is a privacy
-        violation arriving disguised as a feature request.
+        Operational shape across the whole deployment — counts, queue depth, unpurged tombstones.
+        Never tenant content: support tooling that shows customer data is a privacy violation
+        arriving disguised as a feature request.
       </p>
-      {error && <p className="err">{error} — this view requires <code>admin:*</code>.</p>}
-      {data && (
+
+      {denied && (
         <section className="panel">
-          <table className="kv">
-            <tbody>
-              {Object.entries(data).map(([k, v]) => (
-                <tr key={k}>
-                  <td>{k}</td>
-                  <td><code>{typeof v === "object" ? JSON.stringify(v) : String(v)}</code></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <p className="what">This is not something your account can be given.</p>
+          <p className="hint">
+            A signed-in session never carries <code>admin:*</code>, whatever your role in the
+            organization. The figures below the fold count <strong>every tenant on this
+            deployment</strong>, so being an owner of one organization is deliberately not enough —
+            granting it on role would be a cross-tenant leak dressed as a fix.
+          </p>
+          <p className="hint">
+            It is reachable with an API key that was granted the capability explicitly, which is an
+            operator action taken at the terminal rather than in this console:
+          </p>
+          <pre className="code">python -m memdog grant-key &lt;key-prefix&gt; &apos;admin:*&apos;</pre>
+          <p className="empty">
+            Everything else in Admin works without it — keys, invites, members and producers are all
+            organization-scoped.
+          </p>
         </section>
+      )}
+
+      {error && !denied && (
+        <p className="err">
+          {error} — this view needs <code>admin:*</code>, and the request did not fail on that.
+        </p>
+      )}
+
+      {data && (
+        <>
+          <section className="tiles">
+            <Tile value={data.orgs} label="organizations" />
+            <Tile value={data.projects} label="projects" />
+            <Tile value={data.items} label="records" />
+            <Tile
+              value={data.queue_depth}
+              label="queued"
+              note={data.queue_depth === 0 ? "nothing waiting" : "work in flight"}
+              alarm={data.queue_depth > 100}
+            />
+          </section>
+          <section className="panel">
+            <h2>Records by rung</h2>
+            <table className="kv">
+              <tbody>
+                {Object.entries(data.items_by_state).map(([state, n]) => (
+                  <tr key={state}>
+                    <td>{state}</td>
+                    <td>{n}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </section>
+          <section className="panel">
+            <h2>Needs attention</h2>
+            <table className="kv">
+              <tbody>
+                <tr>
+                  <td>tombstones not yet purged</td>
+                  <td className={data.unpurged_tombstones > 0 ? "warn" : ""}>
+                    {data.unpurged_tombstones}
+                    {data.unpurged_tombstones > 0
+                      ? " — a delete is recorded but the bytes are still there"
+                      : " — every deletion completed"}
+                  </td>
+                </tr>
+                <tr>
+                  <td>live share links</td>
+                  <td>{data.live_shares} — unrevoked and unexpired</td>
+                </tr>
+                {Object.entries(data.parse_problems).length === 0 ? (
+                  <tr><td>bytes that could not be read</td><td>none</td></tr>
+                ) : (
+                  Object.entries(data.parse_problems).map(([status, n]) => (
+                    <tr key={status}>
+                      <td>bytes that could not be read — {status}</td>
+                      <td className="warn">{n}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </section>
+        </>
       )}
     </>
   );

@@ -26,6 +26,13 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   unanchored patterns, and `.+` wildcards that span path separators.
 - `ui/package.json` declares `"type": "module"`, so Node stops reparsing every
   `.ts` it loads and warning on each build.
+- **The console's access ceiling now fails closed on an unknown connection
+  scope**, matching `acl.py`, which caps every non-null scope other than
+  `shared` at `private`. The console returned `public` for anything it did not
+  recognise; that agreed with the server only because the database permits
+  exactly two scopes. A third would have made the picker offer a level the API
+  rejects. The rule moved to `ui/lib/acl.ts`, with tests on both sides — the
+  API's names the UI file in its failure message.
 
 ### Changed
 - Six plan files under `.claude/plans/` claimed *"plan only, nothing
