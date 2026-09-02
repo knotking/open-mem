@@ -62,32 +62,32 @@ const STEPS = [
   {
     n: "01",
     title: "Write",
-    body: "One endpoint for every producer — an upload, a webhook, a crawler, an SDK call. The write commits before it returns; only the enrichment is queued.",
+    body: "One endpoint for every producer — upload, webhook, crawler, SDK. It commits before it returns.",
   },
   {
     n: "02",
     title: "Store",
-    body: "Bytes to object storage, text and metadata to Postgres, an ACL derived at write time and sealed before anything else runs.",
+    body: "Bytes to object storage, text and metadata to Postgres. The ACL is sealed at write time.",
   },
   {
     n: "03",
     title: "Read",
-    body: "Parsed by a handler chosen from the sniffed bytes, never from the caller's claim about them. Audio and video are transcribed; images are described.",
+    body: "Parsed from the sniffed bytes, never the caller's claim. Audio and video transcribed, images described.",
   },
   {
     n: "04",
     title: "Enrich",
-    body: "Optional and off by default, because it is the expensive part. A prompt picked for the kind of thing it is — a table is not summarised as prose.",
+    body: "Off by default — it is the part that spends money. The prompt is picked for the kind of thing it is.",
   },
   {
     n: "05",
     title: "Retrieve",
-    body: "Vector and lexical arms in one query with one plan, and the access rule inside the query rather than filtering what came back.",
+    body: "Vector and lexical in one query, one plan. The access rule is inside it, not a filter after it.",
   },
   {
     n: "06",
     title: "Answer",
-    body: "A model reads only the passages retrieval returned and cites the one behind each claim. When they do not support an answer, it says so.",
+    body: "Cites the passage behind each claim, and says so when the passages do not support one.",
   },
 ];
 
@@ -96,9 +96,8 @@ const PILLARS = [
     title: "The staircase is visible",
     body: (
       <>
-        <code>stored</code> → <code>searchable</code> → <code>enriched</code>. An item is durable
-        the moment it is written and findable the moment it is embedded. &ldquo;I uploaded it and
-        search cannot find it&rdquo; is a state, not a bug — and you can see which one.
+        <code>stored</code> → <code>searchable</code> → <code>enriched</code>. &ldquo;I uploaded it
+        and search cannot find it&rdquo; is a state, not a bug, and you can see which one.
       </>
     ),
   },
@@ -106,9 +105,8 @@ const PILLARS = [
     title: "The trace, not just the answer",
     body: (
       <>
-        Ranked chunks with scores, which arm matched, spans into the source, and the records
-        <em> considered and excluded</em> — with the reason. Missing something you know is there has
-        several causes, and they need different fixes.
+        Scores, which arm matched, spans into the source — and the records
+        <em> considered and excluded</em>, with the reason for each.
       </>
     ),
   },
@@ -116,9 +114,8 @@ const PILLARS = [
     title: "Provenance on every derived row",
     body: (
       <>
-        Every embedding, summary and transcript records the model, the build that answered, and
-        when. Nothing is mutated in place, so &ldquo;why does this say something different than last
-        week?&rdquo; has an answer.
+        Model, build and time on every embedding, summary and transcript. Nothing is mutated in
+        place.
       </>
     ),
   },
@@ -126,8 +123,8 @@ const PILLARS = [
     title: "Access control inside the query",
     body: (
       <>
-        The ACL is a predicate in the retrieval query, never a filter over results. Asking for ten
-        and hiding three is a different and worse thing than returning the right ten.
+        A predicate in the retrieval query, never a filter over results. Asking for ten and hiding
+        three is worse than returning the right ten.
       </>
     ),
   },
@@ -135,9 +132,8 @@ const PILLARS = [
     title: "Deletion that completes",
     body: (
       <>
-        Invisible in the request transaction; chunks, vectors, blobs and artifacts reclaimed
-        asynchronously; the root row last. The certificate is issued when the bytes are gone, not
-        when the tombstone was written.
+        Chunks, vectors, blobs and artifacts reclaimed asynchronously, the root row last. The
+        certificate is issued when the bytes are gone, not when the tombstone was written.
       </>
     ),
   },
@@ -145,8 +141,8 @@ const PILLARS = [
     title: "Audit that survives the data",
     body: (
       <>
-        Reads and writes land in append-only stores that outlive what they describe. You cannot
-        evidence &ldquo;we deleted it&rdquo; if the evidence was inside the deletion.
+        Append-only, and outliving what it describes. You cannot evidence a deletion if the evidence
+        was inside it.
       </>
     ),
   },
@@ -708,10 +704,9 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
             It answers — then tells you what it <em>left out</em>.
           </h1>
           <p className="hero-lede">
-            Documents, spreadsheets, calendars, email, audio, video: written once, retrieved by
-            meaning. Every result carries the passage behind it, and every record that was
-            considered and dropped carries the reason it was dropped — which is the half that
-            turns an answer you have to believe into one you can check.
+            Documents, spreadsheets, calendars, email, audio, video — retrieved by meaning. Every
+            result carries the passage behind it, and every record it dropped carries the reason.
+            That second half is what makes an answer checkable.
           </p>
           {numbers.length > 0 && (
             <div className="numbers">
@@ -818,9 +813,8 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
       <section className="steps" id="graph">
         <h2 className="section-title">It knows what connects to what</h2>
         <p className="hero-lede" style={{ marginBottom: 22 }}>
-          Records name people, organizations and places. Those resolve into entities — cautiously,
-          joining on a shared email or an exact name and otherwise keeping them apart, because two
-          nodes you can merge later beat one node that fused two people and cannot be separated.
+          People, organizations and places resolve into entities — cautiously. Two nodes you can
+          merge later beat one that fused two people and cannot be separated.
         </p>
       </section>
 
@@ -832,27 +826,21 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
             <span className="step-n">EDGES</span>
             <h3>Claims, with their evidence</h3>
             <p>
-              A relationship is something a document asserted, so it carries the records that say
-              so and a count of how many. An edge nobody can check is an assertion, and extracted
-              graphs are full of those.
+              A relationship is something a document asserted, so it carries the records that say so and how many.
             </p>
           </article>
           <article>
             <span className="step-n">FREE</span>
             <h3>Connections that need no model</h3>
             <p>
-              Two entities named in the same record are connected by that fact alone. It costs
-              nothing and works before any model has read for relationships — which is most of the
-              time, early on.
+              Two entities named in the same record are connected by that fact alone. No model, no cost.
             </p>
           </article>
           <article>
             <span className="step-n">ACL</span>
             <h3>Traversal stops where you cannot read</h3>
             <p>
-              The access rule is inside the recursive query, not applied to its result. A path
-              through a record you cannot see is never returned — arriving at its far end would
-              disclose that the record exists.
+              The walk stops at the edge of what you can read. A neighbourhood is not a way around an ACL.
             </p>
           </article>
         </div>
@@ -871,18 +859,14 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
             <span className="step-n">THEN</span>
             <h3>Nothing is overwritten</h3>
             <p>
-              Moving to Berlin closes living in Lisbon rather than replacing it, so the graph as it
-              stood in March is still there to ask. A fact can also be withdrawn without ever
-              having been false — those are different, and they are stored differently.
+              A claim carries two clocks: when it was true, and when we came to believe it. Nothing is overwritten.
             </p>
           </article>
           <article>
             <span className="step-n">CLOSE</span>
             <h3>No model decides what stopped being true</h3>
             <p>
-              Some relationships hold one value at a time and some do not. A second address
-              supersedes the first; a second employer does not, because people hold two jobs.
-              That is declared, not inferred.
+              Single-valued predicates close the old claim when a new one lands. A rule, not a judgement call.
             </p>
           </article>
         </div>
@@ -891,37 +875,30 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
       <section className="steps" id="alerts">
         <h2 className="section-title">Two ways to say what you are watching for</h2>
         <p className="hero-lede" style={{ marginBottom: 22 }}>
-          Most of what people watch for is a rule, and a rule costs nothing to evaluate. What is
-          left over is a sentence, and that is judged — but only over what the rules already
-          narrowed down, in one call for the whole batch rather than one per event.
+          Most of what people watch for is a rule, and rules are free. What is left over is a
+          sentence, judged only over what the rules already narrowed — one call per batch, not per
+          event.
         </p>
         <div className="steps-grid">
           <article>
             <span className="step-n">RULES</span>
             <h3>Conditions, over any shape</h3>
             <p>
-              Compare a field or a dotted path into the event — is one of, contains, greater than,
-              is absent. A kind of event this console has never seen is still reachable, so the
-              vocabulary does not have to grow every time the system does.
+              Compare a field or a dotted path — is one of, contains, greater than, is absent. An event kind this console has never seen is still reachable.
             </p>
           </article>
           <article>
             <span className="step-n">WORDS</span>
             <h3>And a sentence for the rest</h3>
             <p>
-              <em>&ldquo;A customer signals they may leave.&rdquo;</em> The rules still run first
-              and decide what the model is even shown, which is why they are required. If no model
-              is available the run defers rather than guessing — a wrong yes is a false alarm and a
-              wrong no is a silence nobody notices.
+              <em>&ldquo;A customer signals they may leave.&rdquo;</em> Rules run first and decide what the model is shown. With no model available the run defers rather than guessing.
             </p>
           </article>
           <article>
             <span className="step-n">NEVER</span>
             <h3>Not once per write</h3>
             <p>
-              Evaluation waits and batches, so ten thousand records arriving at once is a handful
-              of evaluations rather than ten thousand. What has been looked at is a mark in the
-              database, not a message in a queue, so nothing is lost when a machine goes away.
+              Evaluation batches, so ten thousand arrivals are a handful of evaluations. What has been looked at is a mark in the database, not a message in a queue.
             </p>
           </article>
         </div>
@@ -939,27 +916,21 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
             <span className="step-n">KEEP</span>
             <h3>Folding is not deleting</h3>
             <p>
-              Compaction archives what it folds. Archived records leave the default view and stay
-              readable, searchable and citable when asked for — so the working set shrinks and the
-              record does not.
+              A summary carries its sources as a list, so the records behind it can still be reached — and erased.
             </p>
           </article>
           <article>
             <span className="step-n">CHEAP</span>
             <h3>The cheap half first</h3>
             <p>
-              Most of what a corpus accumulates is the same record written twice — a re-crawl, a
-              re-import. Noticing that needs no model. Summarising does, and it says so before you
-              schedule it rather than after the bill.
+              Deduplication and near-duplicate merging run before any model does.
             </p>
           </article>
           <article>
             <span className="step-n">SEE</span>
             <h3>Previewed before it is scheduled</h3>
             <p>
-              A run reports what it would fold and archives nothing, through the same path a live
-              one takes. Scheduling is refused until you have looked — a compaction nobody has
-              seen is one that empties a memory quietly.
+              A job says what it would fold and what it would cost before it is scheduled.
             </p>
           </article>
         </div>
@@ -977,27 +948,21 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
             <span className="step-n">WHERE</span>
             <h3>A position per scope, not per connector</h3>
             <p>
-              One crawler over forty Slack channels used to keep a single position, so a busy
-              channel dragged it past thirty quiet ones and their history was never read. Each
-              channel, repo, Jira project and folder now keeps its own.
+              A position per scope, not per connector: one broken mailbox does not reset the other five.
             </p>
           </article>
           <article>
             <span className="step-n">SLOW</span>
             <h3>The limit belongs to the token</h3>
             <p>
-              Two crawlers on one Slack connection draw down the same quota and neither can see
-              the other. A rate limit parks the credential, so everything sharing it waits — and
-              waits as long as the API asked for, not as long as we guessed.
+              Rate limits belong to the credential, so two crawlers on one token share it rather than racing.
             </p>
           </article>
           <article>
             <span className="step-n">LAG</span>
             <h3>Stale is reported, not inferred</h3>
             <p>
-              Every scope reports when it last succeeded and why it last failed. A run that hit a
-              limit is not a failed run: it keeps its position and retries the same range, so a
-              gap in the record means a failure and never a silence.
+              Seconds since the last item, per producer. Silence is the failure mode, so it is measured rather than inferred.
             </p>
           </article>
         </div>
@@ -1024,20 +989,17 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
           to what mem-dog does.
         </p>
         <p className="hero-lede" style={{ marginBottom: 26 }}>
-          The honest answer starts with a category difference rather than a feature. <strong>A
-          workspace answers over what people remembered to put in it.</strong> That is not a
-          shortcoming of Notion — it is what a workspace is — but it means the answer is bounded by
-          the discipline of everybody who did or did not write something down. mem-dog owns no
-          documents and has no editor. It reads the email, the tickets, the calls and the calendar
-          that were never going to be pasted into a page, and it shows what it considered.
+          <strong>A workspace answers over what people remembered to put in it.</strong> That is
+          not a shortcoming of Notion, it is what a workspace is. mem-dog owns no documents and has
+          no editor; it reads the email, tickets, calls and calendar that were never going to be
+          pasted into a page.
         </p>
         <p className="hero-lede" style={{ marginBottom: 26 }}>
-          Two things this deliberately does <em>not</em> claim. <strong>Self-hosting is not a
+          Two things this does <em>not</em> claim. <strong>Self-hosting is not a
           differentiator</strong> — four of the six run on your own infrastructure and Onyx is MIT.
           And <strong>Onyx is ahead on permissions</strong>: it inherits each document&rsquo;s
-          access rules from the system it came from, so a person cannot retrieve what they could not
-          open. mem-dog enforces its own ACL inside the query and does not yet sync source
-          permissions. If that is your requirement today, Onyx is the better answer today.
+          access rules from the source system, which mem-dog does not yet do. If that is your
+          requirement today, Onyx is the better answer today.
         </p>
 
         <Matrix formats={caps?.formats ?? null} />
@@ -1049,10 +1011,9 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
           <span><span className="mark no" aria-hidden="true" /> no</span>
         </p>
         <p className="caveat">
-          Every mem-dog cell is verifiable in this repository. Every other cell reflects what that
-          product publicly documents as of September&nbsp;2026 — and where something is simply not part
-          of a product&rsquo;s stated scope it is marked so, rather than asserted absent. Those are
-          different claims, and only one of them is defensible.
+          Every mem-dog cell is verifiable in this repository. Every other reflects what that
+          product publicly documents as of September&nbsp;2026 — and where something is outside a
+          product&rsquo;s stated scope it is marked so rather than asserted absent.
         </p>
       </section>
 
