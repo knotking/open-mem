@@ -12,7 +12,7 @@
 
 import { Fragment, useCallback, useEffect, useState } from "react";
 
-import Capture, { humanBytes } from "./Capture";
+import Capture, { humanBytes, type Staged } from "./Capture";
 import ThemeToggle from "./ThemeToggle";
 import { WriteProgress, useTracked } from "./Progress";
 // The ceiling rule is mirrored from `acl.py` and tested against it there.
@@ -481,34 +481,33 @@ function StoredMedia({ item }: { item: Item }) {
 // against it there. Two copies of an access rule is how they drift.
 
 /**
- * Add data — one write, arranged as the four decisions it actually is.
+ * Add data — one path, one action, in the order the decisions are made.
  *
- * It used to be six panels in the order the API happens to take its arguments:
- * two ways in, each with its own button and its own copy of the cost line, then
- * interpretation, then the ACL, then memory routing last and marked optional,
- * and finally — below all of it — the only part that says whether any of it
- * worked. The report was that it is "a very hard window to follow", and the
- * diagnosis is in that ordering:
+ * The previous arrangement grouped the controls correctly and still could not
+ * be followed, and the reason was where the *action* sat. "Write item" lived in
+ * the first card, above memory, interpretation and visibility — so the button
+ * came before three of the four decisions it committed. Recording had a second
+ * button of its own inside Capture, which meant two ways to write on one
+ * screen, both of them above the settings they ignored.
  *
- * **The result was last.** A person writes an item and then scrolls *past every
- * control they just used* to find out what happened to it. Outcome now sits
- * directly under the heading, above the form, because after the first write it
- * is the thing being looked for.
+ * So the shape here is not four cards, it is five steps and one button at the
+ * end:
  *
- * **Two panels asked one question.** "Paste text" and "Upload or record" are
- * not two features; they are one choice of source. Split across two cards, each
- * with a write button, the screen offered two places to start and no indication
- * that the panels below applied to both.
+ *   1  what kind of thing        2  the thing itself
+ *   3  where it goes             4  what is done to it
+ *   5  who may see it            →  Add data
  *
- * **Memory was free text, and last, and called optional.** A project's memories
- * already exist and the API lists them, so asking a person to retype a type and
- * a key is asking them to guess an identifier they could have picked — and to
- * guess it *after* the write button, which is not where a routing decision
- * belongs. It is now a list of what is there.
+ * Two consequences worth stating, because they are what makes it followable.
+ * **Capture no longer writes.** It stages a payload and the parent commits it,
+ * so text and media end at the same button. And **the button carries the whole
+ * decision** — destination, interpretation, audience — in a line above it, so
+ * the summary of what is about to happen is adjacent to the thing that makes it
+ * happen rather than three cards up.
  *
- * The remaining order is the order of the decisions: what, where it goes, what
- * is done to it, who may see it. Numbered, because four cards that each look
- * equally like the next is the shape the complaint was about.
+ * Steps 3-5 are collapsed by default. Every one has a working default, and a
+ * person adding a note should not have to read three panels of ACL semantics to
+ * reach a button. Each header states its current value, so what is collapsed is
+ * still visible — closed is not hidden.
  */
 function AddData({
   projectId,
@@ -524,47 +523,37 @@ function AddData({
   const [text, setText] = useState(
     "The checkout service returned 502s for eleven minutes after a bad deploy.\n\nRollback completed at 14:02 UTC and error rates recovered.",
   );
-  // Which input is shown. One question with one answer, rather than two panels
-  // that each look like the place to start.
   const [source, setSource] = useState<"text" | "file">("text");
-  // The project's existing memories, so routing is a choice among what is there
-  // rather than an identifier to be remembered correctly.
+  const [staged, setStaged] = useState<Staged | null>(null);
+  // Which optional steps are open. Closed by default because each has a
+  // working default and the button is what people came for.
+  const [open, setOpen] = useState<Record<string, boolean>>({});
+  const toggle = (k: string) => setOpen((o) => ({ ...o, [k]: !o[k] }));
+
   const [memories, setMemories] = useState<Memory[]>([]);
   const [memoryChoice, setMemoryChoice] = useState("");
   const [memoryType, setMemoryType] = useState("");
   const [memoryKey, setMemoryKey] = useState("");
-  // Enrichment is off by default at the API, and a write from here that does
-  // not say otherwise stops at `stored` — durable, and invisible to search.
-  // That is right for a producer pushing ten thousand records and wrong for a
-  // person adding one item by hand and then looking for it, so this screen
-  // asks, visibly, with the cost said out loud next to the switch.
+  // Enrichment is off by default at the API, and a write that does not say
+  // otherwise stops at `stored` — durable, and invisible to search. Right for a
+  // producer pushing ten thousand records, wrong for a person adding one item
+  // and then looking for it.
   const [enrich, setEnrich] = useState(true);
   const [embed, setEmbed] = useState(true);
   const [summarize, setSummarize] = useState(true);
   // Per-request overrides. The API accepts both and persists neither, which is
-  // the whole point of them -- a saved override would change what a project
-  // does with no audit trail on the setting that appears to control it. That is
-  // also why they are here rather than on Prompts, which is where a *saved*
-  // instruction block belongs.
+  // the point of them -- a saved override would change what a project does with
+  // no audit trail on the setting that appears to control it.
   const [promptOverride, setPromptOverride] = useState("");
   const [modelOverride, setModelOverride] = useState("");
-  // Who can see it, decided at write time -- which is the only time it can be
-  // decided, since the ACL is sealed before any other phase runs and there is
-  // no endpoint that changes it afterwards. Re-writing the same external_id
-  // with a different level is the only path, and it raises `acl.changed`.
+  // Sealed before any other phase runs, and no endpoint changes it afterwards.
   const [level, setLevel] = useState("");
   const [principals, setPrincipals] = useState<string[]>([]);
-  // A transcript is not a document like the others: it is speech four people
-  // did not publish to the company. Naming the room here is what lets one be
-  // uploaded by hand without a provider integration at all.
   const [attendees, setAttendees] = useState("");
   const [room, setRoom] = useState<{ level: string; principals: string[];
                                      resolved: string[]; unresolved: string[] } | null>(null);
   const [audience, setAudience] = useState<{ groups: Group[]; members: Member[] }>(
     { groups: [], members: [] });
-  // What this producer's connection permits. A connection's scope is a ceiling
-  // on what its writes may publish, so offering a level the API will refuse
-  // would turn a choice into a failed item and a message nobody expected.
   const [scope, setScope] = useState<string | null | undefined>(undefined);
 
   useEffect(() => {
@@ -580,8 +569,6 @@ function AddData({
     });
   }, [producerId]);
 
-  // Reloaded when the write lands, so a memory this write created appears in
-  // the list rather than only on the next visit.
   const loadMemories = useCallback(() => {
     void call<{ memories: Memory[] }>(`api/v1/projects/${projectId}/memories`)
       .then((r) => setMemories(r.memories))
@@ -596,43 +583,56 @@ function AddData({
     useTracked(onChange);
 
   const ceiling = ceilingFor(scope);
-
-  // Said beside the button that causes the spend. "Stored only" is the sentence
-  // that would otherwise be discovered afterwards, in a search that finds
-  // nothing.
-  const willDo = !enrich
-    ? "stored only — not searchable"
-    : embed && summarize
-      ? "will embed and summarise"
-      : embed
-        ? "will embed, no summary"
-        : summarize
-          ? "will summarise, not searchable"
-          : "stored only — both steps unchecked";
-
   const meeting = room !== null && attendees.trim() !== "";
   const chosenMemory = memories.find((m) => m.memory_id === memoryChoice) ?? null;
 
-  // Where this write will land, in one sentence, next to the control that
-  // decides it -- because "default" and "the memory I picked" are the two
-  // outcomes and only one of them is visible in the select.
+  // Capture calls this on every staging change, so it must be stable or the
+  // effect that produces the payload re-runs against a new identity forever.
+  const onStaged = useCallback((s: Staged | null) => setStaged(s), []);
+
+  const willDo = !enrich
+    ? "stored only — not searchable"
+    : embed && summarize
+      ? "embedded and summarised"
+      : embed
+        ? "embedded, no summary"
+        : summarize
+          ? "summarised, not searchable"
+          : "stored only — both steps unchecked";
+
   const destination = meeting
     ? "a new meeting memory — ninety days, then archived"
     : chosenMemory
       ? `${chosenMemory.type} · ${chosenMemory.memory_key ?? chosenMemory.memory_id}`
       : memoryChoice === "new"
-        ? `${memoryType || "default"}${memoryKey ? ` · ${memoryKey}` : " · no key — a new memory each write"}`
+        ? `${memoryType || "default"}${memoryKey ? ` · ${memoryKey}` : " · a new memory each write"}`
         : "your default memory";
 
-  async function submit(content: Record<string, unknown>, externalId: string, label: string) {
+  const audienceSummary = meeting
+    ? `the room — ${room.level}`
+    : level
+      ? `${level}${principals.length ? ` · ${principals.length} named` : ""}`
+      : "the producer's default";
+
+  // Why the button is not pressable, said in the button's own tooltip rather
+  // than left for someone to work out from a greyed-out control.
+  const blocked = source === "text"
+    ? (text.trim() ? null : "Nothing typed yet")
+    : (staged ? null : "Choose a file or record something first");
+  const aclIncomplete = !meeting && (level === "restricted" || level === "shared")
+    && principals.length === 0;
+
+  async function submit() {
     setBusy(true);
     setError(null);
     setNote(null);
     try {
-      // A named room decides both the container and the visibility, and wins
-      // over the selected memory: a transcript filed as `default` and visible
-      // to the project is the failure the meeting type and its ninety-day
-      // retention exist to prevent.
+      const externalId = source === "text" ? `text-${Date.now()}` : staged!.name;
+      const content = source === "text"
+        ? { kind: "inline", text }
+        : { kind: "inline", bytes_b64: staged!.base64, mime_type: staged!.mime };
+      const label = source === "text" ? "Text" : `${staged!.name} (${humanBytes(staged!.size)})`;
+
       const memory = meeting
         ? { type: "meeting", key: memoryKey || externalId }
         : chosenMemory
@@ -640,12 +640,11 @@ function AddData({
           : memoryChoice === "new" && (memoryType || memoryKey)
             ? { type: memoryType || "default", key: memoryKey || null }
             : undefined;
+
       const response = await call<{
         results: { data_id: string; memories: string[]; events: string[] }[];
       }>("api/v1/write", {
         producer_id: producerId,
-        // `access` is a property of the item, not of the request: one write can
-        // carry five hundred items with five hundred different ACLs.
         items: [{
           external_id: externalId, content, memory,
           access: meeting
@@ -669,11 +668,9 @@ function AddData({
       setNote(
         `${label} committed as ${first.data_id}, mapped into ${first.memories.length} memory(ies).`,
       );
-      // The write is done the moment it returns — the button goes back to
-      // being a button, and the climb is watched above rather than behind a
-      // disabled control that looks like a hang.
       track(first.data_id);
       loadMemories();
+      setStaged(null);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -681,20 +678,37 @@ function AddData({
     }
   }
 
+  function Step({ n, title, value, name, children }: {
+    n: number; title: string; value: string; name: string; children: React.ReactNode;
+  }) {
+    const isOpen = open[name] ?? false;
+    return (
+      <section className="panel">
+        <button
+          className="stephead"
+          onClick={() => toggle(name)}
+          aria-expanded={isOpen}
+        >
+          <span className="stepn">{n}</span>
+          <span className="steptitle">{title}</span>
+          <span className="stepvalue">{value}</span>
+          <span className="stepcaret">{isOpen ? "▾" : "▸"}</span>
+        </button>
+        {isOpen && <div className="stepbody">{children}</div>}
+      </section>
+    );
+  }
+
   return (
     <>
       <h1>Add data</h1>
       <p className="lede">
-        Four decisions, in order: what you are adding, where it goes, what is done to it, and who
-        may see it. Text, a file and a recording take the identical write path — there is no
-        sandbox shortcut, which is the only reason what you see here tells you anything.
+        Choose what you are adding, then where it goes and what happens to it. Everything below has
+        a working default, so the short path is step 1, step 2, and the button.
       </p>
 
       {error && <p className="err">{error}</p>}
 
-      {/* The outcome, above the form rather than below it. After the first
-        * write this is what the screen is being looked at for, and it used to
-        * sit past every control the person had just finished using. */}
       {(watching || item) && (
         <section className="panel">
           <h2>What happened to it</h2>
@@ -712,14 +726,14 @@ function AddData({
       )}
 
       <section className="panel">
-        <h2>1 · What are you adding</h2>
+        <h2><span className="stepn">1</span> What kind of thing</h2>
         <div className="row">
           <label className="check">
             <input
               type="radio"
               name="add-source"
               checked={source === "text"}
-              onChange={() => setSource("text")}
+              onChange={() => { setSource("text"); setStaged(null); }}
             />
             Text — paste or type it
           </label>
@@ -730,27 +744,15 @@ function AddData({
               checked={source === "file"}
               onChange={() => setSource("file")}
             />
-            A file, or record something now
+            A file, a recording, or a photo
           </label>
         </div>
+      </section>
 
+      <section className="panel">
+        <h2><span className="stepn">2</span> {source === "text" ? "The text" : "The file"}</h2>
         {source === "text" ? (
-          <>
-            <textarea value={text} onChange={(e) => setText(e.target.value)} />
-            <div className="row end" style={{ marginTop: 10 }}>
-              <span className="empty">→ {destination}</span>
-              <span className={enrich ? "empty" : "warntext"}>{willDo}</span>
-              <button
-                onClick={() =>
-                  submit({ kind: "inline", text }, `text-${Date.now()}`, "Text")
-                }
-                disabled={busy || !text.trim()}
-                title={!text.trim() ? "Nothing to write yet" : undefined}
-              >
-                {busy ? "Writing…" : "Write item"}
-              </button>
-            </div>
-          </>
+          <textarea value={text} onChange={(e) => setText(e.target.value)} />
         ) : (
           <>
             <div className="notice">
@@ -758,53 +760,25 @@ function AddData({
               images described and their text transcribed. That costs tokens per file, recorded per
               revision.
             </div>
-            <div className="row end" style={{ marginBottom: 8 }}>
-              <span className="empty">→ {destination}</span>
-              <span className={enrich ? "empty" : "warntext"}>{willDo}</span>
-            </div>
-            <Capture
-              busy={busy}
-              onSubmit={(name, mime, base64, size) =>
-                // `mime` is forwarded, and dropping it was not cosmetic. Capture
-                // derives the filename from the recording's type, so an audio
-                // clip and a video clip are both `capture-<ts>.webm` -- the only
-                // thing telling them apart is this header. Without it the server
-                // falls back to the extension, `.webm` guesses as `video/webm`,
-                // and every audio recording was stored as a video and sent to a
-                // model that refuses frames. Zero audio items existed.
-                submit(
-                  { kind: "inline", bytes_b64: base64, mime_type: mime },
-                  name,
-                  `${name} (${humanBytes(size)})`,
-                )
-              }
-            />
+            <Capture busy={busy} onStaged={onStaged} />
           </>
         )}
       </section>
 
-      <section className="panel">
-        <h2>2 · Where it goes</h2>
+      <Step n={3} name="memory" title="Where it goes" value={destination}>
         <p className="empty" style={{ marginTop: 0 }}>
-          A memory is the container a record lives in and the thing that decides when it expires.
-          Nothing is orphaned — leave this alone and the item lands in your <code>default</code>{" "}
-          memory.
+          A memory is the container a record lives in and what decides when it expires. Nothing is
+          orphaned — leave this alone and it lands in your <code>default</code> memory.
         </p>
         <div className="row">
           <label style={{ flex: 1, minWidth: 260 }}>
             Memory
-            <select
-              value={memoryChoice}
-              disabled={meeting}
-              onChange={(e) => setMemoryChoice(e.target.value)}
-            >
+            <select value={memoryChoice} disabled={meeting}
+                    title={meeting ? "A named room files this as a meeting memory" : undefined}
+                    onChange={(e) => setMemoryChoice(e.target.value)}>
               <option value="">your default memory</option>
               {memories.map((m) => (
-                <option
-                  key={m.memory_id}
-                  value={m.memory_id}
-                  disabled={m.memory_key === null}
-                >
+                <option key={m.memory_id} value={m.memory_id} disabled={m.memory_key === null}>
                   {m.title ?? m.memory_key ?? m.memory_id} · {m.type} · {m.members} item
                   {m.members === 1 ? "" : "s"}
                   {m.memory_key === null ? " — no key, cannot be written into by name" : ""}
@@ -814,35 +788,14 @@ function AddData({
             </select>
           </label>
         </div>
-        {memories.length === 0 && (
-          <p className="empty">
-            No memories in this project yet. The first write creates one — pick{" "}
-            <strong>a new memory…</strong> to name it, or leave the default and it is made for you.
-          </p>
-        )}
         {memoryChoice === "new" && !meeting && (
-          <>
-            <div className="row" style={{ marginTop: 8 }}>
-              <input
-                type="text"
-                placeholder="type — conversation, session, factual…"
-                value={memoryType}
-                onChange={(e) => setMemoryType(e.target.value)}
-              />
-              <input
-                type="text"
-                placeholder="key — e.g. thread-8841"
-                value={memoryKey}
-                onChange={(e) => setMemoryKey(e.target.value)}
-              />
-            </div>
-            <p className="empty">
-              Reuse a key later and writes collect into one memory, with no session state anywhere.
-              Without a key every write makes its own memory, which is rarely what is wanted.
-            </p>
-          </>
+          <div className="row" style={{ marginTop: 8 }}>
+            <input type="text" placeholder="type — conversation, session, factual…"
+                   value={memoryType} onChange={(e) => setMemoryType(e.target.value)} />
+            <input type="text" placeholder="key — e.g. thread-8841"
+                   value={memoryKey} onChange={(e) => setMemoryKey(e.target.value)} />
+          </div>
         )}
-
         <h3>Or file it as a meeting</h3>
         <div className="row">
           <label style={{ flex: 1 }}>
@@ -874,23 +827,20 @@ function AddData({
                 : ", because nobody in the room is a member here"}
               . A transcript is unedited speech nobody reviewed before it was stored, which is why
               the retention is a default rather than a preference. This <strong>overrides</strong>{" "}
-              the memory and the visibility chosen elsewhere on this screen.
+              the memory and the audience chosen elsewhere.
             </p>
             {room.unresolved.length > 0 && (
               <p className="warned">
                 <strong>{room.unresolved.length} of {room.resolved.length + room.unresolved.length}{" "}
                 did not resolve</strong> — {room.unresolved.join(", ")}. They are not members here,
-                so no principal exists for them and they will not see this. That is the
-                conservative direction; the alternative is inventing a principal for somebody
-                outside the organisation.
+                so no principal exists for them and they will not see this.
               </p>
             )}
           </>
         )}
-      </section>
+      </Step>
 
-      <section className="panel">
-        <h2>3 · What is done to it</h2>
+      <Step n={4} name="interpret" title="What is done to it" value={willDo}>
         <p className="empty" style={{ marginTop: 0 }}>
           Off, an item is stored and durable and <strong>nothing can find it</strong> — search runs
           on embeddings and there would be none. On, it costs one model call per chunk to embed and
@@ -902,30 +852,20 @@ function AddData({
             Interpret this write
           </label>
           <label className="check">
-            <input
-              type="checkbox"
-              checked={embed}
-              disabled={!enrich}
-              onChange={(e) => setEmbed(e.target.checked)}
-            />
+            <input type="checkbox" checked={embed} disabled={!enrich}
+                   onChange={(e) => setEmbed(e.target.checked)} />
             Embed — makes it searchable
           </label>
           <label className="check">
-            <input
-              type="checkbox"
-              checked={summarize}
-              disabled={!enrich}
-              onChange={(e) => setSummarize(e.target.checked)}
-            />
+            <input type="checkbox" checked={summarize} disabled={!enrich}
+                   onChange={(e) => setSummarize(e.target.checked)} />
             Summarise — title, keywords, entities
           </label>
         </div>
         <div className="row" style={{ marginTop: 10 }}>
           <input
-            type="text"
-            placeholder="prompt override — this write only, never saved"
-            value={promptOverride}
-            disabled={!enrich || !summarize}
+            type="text" placeholder="prompt override — this write only, never saved"
+            value={promptOverride} disabled={!enrich || !summarize}
             title={!enrich || !summarize
               ? "Needs interpretation and summarising — a prompt has nothing to steer otherwise"
               : undefined}
@@ -933,10 +873,8 @@ function AddData({
             style={{ flex: 2, minWidth: 240 }}
           />
           <input
-            type="text"
-            placeholder="model override — e.g. gemini-2.5-flash"
-            value={modelOverride}
-            disabled={!enrich || !summarize}
+            type="text" placeholder="model override — e.g. gemini-2.5-flash"
+            value={modelOverride} disabled={!enrich || !summarize}
             title={!enrich || !summarize
               ? "Needs interpretation and summarising — there is no model call to redirect otherwise"
               : undefined}
@@ -945,21 +883,13 @@ function AddData({
           />
         </div>
         <p className="empty" style={{ marginBottom: 0 }}>
-          Both apply to this write alone and are never persisted as configuration. A locked org
-          prompt still wins over either — otherwise a lock would be advisory. Saved instruction
-          blocks live under <strong>Prompts</strong>; assignment per purpose lives under{" "}
-          <strong>Models</strong>.
+          Both apply to this write alone and are never persisted. A locked org prompt still wins
+          over either — otherwise a lock would be advisory. Saved instruction blocks live under{" "}
+          <strong>Prompts</strong>; assignment per purpose lives under <strong>Models</strong>.
         </p>
-        {!enrich && (
-          <p className="warned" style={{ marginBottom: 0 }}>
-            This write will stop at <code>stored</code>. You can ask for interpretation later, from
-            the progress panel above or from Browse.
-          </p>
-        )}
-      </section>
+      </Step>
 
-      <section className="panel">
-        <h2>4 · Who can see it</h2>
+      <Step n={5} name="acl" title="Who can see it" value={audienceSummary}>
         <p className="empty" style={{ marginTop: 0 }}>
           Decided here because this is the only place it can be: the ACL is <strong>sealed before
           any other phase runs</strong>, and no endpoint changes it afterwards — re-writing the same
@@ -968,16 +898,14 @@ function AddData({
         {scope !== undefined && scope !== null && (
           <p className="warned">
             This producer writes through a <strong>{scope}</strong> connection, which is a{" "}
-            <strong>ceiling</strong> rather than a default: it can narrow visibility and never
-            widen it past <code>{LEVELS[ceiling].key}</code>. Personal data in a team organisation
-            stays personal whatever the project says, and a wider level is refused rather than
-            quietly stored as something narrower.
+            <strong>ceiling</strong> rather than a default: it can narrow visibility and never widen
+            it past <code>{LEVELS[ceiling].key}</code>.
           </p>
         )}
         {meeting ? (
           <p className="empty">
-            Set by the room above — <strong>{room.level}</strong>. A named meeting decides its own
-            audience, so this is not a choice while one is named.
+            Set by the room in step 3 — <strong>{room.level}</strong>. A named meeting decides its
+            own audience.
           </p>
         ) : (
           <>
@@ -1003,11 +931,6 @@ function AddData({
                            title={`${g.members.length} member${g.members.length === 1 ? "" : "s"}`}>
                       <input
                         type="checkbox"
-                        /* `group:` and `user:` prefixes, because that is the shape
-                         * `acl_principals()` builds and the predicate compares
-                         * against. A bare id matches nothing -- including for the
-                         * person who wrote the record, who then cannot see their
-                         * own item and has no way to tell why. */
                         checked={principals.includes(`group:${g.group_id}`)}
                         onChange={(e) => setPrincipals(e.target.checked
                           ? [...principals, `group:${g.group_id}`]
@@ -1035,15 +958,31 @@ function AddData({
                     without one rather than quietly stored as something narrower.
                   </p>
                 )}
-                <p className="empty" style={{ marginBottom: 0 }}>
-                  A group resolves inside the ACL query like a person does, so adding somebody to it
-                  later gives them this record too — which is the reason to prefer one over naming
-                  three people. Create groups under <strong>Projects &amp; members</strong>.
-                </p>
               </>
             )}
           </>
         )}
+      </Step>
+
+      {/* The whole decision, next to the thing that commits it. */}
+      <section className="panel addbar">
+        <div className="addsummary">
+          <span className="empty">→ {destination}</span>
+          <span className={enrich ? "empty" : "warntext"}>· {willDo}</span>
+          <span className="empty">· {audienceSummary}</span>
+        </div>
+        <div className="row end" style={{ marginTop: 10 }}>
+          {aclIncomplete && (
+            <span className="warntext">pick at least one person or group in step 5</span>
+          )}
+          <button
+            onClick={submit}
+            disabled={busy || blocked !== null || aclIncomplete}
+            title={blocked ?? (aclIncomplete ? "Step 5 needs at least one principal" : undefined)}
+          >
+            {busy ? "Adding…" : "Add data"}
+          </button>
+        </div>
       </section>
 
       {stair && (

@@ -297,6 +297,67 @@ pre.code {
 .filebtn:hover { border-color: var(--accent); }
 .preview { max-width: 100%; max-height: 260px; border-radius: 8px; border: 1px solid var(--line); display: block; }
 .preview-wrap { margin-top: 12px; }
+
+/* ---------------------------------------------------------- add-data steps */
+
+/* A step header is a real <button> so it is reachable by keyboard, which means
+   it inherits the primary-action paint -- accent background, light text, 9px
+   padding. Every one of those is answered here; a class that overrode only
+   `background` once left a chip's label light-on-light and invisible. */
+.stephead {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  background: none;
+  color: var(--ink);
+  border: 0;
+  padding: 0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.stephead:hover .steptitle { text-decoration: underline; }
+.stepn {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 22px;
+  text-align: center;
+}
+.steptitle { font-weight: 600; }
+/* The current value of a closed step. Collapsed must not mean hidden -- the
+   reader can still see where it is going without opening anything. */
+.stepvalue { flex: 1; color: var(--muted); font-size: 13px; }
+.stepcaret { flex: none; color: var(--muted); font-size: 12px; }
+.stepbody { margin-top: 14px; }
+
+/* The commit bar. Deliberately not `.commit`: generic names are the ones that
+   collide later, and this file already carries a `.preview` defined twice. */
+.addbar { position: sticky; bottom: 0; }
+.addsummary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 13px;
+}
+/* The live viewfinder, deliberately NOT `.preview`. That class is defined twice
+   in this file -- a media preview here and a text-truncation rule further down
+   -- and the two merge, so a camera feed wearing it came out at opacity 0.75.
+   Generic names are the ones already taken. */
+.viewfinder {
+  max-width: 100%;
+  max-height: 260px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  display: block;
+  background: #000;
+}
 audio.preview { width: 100%; height: auto; }
 .rec { color: #a4462f; font-family: var(--mono); font-size: 13px; }
 .chip.stored { background: color-mix(in srgb, var(--step1) 35%, transparent); }
