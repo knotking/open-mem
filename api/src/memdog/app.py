@@ -72,7 +72,7 @@ from .retrieval import (
 from .extraction import build_extractor
 from .fetching import FetchWorker
 from .multimodal import build_multimodal
-from .events import dispatch_pending, emit_audited, list_events
+from .events import dispatch_pending, emit, emit_audited, list_events
 from .workers import (
     EmbedWorker,
     EnrichWorker,
@@ -97,7 +97,35 @@ async def lifespan(app: FastAPI):
     embedder = build_embedder(settings)
     # Refuse to serve against an index this engine cannot write to.
     await verify_index_dimension(pool, embedder)
-    queue = InProcessQueue()
+    async def _record_dead_letter(message, error: str) -> None:
+        """A job the queue gave up on, written where the item can show it.
+
+        The queue's own list is in memory and dies with the process, which on a
+        platform that scales to zero means an abandoned job leaves the record
+        sitting at its current state with nothing anywhere saying why. The
+        console already reads the event log to explain a stalled climb, so that
+        is where this belongs.
+        """
+        data_id = (message.body or {}).get("data_id")
+        if not data_id:
+            return
+        owner = await pool.fetchrow(
+            "SELECT org_id, project_id FROM data_items WHERE data_id = $1", data_id
+        )
+        if owner is None:
+            return
+        async with pool.acquire() as conn, conn.transaction():
+            await emit(
+                conn,
+                event_type="work.abandoned",
+                org_id=owner["org_id"],
+                project_id=owner["project_id"],
+                data_id=data_id,
+                payload={"topic": message.topic, "attempts": message.attempt,
+                         "error": error[:600]},
+            )
+
+    queue = InProcessQueue(on_dead_letter=_record_dead_letter)
     embed_worker = EmbedWorker(pool, embedder, settings, queue=queue)
     await embed_worker.ensure_generator()
     embed_worker.register(queue, EMBED_TOPIC)

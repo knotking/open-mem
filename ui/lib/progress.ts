@@ -69,7 +69,13 @@ export function assess(
   const request = events.find((e) => e.event_type === REQUESTED) ?? null;
   const refusal = events.find((e) => e.event_type === REFUSED) ?? null;
   const needsParse = item.parse_status !== null;
-  const parsed = item.parse_status === "parsed";
+  // `truncated` is a *success* with a warning: the handler read the bytes and
+  // the text ran past the index ceiling, so everything up to it was extracted
+  // and the rest is stored but not indexed. Treating it as a failure told
+  // somebody with a long document that "the bytes could not be read" and that
+  // "there is nothing to embed" -- of two million characters that were read,
+  // and which the API does queue for embedding.
+  const parsed = item.parse_status === "parsed" || item.parse_status === "truncated";
   const parseFailed = needsParse && !parsed && item.parse_status !== "pending";
   const parsePending = item.parse_status === "pending";
   const awaitingFetch = item.state === "awaiting_fetch";

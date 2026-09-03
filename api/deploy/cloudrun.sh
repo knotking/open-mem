@@ -33,6 +33,20 @@ step "Deploying ${SERVICE}"
 # instance has no public IP (org policy forbids one), so the service reaches
 # it over the VPC and speaks ordinary Postgres to a private address. No Cloud
 # SQL socket, no proxy sidecar.
+#
+# `--no-cpu-throttling` is load-bearing, not a performance preference. The queue
+# is in-process: `publish()` hands work to asyncio tasks in this same container,
+# and the endpoint that triggers enrichment returns as soon as the work is
+# *queued*. Under Cloud Run's default, CPU is throttled to near-zero the moment
+# a response is sent, so anything outliving its request is starved rather than
+# run.
+#
+# That is invisible until a job is large enough to matter. A summary or a
+# transcription is one model call and finishes inside the request; a
+# two-million-character document is ~1,900 chunks and ~19 sequential embedding
+# calls, and never finished. Nothing errored and nothing was logged, because the
+# task was not failing -- it was frozen. Found 2026-09-03, on a .docx that had
+# parsed and summarised perfectly and would not become searchable.
 gcloud run deploy "$SERVICE" \
   --project "$PROJECT" --region "$REGION" \
   --image "$IMAGE" \
@@ -43,6 +57,7 @@ gcloud run deploy "$SERVICE" \
   --allow-unauthenticated \
   --min-instances 0 --max-instances 4 \
   --cpu 1 --memory 1Gi --timeout 600 \
+  --no-cpu-throttling \
   --quiet
 
 # The reconciler runs the same image with the same configuration, and must be

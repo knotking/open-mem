@@ -74,7 +74,8 @@ class InProcessQueue:
     contract tests check across all three implementations.
     """
 
-    def __init__(self, *, max_attempts: int = 5, base_delay: float = 0.05) -> None:
+    def __init__(self, *, max_attempts: int = 5, base_delay: float = 0.05,
+                 on_dead_letter=None) -> None:
         # Deferrals are counted separately from attempts and are not bounded
         # the same way: waiting out a quota window is the correct behaviour,
         # where retrying a genuinely broken message forever is not.
@@ -85,6 +86,12 @@ class InProcessQueue:
         self._base_delay = base_delay
         self._active = 0
         self.dead_letters: list[tuple[Message, str]] = []
+        # Called when a message is given up on. The in-memory list above dies
+        # with the process, and on a platform that scales to zero that is the
+        # same as not recording it: the item sits at its current state with
+        # nothing on the row saying why. The hook is how that reaches somewhere
+        # durable, without this module learning what a database is.
+        self._on_dead_letter = on_dead_letter
 
     def _queue(self, topic: str) -> asyncio.Queue[Message]:
         return self._queues.setdefault(topic, asyncio.Queue())
@@ -169,6 +176,14 @@ class InProcessQueue:
                     "dropping message on %s after %d attempts: %r",
                     message.topic, message.attempt, exc,
                 )
+                if self._on_dead_letter is not None:
+                    # Never let recording a failure become a second failure:
+                    # this runs while handling one, and the queue must keep
+                    # draining whatever happens here.
+                    try:
+                        await self._on_dead_letter(message, repr(exc))
+                    except Exception:
+                        log.exception("could not record the dead letter")
             finally:
                 queue.task_done()
                 self._active -= 1

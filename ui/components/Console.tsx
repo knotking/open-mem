@@ -683,7 +683,12 @@ function Staircase({ stair, compact }: { stair: Stair; compact?: boolean }) {
 
 function ItemDetail({ item, versions }: { item: Item; versions: Version[] }) {
   const text = item.extracted_text ?? item.content_text ?? "";
-  const stuck = item.parse_status !== null && item.parse_status !== "parsed";
+  // Same rule as `lib/progress.ts`: `truncated` read fine and simply ran past
+  // the index ceiling. It earns a note, not a "could not be read".
+  const stuck = item.parse_status !== null
+    && item.parse_status !== "parsed"
+    && item.parse_status !== "truncated";
+  const capped = item.parse_status === "truncated";
   return (
     <>
       <table className="kv">
@@ -703,6 +708,14 @@ function ItemDetail({ item, versions }: { item: Item; versions: Version[] }) {
           {item.checksum && <tr><td>checksum</td><td className="provenance">{item.checksum}</td></tr>}
         </tbody>
       </table>
+
+      {capped && (
+        <div className="notice" style={{ marginTop: 12 }}>
+          <strong>Read in full up to the index ceiling.</strong>{" "}
+          {String((item.parse_detail?.warnings as string[] | undefined)?.[0] ?? "")} The bytes are
+          untouched, so a higher ceiling re-indexes the rest without a re-upload.
+        </div>
+      )}
 
       {stuck && (
         <div className="notice" style={{ marginTop: 12 }}>
