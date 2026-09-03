@@ -10,9 +10,9 @@
  * accountable.
  */
 
-import { Fragment, useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 
-import Capture, { humanBytes } from "./Capture";
+import Capture, { humanBytes, type Staged } from "./Capture";
 import ThemeToggle from "./ThemeToggle";
 import { WriteProgress, useTracked } from "./Progress";
 // The ceiling rule is mirrored from `acl.py` and tested against it there.
@@ -177,6 +177,49 @@ const GROUPS: { title: string; items: { key: Section; label: string; hint: strin
   },
 ];
 
+/**
+ * What the console is for, in the order you meet it.
+ *
+ * The per-group sentences are the reasoning already recorded against `GROUPS`,
+ * said to the reader rather than to the next maintainer. The per-item lines are
+ * the `hint` values themselves — one source, so a help panel cannot drift from
+ * the nav it describes, which is the usual fate of written documentation of a
+ * menu.
+ */
+const GUIDE_PATH = [
+  {
+    n: "01",
+    title: "Get something in",
+    body: "Add data takes a paste, a file or a recording. Producers, Inbound and Crawlers are the same write path without a person: an SDK, a webhook a provider posts to, and a puller for anything that will not push.",
+  },
+  {
+    n: "02",
+    title: "Watch it climb",
+    body: "A write commits immediately and is durable at once, but it is not findable yet. Stored becomes searchable when it is embedded, and enriched when a model has read it. Overview is where you see whether that is keeping up.",
+  },
+  {
+    n: "03",
+    title: "Get it back",
+    body: "Search returns evidence and says what it excluded and why. Chat returns prose with a citation behind every claim. Browse walks the corpus by container when you would rather look than ask.",
+  },
+  {
+    n: "04",
+    title: "Prove it",
+    body: "Audit says who read and wrote what. Sharing says what is public and takes it back. Deletion erases and issues a certificate that outlives the record.",
+  },
+];
+
+const GUIDE_WHY: Record<string, string> = {
+  Monitor: "Is this working, and will it tell me when it is not.",
+  Sources: "Is data still arriving, and where from.",
+  Data: "Put things in, and get them back out.",
+  Organize: "How the corpus is arranged, and what it has learned is in it.",
+  Lifecycle: "How a corpus stops growing, and how something leaves for good.",
+  Governance: "Who touched it, and what can be proved afterwards.",
+  Configuration: "What runs, on which data, and what it costs.",
+  Admin: "Who is in this organization, and what they may do.",
+};
+
 export default function Console({
   projectId,
   producerId,
@@ -198,8 +241,22 @@ export default function Console({
   // existed as far as anybody looking could tell. A nav that hides a feature
   // until you guess which heading it is behind is a nav that has not been
   // navigated.
+  // Typing beats scanning once there are twenty-six destinations, and it is
+  // what makes collapsing safe: nothing is unreachable if it can be named.
+  const [filter, setFilter] = useState("");
+  const [showGuide, setShowGuide] = useState(false);
+  // Only the group you are in. The previous default opened all eight, which
+  // put twenty-six items and twenty-six hints on screen at once and made every
+  // destination shout at the same volume.
+  //
+  // This revisits a deliberate decision, so the reason it is safe now: what
+  // failed before was a *single-open accordion*, where opening one group shut
+  // the others and a feature could not be found without guessing which heading
+  // hid it. Here every heading stays visible, any number of groups can be open
+  // at once, the group you are in opens itself, and the filter finds anything
+  // by name. Collapsed is not the same as hidden.
   const [openGroups, setOpenGroups] = useState<string[]>(
-    () => GROUPS.map((g) => g.title));
+    () => GROUPS.filter((g) => g.items.some((i) => i.key === "overview")).map((g) => g.title));
   // Handoffs between Search and Entities. A search result explains itself by
   // naming the entity it was reached through; the entity panel hands a name
   // back. Held here because the two panels are siblings and neither owns the
@@ -208,6 +265,32 @@ export default function Console({
   const [seededQuery, setSeededQuery] = useState<string | null>(null);
   const [stair, setStair] = useState<Stair | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // What the filter admits. Matched on label *and* hint, because the hint is
+  // often the word somebody actually knows -- "webhook" finds Inbound, which
+  // its label never says.
+  const filtering = filter.trim() !== "";
+  const matches = useMemo(() => {
+    const needle = filter.trim().toLowerCase();
+    const all = GROUPS.flatMap((g) => g.items);
+    if (!needle) return all.map((i) => i.key);
+    return all
+      .filter((i) => `${i.label} ${i.hint}`.toLowerCase().includes(needle))
+      .map((i) => i.key);
+  }, [filter]);
+
+  // Following a handoff -- a search result that jumps to Entities, say -- must
+  // open the group it landed in, or the nav says you are somewhere you cannot
+  // see.
+  useEffect(() => {
+    const owner = GROUPS.find((g) => g.items.some((i) => i.key === section));
+    if (owner && !openGroups.includes(owner.title)) {
+      setOpenGroups((o) => [...o, owner.title]);
+    }
+    // `openGroups` is deliberately absent: this must run when the *section*
+    // changes, not when somebody collapses a group by hand.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [section]);
 
   const refresh = useCallback(async () => {
     try {
@@ -228,9 +311,26 @@ export default function Console({
           <span className="dot" aria-hidden="true" />
           mem-dog
         </div>
+        <input
+          className="navfilter"
+          type="search"
+          value={filter}
+          placeholder="Filter…"
+          aria-label="Filter navigation"
+          onChange={(e) => setFilter(e.target.value)}
+        />
         <div className="navscroll">
+          {matches.length === 0 && (
+            <p className="navempty">
+              Nothing matches <strong>{filter}</strong>.
+            </p>
+          )}
           {GROUPS.map((group) => {
-            const open = openGroups.includes(group.title);
+            const items = group.items.filter((i) => matches.includes(i.key));
+            if (items.length === 0) return null;
+            // A filter that left groups shut would be a filter that finds
+            // nothing, so a query opens whatever it matched.
+            const open = filtering || openGroups.includes(group.title);
             const current = group.items.some((i) => i.key === section);
             return (
               <div className="navgroup" key={group.title}>
@@ -248,14 +348,19 @@ export default function Console({
                   {!open && current && <span className="here" aria-hidden="true" />}
                 </button>
                 {open &&
-                  group.items.map((item) => (
+                  items.map((item) => (
                     <button
                       key={item.key}
                       className={`navitem${section === item.key ? " active" : ""}`}
+                      /* The hint was a second line under every one of twenty-six
+                         items -- twenty-six sentences competing with twenty-six
+                         labels. Its job is to help you choose, which a tooltip
+                         does on the one you are considering, and every screen
+                         states its own purpose in its lede once you arrive. */
+                      title={item.hint}
                       onClick={() => setSection(item.key)}
                     >
                       <span className="navlabel">{item.label}</span>
-                      <span className="navhint">{item.hint}</span>
                     </button>
                   ))}
               </div>
@@ -285,6 +390,67 @@ export default function Console({
           )}
         </div>
       </nav>
+
+      <button
+        className="helpbtn"
+        onClick={() => setShowGuide(true)}
+        title="What each part of the console is for"
+      >
+        How to use this
+      </button>
+
+      {showGuide && (
+        <>
+          {/* Click-away and Escape both close it. A panel that can only be
+              dismissed by finding its own small button is a panel people leave
+              open and then work around. */}
+          <div className="helpscrim" onClick={() => setShowGuide(false)} aria-hidden="true" />
+          <aside
+            className="helppanel"
+            role="dialog"
+            aria-label="How to use this console"
+            onKeyDown={(e) => { if (e.key === "Escape") setShowGuide(false); }}
+          >
+            <div className="row" style={{ justifyContent: "space-between" }}>
+              <h2 style={{ margin: 0 }}>How to use this</h2>
+              <button className="secondary" onClick={() => setShowGuide(false)}>Close</button>
+            </div>
+            <p className="empty">
+              Four steps end to end, then what every section in the sidebar is for. Pick any of
+              them to go there.
+            </p>
+
+            {GUIDE_PATH.map((step) => (
+              <div className="guidepath" key={step.n}>
+                <span className="stepn">{step.n}</span>
+                <div>
+                  <strong>{step.title}</strong>
+                  <p className="empty" style={{ margin: "2px 0 0" }}>{step.body}</p>
+                </div>
+              </div>
+            ))}
+
+            {GROUPS.map((group) => (
+              <div className="guidegroup" key={group.title}>
+                <h3 style={{ marginBottom: 2 }}>{group.title}</h3>
+                {GUIDE_WHY[group.title] && (
+                  <p className="guidewhy">{GUIDE_WHY[group.title]}</p>
+                )}
+                {group.items.map((item) => (
+                  <button
+                    className="guideitem"
+                    key={item.key}
+                    onClick={() => { setSection(item.key); setShowGuide(false); }}
+                  >
+                    <span className="navlabel">{item.label}</span>
+                    <span className="navhint">{item.hint}</span>
+                  </button>
+                ))}
+              </div>
+            ))}
+          </aside>
+        </>
+      )}
 
       <main className="content">
         {error && <p className="err">{error}</p>}
@@ -480,6 +646,35 @@ function StoredMedia({ item }: { item: Item }) {
 // The ceiling rule lives in `lib/acl.ts`, mirrored from `acl.py` and tested
 // against it there. Two copies of an access rule is how they drift.
 
+/**
+ * Add data — one path, one action, in the order the decisions are made.
+ *
+ * The previous arrangement grouped the controls correctly and still could not
+ * be followed, and the reason was where the *action* sat. "Write item" lived in
+ * the first card, above memory, interpretation and visibility — so the button
+ * came before three of the four decisions it committed. Recording had a second
+ * button of its own inside Capture, which meant two ways to write on one
+ * screen, both of them above the settings they ignored.
+ *
+ * So the shape here is not four cards, it is five steps and one button at the
+ * end:
+ *
+ *   1  what kind of thing        2  the thing itself
+ *   3  where it goes             4  what is done to it
+ *   5  who may see it            →  Add data
+ *
+ * Two consequences worth stating, because they are what makes it followable.
+ * **Capture no longer writes.** It stages a payload and the parent commits it,
+ * so text and media end at the same button. And **the button carries the whole
+ * decision** — destination, interpretation, audience — in a line above it, so
+ * the summary of what is about to happen is adjacent to the thing that makes it
+ * happen rather than three cards up.
+ *
+ * Steps 3-5 are collapsed by default. Every one has a working default, and a
+ * person adding a note should not have to read three panels of ACL semantics to
+ * reach a button. Each header states its current value, so what is collapsed is
+ * still visible — closed is not hidden.
+ */
 function AddData({
   projectId,
   producerId,
@@ -494,40 +689,37 @@ function AddData({
   const [text, setText] = useState(
     "The checkout service returned 502s for eleven minutes after a bad deploy.\n\nRollback completed at 14:02 UTC and error rates recovered.",
   );
+  const [source, setSource] = useState<"text" | "file">("text");
+  const [staged, setStaged] = useState<Staged | null>(null);
+  // Which optional steps are open. Closed by default because each has a
+  // working default and the button is what people came for.
+  const [open, setOpen] = useState<Record<string, boolean>>({});
+  const toggle = (k: string) => setOpen((o) => ({ ...o, [k]: !o[k] }));
+
+  const [memories, setMemories] = useState<Memory[]>([]);
+  const [memoryChoice, setMemoryChoice] = useState("");
   const [memoryType, setMemoryType] = useState("");
   const [memoryKey, setMemoryKey] = useState("");
-  // Enrichment is off by default at the API, and a write from here that does
-  // not say otherwise stops at `stored` — durable, and invisible to search.
-  // That is right for a producer pushing ten thousand records and wrong for a
-  // person adding one item by hand and then looking for it, so this screen
-  // asks, visibly, with the cost said out loud next to the switch.
+  // Enrichment is off by default at the API, and a write that does not say
+  // otherwise stops at `stored` — durable, and invisible to search. Right for a
+  // producer pushing ten thousand records, wrong for a person adding one item
+  // and then looking for it.
   const [enrich, setEnrich] = useState(true);
   const [embed, setEmbed] = useState(true);
   const [summarize, setSummarize] = useState(true);
   // Per-request overrides. The API accepts both and persists neither, which is
-  // the whole point of them -- a saved override would change what a project
-  // does with no audit trail on the setting that appears to control it. That is
-  // also why they are here rather than on Prompts, which is where a *saved*
-  // instruction block belongs.
+  // the point of them -- a saved override would change what a project does with
+  // no audit trail on the setting that appears to control it.
   const [promptOverride, setPromptOverride] = useState("");
   const [modelOverride, setModelOverride] = useState("");
-  // Who can see it, decided at write time -- which is the only time it can be
-  // decided, since the ACL is sealed before any other phase runs and there is
-  // no endpoint that changes it afterwards. Re-writing the same external_id
-  // with a different level is the only path, and it raises `acl.changed`.
+  // Sealed before any other phase runs, and no endpoint changes it afterwards.
   const [level, setLevel] = useState("");
   const [principals, setPrincipals] = useState<string[]>([]);
-  // A transcript is not a document like the others: it is speech four people
-  // did not publish to the company. Naming the room here is what lets one be
-  // uploaded by hand without a provider integration at all.
   const [attendees, setAttendees] = useState("");
   const [room, setRoom] = useState<{ level: string; principals: string[];
                                      resolved: string[]; unresolved: string[] } | null>(null);
   const [audience, setAudience] = useState<{ groups: Group[]; members: Member[] }>(
     { groups: [], members: [] });
-  // What this producer's connection permits. A connection's scope is a ceiling
-  // on what its writes may publish, so offering a level the API will refuse
-  // would turn a choice into a failed item and a message nobody expected.
   const [scope, setScope] = useState<string | null | undefined>(undefined);
 
   useEffect(() => {
@@ -542,49 +734,83 @@ function AddData({
       setScope(p.producers.find((x) => x.producer_id === producerId)?.connection_scope ?? null);
     });
   }, [producerId]);
+
+  const loadMemories = useCallback(() => {
+    void call<{ memories: Memory[] }>(`api/v1/projects/${projectId}/memories`)
+      .then((r) => setMemories(r.memories))
+      .catch(() => setMemories([]));
+  }, [projectId]);
+  useEffect(() => { loadMemories(); }, [loadMemories]);
+
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const { item, versions, climb, watching, elapsed, track, resume, enrichNow } =
     useTracked(onChange);
 
-  // Said beside every control that causes the spend, because the panel that
-  // configures it is further down the page and a person writes before they
-  // scroll. "Stored only" is the sentence that would otherwise be discovered
-  // afterwards, in a search that finds nothing.
   const ceiling = ceilingFor(scope);
+  const meeting = room !== null && attendees.trim() !== "";
+  const chosenMemory = memories.find((m) => m.memory_id === memoryChoice) ?? null;
+
+  // Capture calls this on every staging change, so it must be stable or the
+  // effect that produces the payload re-runs against a new identity forever.
+  const onStaged = useCallback((s: Staged | null) => setStaged(s), []);
 
   const willDo = !enrich
     ? "stored only — not searchable"
     : embed && summarize
-      ? "will embed and summarise"
+      ? "embedded and summarised"
       : embed
-        ? "will embed, no summary"
+        ? "embedded, no summary"
         : summarize
-          ? "will summarise, not searchable"
+          ? "summarised, not searchable"
           : "stored only — both steps unchecked";
 
-  async function submit(content: Record<string, unknown>, externalId: string, label: string) {
+  const destination = meeting
+    ? "a new meeting memory — ninety days, then archived"
+    : chosenMemory
+      ? `${chosenMemory.type} · ${chosenMemory.memory_key ?? chosenMemory.memory_id}`
+      : memoryChoice === "new"
+        ? `${memoryType || "default"}${memoryKey ? ` · ${memoryKey}` : " · a new memory each write"}`
+        : "your default memory";
+
+  const audienceSummary = meeting
+    ? `the room — ${room.level}`
+    : level
+      ? `${level}${principals.length ? ` · ${principals.length} named` : ""}`
+      : "the producer's default";
+
+  // Why the button is not pressable, said in the button's own tooltip rather
+  // than left for someone to work out from a greyed-out control.
+  const blocked = source === "text"
+    ? (text.trim() ? null : "Nothing typed yet")
+    : (staged ? null : "Choose a file or record something first");
+  const aclIncomplete = !meeting && (level === "restricted" || level === "shared")
+    && principals.length === 0;
+
+  async function submit() {
     setBusy(true);
     setError(null);
     setNote(null);
     try {
-      // A named room decides both the container and the visibility. Set here
-      // rather than left to the general controls below, because a transcript
-      // filed as `default` and visible to the project is the failure the
-      // meeting type and its ninety-day retention exist to prevent.
-      const meeting = room !== null && attendees.trim() !== "";
+      const externalId = source === "text" ? `text-${Date.now()}` : staged!.name;
+      const content = source === "text"
+        ? { kind: "inline", text }
+        : { kind: "inline", bytes_b64: staged!.base64, mime_type: staged!.mime };
+      const label = source === "text" ? "Text" : `${staged!.name} (${humanBytes(staged!.size)})`;
+
       const memory = meeting
         ? { type: "meeting", key: memoryKey || externalId }
-        : memoryType || memoryKey
-          ? { type: memoryType || "default", key: memoryKey || null }
-          : undefined;
+        : chosenMemory
+          ? { type: chosenMemory.type, key: chosenMemory.memory_key }
+          : memoryChoice === "new" && (memoryType || memoryKey)
+            ? { type: memoryType || "default", key: memoryKey || null }
+            : undefined;
+
       const response = await call<{
         results: { data_id: string; memories: string[]; events: string[] }[];
       }>("api/v1/write", {
         producer_id: producerId,
-        // `access` is a property of the item, not of the request: one write can
-        // carry five hundred items with five hundred different ACLs.
         items: [{
           external_id: externalId, content, memory,
           access: meeting
@@ -608,10 +834,9 @@ function AddData({
       setNote(
         `${label} committed as ${first.data_id}, mapped into ${first.memories.length} memory(ies).`,
       );
-      // The write is done the moment it returns — the button goes back to
-      // being a button, and the climb is watched below rather than behind a
-      // disabled control that looks like a hang.
       track(first.data_id);
+      loadMemories();
+      setStaged(null);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -619,41 +844,128 @@ function AddData({
     }
   }
 
+  function Step({ n, title, value, name, children }: {
+    n: number; title: string; value: string; name: string; children: React.ReactNode;
+  }) {
+    const isOpen = open[name] ?? false;
+    return (
+      <section className="panel">
+        <button
+          className="stephead"
+          onClick={() => toggle(name)}
+          aria-expanded={isOpen}
+        >
+          <span className="stepn">{n}</span>
+          <span className="steptitle">{title}</span>
+          <span className="stepvalue">{value}</span>
+          <span className="stepcaret">{isOpen ? "▾" : "▸"}</span>
+        </button>
+        {isOpen && <div className="stepbody">{children}</div>}
+      </section>
+    );
+  }
+
   return (
     <>
       <h1>Add data</h1>
       <p className="lede">
-        Text, a file, or something recorded here and now. All three take the identical write path —
-        there is no sandbox shortcut, which is the only reason what you see here tells you anything.
+        Choose what you are adding, then where it goes and what happens to it. Everything below has
+        a working default, so the short path is step 1, step 2, and the button.
       </p>
 
+      {error && <p className="err">{error}</p>}
+
+      {(watching || item) && (
+        <section className="panel">
+          <h2>What happened to it</h2>
+          {note && <p className="empty" style={{ marginTop: 0 }}>{note}</p>}
+          <WriteProgress
+            climb={climb}
+            watching={watching}
+            elapsed={elapsed}
+            dataId={item?.data_id ?? null}
+            onEnrich={enrichNow}
+            onResume={resume}
+          />
+          {item && <ItemDetail item={item} versions={versions} />}
+        </section>
+      )}
+
       <section className="panel">
-        <h2>Paste text</h2>
-        <textarea value={text} onChange={(e) => setText(e.target.value)} />
-        <div className="row end" style={{ marginTop: 10 }}>
-          <span className={enrich ? "empty" : "warntext"}>{willDo}</span>
-          <button
-            onClick={() =>
-              submit({ kind: "inline", text }, `text-${Date.now()}`, "Text")
-            }
-            disabled={busy || !text.trim()}
-          >
-            {busy ? "Writing…" : "Write item"}
-          </button>
+        <h2><span className="stepn">1</span> What kind of thing</h2>
+        <div className="row">
+          <label className="check">
+            <input
+              type="radio"
+              name="add-source"
+              checked={source === "text"}
+              onChange={() => { setSource("text"); setStaged(null); }}
+            />
+            Text — paste or type it
+          </label>
+          <label className="check">
+            <input
+              type="radio"
+              name="add-source"
+              checked={source === "file"}
+              onChange={() => setSource("file")}
+            />
+            A file, a recording, or a photo
+          </label>
         </div>
       </section>
 
       <section className="panel">
-        <h2>Upload or record</h2>
-        <div className="notice">
-          <strong>Media is interpreted by a model.</strong> Audio and video are transcribed, images
-          described and their text transcribed. That costs tokens per file, recorded per revision.
-        </div>
-        <p className={enrich ? "empty" : "warntext"} style={{ marginTop: 0 }}>{willDo}</p>
+        <h2><span className="stepn">2</span> {source === "text" ? "The text" : "The file"}</h2>
+        {source === "text" ? (
+          <textarea value={text} onChange={(e) => setText(e.target.value)} />
+        ) : (
+          <>
+            <div className="notice">
+              <strong>Media is interpreted by a model.</strong> Audio and video are transcribed,
+              images described and their text transcribed. That costs tokens per file, recorded per
+              revision.
+            </div>
+            <Capture busy={busy} onStaged={onStaged} />
+          </>
+        )}
+      </section>
 
+      <Step n={3} name="memory" title="Where it goes" value={destination}>
+        <p className="empty" style={{ marginTop: 0 }}>
+          A memory is the container a record lives in and what decides when it expires. Nothing is
+          orphaned — leave this alone and it lands in your <code>default</code> memory.
+        </p>
+        <div className="row">
+          <label style={{ flex: 1, minWidth: 260 }}>
+            Memory
+            <select value={memoryChoice} disabled={meeting}
+                    title={meeting ? "A named room files this as a meeting memory" : undefined}
+                    onChange={(e) => setMemoryChoice(e.target.value)}>
+              <option value="">your default memory</option>
+              {memories.map((m) => (
+                <option key={m.memory_id} value={m.memory_id} disabled={m.memory_key === null}>
+                  {m.title ?? m.memory_key ?? m.memory_id} · {m.type} · {m.members} item
+                  {m.members === 1 ? "" : "s"}
+                  {m.memory_key === null ? " — no key, cannot be written into by name" : ""}
+                </option>
+              ))}
+              <option value="new">a new memory…</option>
+            </select>
+          </label>
+        </div>
+        {memoryChoice === "new" && !meeting && (
+          <div className="row" style={{ marginTop: 8 }}>
+            <input type="text" placeholder="type — conversation, session, factual…"
+                   value={memoryType} onChange={(e) => setMemoryType(e.target.value)} />
+            <input type="text" placeholder="key — e.g. thread-8841"
+                   value={memoryKey} onChange={(e) => setMemoryKey(e.target.value)} />
+          </div>
+        )}
+        <h3>Or file it as a meeting</h3>
         <div className="row">
           <label style={{ flex: 1 }}>
-            Was this a meeting? Name the room
+            Name the room — who was in it
             <input
               type="text"
               value={attendees}
@@ -680,30 +992,21 @@ function AddData({
                 ? ` to ${room.resolved.join(", ")}`
                 : ", because nobody in the room is a member here"}
               . A transcript is unedited speech nobody reviewed before it was stored, which is why
-              the retention is a default rather than a preference.
+              the retention is a default rather than a preference. This <strong>overrides</strong>{" "}
+              the memory and the audience chosen elsewhere.
             </p>
             {room.unresolved.length > 0 && (
               <p className="warned">
                 <strong>{room.unresolved.length} of {room.resolved.length + room.unresolved.length}{" "}
                 did not resolve</strong> — {room.unresolved.join(", ")}. They are not members here,
-                so no principal exists for them and they will not see this. That is the
-                conservative direction; the alternative is inventing a principal for somebody
-                outside the organisation.
+                so no principal exists for them and they will not see this.
               </p>
             )}
           </>
         )}
+      </Step>
 
-        <Capture
-          busy={busy}
-          onSubmit={(name, mime, base64, size) =>
-            submit({ kind: "inline", bytes_b64: base64 }, name, `${name} (${humanBytes(size)})`)
-          }
-        />
-      </section>
-
-      <section className="panel">
-        <h2>Interpretation</h2>
+      <Step n={4} name="interpret" title="What is done to it" value={willDo}>
         <p className="empty" style={{ marginTop: 0 }}>
           Off, an item is stored and durable and <strong>nothing can find it</strong> — search runs
           on embeddings and there would be none. On, it costs one model call per chunk to embed and
@@ -715,58 +1018,44 @@ function AddData({
             Interpret this write
           </label>
           <label className="check">
-            <input
-              type="checkbox"
-              checked={embed}
-              disabled={!enrich}
-              onChange={(e) => setEmbed(e.target.checked)}
-            />
+            <input type="checkbox" checked={embed} disabled={!enrich}
+                   onChange={(e) => setEmbed(e.target.checked)} />
             Embed — makes it searchable
           </label>
           <label className="check">
-            <input
-              type="checkbox"
-              checked={summarize}
-              disabled={!enrich}
-              onChange={(e) => setSummarize(e.target.checked)}
-            />
+            <input type="checkbox" checked={summarize} disabled={!enrich}
+                   onChange={(e) => setSummarize(e.target.checked)} />
             Summarise — title, keywords, entities
           </label>
         </div>
         <div className="row" style={{ marginTop: 10 }}>
           <input
-            type="text"
-            placeholder="prompt override — this write only, never saved"
-            value={promptOverride}
-            disabled={!enrich || !summarize}
+            type="text" placeholder="prompt override — this write only, never saved"
+            value={promptOverride} disabled={!enrich || !summarize}
+            title={!enrich || !summarize
+              ? "Needs interpretation and summarising — a prompt has nothing to steer otherwise"
+              : undefined}
             onChange={(e) => setPromptOverride(e.target.value)}
             style={{ flex: 2, minWidth: 240 }}
           />
           <input
-            type="text"
-            placeholder="model override — e.g. gemini-2.5-flash"
-            value={modelOverride}
-            disabled={!enrich || !summarize}
+            type="text" placeholder="model override — e.g. gemini-2.5-flash"
+            value={modelOverride} disabled={!enrich || !summarize}
+            title={!enrich || !summarize
+              ? "Needs interpretation and summarising — there is no model call to redirect otherwise"
+              : undefined}
             onChange={(e) => setModelOverride(e.target.value)}
             style={{ flex: 1, minWidth: 180 }}
           />
         </div>
         <p className="empty" style={{ marginBottom: 0 }}>
-          Both apply to this write alone and are never persisted as configuration. A locked org
-          prompt still wins over either — otherwise a lock would be advisory. Saved instruction
-          blocks live under <strong>Prompts</strong>; assignment per purpose lives under{" "}
-          <strong>Models</strong>.
+          Both apply to this write alone and are never persisted. A locked org prompt still wins
+          over either — otherwise a lock would be advisory. Saved instruction blocks live under{" "}
+          <strong>Prompts</strong>; assignment per purpose lives under <strong>Models</strong>.
         </p>
-        {!enrich && (
-          <p className="warned" style={{ marginBottom: 0 }}>
-            This write will stop at <code>stored</code>. You can ask for interpretation later, from
-            the progress panel below or from Browse.
-          </p>
-        )}
-      </section>
+      </Step>
 
-      <section className="panel">
-        <h2>Who can see it</h2>
+      <Step n={5} name="acl" title="Who can see it" value={audienceSummary}>
         <p className="empty" style={{ marginTop: 0 }}>
           Decided here because this is the only place it can be: the ACL is <strong>sealed before
           any other phase runs</strong>, and no endpoint changes it afterwards — re-writing the same
@@ -775,112 +1064,93 @@ function AddData({
         {scope !== undefined && scope !== null && (
           <p className="warned">
             This producer writes through a <strong>{scope}</strong> connection, which is a{" "}
-            <strong>ceiling</strong> rather than a default: it can narrow visibility and never
-            widen it past <code>{LEVELS[ceiling].key}</code>. Personal data in a team organisation
-            stays personal whatever the project says, and a wider level is refused rather than
-            quietly stored as something narrower.
+            <strong>ceiling</strong> rather than a default: it can narrow visibility and never widen
+            it past <code>{LEVELS[ceiling].key}</code>.
           </p>
         )}
-        <div className="row">
-          <label>
-            Level
-            <select value={level} onChange={(e) => { setLevel(e.target.value); setPrincipals([]); }}>
-              <option value="">the producer&rsquo;s default</option>
-              {LEVELS.map((l) => (
-                <option key={l.key} value={l.key} disabled={ceiling < l.rank}>
-                  {l.label}{ceiling < l.rank ? " — not allowed by this connection" : ""}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-        {(level === "restricted" || level === "shared") && (
+        {meeting ? (
+          <p className="empty">
+            Set by the room in step 3 — <strong>{room.level}</strong>. A named meeting decides its
+            own audience.
+          </p>
+        ) : (
           <>
-            <div className="row" style={{ marginTop: 8 }}>
-              {audience.groups.map((g) => (
-                <label className="check" key={g.group_id}
-                       title={`${g.members.length} member${g.members.length === 1 ? "" : "s"}`}>
-                  <input
-                    type="checkbox"
-                    /* `group:` and `user:` prefixes, because that is the shape
-                     * `acl_principals()` builds and the predicate compares
-                     * against. A bare id matches nothing -- including for the
-                     * person who wrote the record, who then cannot see their
-                     * own item and has no way to tell why. */
-                    checked={principals.includes(`group:${g.group_id}`)}
-                    onChange={(e) => setPrincipals(e.target.checked
-                      ? [...principals, `group:${g.group_id}`]
-                      : principals.filter((x) => x !== `group:${g.group_id}`))}
-                  />
-                  {g.name} <span className="empty">· group of {g.members.length}</span>
-                </label>
-              ))}
-              {audience.members.map((m) => (
-                <label className="check" key={m.user_id}>
-                  <input
-                    type="checkbox"
-                    checked={principals.includes(`user:${m.user_id}`)}
-                    onChange={(e) => setPrincipals(e.target.checked
-                      ? [...principals, `user:${m.user_id}`]
-                      : principals.filter((x) => x !== `user:${m.user_id}`))}
-                  />
-                  {m.email ?? m.user_id}
-                </label>
-              ))}
+            <div className="row">
+              <label>
+                Level
+                <select value={level}
+                        onChange={(e) => { setLevel(e.target.value); setPrincipals([]); }}>
+                  <option value="">the producer&rsquo;s default</option>
+                  {LEVELS.map((l) => (
+                    <option key={l.key} value={l.key} disabled={ceiling < l.rank}>
+                      {l.label}{ceiling < l.rank ? " — not allowed by this connection" : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
             </div>
-            {principals.length === 0 && (
-              <p className="warned">
-                <strong>{level}</strong> needs at least one principal, and the write is refused
-                without one rather than quietly stored as something narrower.
-              </p>
+            {(level === "restricted" || level === "shared") && (
+              <>
+                <div className="row" style={{ marginTop: 8 }}>
+                  {audience.groups.map((g) => (
+                    <label className="check" key={g.group_id}
+                           title={`${g.members.length} member${g.members.length === 1 ? "" : "s"}`}>
+                      <input
+                        type="checkbox"
+                        checked={principals.includes(`group:${g.group_id}`)}
+                        onChange={(e) => setPrincipals(e.target.checked
+                          ? [...principals, `group:${g.group_id}`]
+                          : principals.filter((x) => x !== `group:${g.group_id}`))}
+                      />
+                      {g.name} <span className="empty">· group of {g.members.length}</span>
+                    </label>
+                  ))}
+                  {audience.members.map((m) => (
+                    <label className="check" key={m.user_id}>
+                      <input
+                        type="checkbox"
+                        checked={principals.includes(`user:${m.user_id}`)}
+                        onChange={(e) => setPrincipals(e.target.checked
+                          ? [...principals, `user:${m.user_id}`]
+                          : principals.filter((x) => x !== `user:${m.user_id}`))}
+                      />
+                      {m.email ?? m.user_id}
+                    </label>
+                  ))}
+                </div>
+                {principals.length === 0 && (
+                  <p className="warned">
+                    <strong>{level}</strong> needs at least one principal, and the write is refused
+                    without one rather than quietly stored as something narrower.
+                  </p>
+                )}
+              </>
             )}
-            <p className="empty" style={{ marginBottom: 0 }}>
-              A group resolves inside the ACL query like a person does, so adding somebody to it
-              later gives them this record too — which is the reason to prefer one over naming
-              three people. Create groups under <strong>Projects &amp; members</strong>.
-            </p>
           </>
         )}
-      </section>
+      </Step>
 
-      <section className="panel">
-        <h2>Memory routing (optional)</h2>
-        <div className="row">
-          <input
-            type="text"
-            placeholder="type — conversation, session, factual…"
-            value={memoryType}
-            onChange={(e) => setMemoryType(e.target.value)}
-          />
-          <input
-            type="text"
-            placeholder="key — e.g. thread-8841"
-            value={memoryKey}
-            onChange={(e) => setMemoryKey(e.target.value)}
-          />
+      {/* The whole decision, next to the thing that commits it. */}
+      <section className="panel addbar">
+        <div className="addsummary">
+          <span className="empty">→ {destination}</span>
+          <span className={enrich ? "empty" : "warntext"}>· {willDo}</span>
+          <span className="empty">· {audienceSummary}</span>
         </div>
-        <p className="empty">
-          Leave both blank and the item lands in your <code>default</code> memory — nothing is
-          orphaned. Reuse a key and writes collect into one memory, with no session state anywhere.
-        </p>
+        <div className="row end" style={{ marginTop: 10 }}>
+          {aclIncomplete && (
+            <span className="warntext">pick at least one person or group in step 5</span>
+          )}
+          <button
+            onClick={submit}
+            disabled={busy || blocked !== null || aclIncomplete}
+            title={blocked ?? (aclIncomplete ? "Step 5 needs at least one principal" : undefined)}
+          >
+            {busy ? "Adding…" : "Add data"}
+          </button>
+        </div>
       </section>
 
-      {error && <p className="err">{error}</p>}
-      {(watching || item) && (
-        <section className="panel">
-          <h2>What happened to it</h2>
-          {note && <p className="empty" style={{ marginTop: 0 }}>{note}</p>}
-          <WriteProgress
-            climb={climb}
-            watching={watching}
-            elapsed={elapsed}
-            dataId={item?.data_id ?? null}
-            onEnrich={enrichNow}
-            onResume={resume}
-          />
-          {item && <ItemDetail item={item} versions={versions} />}
-        </section>
-      )}
       {stair && (
         <section className="panel">
           <h2>Readiness staircase</h2>

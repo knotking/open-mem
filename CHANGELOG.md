@@ -10,6 +10,66 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 
 ## Unreleased
 
+### Fixed
+- **The live viewfinder was blank while recording video.** The `<video>` renders
+  only once recording has started, but the stream was attached before either
+  state update had rendered — so the ref was still `null` and the `&& video.current`
+  guard skipped the attachment silently. The camera light came on, the recording
+  was fine, and nothing was shown. It is now attached from an effect that runs
+  after the element mounts. The viewfinder also has its own `.viewfinder` class:
+  `.preview` is defined twice in `globals.css` and the two merge, so a camera
+  feed wearing it rendered at `opacity: 0.75`.
+- **Recorded audio and video were stored but never interpreted.** Two faults:
+  `video` was routed to the audio-only transcription model, which refused every
+  clip with *"Image input modality is not enabled for this model"* and left it
+  at `stored` (images were unaffected — they use the multimodal model); and an
+  audio recording was classified as video, because `MediaRecorder` names both
+  `capture-<ts>.webm` and the console dropped the mime, so the server fell back
+  to the extension. **No audio item had ever existed.** A declared mime may now
+  refine an ambiguous container — `audio/webm` over a sniffed `video/webm` —
+  with the subtype required to match, so nothing can override a PDF. Existing
+  stuck items recover with the ordinary enrich action; no re-upload.
+- **A failed media call recorded the status and threw away the reason.**
+  `raise_for_status` names the code and the URL only, so a row read
+  `Client error '400 Bad Request'` while the provider had said precisely what
+  was wrong. The provider's message is kept, and the console already renders it.
+
+### Added
+- **"How to use this" in the console**, pinned top-right: four steps end to end
+  — get something in, watch it climb, get it back, prove it — then every section
+  grouped, with why each group exists. Each entry navigates and closes. The
+  per-item text is read from the same `GROUPS.hint` values the sidebar uses, so
+  the guide cannot drift from the menu it describes.
+
+### Changed
+- **The console sidebar is readable on sign-in.** It rendered twenty-six
+  destinations across eight groups with every group open and every item showing
+  a label *and* a hint — about sixty lines of text, all at one volume. The hints
+  are now tooltips (each screen already states its purpose in its own lede), a
+  **filter** matches label and hint together so "webhook" finds Inbound, and only
+  the group you are in starts open. Every heading stays visible, any number of
+  groups can be open, and the group holding the current section opens itself —
+  collapsed is not hidden.
+- **The sign-in page's bar is five beats, not eight anchors** — how it works,
+  what it connects, what it tells you, what it accepts, why trust it — each
+  covering a run of sections and named for what the page argues there rather
+  than which feature lives in it. Groups cover *contiguous* sections only: the
+  bar doubles as a position indicator, so one spanning a gap would light, go
+  dark and light again as you scrolled through it.
+- **The hero states the guarantee rather than the feature** — *"No answer
+  without its source. No silence without its reason."*
+- **The wordmark returns you to the top of the page.**
+- **Add data is five steps and one button** — what kind of thing, the thing
+  itself, where it goes, what is done to it, who may see it, then *Add data*.
+  The action used to sit in the first card, above three of the four decisions it
+  committed, and recording had a second write button of its own, so whichever
+  you pressed you committed before reaching the settings. Capture now stages a
+  payload and the screen commits it, so text and media end at the same button,
+  with the destination, interpretation and audience on the line above it. Memory
+  is chosen from the project's existing memories rather than typed as a
+  free-text type and key. The last three steps are collapsed but state their
+  current value, because closed should not mean hidden.
+
 ### Changed
 - **The sign-in page is about half its former length** — ~1,700 words of prose
   down to ~930, with the fourteen section cards going 560 → 269. No claim was

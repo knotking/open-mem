@@ -121,6 +121,30 @@ cause, because two of them are deliberately quiet:
 3. **A membership exists.** Auto-provisioning creates a user and an identity but
    **never a membership**, so a brand-new account authenticates cleanly and then
    gets `403 this account is not a member of any organization`.
+4. **The membership is in the org the console is configured for.** Found
+   2026-09-03. `MEMDOG_PRODUCER_ID` and `MEMDOG_PROJECT_ID` are baked in at
+   deploy time and name one org; the console serves whoever signs in. When those
+   disagree, every write fails with `404 unknown producer` — *for signed-in
+   users only*.
+
+   The trap is that it cannot be reproduced with curl. `lib/api.ts` sends the
+   **signed-in user's** identity and falls back to the service key only when
+   sign-in is not configured, so an unauthenticated reproduction always takes
+   the service key, which is in the producer's org and always works. Hours went
+   into testing the one path that cannot fail.
+
+   `add-member` makes this easy to cause: it attaches to *"the first
+   organization"* (`ORDER BY created_at LIMIT 1`), which is the oldest org and
+   not necessarily the configured one. Checking that `/api/v1/projects` returns
+   200 does not catch it — the account is a member of *an* org, just the wrong
+   one. Check the project id matches `MEMDOG_PROJECT_ID`.
+
+   Moving somebody between orgs is not one call. Resolution takes the **oldest**
+   membership, so the old row has to be deleted, not merely outranked — and
+   `remove_member` refuses self-removal, so it needs a third admin who is not
+   being moved. An existing `users` row with no way to sign in can be given an
+   Identity Platform account (create, then set `emailVerified`) to become that
+   admin.
 
 Reset a password without touching the rest (the body goes in a file — a password
 in a command line is a password in the process table):
@@ -137,6 +161,11 @@ curl -X POST "https://identitytoolkit.googleapis.com/v1/projects/memdog-dev-5067
   credentials carry no quota project of their own; add
   `-H "x-goog-user-project: memdog-dev-506718"`. It reads as a permissions
   problem and is not one.
+
+> **`pytest` destroys the local database.** The suite drops the schema and
+> re-migrates on every run against the same Postgres the local console uses, so
+> a seeded demo tenant does not survive it. Re-seed afterwards. Found the hard
+> way, mid-session, having wiped a corpus somebody was demoing from.
 
 Rehearse the inbound path against the deployment without waiting for a provider
 — this is the only thing that exercises the HTTP layer of `/webhooks/`:

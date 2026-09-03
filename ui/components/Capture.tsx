@@ -35,11 +35,27 @@ export function humanBytes(n: number): string {
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 
+export type Staged = { name: string; mime: string; base64: string; size: number };
+
+/**
+ * Choose or record something. It does not write.
+ *
+ * This used to end in its own "Ingest it" button, which made two write buttons
+ * on one screen -- one for text, one here -- with the memory, interpretation
+ * and visibility choices sitting *below* both. Whichever you pressed, you
+ * committed before reaching the decisions. Capture now hands the parent a
+ * staged payload and the parent owns the single action at the end of the flow.
+ */
 export default function Capture({
+  onStaged,
   onSubmit,
   busy,
 }: {
-  onSubmit: (name: string, mime: string, base64: string, size: number) => Promise<void>;
+  /** Hand the parent a ready payload; the parent owns the write. */
+  onStaged?: (staged: Staged | null) => void;
+  /** Legacy: write from here, with a button of our own. Used by the sandbox,
+   *  whose screen is a single panel and has no later step to commit at. */
+  onSubmit?: (name: string, mime: string, base64: string, size: number) => Promise<void>;
   busy: boolean;
 }) {
   const [mode, setMode] = useState<Mode | null>(null);
@@ -63,6 +79,65 @@ export default function Capture({
 
   useEffect(() => stopTracks, [stopTracks]);
 
+  // Attach the live stream once the element it plays into actually exists.
+  // Runs after the render that mounts the <video>, which is the earliest moment
+  // the ref is populated.
+  useEffect(() => {
+    const element = video.current;
+    if (!element || mode !== "video" || !recording || !stream.current) return;
+    if (element.srcObject === stream.current) return;
+    element.srcObject = stream.current;
+    void element.play().catch(() => undefined);
+  }, [mode, recording]);
+
+  // Staging follows the preview, so every path that produces one -- a stopped
+  // recording, a photo, a chosen file -- reaches the parent the same way. The
+  // size ceiling is enforced here rather than at submit time, because being
+  // told a clip is too long *after* deciding everything else about it is the
+  // version of this that wastes the most of somebody's time.
+  useEffect(() => {
+    if (!onStaged) return;
+    const payload = blob.current;
+    if (!preview || !payload) {
+      onStaged(null);
+      return;
+    }
+    if (payload.size > MAX_BYTES) {
+      setError(
+        `${humanBytes(payload.size)} exceeds the ${humanBytes(MAX_BYTES)} inline ceiling. ` +
+          "Resumable upload is a later slice; record something shorter for now.",
+      );
+      onStaged(null);
+      return;
+    }
+    let cancelled = false;
+    const named = payload as File & { pickedName?: string };
+    const extension = (payload.type.split("/")[1] ?? "bin").split(";")[0];
+    const name = named.pickedName ?? `capture-${Date.now()}.${extension}`;
+    void toBase64(payload).then((base64) => {
+      if (!cancelled) onStaged({ name, mime: payload.type, base64, size: payload.size });
+    });
+    return () => { cancelled = true; };
+  }, [preview, onStaged]);
+
+  async function send() {
+    const payload = blob.current;
+    if (!payload || !onSubmit) return;
+    if (payload.size > MAX_BYTES) {
+      setError(
+        `${humanBytes(payload.size)} exceeds the ${humanBytes(MAX_BYTES)} inline ceiling. ` +
+          "Resumable upload is a later slice; record something shorter for now.",
+      );
+      return;
+    }
+    const named = payload as File & { pickedName?: string };
+    const extension = (payload.type.split("/")[1] ?? "bin").split(";")[0];
+    const name = named.pickedName ?? `capture-${Date.now()}.${extension}`;
+    await onSubmit(name, payload.type, await toBase64(payload), payload.size);
+    setPreview(null);
+    blob.current = null;
+  }
+
   async function start(kind: Mode) {
     setError(null);
     setPreview(null);
@@ -73,10 +148,12 @@ export default function Capture({
       );
       stream.current = media;
       setMode(kind);
-      if (kind === "video" && video.current) {
-        video.current.srcObject = media;
-        await video.current.play().catch(() => undefined);
-      }
+      // The stream is attached by the effect below, not here. The <video> is
+      // rendered only once `mode` and `recording` are both set, and both are
+      // state updates that have not been applied yet at this point -- so
+      // `video.current` is null and the old `&& video.current` guard skipped
+      // the attachment without a word. The camera light came on and the
+      // viewfinder stayed empty.
       chunks.current = [];
       const rec = new MediaRecorder(media);
       rec.ondataavailable = (e) => e.data.size > 0 && chunks.current.push(e.data);
@@ -145,23 +222,6 @@ export default function Capture({
     (blob.current as File & { pickedName?: string }).pickedName = file.name;
   }
 
-  async function send() {
-    const payload = blob.current;
-    if (!payload) return;
-    if (payload.size > MAX_BYTES) {
-      setError(
-        `${humanBytes(payload.size)} exceeds the ${humanBytes(MAX_BYTES)} inline ceiling. ` +
-          "Resumable upload is a later slice; record something shorter for now.",
-      );
-      return;
-    }
-    const named = payload as File & { pickedName?: string };
-    const extension = (payload.type.split("/")[1] ?? "bin").split(";")[0];
-    const name = named.pickedName ?? `capture-${Date.now()}.${extension}`;
-    await onSubmit(name, payload.type, await toBase64(payload), payload.size);
-    setPreview(null);
-    blob.current = null;
-  }
 
   return (
     <div>
@@ -193,7 +253,10 @@ export default function Capture({
       </div>
 
       {mode === "video" && recording && (
-        <video ref={video} muted playsInline className="preview" />
+        // `muted` is required, not stylistic: an unmuted autoplaying stream is
+        // blocked by the browser, and it would also feed the microphone back
+        // through the speakers while recording.
+        <video ref={video} autoPlay muted playsInline className="viewfinder" />
       )}
 
       {preview && (
@@ -204,9 +267,13 @@ export default function Capture({
           <div className="row" style={{ marginTop: 10 }}>
             <span className="chip">{preview.mime || "unknown type"}</span>
             <span className="chip">{humanBytes(preview.size)}</span>
-            <button onClick={send} disabled={busy}>
-              {busy ? "Uploading…" : "Ingest it"}
-            </button>
+            {onSubmit ? (
+              <button onClick={send} disabled={busy}>
+                {busy ? "Uploading…" : "Ingest it"}
+              </button>
+            ) : (
+              <span className="empty">ready — continue below</span>
+            )}
           </div>
         </div>
       )}

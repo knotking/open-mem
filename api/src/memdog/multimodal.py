@@ -180,13 +180,24 @@ class GeminiMultimodal:
                 response.raise_for_status()
                 data = response.json()
         except httpx.HTTPStatusError as exc:
+            # `raise_for_status` names the status and the URL and throws the
+            # body away, which is the half that says what was actually wrong.
+            # A video sent to an audio-only model recorded "Client error '400
+            # Bad Request'" on the row and cost an afternoon; the provider had
+            # said "Image input modality is not enabled for this model" in the
+            # body all along, and the console already renders that reason.
+            detail = _provider_message(exc.response)
             if exc.response.status_code == 429:
-                raise QuotaExhausted(str(exc)) from exc
+                raise QuotaExhausted(detail or str(exc)) from exc
             if exc.response.status_code in (500, 503):
                 # Rate limits and capacity spikes are transient; the queue's
                 # backoff is the right place to handle them.
-                raise RuntimeError(f"multimodal temporarily unavailable: {exc}") from exc
-            raise MediaDisabled(f"multimodal rejected the request: {exc}") from exc
+                raise RuntimeError(
+                    f"multimodal temporarily unavailable: {detail or exc}") from exc
+            raise MediaDisabled(
+                f"multimodal rejected the request ({exc.response.status_code}): "
+                f"{detail or exc}"
+            ) from exc
         except httpx.HTTPError as exc:
             # Transient. Unlike a parse failure this is worth retrying, so it
             # propagates to the queue rather than being recorded on the row.
@@ -219,6 +230,23 @@ class GeminiMultimodal:
         )
 
 
+def _provider_message(response) -> str:
+    """The provider's own sentence, or nothing.
+
+    Never raises: this runs while handling an error, and a failure to parse an
+    error body must not replace the error being reported.
+    """
+    try:
+        payload = response.json()
+    except Exception:
+        return (response.text or "").strip()[:400]
+    if isinstance(payload, dict):
+        error = payload.get("error")
+        if isinstance(error, dict) and error.get("message"):
+            return str(error["message"])[:400]
+    return str(payload)[:400]
+
+
 def modality_for(mime: str) -> str | None:
     family = mime.split("/")[0] if mime else ""
     if family in ("image", "audio", "video"):
@@ -234,8 +262,12 @@ def build_multimodal(settings) -> MultimodalEngine:
         return NullMultimodal()
     per_modality = {}
     if settings.transcribe_model:
+        # Audio only. A transcription model is audio-only by construction, and
+        # video carries frames -- pointing `video` here made every recording
+        # fail with "Image input modality is not enabled for this model" while
+        # images, which use the multimodal model, worked fine. Video therefore
+        # falls through to `multimodal_model`, which handles both modalities.
         per_modality["audio"] = settings.transcribe_model
-        per_modality["video"] = settings.transcribe_model
     return GeminiMultimodal(
         settings.gemini_api_key, settings.multimodal_model, per_modality
     )
