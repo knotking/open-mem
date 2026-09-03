@@ -177,6 +177,49 @@ const GROUPS: { title: string; items: { key: Section; label: string; hint: strin
   },
 ];
 
+/**
+ * What the console is for, in the order you meet it.
+ *
+ * The per-group sentences are the reasoning already recorded against `GROUPS`,
+ * said to the reader rather than to the next maintainer. The per-item lines are
+ * the `hint` values themselves — one source, so a help panel cannot drift from
+ * the nav it describes, which is the usual fate of written documentation of a
+ * menu.
+ */
+const GUIDE_PATH = [
+  {
+    n: "01",
+    title: "Get something in",
+    body: "Add data takes a paste, a file or a recording. Producers, Inbound and Crawlers are the same write path without a person: an SDK, a webhook a provider posts to, and a puller for anything that will not push.",
+  },
+  {
+    n: "02",
+    title: "Watch it climb",
+    body: "A write commits immediately and is durable at once, but it is not findable yet. Stored becomes searchable when it is embedded, and enriched when a model has read it. Overview is where you see whether that is keeping up.",
+  },
+  {
+    n: "03",
+    title: "Get it back",
+    body: "Search returns evidence and says what it excluded and why. Chat returns prose with a citation behind every claim. Browse walks the corpus by container when you would rather look than ask.",
+  },
+  {
+    n: "04",
+    title: "Prove it",
+    body: "Audit says who read and wrote what. Sharing says what is public and takes it back. Deletion erases and issues a certificate that outlives the record.",
+  },
+];
+
+const GUIDE_WHY: Record<string, string> = {
+  Monitor: "Is this working, and will it tell me when it is not.",
+  Sources: "Is data still arriving, and where from.",
+  Data: "Put things in, and get them back out.",
+  Organize: "How the corpus is arranged, and what it has learned is in it.",
+  Lifecycle: "How a corpus stops growing, and how something leaves for good.",
+  Governance: "Who touched it, and what can be proved afterwards.",
+  Configuration: "What runs, on which data, and what it costs.",
+  Admin: "Who is in this organization, and what they may do.",
+};
+
 export default function Console({
   projectId,
   producerId,
@@ -201,6 +244,7 @@ export default function Console({
   // Typing beats scanning once there are twenty-six destinations, and it is
   // what makes collapsing safe: nothing is unreachable if it can be named.
   const [filter, setFilter] = useState("");
+  const [showGuide, setShowGuide] = useState(false);
   // Only the group you are in. The previous default opened all eight, which
   // put twenty-six items and twenty-six hints on screen at once and made every
   // destination shout at the same volume.
@@ -346,6 +390,67 @@ export default function Console({
           )}
         </div>
       </nav>
+
+      <button
+        className="helpbtn"
+        onClick={() => setShowGuide(true)}
+        title="What each part of the console is for"
+      >
+        How to use this
+      </button>
+
+      {showGuide && (
+        <>
+          {/* Click-away and Escape both close it. A panel that can only be
+              dismissed by finding its own small button is a panel people leave
+              open and then work around. */}
+          <div className="helpscrim" onClick={() => setShowGuide(false)} aria-hidden="true" />
+          <aside
+            className="helppanel"
+            role="dialog"
+            aria-label="How to use this console"
+            onKeyDown={(e) => { if (e.key === "Escape") setShowGuide(false); }}
+          >
+            <div className="row" style={{ justifyContent: "space-between" }}>
+              <h2 style={{ margin: 0 }}>How to use this</h2>
+              <button className="secondary" onClick={() => setShowGuide(false)}>Close</button>
+            </div>
+            <p className="empty">
+              Four steps end to end, then what every section in the sidebar is for. Pick any of
+              them to go there.
+            </p>
+
+            {GUIDE_PATH.map((step) => (
+              <div className="guidepath" key={step.n}>
+                <span className="stepn">{step.n}</span>
+                <div>
+                  <strong>{step.title}</strong>
+                  <p className="empty" style={{ margin: "2px 0 0" }}>{step.body}</p>
+                </div>
+              </div>
+            ))}
+
+            {GROUPS.map((group) => (
+              <div className="guidegroup" key={group.title}>
+                <h3 style={{ marginBottom: 2 }}>{group.title}</h3>
+                {GUIDE_WHY[group.title] && (
+                  <p className="guidewhy">{GUIDE_WHY[group.title]}</p>
+                )}
+                {group.items.map((item) => (
+                  <button
+                    className="guideitem"
+                    key={item.key}
+                    onClick={() => { setSection(item.key); setShowGuide(false); }}
+                  >
+                    <span className="navlabel">{item.label}</span>
+                    <span className="navhint">{item.hint}</span>
+                  </button>
+                ))}
+              </div>
+            ))}
+          </aside>
+        </>
+      )}
 
       <main className="content">
         {error && <p className="err">{error}</p>}
