@@ -35,6 +35,14 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   was wrong. The provider's message is kept, and the console already renders it.
 
 ### Changed
+- **The console sidebar is readable on sign-in.** It rendered twenty-six
+  destinations across eight groups with every group open and every item showing
+  a label *and* a hint — about sixty lines of text, all at one volume. The hints
+  are now tooltips (each screen already states its purpose in its own lede), a
+  **filter** matches label and hint together so "webhook" finds Inbound, and only
+  the group you are in starts open. Every heading stays visible, any number of
+  groups can be open, and the group holding the current section opens itself —
+  collapsed is not hidden.
 - **The sign-in page's bar is five beats, not eight anchors** — how it works,
   what it connects, what it tells you, what it accepts, why trust it — each
   covering a run of sections and named for what the page argues there rather
