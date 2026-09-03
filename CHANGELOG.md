@@ -36,10 +36,15 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 
 ### Added
 - **"How to use this" in the console**, pinned top-right: four steps end to end
-  — get something in, watch it climb, get it back, prove it — then every section
-  grouped, with why each group exists. Each entry navigates and closes. The
-  per-item text is read from the same `GROUPS.hint` values the sidebar uses, so
-  the guide cannot drift from the menu it describes.
+  — get something in, watch it climb, get it back, prove it — then **a
+  walkthrough for every one of the twenty-six sections**, expanded one at a time,
+  each with a link straight into that screen. The steps were written against each
+  screen's own panels rather than from its label, and where a screen has a trap
+  the step says so: a minted signing secret leaves an inbound endpoint looking
+  configured while it rejects every real delivery; deliveries are stored and not
+  interpreted unless asked; a crawler's dry run walks the identical code and
+  stops short of the write. Per-item text is read from the same `GROUPS.hint`
+  values the sidebar uses, so the guide cannot drift from the menu it describes.
 
 ### Changed
 - **The console sidebar is readable on sign-in.** It rendered twenty-six
