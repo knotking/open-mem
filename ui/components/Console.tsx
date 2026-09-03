@@ -480,6 +480,36 @@ function StoredMedia({ item }: { item: Item }) {
 // The ceiling rule lives in `lib/acl.ts`, mirrored from `acl.py` and tested
 // against it there. Two copies of an access rule is how they drift.
 
+/**
+ * Add data — one write, arranged as the four decisions it actually is.
+ *
+ * It used to be six panels in the order the API happens to take its arguments:
+ * two ways in, each with its own button and its own copy of the cost line, then
+ * interpretation, then the ACL, then memory routing last and marked optional,
+ * and finally — below all of it — the only part that says whether any of it
+ * worked. The report was that it is "a very hard window to follow", and the
+ * diagnosis is in that ordering:
+ *
+ * **The result was last.** A person writes an item and then scrolls *past every
+ * control they just used* to find out what happened to it. Outcome now sits
+ * directly under the heading, above the form, because after the first write it
+ * is the thing being looked for.
+ *
+ * **Two panels asked one question.** "Paste text" and "Upload or record" are
+ * not two features; they are one choice of source. Split across two cards, each
+ * with a write button, the screen offered two places to start and no indication
+ * that the panels below applied to both.
+ *
+ * **Memory was free text, and last, and called optional.** A project's memories
+ * already exist and the API lists them, so asking a person to retype a type and
+ * a key is asking them to guess an identifier they could have picked — and to
+ * guess it *after* the write button, which is not where a routing decision
+ * belongs. It is now a list of what is there.
+ *
+ * The remaining order is the order of the decisions: what, where it goes, what
+ * is done to it, who may see it. Numbered, because four cards that each look
+ * equally like the next is the shape the complaint was about.
+ */
 function AddData({
   projectId,
   producerId,
@@ -494,6 +524,13 @@ function AddData({
   const [text, setText] = useState(
     "The checkout service returned 502s for eleven minutes after a bad deploy.\n\nRollback completed at 14:02 UTC and error rates recovered.",
   );
+  // Which input is shown. One question with one answer, rather than two panels
+  // that each look like the place to start.
+  const [source, setSource] = useState<"text" | "file">("text");
+  // The project's existing memories, so routing is a choice among what is there
+  // rather than an identifier to be remembered correctly.
+  const [memories, setMemories] = useState<Memory[]>([]);
+  const [memoryChoice, setMemoryChoice] = useState("");
   const [memoryType, setMemoryType] = useState("");
   const [memoryKey, setMemoryKey] = useState("");
   // Enrichment is off by default at the API, and a write from here that does
@@ -542,18 +579,27 @@ function AddData({
       setScope(p.producers.find((x) => x.producer_id === producerId)?.connection_scope ?? null);
     });
   }, [producerId]);
+
+  // Reloaded when the write lands, so a memory this write created appears in
+  // the list rather than only on the next visit.
+  const loadMemories = useCallback(() => {
+    void call<{ memories: Memory[] }>(`api/v1/projects/${projectId}/memories`)
+      .then((r) => setMemories(r.memories))
+      .catch(() => setMemories([]));
+  }, [projectId]);
+  useEffect(() => { loadMemories(); }, [loadMemories]);
+
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const { item, versions, climb, watching, elapsed, track, resume, enrichNow } =
     useTracked(onChange);
 
-  // Said beside every control that causes the spend, because the panel that
-  // configures it is further down the page and a person writes before they
-  // scroll. "Stored only" is the sentence that would otherwise be discovered
-  // afterwards, in a search that finds nothing.
   const ceiling = ceilingFor(scope);
 
+  // Said beside the button that causes the spend. "Stored only" is the sentence
+  // that would otherwise be discovered afterwards, in a search that finds
+  // nothing.
   const willDo = !enrich
     ? "stored only — not searchable"
     : embed && summarize
@@ -564,21 +610,36 @@ function AddData({
           ? "will summarise, not searchable"
           : "stored only — both steps unchecked";
 
+  const meeting = room !== null && attendees.trim() !== "";
+  const chosenMemory = memories.find((m) => m.memory_id === memoryChoice) ?? null;
+
+  // Where this write will land, in one sentence, next to the control that
+  // decides it -- because "default" and "the memory I picked" are the two
+  // outcomes and only one of them is visible in the select.
+  const destination = meeting
+    ? "a new meeting memory — ninety days, then archived"
+    : chosenMemory
+      ? `${chosenMemory.type} · ${chosenMemory.memory_key ?? chosenMemory.memory_id}`
+      : memoryChoice === "new"
+        ? `${memoryType || "default"}${memoryKey ? ` · ${memoryKey}` : " · no key — a new memory each write"}`
+        : "your default memory";
+
   async function submit(content: Record<string, unknown>, externalId: string, label: string) {
     setBusy(true);
     setError(null);
     setNote(null);
     try {
-      // A named room decides both the container and the visibility. Set here
-      // rather than left to the general controls below, because a transcript
-      // filed as `default` and visible to the project is the failure the
-      // meeting type and its ninety-day retention exist to prevent.
-      const meeting = room !== null && attendees.trim() !== "";
+      // A named room decides both the container and the visibility, and wins
+      // over the selected memory: a transcript filed as `default` and visible
+      // to the project is the failure the meeting type and its ninety-day
+      // retention exist to prevent.
       const memory = meeting
         ? { type: "meeting", key: memoryKey || externalId }
-        : memoryType || memoryKey
-          ? { type: memoryType || "default", key: memoryKey || null }
-          : undefined;
+        : chosenMemory
+          ? { type: chosenMemory.type, key: chosenMemory.memory_key }
+          : memoryChoice === "new" && (memoryType || memoryKey)
+            ? { type: memoryType || "default", key: memoryKey || null }
+            : undefined;
       const response = await call<{
         results: { data_id: string; memories: string[]; events: string[] }[];
       }>("api/v1/write", {
@@ -609,9 +670,10 @@ function AddData({
         `${label} committed as ${first.data_id}, mapped into ${first.memories.length} memory(ies).`,
       );
       // The write is done the moment it returns — the button goes back to
-      // being a button, and the climb is watched below rather than behind a
+      // being a button, and the climb is watched above rather than behind a
       // disabled control that looks like a hang.
       track(first.data_id);
+      loadMemories();
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -623,37 +685,157 @@ function AddData({
     <>
       <h1>Add data</h1>
       <p className="lede">
-        Text, a file, or something recorded here and now. All three take the identical write path —
-        there is no sandbox shortcut, which is the only reason what you see here tells you anything.
+        Four decisions, in order: what you are adding, where it goes, what is done to it, and who
+        may see it. Text, a file and a recording take the identical write path — there is no
+        sandbox shortcut, which is the only reason what you see here tells you anything.
       </p>
 
+      {error && <p className="err">{error}</p>}
+
+      {/* The outcome, above the form rather than below it. After the first
+        * write this is what the screen is being looked at for, and it used to
+        * sit past every control the person had just finished using. */}
+      {(watching || item) && (
+        <section className="panel">
+          <h2>What happened to it</h2>
+          {note && <p className="empty" style={{ marginTop: 0 }}>{note}</p>}
+          <WriteProgress
+            climb={climb}
+            watching={watching}
+            elapsed={elapsed}
+            dataId={item?.data_id ?? null}
+            onEnrich={enrichNow}
+            onResume={resume}
+          />
+          {item && <ItemDetail item={item} versions={versions} />}
+        </section>
+      )}
+
       <section className="panel">
-        <h2>Paste text</h2>
-        <textarea value={text} onChange={(e) => setText(e.target.value)} />
-        <div className="row end" style={{ marginTop: 10 }}>
-          <span className={enrich ? "empty" : "warntext"}>{willDo}</span>
-          <button
-            onClick={() =>
-              submit({ kind: "inline", text }, `text-${Date.now()}`, "Text")
-            }
-            disabled={busy || !text.trim()}
-          >
-            {busy ? "Writing…" : "Write item"}
-          </button>
+        <h2>1 · What are you adding</h2>
+        <div className="row">
+          <label className="check">
+            <input
+              type="radio"
+              name="add-source"
+              checked={source === "text"}
+              onChange={() => setSource("text")}
+            />
+            Text — paste or type it
+          </label>
+          <label className="check">
+            <input
+              type="radio"
+              name="add-source"
+              checked={source === "file"}
+              onChange={() => setSource("file")}
+            />
+            A file, or record something now
+          </label>
         </div>
+
+        {source === "text" ? (
+          <>
+            <textarea value={text} onChange={(e) => setText(e.target.value)} />
+            <div className="row end" style={{ marginTop: 10 }}>
+              <span className="empty">→ {destination}</span>
+              <span className={enrich ? "empty" : "warntext"}>{willDo}</span>
+              <button
+                onClick={() =>
+                  submit({ kind: "inline", text }, `text-${Date.now()}`, "Text")
+                }
+                disabled={busy || !text.trim()}
+                title={!text.trim() ? "Nothing to write yet" : undefined}
+              >
+                {busy ? "Writing…" : "Write item"}
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="notice">
+              <strong>Media is interpreted by a model.</strong> Audio and video are transcribed,
+              images described and their text transcribed. That costs tokens per file, recorded per
+              revision.
+            </div>
+            <div className="row end" style={{ marginBottom: 8 }}>
+              <span className="empty">→ {destination}</span>
+              <span className={enrich ? "empty" : "warntext"}>{willDo}</span>
+            </div>
+            <Capture
+              busy={busy}
+              onSubmit={(name, mime, base64, size) =>
+                submit({ kind: "inline", bytes_b64: base64 }, name, `${name} (${humanBytes(size)})`)
+              }
+            />
+          </>
+        )}
       </section>
 
       <section className="panel">
-        <h2>Upload or record</h2>
-        <div className="notice">
-          <strong>Media is interpreted by a model.</strong> Audio and video are transcribed, images
-          described and their text transcribed. That costs tokens per file, recorded per revision.
+        <h2>2 · Where it goes</h2>
+        <p className="empty" style={{ marginTop: 0 }}>
+          A memory is the container a record lives in and the thing that decides when it expires.
+          Nothing is orphaned — leave this alone and the item lands in your <code>default</code>{" "}
+          memory.
+        </p>
+        <div className="row">
+          <label style={{ flex: 1, minWidth: 260 }}>
+            Memory
+            <select
+              value={memoryChoice}
+              disabled={meeting}
+              onChange={(e) => setMemoryChoice(e.target.value)}
+            >
+              <option value="">your default memory</option>
+              {memories.map((m) => (
+                <option
+                  key={m.memory_id}
+                  value={m.memory_id}
+                  disabled={m.memory_key === null}
+                >
+                  {m.title ?? m.memory_key ?? m.memory_id} · {m.type} · {m.members} item
+                  {m.members === 1 ? "" : "s"}
+                  {m.memory_key === null ? " — no key, cannot be written into by name" : ""}
+                </option>
+              ))}
+              <option value="new">a new memory…</option>
+            </select>
+          </label>
         </div>
-        <p className={enrich ? "empty" : "warntext"} style={{ marginTop: 0 }}>{willDo}</p>
+        {memories.length === 0 && (
+          <p className="empty">
+            No memories in this project yet. The first write creates one — pick{" "}
+            <strong>a new memory…</strong> to name it, or leave the default and it is made for you.
+          </p>
+        )}
+        {memoryChoice === "new" && !meeting && (
+          <>
+            <div className="row" style={{ marginTop: 8 }}>
+              <input
+                type="text"
+                placeholder="type — conversation, session, factual…"
+                value={memoryType}
+                onChange={(e) => setMemoryType(e.target.value)}
+              />
+              <input
+                type="text"
+                placeholder="key — e.g. thread-8841"
+                value={memoryKey}
+                onChange={(e) => setMemoryKey(e.target.value)}
+              />
+            </div>
+            <p className="empty">
+              Reuse a key later and writes collect into one memory, with no session state anywhere.
+              Without a key every write makes its own memory, which is rarely what is wanted.
+            </p>
+          </>
+        )}
 
+        <h3>Or file it as a meeting</h3>
         <div className="row">
           <label style={{ flex: 1 }}>
-            Was this a meeting? Name the room
+            Name the room — who was in it
             <input
               type="text"
               value={attendees}
@@ -680,7 +862,8 @@ function AddData({
                 ? ` to ${room.resolved.join(", ")}`
                 : ", because nobody in the room is a member here"}
               . A transcript is unedited speech nobody reviewed before it was stored, which is why
-              the retention is a default rather than a preference.
+              the retention is a default rather than a preference. This <strong>overrides</strong>{" "}
+              the memory and the visibility chosen elsewhere on this screen.
             </p>
             {room.unresolved.length > 0 && (
               <p className="warned">
@@ -693,17 +876,10 @@ function AddData({
             )}
           </>
         )}
-
-        <Capture
-          busy={busy}
-          onSubmit={(name, mime, base64, size) =>
-            submit({ kind: "inline", bytes_b64: base64 }, name, `${name} (${humanBytes(size)})`)
-          }
-        />
       </section>
 
       <section className="panel">
-        <h2>Interpretation</h2>
+        <h2>3 · What is done to it</h2>
         <p className="empty" style={{ marginTop: 0 }}>
           Off, an item is stored and durable and <strong>nothing can find it</strong> — search runs
           on embeddings and there would be none. On, it costs one model call per chunk to embed and
@@ -739,6 +915,9 @@ function AddData({
             placeholder="prompt override — this write only, never saved"
             value={promptOverride}
             disabled={!enrich || !summarize}
+            title={!enrich || !summarize
+              ? "Needs interpretation and summarising — a prompt has nothing to steer otherwise"
+              : undefined}
             onChange={(e) => setPromptOverride(e.target.value)}
             style={{ flex: 2, minWidth: 240 }}
           />
@@ -747,6 +926,9 @@ function AddData({
             placeholder="model override — e.g. gemini-2.5-flash"
             value={modelOverride}
             disabled={!enrich || !summarize}
+            title={!enrich || !summarize
+              ? "Needs interpretation and summarising — there is no model call to redirect otherwise"
+              : undefined}
             onChange={(e) => setModelOverride(e.target.value)}
             style={{ flex: 1, minWidth: 180 }}
           />
@@ -760,13 +942,13 @@ function AddData({
         {!enrich && (
           <p className="warned" style={{ marginBottom: 0 }}>
             This write will stop at <code>stored</code>. You can ask for interpretation later, from
-            the progress panel below or from Browse.
+            the progress panel above or from Browse.
           </p>
         )}
       </section>
 
       <section className="panel">
-        <h2>Who can see it</h2>
+        <h2>4 · Who can see it</h2>
         <p className="empty" style={{ marginTop: 0 }}>
           Decided here because this is the only place it can be: the ACL is <strong>sealed before
           any other phase runs</strong>, and no endpoint changes it afterwards — re-writing the same
@@ -781,106 +963,78 @@ function AddData({
             quietly stored as something narrower.
           </p>
         )}
-        <div className="row">
-          <label>
-            Level
-            <select value={level} onChange={(e) => { setLevel(e.target.value); setPrincipals([]); }}>
-              <option value="">the producer&rsquo;s default</option>
-              {LEVELS.map((l) => (
-                <option key={l.key} value={l.key} disabled={ceiling < l.rank}>
-                  {l.label}{ceiling < l.rank ? " — not allowed by this connection" : ""}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-        {(level === "restricted" || level === "shared") && (
+        {meeting ? (
+          <p className="empty">
+            Set by the room above — <strong>{room.level}</strong>. A named meeting decides its own
+            audience, so this is not a choice while one is named.
+          </p>
+        ) : (
           <>
-            <div className="row" style={{ marginTop: 8 }}>
-              {audience.groups.map((g) => (
-                <label className="check" key={g.group_id}
-                       title={`${g.members.length} member${g.members.length === 1 ? "" : "s"}`}>
-                  <input
-                    type="checkbox"
-                    /* `group:` and `user:` prefixes, because that is the shape
-                     * `acl_principals()` builds and the predicate compares
-                     * against. A bare id matches nothing -- including for the
-                     * person who wrote the record, who then cannot see their
-                     * own item and has no way to tell why. */
-                    checked={principals.includes(`group:${g.group_id}`)}
-                    onChange={(e) => setPrincipals(e.target.checked
-                      ? [...principals, `group:${g.group_id}`]
-                      : principals.filter((x) => x !== `group:${g.group_id}`))}
-                  />
-                  {g.name} <span className="empty">· group of {g.members.length}</span>
-                </label>
-              ))}
-              {audience.members.map((m) => (
-                <label className="check" key={m.user_id}>
-                  <input
-                    type="checkbox"
-                    checked={principals.includes(`user:${m.user_id}`)}
-                    onChange={(e) => setPrincipals(e.target.checked
-                      ? [...principals, `user:${m.user_id}`]
-                      : principals.filter((x) => x !== `user:${m.user_id}`))}
-                  />
-                  {m.email ?? m.user_id}
-                </label>
-              ))}
+            <div className="row">
+              <label>
+                Level
+                <select value={level}
+                        onChange={(e) => { setLevel(e.target.value); setPrincipals([]); }}>
+                  <option value="">the producer&rsquo;s default</option>
+                  {LEVELS.map((l) => (
+                    <option key={l.key} value={l.key} disabled={ceiling < l.rank}>
+                      {l.label}{ceiling < l.rank ? " — not allowed by this connection" : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
             </div>
-            {principals.length === 0 && (
-              <p className="warned">
-                <strong>{level}</strong> needs at least one principal, and the write is refused
-                without one rather than quietly stored as something narrower.
-              </p>
+            {(level === "restricted" || level === "shared") && (
+              <>
+                <div className="row" style={{ marginTop: 8 }}>
+                  {audience.groups.map((g) => (
+                    <label className="check" key={g.group_id}
+                           title={`${g.members.length} member${g.members.length === 1 ? "" : "s"}`}>
+                      <input
+                        type="checkbox"
+                        /* `group:` and `user:` prefixes, because that is the shape
+                         * `acl_principals()` builds and the predicate compares
+                         * against. A bare id matches nothing -- including for the
+                         * person who wrote the record, who then cannot see their
+                         * own item and has no way to tell why. */
+                        checked={principals.includes(`group:${g.group_id}`)}
+                        onChange={(e) => setPrincipals(e.target.checked
+                          ? [...principals, `group:${g.group_id}`]
+                          : principals.filter((x) => x !== `group:${g.group_id}`))}
+                      />
+                      {g.name} <span className="empty">· group of {g.members.length}</span>
+                    </label>
+                  ))}
+                  {audience.members.map((m) => (
+                    <label className="check" key={m.user_id}>
+                      <input
+                        type="checkbox"
+                        checked={principals.includes(`user:${m.user_id}`)}
+                        onChange={(e) => setPrincipals(e.target.checked
+                          ? [...principals, `user:${m.user_id}`]
+                          : principals.filter((x) => x !== `user:${m.user_id}`))}
+                      />
+                      {m.email ?? m.user_id}
+                    </label>
+                  ))}
+                </div>
+                {principals.length === 0 && (
+                  <p className="warned">
+                    <strong>{level}</strong> needs at least one principal, and the write is refused
+                    without one rather than quietly stored as something narrower.
+                  </p>
+                )}
+                <p className="empty" style={{ marginBottom: 0 }}>
+                  A group resolves inside the ACL query like a person does, so adding somebody to it
+                  later gives them this record too — which is the reason to prefer one over naming
+                  three people. Create groups under <strong>Projects &amp; members</strong>.
+                </p>
+              </>
             )}
-            <p className="empty" style={{ marginBottom: 0 }}>
-              A group resolves inside the ACL query like a person does, so adding somebody to it
-              later gives them this record too — which is the reason to prefer one over naming
-              three people. Create groups under <strong>Projects &amp; members</strong>.
-            </p>
           </>
         )}
       </section>
 
-      <section className="panel">
-        <h2>Memory routing (optional)</h2>
-        <div className="row">
-          <input
-            type="text"
-            placeholder="type — conversation, session, factual…"
-            value={memoryType}
-            onChange={(e) => setMemoryType(e.target.value)}
-          />
-          <input
-            type="text"
-            placeholder="key — e.g. thread-8841"
-            value={memoryKey}
-            onChange={(e) => setMemoryKey(e.target.value)}
-          />
-        </div>
-        <p className="empty">
-          Leave both blank and the item lands in your <code>default</code> memory — nothing is
-          orphaned. Reuse a key and writes collect into one memory, with no session state anywhere.
-        </p>
-      </section>
-
-      {error && <p className="err">{error}</p>}
-      {(watching || item) && (
-        <section className="panel">
-          <h2>What happened to it</h2>
-          {note && <p className="empty" style={{ marginTop: 0 }}>{note}</p>}
-          <WriteProgress
-            climb={climb}
-            watching={watching}
-            elapsed={elapsed}
-            dataId={item?.data_id ?? null}
-            onEnrich={enrichNow}
-            onResume={resume}
-          />
-          {item && <ItemDetail item={item} versions={versions} />}
-        </section>
-      )}
       {stair && (
         <section className="panel">
           <h2>Readiness staircase</h2>
