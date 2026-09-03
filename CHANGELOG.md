@@ -35,6 +35,19 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   was wrong. The provider's message is kept, and the console already renders it.
 
 ### Added
+- **The text ceiling is a deployment setting** (`MAX_TEXT_CHARS`, default
+  2,000,000; 4,000,000 here) instead of a constant, and **`/reprocess` gains a
+  `parse` stage** that makes a raised ceiling reachable. Raising it alone changed
+  nothing: the parse worker skips any row that already has text — correct for an
+  at-least-once queue, but it cannot tell "already done" from "done under a
+  smaller ceiling". The new stage clears the derived text and re-reads the bytes,
+  which are untouched, so nothing is re-uploaded.
+- **[`docs/ingestion/large-documents.md`](docs/ingestion/large-documents.md)** —
+  what would have to change for gigabyte documents. The transport is already
+  designed (`POST /uploads` grants a signed URL; bytes never pass through the
+  API); the processing is not. Proposes splitting one upload into part-records
+  inside one memory, which is the only change that makes failure partial and
+  work resumable.
 - **"How to use this" in the console**, pinned top-right: four steps end to end
   — get something in, watch it climb, get it back, prove it — then **a
   walkthrough for every one of the twenty-six sections**, expanded one at a time,
