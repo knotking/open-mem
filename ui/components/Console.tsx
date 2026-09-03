@@ -681,6 +681,10 @@ function Staircase({ stair, compact }: { stair: Stair; compact?: boolean }) {
   );
 }
 
+/** `parsers.MAX_TEXT_CHARS` — one document must not consume a workspace's
+ *  embedding budget, so extraction stops here and says that it did. */
+const INDEX_CEILING = 2_000_000;
+
 function ItemDetail({ item, versions }: { item: Item; versions: Version[] }) {
   const text = item.extracted_text ?? item.content_text ?? "";
   // Same rule as `lib/progress.ts`: `truncated` read fine and simply ran past
@@ -711,17 +715,28 @@ function ItemDetail({ item, versions }: { item: Item; versions: Version[] }) {
 
       {capped && (
         <div className="notice" style={{ marginTop: 12 }}>
-          <strong>Read in full up to the index ceiling.</strong>{" "}
-          {String((item.parse_detail?.warnings as string[] | undefined)?.[0] ?? "")} The bytes are
-          untouched, so a higher ceiling re-indexes the rest without a re-upload.
+          {/* Written as prose rather than assembled from the API's warning
+            * string. Splicing that in mid-sentence produced "…the rest is
+            * stored but not indexed The bytes are untouched" — no full stop,
+            * a lower-case sentence start, a raw 2000000, and the same fact
+            * stated twice. A machine-readable warning and a sentence for a
+            * person are not the same artifact. */}
+          <strong>Indexed up to the {INDEX_CEILING.toLocaleString()}-character ceiling.</strong>{" "}
+          This document is longer, so the text past that point is stored and durable but will not
+          be found by search. The bytes and their checksum are untouched, so raising the ceiling
+          re-indexes the rest without a re-upload.
         </div>
       )}
 
       {stuck && (
         <div className="notice" style={{ marginTop: 12 }}>
           <strong>Stored but not interpreted — {item.parse_status}.</strong>{" "}
-          {String((item.parse_detail?.reason as string) ?? "")} The bytes and their checksum are
-          untouched, so this is fixable without re-uploading.
+          {/* The reason is a sentence from the API and may or may not end in a
+            * full stop, so it gets its own paragraph rather than being spliced
+            * into the middle of ours. */}
+          <span className="provenance">{String((item.parse_detail?.reason as string) ?? "")}</span>
+          <br />
+          The bytes and their checksum are untouched, so this is fixable without re-uploading.
         </div>
       )}
 

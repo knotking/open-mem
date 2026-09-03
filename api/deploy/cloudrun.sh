@@ -52,7 +52,7 @@ gcloud run deploy "$SERVICE" \
   --image "$IMAGE" \
   --service-account "$SA" \
   --network default --subnet default --vpc-egress private-ranges-only \
-  --set-env-vars "DB_HOST=${DB_HOST},DB_NAME=${DB_NAME},DB_USER=postgres,EMBED_DIM=768,EMBED_ENGINE=${EMBED_ENGINE:-gemini},EMBED_MODEL=${EMBED_MODEL:-gemini-embedding-001},RAW_BUCKET=${RAW_BUCKET},MEDIA_INTERPRETATION=true,EXTRACT_ENGINE=gemini,MULTIMODAL_MODEL=${MULTIMODAL_MODEL:-gemini-3.7-flash},TRANSCRIBE_MODEL=${TRANSCRIBE_MODEL:-gemini-3.5-transcribe},FIREBASE_PROJECT_ID=${PROJECT},OTEL_GCP_PROJECT=${PROJECT},IMAGE_TAG=${TAG}" \
+  --set-env-vars "DB_HOST=${DB_HOST},DB_NAME=${DB_NAME},DB_USER=postgres,EMBED_DIM=768,EMBED_ENGINE=${EMBED_ENGINE:-gemini},EMBED_MODEL=${EMBED_MODEL:-gemini-embedding-001},RAW_BUCKET=${RAW_BUCKET},MEDIA_INTERPRETATION=true,MAX_TEXT_CHARS=${MAX_TEXT_CHARS:-4000000},EXTRACT_ENGINE=gemini,MULTIMODAL_MODEL=${MULTIMODAL_MODEL:-gemini-3.7-flash},TRANSCRIBE_MODEL=${TRANSCRIBE_MODEL:-gemini-3.5-transcribe},FIREBASE_PROJECT_ID=${PROJECT},OTEL_GCP_PROJECT=${PROJECT},IMAGE_TAG=${TAG}" \
   --set-secrets "DB_PASSWORD=memdog-db-password:latest,MEMDOG_MASTER_KEY=memdog-master-key:latest,GEMINI_API_KEY=gemini-api-key:latest" \
   --allow-unauthenticated \
   --min-instances 0 --max-instances 4 \
@@ -69,7 +69,7 @@ gcloud run deploy "$SERVICE" \
 # Anything that reads `current_generators` has to agree with the service about
 # what "current" means, or its idea of stale is the inverse of the truth.
 step "Deploying the reconcile job"
-JOB_ENV="DB_HOST=${DB_HOST},DB_NAME=${DB_NAME},DB_USER=postgres,EMBED_DIM=768,EMBED_ENGINE=${EMBED_ENGINE:-gemini},EMBED_MODEL=${EMBED_MODEL:-gemini-embedding-001},RAW_BUCKET=${RAW_BUCKET},MEDIA_INTERPRETATION=true,EXTRACT_ENGINE=gemini,MULTIMODAL_MODEL=${MULTIMODAL_MODEL:-gemini-3.7-flash},TRANSCRIBE_MODEL=${TRANSCRIBE_MODEL:-gemini-3.5-transcribe},OTEL_GCP_PROJECT=${PROJECT},IMAGE_TAG=${TAG}"
+JOB_ENV="DB_HOST=${DB_HOST},DB_NAME=${DB_NAME},DB_USER=postgres,EMBED_DIM=768,EMBED_ENGINE=${EMBED_ENGINE:-gemini},EMBED_MODEL=${EMBED_MODEL:-gemini-embedding-001},RAW_BUCKET=${RAW_BUCKET},MEDIA_INTERPRETATION=true,MAX_TEXT_CHARS=${MAX_TEXT_CHARS:-4000000},EXTRACT_ENGINE=gemini,MULTIMODAL_MODEL=${MULTIMODAL_MODEL:-gemini-3.7-flash},TRANSCRIBE_MODEL=${TRANSCRIBE_MODEL:-gemini-3.5-transcribe},OTEL_GCP_PROJECT=${PROJECT},IMAGE_TAG=${TAG}"
 JOB_SECRETS="DB_PASSWORD=memdog-db-password:latest,MEMDOG_MASTER_KEY=memdog-master-key:latest,GEMINI_API_KEY=gemini-api-key:latest"
 
 # `memdog-seed` is here for the same reason the reconciler is: it was created by
