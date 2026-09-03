@@ -34,6 +34,13 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   `Client error '400 Bad Request'` while the provider had said precisely what
   was wrong. The provider's message is kept, and the console already renders it.
 
+### Added
+- **"How to use this" in the console**, pinned top-right: four steps end to end
+  — get something in, watch it climb, get it back, prove it — then every section
+  grouped, with why each group exists. Each entry navigates and closes. The
+  per-item text is read from the same `GROUPS.hint` values the sidebar uses, so
+  the guide cannot drift from the menu it describes.
+
 ### Changed
 - **The console sidebar is readable on sign-in.** It rendered twenty-six
   destinations across eight groups with every group open and every item showing
