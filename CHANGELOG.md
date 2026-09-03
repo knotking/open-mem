@@ -35,6 +35,15 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   was wrong. The provider's message is kept, and the console already renders it.
 
 ### Changed
+- **The sign-in page's bar is five beats, not eight anchors** — how it works,
+  what it connects, what it tells you, what it accepts, why trust it — each
+  covering a run of sections and named for what the page argues there rather
+  than which feature lives in it. Groups cover *contiguous* sections only: the
+  bar doubles as a position indicator, so one spanning a gap would light, go
+  dark and light again as you scrolled through it.
+- **The hero states the guarantee rather than the feature** — *"No answer
+  without its source. No silence without its reason."*
+- **The wordmark returns you to the top of the page.**
 - **Add data is five steps and one button** — what kind of thing, the thing
   itself, where it goes, what is done to it, who may see it, then *Add data*.
   The action used to sit in the first card, above three of the four decisions it
