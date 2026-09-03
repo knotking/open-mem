@@ -28,34 +28,35 @@ type Capabilities = {
 };
 
 /**
- * The bar, and the page it navigates.
+ * The bar, and the page it navigates — five beats, not eight anchors.
  *
- * This was cut to two anchors once, on the reasoning that a list of seven
- * undifferentiated destinations asks a first-time reader to choose between
- * things they have no basis to choose between. The reasoning was half right:
- * the problem was never the count, it was that the bar said nothing about
- * *where you were* — so it read as seven equivalent choices rather than as a
- * position in an argument.
+ * This was cut to two once and restored to the whole page, on the reasoning
+ * that the problem was never the count but that the bar said nothing about
+ * *where you were*. That was half right. Position-tracking fixed the "seven
+ * equivalent choices" problem; it did not fix eight labels reading as a list of
+ * parts rather than an argument with an order.
  *
- * So it is the whole page again, and the bar tracks the reader: the section
- * currently on screen is marked, which is the job a table of contents does and
- * the reason a long page can have one.
+ * So each entry now covers a run of sections and is named for the beat it is:
+ * how it works, what it connects, what it tells you, what it accepts, why to
+ * trust it. Fewer things to choose between, and the labels say what the page
+ * argues rather than which feature lives where.
+ *
+ * **Groups must cover *contiguous* sections.** The bar is a position as well as
+ * a menu, so a group spanning a gap would light up, go dark, and light again as
+ * the reader scrolled through it — which reads as a bug in the page rather than
+ * a choice about the menu.
  *
  * **This list is the only source of truth for the bar, and dead links cannot
- * render.** The nav is filtered at mount to ids that actually exist in the
- * document, so renaming a section's id removes its anchor rather than leaving
- * one that scrolls nowhere — the failure that is invisible until somebody
- * clicks.
+ * render.** A group is dropped if none of the sections it covers exists, and it
+ * anchors to the first that does — so renaming a section id removes or retargets
+ * its anchor rather than leaving one that scrolls nowhere.
  */
 const SECTIONS = [
-  { id: "flow", label: "How it works" },
-  { id: "graph", label: "Connections" },
-  { id: "time", label: "Time" },
-  { id: "alerts", label: "Alerts" },
-  { id: "compaction", label: "Working set" },
-  { id: "sources", label: "Sources" },
-  { id: "principles", label: "Principles" },
-  { id: "compare", label: "Where this sits" },
+  { label: "How it works", covers: ["flow"] },
+  { label: "What it connects", covers: ["graph", "time"] },
+  { label: "What it tells you", covers: ["alerts", "compaction"] },
+  { label: "What it accepts", covers: ["sources"] },
+  { label: "Why trust it", covers: ["principles", "compare"] },
 ];
 
 const STEPS = [
@@ -483,25 +484,39 @@ function useSectionSpy() {
   // absent from the server-rendered HTML entirely -- no links without
   // JavaScript, and a visible pop-in for everyone else. A correction that can
   // only remove is safe to apply late; one that has to add is not.
-  const [present, setPresent] = useState<typeof SECTIONS>(SECTIONS);
+  const [present, setPresent] = useState<{ id: string; label: string; covers: string[] }[]>(
+    SECTIONS.map((s) => ({ id: s.covers[0], label: s.label, covers: s.covers })),
+  );
+  // The *group* that is on screen, not the section — the bar has five entries
+  // and one of them lights up.
   const [active, setActive] = useState<string>("");
 
   useEffect(() => {
-    const found = SECTIONS.filter((s) => document.getElementById(s.id));
+    const found = SECTIONS
+      .map((s) => {
+        const covers = s.covers.filter((id) => document.getElementById(id));
+        return { id: covers[0] ?? "", label: s.label, covers };
+      })
+      .filter((s) => s.id !== "");
     setPresent(found);
     if (found.length === 0) return;
+
+    // Which group owns a section, resolved once rather than searched per event.
+    const owner = new Map<string, string>();
+    found.forEach((s) => s.covers.forEach((id) => owner.set(id, s.id)));
 
     const observer = new IntersectionObserver(
       (entries) => {
         const onscreen = entries
           .filter((e) => e.isIntersecting)
           .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
-        if (onscreen[0]) setActive(onscreen[0].target.id);
+        const top = onscreen[0];
+        if (top) setActive(owner.get(top.target.id) ?? "");
       },
       { rootMargin: "-76px 0px -66% 0px", threshold: 0 },
     );
-    found.forEach((s) => {
-      const node = document.getElementById(s.id);
+    owner.forEach((_group, id) => {
+      const node = document.getElementById(id);
       if (node) observer.observe(node);
     });
     return () => observer.disconnect();
@@ -664,12 +679,15 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
     : [];
 
   return (
-    <div className="landing">
+    <div className="landing" id="top">
       <header className="topbar">
-        <div className="wordmark">
+        {/* A real anchor rather than a scroll handler: it works without
+            JavaScript, is reachable by keyboard, and offers the usual
+            open-in-new-tab affordances a wordmark is expected to have. */}
+        <a className="wordmark" href="#top" aria-label="Back to the top">
           <span className="dot" aria-hidden="true" />
           mem-dog
-        </div>
+        </a>
         <nav className="tabs" aria-label="Sections">
           {present.map((section) => (
             <a
@@ -701,12 +719,13 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
         <div>
           <p className="eyebrow">Memory layer · sandbox</p>
           <h1>
-            It answers — then tells you what it <em>left out</em>.
+            No answer without its source. No silence without its <em>reason</em>.
           </h1>
           <p className="hero-lede">
-            Documents, spreadsheets, calendars, email, audio, video — retrieved by meaning. Every
-            result carries the passage behind it, and every record it dropped carries the reason.
-            That second half is what makes an answer checkable.
+            Documents, spreadsheets, calendars, email, audio and video — found by meaning, not by
+            keyword. Every sentence points at the passage it came from. Every record the search set
+            aside says why it was set aside. Anything can show you what it found; being told what it
+            passed over is what lets you check the answer instead of believing it.
           </p>
           {numbers.length > 0 && (
             <div className="numbers">

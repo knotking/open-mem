@@ -405,7 +405,21 @@ audio.preview { width: 100%; height: auto; }
   padding: 16px 26px;
 }
 .wordmark, .brand .dot, .wordmark .dot { font-weight: 650; letter-spacing: -0.01em; }
-.wordmark { display: flex; align-items: center; gap: 8px; font-size: 16px; }
+/* An <a> now, so it answers the browser's default link paint -- without these
+   two lines the wordmark renders blue and underlined. `.tabs a` does not apply
+   here; it is scoped to the nav. */
+.wordmark {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+  color: var(--ink);
+  text-decoration: none;
+}
+/* A cue that it does something, without underlining a wordmark. */
+.wordmark:hover .dot { transform: scale(1.25); }
+.wordmark .dot { transition: transform 120ms ease; }
+@media (prefers-reduced-motion: reduce) { .wordmark .dot { transition: none; } }
 .dot {
   width: 9px; height: 9px; border-radius: 50%;
   background: var(--accent); display: inline-block;
