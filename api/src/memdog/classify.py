@@ -118,12 +118,45 @@ _EXTENSION_MAP = {
 }
 
 
+# Container formats that are byte-identical whether or not a video track is
+# present. `filetype` reads the container signature and can see no further, so
+# it calls every one of these `video/...` -- and an audio-only recording in one
+# is therefore indistinguishable from a film, to the sniffer.
+_AMBIGUOUS_CONTAINERS = {"webm", "ogg", "mp4", "quicktime", "x-matroska", "3gpp"}
+
+
+def _refine_container(sniffed: str, declared: str | None) -> str:
+    """Let the caller pick the *track*, never the format.
+
+    The sniffer is authoritative about what the bytes are and stays that way.
+    This narrows exactly one thing it cannot determine: whether a container
+    holds video or only audio. `MediaRecorder` writes both as `.webm`, so an
+    audio note arrived as `video/webm`, was routed as video, and was sent to a
+    transcription model that refuses frames. No audio item had ever existed.
+
+    Deliberately not a general override. The subtype must match, so `audio/webm`
+    can refine `video/webm` and nothing can turn a PDF into anything at all.
+    """
+    if not declared:
+        return sniffed
+    declared_family, _, declared_sub = declared.partition("/")
+    sniffed_family, _, sniffed_sub = sniffed.partition("/")
+    declared_sub = declared_sub.split(";")[0].strip()
+    if (
+        declared_sub == sniffed_sub
+        and declared_sub in _AMBIGUOUS_CONTAINERS
+        and {declared_family, sniffed_family} <= {"audio", "video"}
+    ):
+        return f"{declared_family}/{declared_sub}"
+    return sniffed
+
+
 def sniff_mime(payload: bytes | None, text: str | None, declared: str | None) -> str | None:
     """Bytes first, structure second, and the caller's word last."""
     if payload:
         guess = filetype.guess(payload[:8192])
         if guess is not None:
-            return guess.mime
+            return _refine_container(guess.mime, declared)
         try:
             decoded = payload.decode("utf-8")
         except UnicodeDecodeError:

@@ -765,7 +765,18 @@ function AddData({
             <Capture
               busy={busy}
               onSubmit={(name, mime, base64, size) =>
-                submit({ kind: "inline", bytes_b64: base64 }, name, `${name} (${humanBytes(size)})`)
+                // `mime` is forwarded, and dropping it was not cosmetic. Capture
+                // derives the filename from the recording's type, so an audio
+                // clip and a video clip are both `capture-<ts>.webm` -- the only
+                // thing telling them apart is this header. Without it the server
+                // falls back to the extension, `.webm` guesses as `video/webm`,
+                // and every audio recording was stored as a video and sent to a
+                // model that refuses frames. Zero audio items existed.
+                submit(
+                  { kind: "inline", bytes_b64: base64, mime_type: mime },
+                  name,
+                  `${name} (${humanBytes(size)})`,
+                )
               }
             />
           </>
