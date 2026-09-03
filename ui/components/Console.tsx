@@ -10,7 +10,7 @@
  * accountable.
  */
 
-import { Fragment, useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 
 import Capture, { humanBytes, type Staged } from "./Capture";
 import ThemeToggle from "./ThemeToggle";
@@ -198,8 +198,21 @@ export default function Console({
   // existed as far as anybody looking could tell. A nav that hides a feature
   // until you guess which heading it is behind is a nav that has not been
   // navigated.
+  // Typing beats scanning once there are twenty-six destinations, and it is
+  // what makes collapsing safe: nothing is unreachable if it can be named.
+  const [filter, setFilter] = useState("");
+  // Only the group you are in. The previous default opened all eight, which
+  // put twenty-six items and twenty-six hints on screen at once and made every
+  // destination shout at the same volume.
+  //
+  // This revisits a deliberate decision, so the reason it is safe now: what
+  // failed before was a *single-open accordion*, where opening one group shut
+  // the others and a feature could not be found without guessing which heading
+  // hid it. Here every heading stays visible, any number of groups can be open
+  // at once, the group you are in opens itself, and the filter finds anything
+  // by name. Collapsed is not the same as hidden.
   const [openGroups, setOpenGroups] = useState<string[]>(
-    () => GROUPS.map((g) => g.title));
+    () => GROUPS.filter((g) => g.items.some((i) => i.key === "overview")).map((g) => g.title));
   // Handoffs between Search and Entities. A search result explains itself by
   // naming the entity it was reached through; the entity panel hands a name
   // back. Held here because the two panels are siblings and neither owns the
@@ -208,6 +221,32 @@ export default function Console({
   const [seededQuery, setSeededQuery] = useState<string | null>(null);
   const [stair, setStair] = useState<Stair | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // What the filter admits. Matched on label *and* hint, because the hint is
+  // often the word somebody actually knows -- "webhook" finds Inbound, which
+  // its label never says.
+  const filtering = filter.trim() !== "";
+  const matches = useMemo(() => {
+    const needle = filter.trim().toLowerCase();
+    const all = GROUPS.flatMap((g) => g.items);
+    if (!needle) return all.map((i) => i.key);
+    return all
+      .filter((i) => `${i.label} ${i.hint}`.toLowerCase().includes(needle))
+      .map((i) => i.key);
+  }, [filter]);
+
+  // Following a handoff -- a search result that jumps to Entities, say -- must
+  // open the group it landed in, or the nav says you are somewhere you cannot
+  // see.
+  useEffect(() => {
+    const owner = GROUPS.find((g) => g.items.some((i) => i.key === section));
+    if (owner && !openGroups.includes(owner.title)) {
+      setOpenGroups((o) => [...o, owner.title]);
+    }
+    // `openGroups` is deliberately absent: this must run when the *section*
+    // changes, not when somebody collapses a group by hand.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [section]);
 
   const refresh = useCallback(async () => {
     try {
@@ -228,9 +267,26 @@ export default function Console({
           <span className="dot" aria-hidden="true" />
           mem-dog
         </div>
+        <input
+          className="navfilter"
+          type="search"
+          value={filter}
+          placeholder="Filter…"
+          aria-label="Filter navigation"
+          onChange={(e) => setFilter(e.target.value)}
+        />
         <div className="navscroll">
+          {matches.length === 0 && (
+            <p className="navempty">
+              Nothing matches <strong>{filter}</strong>.
+            </p>
+          )}
           {GROUPS.map((group) => {
-            const open = openGroups.includes(group.title);
+            const items = group.items.filter((i) => matches.includes(i.key));
+            if (items.length === 0) return null;
+            // A filter that left groups shut would be a filter that finds
+            // nothing, so a query opens whatever it matched.
+            const open = filtering || openGroups.includes(group.title);
             const current = group.items.some((i) => i.key === section);
             return (
               <div className="navgroup" key={group.title}>
@@ -248,14 +304,19 @@ export default function Console({
                   {!open && current && <span className="here" aria-hidden="true" />}
                 </button>
                 {open &&
-                  group.items.map((item) => (
+                  items.map((item) => (
                     <button
                       key={item.key}
                       className={`navitem${section === item.key ? " active" : ""}`}
+                      /* The hint was a second line under every one of twenty-six
+                         items -- twenty-six sentences competing with twenty-six
+                         labels. Its job is to help you choose, which a tooltip
+                         does on the one you are considering, and every screen
+                         states its own purpose in its lede once you arrive. */
+                      title={item.hint}
                       onClick={() => setSection(item.key)}
                     >
                       <span className="navlabel">{item.label}</span>
-                      <span className="navhint">{item.hint}</span>
                     </button>
                   ))}
               </div>

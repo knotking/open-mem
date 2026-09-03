@@ -83,6 +83,24 @@ body {
 .navitem.active .navlabel { color: var(--accent); }
 .navlabel { font-weight: 550; font-size: 14px; }
 .navhint { font-size: 11.5px; color: var(--muted); }
+/* The filter. An <input> inherits nothing useful from the sidebar, so it
+   states its own paint: bare inputs elsewhere in this stylesheet are sized for
+   forms in the content column, not for a 240px rail. */
+.navfilter {
+  width: 100%;
+  margin: 0 0 10px;
+  padding: 6px 9px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+}
+.navfilter::placeholder { color: var(--muted); }
+.navfilter:focus { outline: none; border-color: var(--accent); }
+.navempty { font-size: 12.5px; color: var(--muted); padding: 4px 2px; }
+
 .sidefoot { margin-top: auto; padding-top: 16px; border-top: 1px solid var(--line); }
 
 .content { padding: 30px 34px 96px; max-width: 940px; }
