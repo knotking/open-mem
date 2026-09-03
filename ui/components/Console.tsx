@@ -209,6 +209,125 @@ const GUIDE_PATH = [
   },
 ];
 
+/**
+ * How to work each screen, in the order its own panels are laid out.
+ *
+ * Written from the panels themselves rather than from memory, so a step names
+ * something that is actually on the page. Where a screen has a trap — a default
+ * that silently makes the work invisible, a control that must come before
+ * another — the step says so, because that is the part a person cannot infer
+ * from the layout.
+ */
+const HOW_TO: Partial<Record<Section, string[]>> = {
+  overview: [
+    "Read the rungs: stored is durable, searchable means it was embedded, enriched means a model has read it.",
+    "“Stored but not read” is the backlog — those records will not answer a search until they are interpreted.",
+    "Last 24 hours answers the question the rungs cannot: is anything still arriving.",
+  ],
+  alerts: [
+    "Say what to watch for, as conditions on what arrives.",
+    "Add a destination under “Where events get sent” — a rule with nowhere to send fires into nothing.",
+    "Come back to the run history: for anything on a schedule, silence and success look identical.",
+  ],
+  standing: [
+    "Describe what you want to be told about, rather than asking for it repeatedly.",
+    "“What it has caught” is the calibration — a query matching everything looks like one that works until you read the matches.",
+  ],
+  inbound: [
+    "Create an endpoint, then pick the provider preset — each provider signs a different string.",
+    "Store the provider's own signing secret. Minting ours instead leaves an endpoint that looks configured and rejects every real delivery.",
+    "Give them the URL, then send a test delivery: it signs and goes through the real receive path.",
+    "Turn on “Interpret deliveries” or the provider can post all day and nothing it sent is findable.",
+    "Watch “seconds since last item” — it catches a provider that stopped, which otherwise looks like a quiet week.",
+  ],
+  crawlers: [
+    "Create a crawler and attach the credential it pulls with.",
+    "Dry-run it first: the dry run walks the identical code and stops short of the write, so its count is what a live run would do.",
+    "Enable it only once the dry run looks right. Nothing in the catalog has been exercised against a live account.",
+  ],
+  producers: [
+    "“How far behind each source is” is the highest-value thing here — a source that stopped reads as a quiet week everywhere else.",
+  ],
+  add: [
+    "Pick what kind of thing you are adding, then give it the content.",
+    "Steps 3 to 5 all have working defaults; open them only to change where it goes, what is done to it, or who may see it.",
+    "Press Add data. What happened to it appears at the top — the climb from stored to searchable is watched there.",
+  ],
+  update: [
+    "Choose a memory to scope by — this walks the corpus by container rather than by query.",
+    "Narrow, then open one record, then one revision. Each step shows only what is needed to choose the next.",
+  ],
+  search: [
+    "Type a query and choose the arms — vector, lexical, and graph, which reaches records that never contain your words.",
+    "Read “Considered but not returned” as carefully as the results: every dropped record carries the reason it was dropped.",
+    "Provenance names the model that embedded it, which is what makes a bad result diagnosable.",
+  ],
+  ask: [
+    "Ask a question of the corpus rather than for records.",
+    "Every factual sentence carries the passage behind it. An answer reported as ungrounded means the corpus does not say — that is a result, not a failure.",
+  ],
+  memory: [
+    "A memory is a lifecycle container: it groups records and decides when they expire.",
+    "“Past its TTL” is what to act on. Changing or removing one affects everything mapped into it.",
+  ],
+  cases: [
+    "A case is a subject and its timeline, assembled from records that mention it.",
+  ],
+  entities: [
+    "Entities are the people, organisations and things the corpus mentions, each with the records that evidence it.",
+    "“Merge these two?” is where the same thing under two names gets reconciled. “Mentioned alongside” is computed at query time, not stored.",
+  ],
+  workflows: [
+    "Define a long process, then watch where each run actually is.",
+    "“How it got here” is the part worth reading when one is stuck.",
+  ],
+  reprocess: [
+    "“What is behind” counts records built by a generator that is no longer current.",
+    "Choose what to do and which records, then run it. This rebuilds what a stale generator produced — it cannot un-redact anything removed before storage.",
+  ],
+  compaction: [
+    "Fold a memory down without losing it: the detail is kept, the working set gets smaller.",
+    "The other half of this lifecycle is Deletion — one keeps everything, the other erases and proves it.",
+  ],
+  deletion: [
+    "Say what you are deleting: records, a memory, a mapping, or all account data.",
+    "Dry-run first. Then erase — and take the certificate under “Prove it”, which outlives the record it describes.",
+  ],
+  audit: [
+    "Who read and wrote what. Filter by action to answer a specific question rather than scroll a log.",
+  ],
+  sharing: [
+    "Everything currently public, and the control that takes it back.",
+  ],
+  settings: [
+    "Every effective value with where it came from — the answer to “why is this being used?” rather than just what it is.",
+    "A locked org setting is policy: a project cannot quietly replace it.",
+  ],
+  models: [
+    "Assign a model per purpose — extraction, answering, transcription — for this org.",
+    "Absent an assignment the deployment default applies, which is why most installations never configure this.",
+  ],
+  prompts: [
+    "Override a shipped extraction prompt per data type. Test before saving.",
+    "Changing a prompt is a versioning event: it makes everything the old prompt produced detectably stale, which is what makes Interpret & rebuild actionable.",
+  ],
+  mcp: [
+    "Point any MCP client at the URL shown, with an API key as a bearer token.",
+    "The tools listed are the same functions the REST API calls, so the credential and the access rules are the ones you already have.",
+  ],
+  projects: [
+    "Projects, groups, invites and members — the shape of the organisation.",
+    "Prefer a group over naming three people: a group resolves inside the ACL query, so adding somebody later gives them the records too.",
+  ],
+  keys: [
+    "Issue a key scoped to what it needs. It is shown once and cannot be read back — only replaced.",
+    "Revoking is immediate, and removing a member revokes theirs in the same transaction.",
+  ],
+  platform: [
+    "Operational shape only — records by rung and what needs attention. It counts across the deployment, not one tenant.",
+  ],
+};
+
 const GUIDE_WHY: Record<string, string> = {
   Monitor: "Is this working, and will it tell me when it is not.",
   Sources: "Is data still arriving, and where from.",
@@ -245,6 +364,9 @@ export default function Console({
   // what makes collapsing safe: nothing is unreachable if it can be named.
   const [filter, setFilter] = useState("");
   const [showGuide, setShowGuide] = useState(false);
+  // One section's steps at a time. Twenty-six sets of steps rendered at once is
+  // the wall of text the guide exists to replace.
+  const [guideOpen, setGuideOpen] = useState<Section | null>(null);
   // Only the group you are in. The previous default opened all eight, which
   // put twenty-six items and twenty-six hints on screen at once and made every
   // destination shout at the same volume.
@@ -416,8 +538,8 @@ export default function Console({
               <button className="secondary" onClick={() => setShowGuide(false)}>Close</button>
             </div>
             <p className="empty">
-              Four steps end to end, then what every section in the sidebar is for. Pick any of
-              them to go there.
+              Four steps end to end, then every section in the sidebar. Open one for how to work
+              it, or go straight there.
             </p>
 
             {GUIDE_PATH.map((step) => (
@@ -436,16 +558,42 @@ export default function Console({
                 {GUIDE_WHY[group.title] && (
                   <p className="guidewhy">{GUIDE_WHY[group.title]}</p>
                 )}
-                {group.items.map((item) => (
-                  <button
-                    className="guideitem"
-                    key={item.key}
-                    onClick={() => { setSection(item.key); setShowGuide(false); }}
-                  >
-                    <span className="navlabel">{item.label}</span>
-                    <span className="navhint">{item.hint}</span>
-                  </button>
-                ))}
+                {group.items.map((item) => {
+                  const steps = HOW_TO[item.key];
+                  const expanded = guideOpen === item.key;
+                  return (
+                    <div key={item.key}>
+                      <button
+                        className="guideitem"
+                        aria-expanded={expanded}
+                        onClick={() => setGuideOpen(expanded ? null : item.key)}
+                      >
+                        <span className="navlabel">
+                          {item.label}
+                          <span className="stepcaret"> {expanded ? "▾" : "▸"}</span>
+                        </span>
+                        <span className="navhint">{item.hint}</span>
+                      </button>
+                      {expanded && (
+                        <div className="guidesteps">
+                          {steps ? (
+                            <ol>{steps.map((s) => <li key={s}>{s}</li>)}</ol>
+                          ) : (
+                            /* Saying so beats an empty box: "nothing written
+                               yet" and "nothing to say" are different facts. */
+                            <p className="empty">No walkthrough written for this one yet.</p>
+                          )}
+                          <button
+                            className="secondary"
+                            onClick={() => { setSection(item.key); setShowGuide(false); }}
+                          >
+                            Open {item.label} →
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             ))}
           </aside>

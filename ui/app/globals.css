@@ -164,6 +164,9 @@ body {
   cursor: pointer;
 }
 .guideitem:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.guidesteps { padding: 2px 8px 12px 8px; }
+.guidesteps ol { margin: 4px 0 10px; padding-left: 20px; }
+.guidesteps li { font-size: 13px; color: var(--muted); margin-bottom: 6px; line-height: 1.5; }
 .content h1 { font-size: 21px; margin: 0 0 6px; letter-spacing: -0.01em; }
 .content h3 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em;
               color: var(--muted); margin: 18px 0 8px; }
