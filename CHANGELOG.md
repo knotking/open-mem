@@ -10,7 +10,25 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 
 ## Unreleased
 
+### Added
+- **The model's keywords became usable.** Every enriched record already carried
+  `artifacts.keywords` — the model's words for what it is about — read in exactly
+  one place: beside a record you had already found. Now there is a GIN index, a
+  `keywords` filter on `RetrieveFilter` (matching *any*, not all), and
+  `GET /projects/{id}/keywords` counting records per keyword over what the caller
+  can see, so a keyword whose every record is hidden does not appear. Chat can
+  narrow by topic. **Kept separate from tags** — a tag is a person's assertion, a
+  keyword is a model's guess, and merging them makes the guess unfalsifiable.
+
 ### Fixed
+- **A freshly bootstrapped tenant refused every signed-in user at Add data**
+  with *"this producer is bound to another user's personal connection"*. The
+  bootstrap created a `personal` connection, which binds its producer to the user
+  who ran it, and the console writes as the *signed-in user* rather than with a
+  service credential — so only the bootstrap owner could write, while reads kept
+  working and it presented as "adding data is broken". `cloudrun.sh` now
+  bootstraps `shared`; a single-person deployment should pass `personal`
+  deliberately.
 - **The progress panel gave up on work that was going fine.** It watched for two
   minutes and reported "still queued", which was right when every job was one or
   two model calls — a long document is thousands of chunks and ~20 sequential
