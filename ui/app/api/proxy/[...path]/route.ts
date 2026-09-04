@@ -83,6 +83,11 @@ async function forward(request: Request, path: string[], method: string) {
   try {
     upstream = await apiFetch(`/${joined}`, {
       method, body, skipAppCredential: anonymous,
+      // `skipAppCredential` returns early in `apiFetch`, before the branch that
+      // adds a content-type -- so without this the API receives a JSON body
+      // with no type and FastAPI parses it as a string, answering
+      // "Input should be a valid dictionary" to a perfectly good request.
+      ...(anonymous && body ? { headers: { "content-type": "application/json" } } : {}),
     });
   } catch (error) {
     if (error instanceof SessionExpired) {

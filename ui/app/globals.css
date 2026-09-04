@@ -870,7 +870,9 @@ select {
 
 .hero-split {
   display: grid;
-  grid-template-columns: minmax(0, 1.35fr) minmax(300px, 0.85fr);
+  /* The right column holds the chat now, not a four-field form, so it takes a
+     wider share -- a conversation in a 300px column wraps every line twice. */
+  grid-template-columns: minmax(0, 1.05fr) minmax(340px, 1fr);
   gap: 44px;
   align-items: start;
   /* No border-top: the sticky bar now carries that rule, and two hairlines
@@ -1467,3 +1469,34 @@ button.stattile:focus-visible { outline: 2px solid var(--accent); outline-offset
   line-height: 1.5;
   color: var(--muted);
 }
+
+/* ------------------------------------------------- the demo, as the hero */
+
+/* The public corpus is the first thing on the page, so it sits in the hero
+   rather than in a section a visitor has to scroll to find. `.demo-box` keeps
+   its own styling; this is only the column around it. */
+.demo-card { display: grid; gap: 10px; align-content: start; }
+.demo-card h2 { margin: 0; font-size: 17px; letter-spacing: -0.01em; }
+.demo-card .demo-box { max-width: none; margin: 0; }
+
+/* The transcript scrolls; the composer does not go with it. Without this the
+   card grows with every answer and pushes the whole page down, so the input
+   you just typed into ends up below the fold. */
+.demo-scroll { max-height: min(46vh, 420px); overflow-y: auto; margin: -2px -4px 0; padding: 2px 4px 0; }
+
+/* Sign-in is a panel off the bar, not half the hero. */
+.signin-menu { position: relative; }
+.signin-pop {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 10px);
+  width: min(360px, calc(100vw - 32px));
+  z-index: 30;
+  box-shadow: 0 18px 40px -18px rgba(0, 0, 0, 0.45);
+}
+.signin-pop .signin-card { margin: 0; }
+/* `.tab-cta` was written for an anchor, and it is now also a button -- which
+   the bare `button` rule paints accent-on-light with its own padding. Every
+   property that rule touches has to be answered here or the control renders as
+   a solid pill that does not match the one beside it. */
+button.tab-cta { font-family: inherit; line-height: 1.35; cursor: pointer; }
