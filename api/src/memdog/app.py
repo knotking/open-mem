@@ -556,7 +556,10 @@ async def get_overview(
 ) -> dict:
     """The numbers that answer "is this working?" in one call."""
     try:
-        return await project_overview(request.app.state.pool, actor, project_id)
+        return await project_overview(
+            request.app.state.pool, actor, project_id,
+            embedder=request.app.state.embedder,
+        )
     except AuthError as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
 

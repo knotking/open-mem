@@ -8840,9 +8840,100 @@ type OverviewData = {
   not_read: { parse_status: string; n: number }[];
   models: { model_id: string; calls: number; tokens: number }[];
   derived: { chunks: number; embeddings: number; vector_spaces: number; revisions: number };
+  vector_index?: {
+    queried_as: string | null;
+    spaces: { model_id: string; embeddings: number; records: number; queried: boolean }[];
+    reachable: { rows: number; empty: number; dims: number | null };
+    probe_neighbours: number | null;
+    probe_indexed: number | null;
+    searchable_here: number;
+  };
   containers: { memories: number; cases: number; live_shares: number };
   activity: { writes_24h: number; reads_24h: number; queries_24h: number };
 };
+
+/** Whether a vector search over this project can find anything at all.
+ *
+ * Two ways it silently cannot, both seen on this deployment:
+ *
+ * - The embeddings sit under a model id retrieval does not query, so the arm
+ *   filters every one of them out and the search returns nothing.
+ * - The HNSW graph is degraded. Re-embedding deletes and reinserts every chunk,
+ *   and enough passes leave the index returning a fraction of the neighbours it
+ *   holds -- eventually none. Nothing else on this screen changes.
+ */
+function VectorHealth({
+  vector,
+  embeddings,
+}: {
+  vector: OverviewData["vector_index"];
+  embeddings: number;
+}) {
+  if (!vector) return null;
+  const stranded = vector.spaces
+    .filter((space) => !space.queried)
+    .reduce((n, space) => n + space.records, 0);
+  // What a healthy index returns for a top-40 over a vector already in it.
+  const expected = Math.min(40, vector.reachable.rows);
+  const indexed = vector.probe_indexed;
+  const degraded = indexed !== null && expected > 0 && indexed < expected;
+
+  return (
+    <section className="panel">
+      <h2>Can a vector search find this?</h2>
+      {embeddings === 0 ? (
+        <p className="empty">
+          Nothing is embedded yet, so the vector arm has nothing to match. Lexical search still
+          works — which is why a half-indexed corpus answers some questions and not others.
+        </p>
+      ) : (
+        <>
+          <p className="empty" style={{ marginTop: 0 }}>
+            Retrieval queries{" "}
+            {vector.queried_as ? <code>{vector.queried_as}</code> : "no configured model"}.{" "}
+            An embedding written under any other model is stored, counted, and unreachable.
+          </p>
+          <table className="kv">
+            <tbody>
+              {vector.spaces.map((space) => (
+                <tr key={space.model_id}>
+                  <th>{space.model_id}</th>
+                  <td>
+                    {space.records} record{space.records === 1 ? "" : "s"}, {space.embeddings}{" "}
+                    embedding{space.embeddings === 1 ? "" : "s"}{" "}
+                    <span className={space.queried ? "chip on" : "chip warnchip"}>
+                      {space.queried ? "queried" : "not queried"}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {stranded > 0 && (
+            <p className="warn">
+              <strong>{stranded} record{stranded === 1 ? " is" : "s are"} embedded under a model
+              retrieval does not query.</strong> They will never match a vector search until they
+              are re-embedded. The reconcile sweep does this; nothing else will.
+            </p>
+          )}
+          {degraded ? (
+            <p className="warn">
+              <strong>The vector index is returning less than it holds.</strong> A search for a
+              vector already stored here came back with {indexed} of {expected} neighbours, so
+              real questions will match little or nothing. Rebuilding the index is the repair —
+              it degrades as records are re-embedded, not as they are added.
+            </p>
+          ) : (
+            <p className="ok">
+              {vector.searchable_here} record{vector.searchable_here === 1 ? "" : "s"} reachable by
+              vector search, and the index returns a full set of neighbours for one already in it.
+            </p>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
 
 function Overview({
   projectId,
@@ -8916,6 +9007,12 @@ function Overview({
         />
         <Tile value={humanBytes(counts.bytes_stored)} label="bytes in object storage" />
       </section>
+
+      {/* Every number above can be right while vector search answers nothing:
+          the records are enriched, the embeddings are all there, and they are
+          in a space -- or behind an index -- that retrieval cannot reach. That
+          failure is silent, so it needs a panel that says it out loud. */}
+      <VectorHealth vector={data.vector_index} embeddings={derived.embeddings} />
 
       <div className="two-up">
         <section className="panel">

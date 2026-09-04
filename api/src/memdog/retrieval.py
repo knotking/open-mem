@@ -12,6 +12,8 @@ space.
 
 from __future__ import annotations
 
+import os
+
 import asyncpg
 
 from .acl import visibility_params, visibility_sql
@@ -32,6 +34,11 @@ from .telemetry import span
 from .inference import EmbeddingEngine
 
 RRF_K = 60  # the usual constant; large enough that rank 1 does not dominate
+
+# How many candidates the HNSW scan visits before the ACL and the filters
+# cut it down. The default is 40, which is the same number the arm asks for,
+# so any filtering at all comes straight out of the result.
+HNSW_EF_SEARCH = int(os.environ.get("HNSW_EF_SEARCH", "200"))
 
 
 class NotFound(Exception):
@@ -461,7 +468,19 @@ async def _retrieve(
     # The search still runs through everything below -- the query row, the
     # corpus counts, the audit -- because a search that found nothing is still
     # a search that happened, and the trace is the part that explains why.
-    rows = await pool.fetch(sql, *params) if arms else []
+    if not arms:
+        rows = []
+    elif "vector" in request.match:
+        # HNSW visits `ef_search` candidates and *then* applies the WHERE
+        # clause, so leaving it at the default 40 while the arm also asks for 40
+        # means a single excluded row costs a result. Raised for the vector arm
+        # only, and `SET LOCAL` so it dies with the transaction rather than
+        # riding a pooled connection into somebody else's query.
+        async with pool.acquire() as conn, conn.transaction():
+            await conn.execute(f"SET LOCAL hnsw.ef_search = {HNSW_EF_SEARCH}")
+            rows = await conn.fetch(sql, *params)
+    else:
+        rows = await pool.fetch(sql, *params)
 
     query_id = new_id("qry")
     all_hits = [
@@ -977,7 +996,8 @@ async def list_items(
 
 
 async def project_overview(
-    pool: asyncpg.Pool, principal: Principal, project_id: str
+    pool: asyncpg.Pool, principal: Principal, project_id: str,
+    embedder: EmbeddingEngine | None = None,
 ) -> dict:
     """One call that answers "is this working, and what is in it?".
 
@@ -1051,6 +1071,104 @@ async def project_overview(
         project_id, org_id, user_id, principals,
     )
 
+    # Which vector space the stored embeddings are actually in, and whether the
+    # configured embedder queries it. `vector_spaces: 1` says the corpus is
+    # consistent with itself; it does not say it is consistent with retrieval.
+    # A corpus embedded under one model and searched under another reports
+    # every record enriched and answers every vector search with nothing, and
+    # until this row existed there was no number anywhere that disagreed.
+    spaces = await pool.fetch(
+        f"""
+        SELECT e.model_id, count(*) AS embeddings,
+               count(DISTINCT e.data_id) AS records
+        FROM embeddings e JOIN data_items d ON d.data_id = e.data_id
+        WHERE d.project_id = $1 AND {predicate}
+        GROUP BY 1 ORDER BY 2 DESC LIMIT 6
+        """,
+        project_id, org_id, user_id, principals,
+    )
+    # The vector arm joins embeddings to chunks by `chunk_id`, so an embedding
+    # whose chunk was rewritten under it is counted above and reachable by
+    # nothing.
+    joinable = await pool.fetchrow(
+        f"""
+        SELECT count(*) AS rows,
+               count(*) FILTER (WHERE e.embedding IS NULL) AS empty,
+               min(vector_dims(e.embedding)) AS dims
+        FROM embeddings e
+        JOIN chunks c ON c.chunk_id = e.chunk_id
+        JOIN data_items d ON d.data_id = c.data_id
+        WHERE d.project_id = $1 AND {predicate}
+        """,
+        project_id, org_id, user_id, principals,
+    )
+    queried = embedder.model_id if embedder else None
+    # The same shape the vector arm runs -- joins, ACL, model filter, index
+    # scan -- but with a vector already in the table as the query. If this
+    # returns rows and the arm does not, the storage side is sound and the
+    # question is what the *query* embedded to.
+    probe = await pool.fetchval(
+        f"""
+        WITH probe AS (
+            SELECT e.embedding AS v FROM embeddings e
+            JOIN data_items d ON d.data_id = e.data_id
+            WHERE d.project_id = $1 AND {predicate} LIMIT 1
+        )
+        SELECT count(*) FROM (
+            SELECT c.chunk_id FROM embeddings e
+            JOIN chunks c ON c.chunk_id = e.chunk_id
+            JOIN data_items d ON d.data_id = c.data_id
+            CROSS JOIN probe
+            WHERE d.project_id = $1 AND {predicate}
+              AND ($5::text IS NULL OR e.model_id = $5)
+            ORDER BY e.embedding <=> probe.v LIMIT 40
+        ) t
+        """,
+        project_id, org_id, user_id, principals, queried,
+    )
+    # The same probe with the query vector as a *bound constant*, which is what
+    # lets the planner reach for the HNSW index -- the CROSS JOIN above cannot
+    # use it. Two different numbers here mean the vectors are fine and the
+    # index is not, which is otherwise indistinguishable from bad retrieval.
+    sample = await pool.fetchval(
+        f"""
+        SELECT e.embedding::text FROM embeddings e
+        JOIN data_items d ON d.data_id = e.data_id
+        WHERE d.project_id = $1 AND {predicate} LIMIT 1
+        """,
+        project_id, org_id, user_id, principals,
+    )
+    probe_indexed = None
+    if sample:
+        # Under the same `ef_search` the vector arm runs with, so this number is
+        # what retrieval will actually see. Reporting the default instead would
+        # show a healthy index as broken.
+        async with pool.acquire() as conn, conn.transaction():
+            await conn.execute(f"SET LOCAL hnsw.ef_search = {HNSW_EF_SEARCH}")
+            probe_indexed = await conn.fetchval(
+                f"""
+                SELECT count(*) FROM (
+                    SELECT c.chunk_id FROM embeddings e
+                    JOIN chunks c ON c.chunk_id = e.chunk_id
+                    JOIN data_items d ON d.data_id = c.data_id
+                    WHERE d.project_id = $1 AND {predicate}
+                    ORDER BY e.embedding <=> $5::vector LIMIT 40
+                ) t
+                """,
+                project_id, org_id, user_id, principals, sample,
+            )
+    vector_index = {
+        "queried_as": queried,
+        "spaces": [dict(r) | {"queried": r["model_id"] == queried} for r in spaces],
+        # The one number that answers "will vector search find anything?".
+        "reachable": dict(joinable),
+        "probe_neighbours": probe,
+        "probe_indexed": probe_indexed,
+        "searchable_here": sum(
+            r["records"] for r in spaces if r["model_id"] == queried
+        ),
+    }
+
     containers = await pool.fetchrow(
         """
         SELECT (SELECT count(*) FROM memories m
@@ -1082,6 +1200,7 @@ async def project_overview(
         "not_read": [dict(r) for r in problems],
         "models": [dict(r) for r in models],
         "derived": dict(derived),
+        "vector_index": vector_index,
         "containers": dict(containers),
         "activity": dict(activity),
     }
