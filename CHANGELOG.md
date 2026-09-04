@@ -10,6 +10,19 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 
 ## Unreleased
 
+### Changed
+- **"Interpret & rebuild" chooses its scope instead of asking you to type it.**
+  Data type was a free-text box with three examples in the placeholder, for a
+  closed set of twenty-four the server already publishes — and a typo there is
+  not an error, it is a selector that matches nothing, previews *0 records*, and
+  reads as an empty corpus. It now comes from `GET /api/v1/prompts`, the same
+  registry the Prompts screen reads, so the two cannot drift. Tags are offered
+  from the new `GET /projects/{id}/tags` when the project has any and left as a
+  text field when it does not, since a select with nothing in it is a dead
+  control and tags are an open set. Run stays typed — a run id is copied from
+  Crawlers, not chosen from a set this screen can know — but the placeholder now
+  says where to get one.
+
 ### Added
 - **The model's keywords became usable.** Every enriched record already carried
   `artifacts.keywords` — the model's words for what it is about — read in exactly
