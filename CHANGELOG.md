@@ -43,6 +43,23 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   was wrong. The provider's message is kept, and the console already renders it.
 
 ### Added
+- **Chat can be scoped to the memories you point at.** `RetrieveFilter` gains
+  `memory_ids`, so "what did we decide in the Acme thread" is answered by that
+  thread instead of by everything the project knows. Filtered with `EXISTS`, not
+  a join — a record in several selected memories would otherwise return once per
+  membership and be ranked up for it.
+- **Chat is a chat window.** The question appears the moment you ask rather than
+  when the answer returns, the transcript scrolls inside its own bounds with the
+  composer docked to it, and the answer is written out with a cursor. The reveal
+  is pacing rather than streaming, and deliberately so: the answer is complete
+  and checked against its citations before a word of it is shown.
+
+### Fixed
+- **`.card`, `.hint` and `.stack` had no CSS rule anywhere**, while being used 13,
+  31 and 4 times — by Compaction, Alerts and AlertEditor. Those screens rendered
+  with no container edge, no padding and no separation between blocks. Compaction's
+  five actions also sat in a `<p>`, so they had no gap and Delete was flush against
+  History.
 - **[`docs/ingestion/templates.md`](docs/ingestion/templates.md)** — a design for
   extraction templates, not built. Extraction is routed by `data_type`, which is
   derived from the bytes, and the bytes cannot tell you what a document is *for*:
