@@ -10,6 +10,35 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 
 ## Unreleased
 
+### Fixed
+- **A book produced the graph of a single page, and then of nothing at all.**
+  Three stacked defects, each hidden by the last:
+  `text[:200_000]` silently discarded the tail of any longer document (a
+  232,412-character Bhagavad Gita came back titled *"…Chapters 1 through 16"*);
+  the windowing that fixed it had no effect, because `max_input_chars` was
+  declared on the concrete extractors while the worker holds a
+  `ChainedExtractor`, so `getattr` returned 0 and nothing split; and the window
+  itself was sized by the model's **context limit** rather than by what it
+  extracts well from — at 200,000 characters the model writes a summary and
+  returns no entities and no keywords at all. `EXTRACT_WINDOW` (40,000,
+  env-overridable) is now a separate number and the narrower of the two wins.
+- **`entities` and `relations` were optional in the Gemini response schema.**
+  Listing them first did nothing — Gemini does not emit in declaration order and
+  an optional property may be absent entirely. A windowed extraction returned
+  `{title, description, language, summary}`, ran out of output tokens
+  mid-sentence, and the truncated JSON failed to parse, retried five times and
+  was dropped. They are required now, with `propertyOrdering` putting the graph
+  ahead of the summary so a runaway summary costs the summary and not the whole
+  envelope.
+- **`summary` had no length bound** and a model that starts rambling in it does
+  not stop — one extraction produced thousands of words of run-on prose and lost
+  the envelope. Bounded in the shared prompt, where no per-type override can
+  drop it.
+
+  Measured on the same book: **15 entities / 6 edges** before, **0** once
+  windowing exposed the schema defect, **35 entities / 19 edges** after, read as
+  six windows in under a minute.
+
 ### Added
 - **Pick a memory in Chat and see what is in it.**
   `GET /api/v1/memories/{id}/context` returns record counts by state, the
