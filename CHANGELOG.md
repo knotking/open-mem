@@ -43,6 +43,16 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   was wrong. The provider's message is kept, and the console already renders it.
 
 ### Added
+- **[`docs/ingestion/templates.md`](docs/ingestion/templates.md)** — a design for
+  extraction templates, not built. Extraction is routed by `data_type`, which is
+  derived from the bytes, and the bytes cannot tell you what a document is *for*:
+  a novel, a design doc and a contract are all `document` and are interesting for
+  entirely different reasons. A template is declared intent, composed after the
+  type block and never over the injection-defended skeleton, versioned like any
+  other prompt so `/reprocess` already knows how to rebuild what it produced.
+  Includes a catalogue across documents, media, images and tabular data, and the
+  three rules that stop a template making things worse — chiefly that asking a
+  model to "extract the obligations" is asking it to find some.
 - **The text ceiling is a deployment setting** (`MAX_TEXT_CHARS`, default
   2,000,000; 4,000,000 here) instead of a constant, and **`/reprocess` gains a
   `parse` stage** that makes a raised ceiling reachable. Raising it alone changed
