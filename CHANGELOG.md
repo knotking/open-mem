@@ -11,6 +11,29 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **Chat can search the graph, anchored on what you point at.** The Chat scope
+  picker had one control — memories — while retrieval already accepted tags,
+  keywords and templates and could run a graph arm nobody could reach. It now
+  offers *read as* (the template a record was written under, which narrows both
+  the records searched and the relationships walked), *start from* (entities
+  named outright), and *follow connections* (the graph arm). Answers report what
+  the graph started from: **"Followed connections from Krishna (you chose it)"**
+  — a result reached only through the graph does not contain the words searched
+  for, so without the seed a reader cannot tell whether the connection was the
+  one they meant.
+- **`RetrieveFilter.entity_ids` anchors retrieval on named entities.** It keeps
+  only records mentioning them *and* replaces the guesswork in `graph_seeds()`,
+  which scrapes entity names out of the question text. Asked *"what is the chain
+  that ends in ruin?"* the parser finds nothing to key off and the graph arm
+  sits idle; anchored, it starts there and answers. A named anchor replaces the
+  parsed one rather than adding to it — if the caller said where to start,
+  starting elsewhere as well is not extra recall, it is their scope being
+  quietly widened. `GraphSeed.matched_on` gains `chosen`, which is not a match
+  but the caller insisting, kept distinct so a reader can tell an entity the
+  system found from one a person named. Anchors are visibility-checked the way
+  name resolution is: an id is easier to enumerate than a name, and passing one
+  must not confirm an entity exists to somebody who can see no record naming it.
+
 - **Templates decide the shape of the graph before the document is read.** A
   write may declare `template` per item — what the content is *for*, which the
   bytes cannot say. It narrows the relationships the model may report and adds
