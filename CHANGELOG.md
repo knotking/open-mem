@@ -10,6 +10,49 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 
 ## Unreleased
 
+### Added
+- **Templates decide the shape of the graph before the document is read.** A
+  write may declare `template` per item — what the content is *for*, which the
+  bytes cannot say. It narrows the relationships the model may report and adds
+  an instruction block, so the same `.docx` read as `scripture` and read plainly
+  produce different graphs. `GET /api/v1/templates` serves the three shipped
+  (`scripture`, `design-doc`, `incident`) with the questions each exists to
+  answer; an unknown name is refused with a 400 naming the valid ones, because
+  ignoring a typo yields a generic graph the caller believes is specialised.
+  `GET /api/v1/entities/{id}/graph` takes `template=` to walk only the edges one
+  lens drew, and `RetrieveFilter.template` applies the same lens to both the
+  records searched and the graph arm.
+- **Five predicates, none domain-specific**: `teaches` — attribution, which the
+  graph could not express at all — plus `leads_to`, `contrasts_with`,
+  `caused_by` and `mitigated_by`. A causal chain rendered as `related_to` edges
+  asserts the opposite of what an ordered chain says.
+- **Predicates now carry a domain, a range and a confidence class.** An edge
+  whose endpoint types the predicate does not permit is refused at write time
+  rather than found later by someone reading a bad answer, and an edge reports
+  whether its predicate is *structural* (stated plainly) or *interpretive* (a
+  reading) — so a path resting on a reading can say so. Served from
+  `GET /api/v1/graph/predicates` as `vocabulary`.
+
+### Fixed
+- **A long summary silently ate the graph.** `entities` and `relations` were
+  last in the envelope schema, behind an unbounded `summary`, and a
+  schema-constrained model emits in schema order. A templated extraction spent
+  4,045 of a 4,096-token budget rambling inside `summary` and emitted no
+  entities and no relations — an artifact with a title, a description, an empty
+  graph and a state of `enriched`, with nothing reporting the truncation. The
+  graph is now written first and the budget is 8192: a clipped summary is a
+  worse summary, a clipped graph never existed.
+- **Every edge Gemini produced was stamped confidence 0.5.** The Gemini schema
+  dialect omitted the field although `RELATION_SCHEMA` carried it and
+  `record_edges` read it, so the column said nothing.
+- The predicate vocabulary was defined twice, in `graph.py` and
+  `extraction.py`, with nothing failing if the two drifted — one list now.
+
+### Migrations
+- `0048_graph_templates.sql` — five predicates added to the `entity_edges` and
+  `entity_facts` CHECK constraints; `template` on `data_items`, `entity_edges`
+  and `entity_facts`. Run before deploying.
+
 ### Changed
 - **"Interpret & rebuild" chooses its scope instead of asking you to type it.**
   Data type was a free-text box with three examples in the placeholder, for a
