@@ -109,7 +109,7 @@ class Envelope(BaseModel):
 # large corpus quietly becomes hundreds of calls billed to a project that asked
 # for "add data". Twelve covers ~2.4M characters through Gemini -- several
 # books -- and what is skipped is reported rather than dropped in silence.
-MAX_WINDOWS = int(os.environ.get("MAX_EXTRACT_WINDOWS", "12"))
+MAX_WINDOWS = int(os.environ.get("MAX_EXTRACT_WINDOWS", "24"))
 
 
 def split_windows(text: str, size: int) -> list[str]:
@@ -237,7 +237,11 @@ async def extract_long(
     on a background task, and a burst of a dozen against a rate-limited provider
     turns a slow success into a fast failure.
     """
-    window = getattr(extractor, "max_input_chars", 0)
+    # The smaller of what the model *can* read and what it extracts well from.
+    # A model with no declared limit still gets the extraction window: the
+    # constraint is the model's behaviour on a wall of text, not its context.
+    limit = getattr(extractor, "max_input_chars", 0)
+    window = min(limit, EXTRACT_WINDOW) if limit else EXTRACT_WINDOW
     parts = split_windows(text, window)
     if len(parts) <= 1:
         return await extractor.extract(
@@ -290,6 +294,21 @@ def build_prompt(
     # The type-specific block goes in the system half, with the defence -- not
     # beside the content, where a document could imitate its formatting.
     system = SYSTEM_PROMPT if block is None else f"{SYSTEM_PROMPT}\n\n{block}"
+    # A length bound on the one unbounded field.
+    #
+    # `summary` is the only field with no natural end, and a model that starts
+    # rambling in it does not stop: one extraction produced several thousand
+    # words of run-on prose with no punctuation, exhausted the output budget,
+    # and truncated the JSON mid-sentence -- losing the whole envelope, not just
+    # the summary. The cap is stated in characters because that is what the
+    # reader of the field cares about, and it is stated here rather than in a
+    # per-type block so no override can drop it.
+    system += (
+        "\n\nLENGTH: keep `summary` under 1200 characters and `description` "
+        "under 300. Stop when the content is covered. Never repeat a phrase to "
+        "fill space -- an envelope truncated mid-field is discarded entirely, "
+        "so a short complete answer is worth more than a long incomplete one."
+    )
     # The template block goes *after* the type block, because it is the more
     # specific statement: the type says this is a document, the template says
     # it is a design document, and where they disagree about what is
@@ -424,6 +443,28 @@ _STOP = {
 # system stored the artifact as a success.
 GEMINI_WINDOW = 200_000
 OLLAMA_WINDOW = 100_000
+
+# The window extraction actually uses, which is *not* the model's context limit.
+#
+# Those are different numbers and conflating them was the second bug in this
+# area. A 200,000-character window fits comfortably in the model's context and
+# is far too large to extract from: handed that much text the model writes a
+# long summary and returns an empty `entities` array and an empty `keywords`
+# array -- not truncated, not refused, simply absent. Measured on one document,
+# same text, same prompt, same template:
+#
+#     200,000 chars  ->   0 entities,  0 edges,  0 keywords
+#      40,000 chars  ->  12 entities,  6 edges
+#      32,000 chars  ->   5 entities
+#
+# So the ceiling that matters is behavioural, not technical. Reordering the
+# schema so entities precede the summary was necessary and not sufficient: the
+# model was not running out of room, it was answering a different question.
+#
+# Smaller windows cost more calls -- this book is six instead of one -- which is
+# the honest price of a graph that reflects the whole document rather than an
+# artifact that looks successful and is empty.
+EXTRACT_WINDOW = int(os.environ.get("EXTRACT_WINDOW_CHARS", "40000"))
 
 
 class LocalHeuristicExtractor:
@@ -624,7 +665,24 @@ def _gemini_schema(offered: tuple[str, ...] = RELATION_PREDICATES) -> dict:
     for the same reason -- see the note there."""
     return {
         "type": "object",
-        "required": ["title"],
+        # Entities and relations are REQUIRED, and that is the whole fix.
+        #
+        # Listing them first in `properties` did nothing: Gemini does not emit
+        # in declaration order, and an optional property may simply be absent.
+        # A windowed extraction of the Gita returned
+        # `{title, description, language, summary}` -- no entities key at all --
+        # then ran out of output tokens mid-sentence inside `summary`, so the
+        # JSON was truncated, parsing raised, and the item retried five times
+        # and was dropped. The graph was empty because the field was never
+        # emitted, not because the model found nothing.
+        #
+        # Required forces the key; an empty array remains a correct answer.
+        "required": ["title", "entities", "relations"],
+        # Honoured by Gemini, unlike declaration order. Putting the graph ahead
+        # of the summary means a runaway summary costs the summary rather than
+        # the whole envelope.
+        "propertyOrdering": ["title", "entities", "relations", "description",
+                             "keywords", "language", "summary"],
         "properties": {
             "title": {"type": "string"},
             "entities": {

@@ -173,16 +173,34 @@ async def test_the_window_budget_is_a_cap_and_the_remainder_is_reported():
     assert envelope.fields["windows_skipped"] > 0
 
 
-async def test_an_extractor_with_no_declared_window_is_never_split():
-    """The local heuristic extractor reads whatever it is given; splitting it
-    would multiply cost for no benefit."""
+async def test_the_extraction_window_applies_even_without_a_declared_limit():
+    """The window that matters is behavioural, not technical.
+
+    An extractor that declares no context limit still gets the extraction
+    window, because the constraint is what a model does when handed a wall of
+    text -- not what it can hold. Measured on one document, same prompt, same
+    template: 200,000 characters produced zero entities and zero keywords while
+    40,000 produced twelve entities and six edges. The model was not running out
+    of room; it was answering a different question.
+    """
+    from memdog.extraction import EXTRACT_WINDOW
+
     class _Unbounded(_Recording):
         def __init__(self):
             super().__init__(window=0)
 
     extractor = _Unbounded()
-    await extract_long(extractor, "x" * 50_000, data_type="document")
-    assert len(extractor.seen) == 1
+    await extract_long(extractor, "x" * (EXTRACT_WINDOW * 3), data_type="document")
+    assert len(extractor.seen) == 3
+
+
+async def test_the_narrower_of_the_model_limit_and_the_window_wins():
+    """A model whose context is smaller than the extraction window must not be
+    handed the window: the point of the limit is that the call would fail."""
+    extractor = _Recording(window=1_000)
+    await extract_long(extractor, "x" * 5_000, data_type="document")
+    assert len(extractor.seen) == 5
+    assert all(len(w) <= 1_000 for w in extractor.seen)
 
 
 def test_the_chain_reports_the_narrowest_window_of_its_steps():
