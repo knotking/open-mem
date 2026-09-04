@@ -2702,6 +2702,34 @@ async def co_mentions_endpoint(
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
 
 
+@app.get("/api/v1/memories/{memory_id}/context")
+async def memory_context_endpoint(
+    request: Request, memory_id: str, limit: int = 30,
+    actor: Principal = Depends(principal),
+) -> dict:
+    """Everything known about one memory, in one request.
+
+    A memory is the container people think in — "the Acme thread", "the Gita" —
+    and the console could say how many records were in one and nothing else. To
+    learn what it was *about* you opened Data, filtered, opened a record, read
+    its keywords, then opened Entities and guessed which came from here. The
+    information existed in four places and belonged in one.
+
+    Counts are scoped to what the caller can read, so two people may
+    legitimately see different totals for the same memory: a memory you can see
+    may hold records you cannot, and summarising those would report a corpus you
+    are not allowed to read.
+    """
+    from .memories import context
+
+    try:
+        return await context(request.app.state.pool, actor, memory_id, limit=limit)
+    except NotFound as exc:
+        raise HTTPException(status_code=404, detail="not found") from exc
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
 @app.get("/api/v1/graph/predicates")
 async def graph_predicates_endpoint(actor: Principal = Depends(principal)) -> dict:
     """The closed predicate vocabulary, served rather than documented twice.

@@ -1753,6 +1753,18 @@ type GraphEdge = {
   // not in a detail view nobody opens.
   confidence_class: "structural" | "interpretive";
 };
+type MemoryContext = {
+  memory: { memory_id: string; type: string; memory_key: string | null;
+            title: string | null };
+  records: { total: number; stored: number; searchable: number; enriched: number };
+  templates: { template: string; records: number }[];
+  keywords: { keyword: string; records: number }[];
+  entities: { entity_id: string; display_name: string; type: string; records: number }[];
+  edges: { predicate: string; subject: string; subject_id: string; object: string;
+           object_id: string; template: string | null; evidence: number;
+           confidence_class: "structural" | "interpretive" }[];
+};
+
 type GraphTemplate = {
   template: string; description: string; questions: string[];
   predicates: string[]; citation_unit: string; digest: string;
@@ -4109,6 +4121,17 @@ function AskSection({ projectId }: { projectId: string }) {
       .catch(() => setAnchors([]));
   }, [projectId]);
 
+  // What is actually in the memories you picked. A count of members says how
+  // much is in a container and nothing about what it holds — and "what is in
+  // here" is the question somebody asks *before* they know what to ask.
+  const [held, setHeld] = useState<MemoryContext | null>(null);
+  useEffect(() => {
+    if (scope.length !== 1) { setHeld(null); return; }
+    void call<MemoryContext>(`api/v1/memories/${scope[0]}/context`)
+      .then(setHeld)
+      .catch(() => setHeld(null));
+  }, [scope]);
+
   // The lens the content was read under.
   const [lens, setLens] = useState("");
   const [lenses, setLenses] = useState<GraphTemplate[]>([]);
@@ -4293,6 +4316,115 @@ function AskSection({ projectId }: { projectId: string }) {
                 Selecting several matches a record carrying <strong>any</strong> of them.
               </p>
             </>
+          )}
+
+          {held && (
+            <div className="card" style={{ marginTop: 14 }}>
+              <h3 style={{ marginTop: 0 }}>
+                What is in {held.memory.title ?? held.memory.memory_key ?? "this memory"}
+              </h3>
+              <div className="meta">
+                <span className="chip">{held.records.total} record
+                  {held.records.total === 1 ? "" : "s"}</span>
+                <span className={`chip${held.records.enriched ? " on" : ""}`}>
+                  {held.records.enriched} enriched
+                </span>
+                {/* Stored-but-not-searchable is the one count that explains a
+                  * thin answer, so it is a warning rather than a number. */}
+                {held.records.stored > 0 && (
+                  <span className="chip warnchip"
+                        title="Stored but not embedded — search cannot reach these">
+                    {held.records.stored} not searchable
+                  </span>
+                )}
+                {held.templates.map((x) => (
+                  <span key={x.template} className="chip">
+                    {x.records} read as {x.template}
+                  </span>
+                ))}
+              </div>
+
+              {held.keywords.length > 0 && (
+                <>
+                  <p className="empty" style={{ marginBottom: 4 }}>What it is about</p>
+                  <div className="row">
+                    {held.keywords.slice(0, 16).map((k) => {
+                      const on = about.includes(k.keyword);
+                      return (
+                        <button key={k.keyword} className={on ? "" : "secondary"}
+                                title={`${k.records} record${k.records === 1 ? "" : "s"}`}
+                                onClick={() => setAbout(on
+                                  ? about.filter((x) => x !== k.keyword)
+                                  : [...about, k.keyword])}>
+                          {k.keyword} <span className="empty">· {k.records}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+
+              {held.entities.length > 0 && (
+                <>
+                  <p className="empty" style={{ marginBottom: 4 }}>
+                    Who and what is in it — click to anchor the question here
+                  </p>
+                  <div className="row">
+                    {held.entities.slice(0, 20).map((e) => {
+                      const on = anchored.includes(e.entity_id);
+                      return (
+                        <button key={e.entity_id} className={on ? "" : "secondary"}
+                                title={`${e.type} · named in ${e.records} record${e.records === 1 ? "" : "s"}`}
+                                onClick={() => setAnchored(on
+                                  ? anchored.filter((x) => x !== e.entity_id)
+                                  : [...anchored, e.entity_id])}>
+                          {e.display_name} <span className="empty">· {e.records}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+
+              {held.edges.length > 0 ? (
+                <>
+                  <p className="empty" style={{ marginBottom: 4 }}>
+                    What its records assert
+                  </p>
+                  {held.edges.slice(0, 12).map((e, i) => (
+                    <div className="hit" key={`${e.subject_id}-${e.predicate}-${i}`}>
+                      <div className="text">
+                        {e.subject} <span className="edge-arrow">→</span>{" "}
+                        <strong>{e.predicate.replace(/_/g, " ")}</strong>{" "}
+                        <span className="edge-arrow">→</span> {e.object}
+                      </div>
+                      <div className="meta">
+                        <span className="chip">{e.evidence} record
+                          {e.evidence === 1 ? "" : "s"}</span>
+                        {e.confidence_class === "interpretive" && (
+                          <span className="chip warnchip">a reading, not a quote</span>
+                        )}
+                        {e.template && <span className="chip">read as {e.template}</span>}
+                      </div>
+                    </div>
+                  ))}
+                </>
+              ) : (
+                <p className="empty" style={{ marginBottom: 0 }}>
+                  {held.records.enriched === 0
+                    ? "Nothing here has been interpreted yet, so there is no graph to show."
+                    : "Its records name things but assert no relationships between them — "
+                      + "which is ordinary. A relationship has to be stated, and most text "
+                      + "names things without saying how they connect."}
+                </p>
+              )}
+            </div>
+          )}
+          {scope.length > 1 && (
+            <p className="empty">
+              Pick a single memory to see what is in it. With several selected the
+              question is scoped to all of them, but there is no one container to summarise.
+            </p>
           )}
 
           {lenses.length > 0 && (
