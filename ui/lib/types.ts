@@ -85,6 +85,11 @@ export type Item = {
   content_text: string | null;
   extracted_text: string | null;
   access_level?: string;
+  // What this record put into the graph. `null` on responses that predate the
+  // field; zero is a real answer and must not render as "unknown".
+  entity_count?: number | null;
+  edge_count?: number | null;
+  template?: string | null;
 };
 
 export type Memory = {

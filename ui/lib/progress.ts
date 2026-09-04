@@ -184,17 +184,59 @@ export function assess(
     step("enrich", "enriched", enrichState, enrichNote(enrichState)));
 
   function enrichNote(state: StepState): string {
-    if (state === "done") return "title, summary, keywords and entities recorded";
+    if (state === "done") return "title, summary and keywords recorded";
     if (refusal) return "withheld by a sensitivity policy";
     if (request === null) return "not requested";
     if (request.payload.summarize === false) return "not asked for — this write chose embedding only";
     return state === "stopped" ? "did not run" : "a model is summarising it";
   }
 
+  // The graph, as its own step.
+  //
+  // It was folded into the sentence above -- "title, summary, keywords and
+  // entities recorded" -- which asserted entities on every successful
+  // enrichment and reported no number. A record that produced eighteen
+  // entities and one that produced none rendered identically, and the second
+  // is the case somebody needs to know about: it is the difference between
+  // "the graph is built" and "the graph is empty and nothing said so".
+  //
+  // Zero is shown as a finished step with a note explaining why, not as a
+  // failure. Plenty of records legitimately name nothing, and a red mark on
+  // every meeting reminder would train people to ignore the row.
+  const entities = item.entity_count ?? null;
+  const edges = item.edge_count ?? null;
+  const lens = item.template ?? null;
+  if (enriched && entities !== null) {
+    steps.push(step("graph", "connected", entities > 0 ? "done" : "stopped", graphNote()));
+  } else if (request !== null && request.payload.summarize !== false) {
+    steps.push(step("graph", "connected", enrichState === "stopped" ? "stopped" : "waiting",
+                    enrichState === "stopped" ? "did not run" : "entities and relationships"));
+  }
+
+  function graphNote(): string {
+    if (entities === 0) {
+      return lens
+        ? `nothing to connect — no ${lens} relationships were found in this text`
+        : "nothing to connect — the model named nothing in this text";
+    }
+    const e = `${entities} entit${entities === 1 ? "y" : "ies"}`;
+    if (!edges) {
+      // Entities without edges is the ordinary case, not a fault: a
+      // relationship has to be *stated*, and most text names things without
+      // asserting anything between them.
+      return `${e}, no relationships stated between them`;
+    }
+    return `${e} and ${edges} relationship${edges === 1 ? "" : "s"}`
+      + (lens ? `, read as ${lens}` : "");
+  }
+
   const done = steps.filter((s) => s.state === "done").length;
   const percent = enriched ? 100 : Math.max(8, Math.round((done / steps.length) * 100));
 
   function describe(): string {
+    if (enriched && entities === 0) {
+      return "Enriched — but nothing was named, so it is not in the graph";
+    }
     if (enriched) return "Enriched — it reached the top of the staircase";
     if (gaveUp && !terminal) {
       return searchable

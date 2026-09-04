@@ -51,7 +51,25 @@ async def get_item(
                d.content_text, d.extracted_text, d.storage_ref, d.pending_ref,
                d.is_downloaded, d.parse_status, d.parse_detail,
                d.size_bytes, d.checksum, d.event_time, d.ingested_at, d.tags,
-               d.identifiers, d.producer_id, d.connection_id, d.run_id, d.metadata
+               d.identifiers, d.producer_id, d.connection_id, d.run_id,
+               d.metadata, d.template,
+               -- What this record contributed to the graph.
+               --
+               -- The progress panel claimed "entities recorded" on every
+               -- successful enrichment and reported no number, so a record that
+               -- produced eighteen entities and one that produced none rendered
+               -- identically -- and the second is the case somebody needs to
+               -- know about, because it is the difference between "the graph is
+               -- built" and "the graph is empty and nothing said so".
+               --
+               -- Counted here rather than in a second request: it is one row
+               -- of the item's own state, and a panel that has to make two
+               -- calls to say whether a step finished will eventually show one
+               -- of them stale.
+               (SELECT count(*) FROM entity_mentions m
+                 WHERE m.data_id = d.data_id) AS entity_count,
+               (SELECT count(*) FROM entity_edges e
+                 WHERE e.source_data_id = d.data_id) AS edge_count
         FROM data_items d
         WHERE d.data_id = $1 AND {predicate}
         """,
