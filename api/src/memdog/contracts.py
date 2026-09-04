@@ -183,6 +183,16 @@ class WriteResponse(BaseModel):
 class RetrieveFilter(BaseModel):
     project_id: str
     tags: list[str] = Field(default_factory=list)
+    # Which containers to search. Empty means the whole project, which is the
+    # behaviour every existing caller already gets.
+    #
+    # A memory is the container people actually think in -- "what did we decide
+    # in the Acme thread" is a different question from "what does this project
+    # know", and answering the second when someone asked the first buries the
+    # answer under everything else. Scoping by tag was the nearest thing
+    # available and is not the same: a tag is a label somebody remembered to
+    # apply, a memory is where the record already lives.
+    memory_ids: list[str] = Field(default_factory=list)
     since: datetime | None = None
     until: datetime | None = None
     # Two clocks for the graph arm, and neither is `since`/`until` -- those bound

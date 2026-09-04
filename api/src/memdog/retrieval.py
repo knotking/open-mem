@@ -212,11 +212,18 @@ async def _retrieve(
     arm_limit_p = bind(max(request.limit * 4, 40))
     tags_p = bind(request.filter.tags)
     since_p, until_p = bind(request.filter.since), bind(request.filter.until)
+    memories_p = bind(request.filter.memory_ids)
 
+    # `EXISTS` rather than a join: a record can be in several of the selected
+    # memories and a join would return it once per membership, which the fusion
+    # step would then read as several separate hits and rank accordingly.
     filters = f"""
         d.project_id = {project_p}
         AND {predicate}
         AND ({tags_p}::text[] = '{{}}' OR d.tags && {tags_p}::text[])
+        AND ({memories_p}::text[] = '{{}}' OR EXISTS (
+              SELECT 1 FROM memory_members mm
+              WHERE mm.data_id = d.data_id AND mm.memory_id = ANY({memories_p}::text[])))
         AND ({since_p}::timestamptz IS NULL OR d.event_time >= {since_p})
         AND ({until_p}::timestamptz IS NULL OR d.event_time <= {until_p})
     """
