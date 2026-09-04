@@ -3948,6 +3948,18 @@ function AskSection({ projectId }: { projectId: string }) {
   const [memories, setMemories] = useState<Memory[]>([]);
   const [scope, setScope] = useState<string[]>([]);
   const [picking, setPicking] = useState(false);
+  // What the corpus says it is about. The model produced these from the first
+  // enrichment onwards and nothing could reach them -- they were a field, not a
+  // way in. Offered here because "I do not know what to ask" is the real first
+  // problem with a chat over somebody else's data.
+  const [topics, setTopics] = useState<{ keyword: string; records: number }[]>([]);
+  const [about, setAbout] = useState<string[]>([]);
+  useEffect(() => {
+    void call<{ keywords: { keyword: string; records: number }[] }>(
+      `api/v1/projects/${projectId}/keywords?limit=24`)
+      .then((r) => setTopics(r.keywords))
+      .catch(() => setTopics([]));
+  }, [projectId]);
   useEffect(() => {
     void call<{ memories: Memory[] }>(`api/v1/projects/${projectId}/memories`)
       .then((r) => setMemories(r.memories))
@@ -4000,9 +4012,12 @@ function AskSection({ projectId }: { projectId: string }) {
   }, [turns.length, pending, typed?.upto]);
 
   const chosen = memories.filter((m) => scope.includes(m.memory_id));
-  const scopeLabel = scope.length === 0
-    ? "everything in this project"
-    : chosen.map((m) => m.title ?? m.memory_key ?? m.memory_id).join(", ");
+  const scopeLabel = [
+    scope.length === 0
+      ? "everything in this project"
+      : chosen.map((m) => m.title ?? m.memory_key ?? m.memory_id).join(", "),
+    about.length > 0 ? `about ${about.join(", ")}` : null,
+  ].filter(Boolean).join(" · ");
 
   async function send(preset?: string) {
     const asked = (preset ?? question).trim();
@@ -4014,7 +4029,7 @@ function AskSection({ projectId }: { projectId: string }) {
     try {
       const answer = await call<Answer>("api/v1/ask", {
         question: asked,
-        filter: { project_id: projectId, memory_ids: scope },
+        filter: { project_id: projectId, memory_ids: scope, keywords: about },
       });
       setTurns((previous) => [...previous, answer]);
       setOpen(null);
@@ -4075,11 +4090,39 @@ function AskSection({ projectId }: { projectId: string }) {
               );
             })}
           </div>
-          <p className="empty" style={{ marginBottom: 0 }}>
+          <p className="empty">
             {scope.length === 0
               ? "Every record in the project is in scope."
               : "Everything outside the selection is excluded, not merely ranked lower."}
           </p>
+
+          {topics.length > 0 && (
+            <>
+              <h3>Or narrow by what it is about</h3>
+              <div className="row">
+                {topics.map((k) => {
+                  const on = about.includes(k.keyword);
+                  return (
+                    <button
+                      key={k.keyword}
+                      className={on ? "" : "secondary"}
+                      title={`${k.records} record${k.records === 1 ? "" : "s"}`}
+                      onClick={() => setAbout(on
+                        ? about.filter((x) => x !== k.keyword)
+                        : [...about, k.keyword])}
+                    >
+                      {k.keyword} <span className="empty">· {k.records}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="empty" style={{ marginBottom: 0 }}>
+                These are the model&rsquo;s words for what each record is about, not tags anybody
+                applied — which is why they are shown separately from tags and can be wrong.
+                Selecting several matches a record carrying <strong>any</strong> of them.
+              </p>
+            </>
+          )}
         </section>
       )}
 

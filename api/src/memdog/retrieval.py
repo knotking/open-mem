@@ -213,6 +213,7 @@ async def _retrieve(
     tags_p = bind(request.filter.tags)
     since_p, until_p = bind(request.filter.since), bind(request.filter.until)
     memories_p = bind(request.filter.memory_ids)
+    keywords_p = bind(request.filter.keywords)
 
     # `EXISTS` rather than a join: a record can be in several of the selected
     # memories and a join would return it once per membership, which the fusion
@@ -224,6 +225,10 @@ async def _retrieve(
         AND ({memories_p}::text[] = '{{}}' OR EXISTS (
               SELECT 1 FROM memory_members mm
               WHERE mm.data_id = d.data_id AND mm.memory_id = ANY({memories_p}::text[])))
+        AND ({keywords_p}::text[] = '{{}}' OR EXISTS (
+              SELECT 1 FROM artifacts a2
+              JOIN artifact_sources s2 ON s2.artifact_id = a2.artifact_id
+              WHERE s2.data_id = d.data_id AND a2.keywords && {keywords_p}::text[]))
         AND ({since_p}::timestamptz IS NULL OR d.event_time >= {since_p})
         AND ({until_p}::timestamptz IS NULL OR d.event_time <= {until_p})
     """
@@ -707,6 +712,41 @@ async def list_memories(pool: asyncpg.Pool, principal: Principal, project_id: st
         project_id, org_id, 200, org_id, user_id, principals,
     )
     return [dict(r) for r in rows]
+
+
+async def project_keywords(
+    pool, principal, project_id: str, *, limit: int = 200
+) -> list[dict]:
+    """What this project is about, as the model has described it.
+
+    Counted over artifacts the caller can actually see, not over the project:
+    a keyword whose every record is hidden must not appear, or the count itself
+    discloses that something exists. This is the same rule entity listing
+    follows and for the same reason.
+
+    Counts are of *records*, not of mentions. A keyword repeated across five
+    chunks of one document is one record's worth of evidence, and ranking by
+    mentions would put a long document above a broad theme.
+    """
+    org_id, user_id, principals = visibility_params(principal)
+    predicate = visibility_sql("d", 2, 3, 4)
+    rows = await pool.fetch(
+        f"""
+        SELECT keyword, count(DISTINCT s.data_id) AS records
+        FROM artifacts a
+        JOIN artifact_sources s ON s.artifact_id = a.artifact_id
+        JOIN data_items d ON d.data_id = s.data_id
+        CROSS JOIN LATERAL unnest(a.keywords) AS keyword
+        WHERE a.project_id = $1
+          AND d.deleted_at IS NULL
+          AND {predicate}
+        GROUP BY keyword
+        ORDER BY records DESC, keyword ASC
+        LIMIT $5
+        """,
+        project_id, org_id, user_id, principals, min(limit, 500),
+    )
+    return [{"keyword": r["keyword"], "records": r["records"]} for r in rows]
 
 
 async def memory_members(pool: asyncpg.Pool, principal: Principal, memory_id: str) -> list[dict]:

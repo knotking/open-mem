@@ -193,6 +193,12 @@ class RetrieveFilter(BaseModel):
     # available and is not the same: a tag is a label somebody remembered to
     # apply, a memory is where the record already lives.
     memory_ids: list[str] = Field(default_factory=list)
+    # What the model said a record is about. Kept separate from `tags` on
+    # purpose: a tag is an assertion by a person and a keyword is a guess, and a
+    # filter that cannot tell you which one matched is a filter you cannot
+    # correct. Matching is ANY -- a record with one of these keywords qualifies,
+    # because narrowing by several is an intersection nobody asked for.
+    keywords: list[str] = Field(default_factory=list)
     since: datetime | None = None
     until: datetime | None = None
     # Two clocks for the graph arm, and neither is `since`/`until` -- those bound

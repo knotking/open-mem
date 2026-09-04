@@ -2581,6 +2581,26 @@ async def prompt_registry_endpoint(actor: Principal = Depends(principal)) -> dic
     }
 
 
+@app.get("/api/v1/projects/{project_id}/keywords")
+async def list_keywords_endpoint(
+    request: Request, project_id: str, limit: int = 200,
+    actor: Principal = Depends(principal),
+) -> dict:
+    """What this project is about, counted over what the caller can see.
+
+    Keywords were extracted from the first enrichment onwards and read in
+    exactly one place -- beside a record you had already found. This is the
+    endpoint that turns them from a field into a way in.
+    """
+    from .retrieval import project_keywords
+
+    try:
+        return {"keywords": await project_keywords(
+            request.app.state.pool, actor, project_id, limit=limit)}
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
 @app.get("/api/v1/projects/{project_id}/entities")
 async def list_entities_endpoint(
     request: Request, project_id: str, type: str | None = None,
