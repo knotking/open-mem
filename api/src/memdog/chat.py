@@ -426,6 +426,60 @@ def build_answerer(settings) -> Answerer:
 PASSAGES = 8
 
 
+def _nothing_matched(corpus, request) -> str:
+    """The sentence to show when retrieval returned nothing.
+
+    Every answerer returns the same line for an empty passage list --
+    "Nothing in the corpus matched that question." -- and it is true and
+    useless, because three unrelated situations produce it and they have
+    different fixes. After picking a lens or an anchor it reads as "your data
+    does not say", when the actual cause is a scope that selected no records to
+    search at all.
+
+    The corpus counts are computed under the same filter, so they separate the
+    cases without another query. Ordered by how early the cause stops the
+    search, so the first true one is the one worth reporting -- the same rule
+    the progress panel's `reason` follows.
+    """
+    narrowed = []
+    if request.filter.template:
+        narrowed.append(f"read as {request.filter.template}")
+    if request.filter.entity_ids:
+        narrowed.append("anchored on the entities you chose")
+    if request.filter.memory_ids:
+        narrowed.append("limited to the memories you chose")
+    if request.filter.keywords:
+        narrowed.append("limited to the topics you chose")
+    scope = ", ".join(narrowed)
+
+    if corpus is None:
+        return "Nothing in the corpus matched that question."
+
+    if corpus.total == 0:
+        # The scope, not the question. "Your data does not say" is simply wrong
+        # here: nothing was searched.
+        if scope:
+            return (
+                f"No records are in scope, so nothing was searched — the scope is "
+                f"{scope}, and no record in this project matches it. Widen the scope "
+                f"and ask again."
+            )
+        return "This project has no records yet, so there was nothing to search."
+
+    if corpus.searchable == 0:
+        return (
+            f"{corpus.total} record{'' if corpus.total == 1 else 's'} in scope, but none "
+            f"is searchable yet — search runs on embeddings and there are none. Nothing "
+            f"could have matched, whatever the question was."
+        )
+
+    return (
+        f"Nothing matched among the {corpus.searchable} searchable record"
+        f"{'' if corpus.searchable == 1 else 's'} in scope"
+        + (f" ({scope})." if scope else ".")
+    )
+
+
 async def ask(
     pool: asyncpg.Pool,
     embedder: EmbeddingEngine,
@@ -484,7 +538,13 @@ async def _ask(
         user_id=principal.user_id,
     )
 
-    generated = await answerer.answer(request.question, passages)
+    # Why nothing matched, when nothing did. The answerers all return one
+    # generic sentence for an empty passage list, and it hides the difference
+    # between "your scope excludes everything" and "your data does not say".
+    if not passages:
+        generated = Generated(_nothing_matched(found.corpus, request), [], False)
+    else:
+        generated = await answerer.answer(request.question, passages)
 
     # A model can cite a passage number that does not exist. Citations are
     # therefore resolved against the passages actually supplied, and anything

@@ -19,6 +19,7 @@ determined is null rather than inferred from world knowledge.
 from __future__ import annotations
 
 import json
+import os
 import re
 import secrets
 from collections import Counter
@@ -31,6 +32,7 @@ from pydantic import BaseModel, Field
 
 from . import graph_templates, predicates as predicates_mod
 from .inference import EmbeddingUnavailable
+from .telemetry import span
 
 EXTRACT_PURPOSE = "extraction"
 
@@ -97,6 +99,157 @@ class Envelope(BaseModel):
     # which is itself informative: a null here means no model was involved.
     model_version: str | None = None
     response_id: str | None = None
+
+
+# How many windows one record may cost. A book is not a special case to be
+# refused; it is a normal thing to put in, and reading only its opening is the
+# behaviour that made a graph of eighteen chapters look like a graph of one.
+#
+# Bounded because each window is a model call: without a cap, one upload of a
+# large corpus quietly becomes hundreds of calls billed to a project that asked
+# for "add data". Twelve covers ~2.4M characters through Gemini -- several
+# books -- and what is skipped is reported rather than dropped in silence.
+MAX_WINDOWS = int(os.environ.get("MAX_EXTRACT_WINDOWS", "12"))
+
+
+def split_windows(text: str, size: int) -> list[str]:
+    """Cut text into windows, preferring a paragraph boundary near the end.
+
+    A hard slice at exactly `size` lands mid-sentence, and a model handed half a
+    sentence at each edge invents the other half -- which is the one failure a
+    graph cannot tolerate, because a hallucinated edge becomes a traversable
+    path rather than a sentence somebody can discount.
+
+    The search window is the last 10% so a document with no blank lines still
+    makes progress instead of degenerating to one character at a time.
+    """
+    if size <= 0 or len(text) <= size:
+        return [text]
+    windows, start = [], 0
+    while start < len(text):
+        end = min(start + size, len(text))
+        if end < len(text):
+            floor = start + int(size * 0.9)
+            # The delimiter stays with the window it ends, not the one it
+            # starts. Cutting *at* the separator left the full stop leading the
+            # next window -- so the split was still mid-sentence, which is the
+            # thing this search exists to avoid.
+            for sep in ("\n\n", "\n", ". "):
+                cut = text.rfind(sep, floor, end)
+                if cut > start:
+                    end = cut + len(sep)
+                    break
+        windows.append(text[start:end])
+        start = end
+    return [w for w in windows if w.strip()]
+
+
+def merge_envelopes(parts: list[Envelope], *, read: int, total: int) -> Envelope:
+    """One envelope from several windows.
+
+    The rule is not symmetric, deliberately. **Narrative fields come from the
+    first window; the graph is cumulative.** A title is a name for the whole
+    document and the opening is the best single guess at it, while entities and
+    relations are claims the text makes and every window makes more of them --
+    taking only the first window's would be the bug this exists to fix.
+
+    Summaries are joined rather than replaced, because a book's summary is
+    genuinely a sequence and one paragraph about its opening is not a summary of
+    it. They are capped: a summary nobody will read to the end of has stopped
+    being a summary.
+    """
+    first = parts[0]
+    entities, seen_e = [], set()
+    relations, seen_r = {}, None
+    keywords, seen_k = [], set()
+    summaries = []
+    for part in parts:
+        for e in part.entities or []:
+            name = (e.get("name") or "").strip()
+            kind = e.get("type") or "other"
+            if not name:
+                continue
+            key = (kind, name.casefold())
+            if key in seen_e:
+                continue
+            seen_e.add(key)
+            entities.append(e)
+        for r in part.relations or []:
+            key = ((r.get("subject") or "").strip().casefold(),
+                   (r.get("predicate") or "").strip(),
+                   (r.get("object") or "").strip().casefold())
+            if not all(key):
+                continue
+            # The same claim in two windows is corroboration, and the graph
+            # layer already counts evidence per record -- so here it is one
+            # relation at the best confidence either window offered.
+            existing = relations.get(key)
+            confidence = r.get("confidence")
+            if existing is None:
+                relations[key] = dict(r)
+            elif confidence is not None and (existing.get("confidence") or 0) < confidence:
+                existing["confidence"] = confidence
+        for k in part.keywords or []:
+            if k and k.casefold() not in seen_k:
+                seen_k.add(k.casefold())
+                keywords.append(k)
+        if part.summary:
+            summaries.append(part.summary.strip())
+
+    summary = "\n\n".join(summaries)
+    if len(summary) > 12_000:
+        summary = summary[:12_000].rstrip() + "…"
+
+    fields = dict(first.fields or {})
+    fields["windows_read"] = read
+    fields["windows_total"] = total
+    if read < total:
+        # Named, not silent. "We read 12 of 19 windows" is a fact somebody can
+        # act on; an envelope that simply describes less is not.
+        fields["windows_skipped"] = total - read
+    return Envelope(
+        title=first.title,
+        description=first.description,
+        summary=summary or first.summary,
+        keywords=keywords[:40],
+        language=first.language,
+        entities=entities,
+        relations=list(relations.values()),
+        fields=fields,
+        model_version=first.model_version,
+        response_id=first.response_id,
+    )
+
+
+async def extract_long(
+    extractor, text: str, *, data_type: str, prompt: str | None = None,
+    template: str | None = None, max_windows: int = MAX_WINDOWS,
+) -> Envelope:
+    """Extract across a whole document rather than its first window.
+
+    Embedding has always chunked; extraction never did. So a record's *text*
+    was fully searchable while its *understanding* -- title, keywords, entities,
+    relations -- described only as much as fitted in one model call. On a page
+    those are the same thing. On a book they are not, and the difference showed
+    up as a graph of eighteen chapters that had the density of one.
+
+    Sequential rather than concurrent: these are the expensive calls, they run
+    on a background task, and a burst of a dozen against a rate-limited provider
+    turns a slow success into a fast failure.
+    """
+    window = getattr(extractor, "max_input_chars", 0)
+    parts = split_windows(text, window)
+    if len(parts) <= 1:
+        return await extractor.extract(
+            text, data_type=data_type, prompt=prompt, template=template)
+
+    read = parts[:max_windows]
+    envelopes = []
+    for index, part in enumerate(read):
+        with span("extract.window", index=index, of=len(parts)):
+            envelopes.append(await extractor.extract(
+                part, data_type=data_type, prompt=prompt, template=template))
+    return merge_envelopes(envelopes, read=len(read), total=len(parts))
 
 
 class Extractor(Protocol):
@@ -260,6 +413,19 @@ _STOP = {
 }
 
 
+# How much text an extractor reads in one call. Zero means no limit.
+#
+# This was a bare `text[:200_000]` inside the Gemini call, which is the right
+# guard and the wrong place for it: a slice hides the discarded remainder from
+# everything upstream, so a document longer than the window produced an
+# envelope describing its opening and nothing recorded that the rest existed.
+# A 232,000-character Bhagavad Gita came back titled "Summary of Bhagavad Gita
+# Chapters 1 through 16" -- the model named its own truncation point and the
+# system stored the artifact as a success.
+GEMINI_WINDOW = 200_000
+OLLAMA_WINDOW = 100_000
+
+
 class LocalHeuristicExtractor:
     """Deterministic enrichment with no model behind it.
 
@@ -304,6 +470,8 @@ class LocalHeuristicExtractor:
 
 
 class OllamaExtractor:
+    max_input_chars = OLLAMA_WINDOW
+
     """The model path. Defers rather than falling back, exactly as embedding does.
 
     `served_by_model` is recorded separately from `model_id` for the case this
@@ -356,6 +524,8 @@ class OllamaExtractor:
 
 
 class GeminiExtractor:
+    max_input_chars = GEMINI_WINDOW
+
     """Extraction with the shipped per-type prompts.
 
     The prompt is chosen by `data_type`, which is what the classification
@@ -385,8 +555,11 @@ class GeminiExtractor:
             # above so the name stays available for the artifact's provenance.
             block = prompt
         offered = graph_templates.predicates_for(template)
+        # Still bounded here -- the guard belongs at the call that would
+        # otherwise be rejected -- but callers should hand this a window rather
+        # than a book. `extract_long` does the splitting.
         system, user = build_prompt(
-            text[:200_000], data_type=data_type, schema=envelope_schema(offered),
+            text[:GEMINI_WINDOW], data_type=data_type, schema=envelope_schema(offered),
             block=block, template=template,
         )
         try:
@@ -520,6 +693,34 @@ class ChainedExtractor:
         primary is local and whose fallback is not.
         """
         return [step.model_id for step in self._chain.steps]
+
+    @property
+    def max_input_chars(self) -> int:
+        """The narrowest window any step in the chain can read.
+
+        The chain is what the worker actually holds -- every concrete extractor
+        sits behind it -- so a window declared only on the concrete classes is a
+        window nothing can see. `getattr(extractor, "max_input_chars", 0)`
+        returned 0, `split_windows` treated the document as one window, and the
+        book was truncated inside the Gemini call exactly as before. The fix
+        landed, the tests passed, and the deployed behaviour did not change; the
+        artifact carried no `windows_read`, which is the only reason this was
+        caught rather than believed.
+
+        The *narrowest*, not the primary's: a fallback is chosen when the
+        primary fails, and handing it a window its own context cannot hold
+        turns a degraded answer into no answer.
+        """
+        # `Step.call` is the extractor's bound `extract`, so the instance is
+        # reachable through `__self__`. Reading `step.handler` -- which does not
+        # exist -- would have silently yielded 0 for every step and put the
+        # window back where it started.
+        windows = [
+            getattr(getattr(step.call, "__self__", None), "max_input_chars", 0) or 0
+            for step in self._chain.steps
+        ]
+        windows = [w for w in windows if w > 0]
+        return min(windows) if windows else 0
 
     def restricted_to(self, allowed: set[str]) -> "ChainedExtractor | None":
         chain = self._chain.restricted(lambda step: step.model_id in allowed)

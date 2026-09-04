@@ -28,7 +28,7 @@ from .entities import resolve_mentions
 from .cases import route_case
 from .events import emit
 from .graph import record_edges
-from .extraction import EXTRACT_PURPOSE, Extractor
+from .extraction import EXTRACT_PURPOSE, Extractor, extract_long
 from .inference import EmbeddingEngine, generator_version
 from . import normalize, quota, usage
 from .telemetry import continue_trace, record, span
@@ -503,9 +503,14 @@ class EnrichWorker:
             # is process-global, so two concurrent enrichments of one data type
             # raced and one ran with the other's prompt -- recording a
             # generator version it was not produced by.
-            envelope = await extractor.extract(
-                row["indexable_text"], data_type=data_type, prompt=prompt,
-                template=row["template"],
+            # Windowed. `extract` reads one window; a document longer than
+            # one produced an envelope describing its opening while the rest of
+            # the text sat fully embedded and searchable underneath it -- the
+            # understanding stopped where the model's context did, and nothing
+            # said so.
+            envelope = await extract_long(
+                extractor, row["indexable_text"], data_type=data_type,
+                prompt=prompt, template=row["template"],
             )
 
         # A template changes both halves of the request -- the instruction block
