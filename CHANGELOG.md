@@ -57,10 +57,12 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 
 ### Changed
 - **The landing page leads with the corpus, not with a sign-in form.** The demo
-  is the hero and sign-in is a panel off the top bar: the first thing a visitor
-  can do is ask a question, and a form demanding an account they do not have is
-  the opposite of that. The transcript scrolls inside its own card so the
-  composer does not walk down the page with every answer.
+  takes the full column at the top of the page and sign-in is a panel off the
+  top bar: the first thing a visitor can do is ask a question, and a form
+  demanding an account they do not have is the opposite of that. The headline,
+  lede and counts follow underneath, as an explanation of something already
+  seen rather than a claim to be taken on faith. The transcript scrolls inside
+  its own card so the composer does not walk down the page with every answer.
 
 ### Migrations
 - `0050_rebuild_vector_index.sql` — drops and recreates the HNSW index over
