@@ -1011,9 +1011,20 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
         />
       </header>
 
-      <section className="hero-split">
+      {/* The demo is the page's opening move, at full width and above the
+          argument for it. Somebody who has already asked the corpus a question
+          reads the copy below as an explanation of something they have seen;
+          the other order asks them to take it on faith first. */}
+      {heroHasDemo && (
+        <section className="hero-demo">
+          <p className="eyebrow">Memory layer · sandbox · no account needed</p>
+          <PublicDemo info={demo!} setInfo={setDemo} />
+        </section>
+      )}
+
+      <section className={heroHasDemo ? "hero-copy" : "hero-split"}>
         <div>
-          <p className="eyebrow">Memory layer · sandbox</p>
+          {!heroHasDemo && <p className="eyebrow">Memory layer · sandbox</p>}
           <h1>
             No answer without its source. No silence without its <em>reason</em>.
           </h1>
@@ -1041,9 +1052,7 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
           )}
         </div>
 
-        {heroHasDemo
-          ? <PublicDemo info={demo!} setInfo={setDemo} />
-          : signInCard}
+        {!heroHasDemo && signInCard}
       </section>
 
       <Receipt />
