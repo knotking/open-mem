@@ -426,7 +426,7 @@ def build_answerer(settings) -> Answerer:
 PASSAGES = 8
 
 
-def _nothing_matched(corpus, request) -> str:
+def _nothing_matched(corpus, request, excluded=()) -> str:
     """The sentence to show when retrieval returned nothing.
 
     Every answerer returns the same line for an empty passage list --
@@ -466,16 +466,36 @@ def _nothing_matched(corpus, request) -> str:
             )
         return "This project has no records yet, so there was nothing to search."
 
-    if corpus.searchable == 0:
+    # `enriched` is *past* `searchable`, not an alternative to it: a record that
+    # has been summarised was embedded on the way. Reading the column as
+    # exclusive reported "none is searchable yet" over a corpus that was fully
+    # indexed -- a confident, wrong diagnosis, which is worse than the vague one
+    # it replaced.
+    reachable = corpus.searchable + corpus.enriched
+    if reachable == 0:
         return (
             f"{corpus.total} record{'' if corpus.total == 1 else 's'} in scope, but none "
             f"is searchable yet — search runs on embeddings and there are none. Nothing "
             f"could have matched, whatever the question was."
         )
 
+    # Candidates were found and every one scored too low. That is a different
+    # answer from "nothing was found", and the fix is different too: rephrasing
+    # helps here and does nothing when the corpus is empty.
+    near = [e for e in (excluded or []) if getattr(e, "reason", None) == "threshold"]
+    if near:
+        best = max((e.score or 0) for e in near)
+        return (
+            f"Nothing in scope was close enough to that question. {len(near)} record"
+            f"{'' if len(near) == 1 else 's'} came near — the best scored "
+            f"{best:.2f} — but not near enough to quote from. Try naming the "
+            f"specific thing you are after, in the words the text would use"
+            + (f" ({scope})." if scope else ".")
+        )
+
     return (
-        f"Nothing matched among the {corpus.searchable} searchable record"
-        f"{'' if corpus.searchable == 1 else 's'} in scope"
+        f"Nothing matched among the {reachable} searchable record"
+        f"{'' if reachable == 1 else 's'} in scope"
         + (f" ({scope})." if scope else ".")
     )
 
@@ -542,7 +562,8 @@ async def _ask(
     # generic sentence for an empty passage list, and it hides the difference
     # between "your scope excludes everything" and "your data does not say".
     if not passages:
-        generated = Generated(_nothing_matched(found.corpus, request), [], False)
+        generated = Generated(
+            _nothing_matched(found.corpus, request, found.excluded), [], False)
     else:
         generated = await answerer.answer(request.question, passages)
 

@@ -1124,6 +1124,124 @@ async def delete_share(
     return await _control(sharing.revoke_share)(request.app.state.pool, actor, share_id)
 
 
+# ------------------------------------------------------------- public demo
+
+
+@app.get("/api/v1/public/demo")
+async def public_demo_info(request: Request) -> dict:
+    """What the public demo is, or that there is not one.
+
+    Served unauthenticated so the landing page can decide whether to render the
+    demo at all, rather than hardcoding a corpus that may not be deployed.
+    `available: false` is the ordinary answer on a deployment that has not
+    switched it on, and is not an error.
+    """
+    settings = request.app.state.settings
+    if not settings.public_project_id:
+        return {"available": False}
+
+    counts = await request.app.state.pool.fetchrow(
+        """
+        SELECT count(*) FILTER (WHERE answered
+                                AND asked_at > date_trunc('day', now())) AS spent
+          FROM public_asks
+        """
+    )
+    spent = int(counts["spent"] or 0)
+    return {
+        "available": True,
+        "title": settings.public_title or "Ask the corpus",
+        "subtitle": settings.public_subtitle or "",
+        "remaining_today": max(0, settings.public_daily_cap - spent),
+        "daily_cap": settings.public_daily_cap,
+    }
+
+
+@app.post("/api/v1/public/ask")
+async def public_ask(request: Request, body: dict) -> dict:
+    """One question, one corpus, no login.
+
+    Every other route decides what you may read from who you are. This one has
+    no caller to identify, so it cannot borrow that machinery -- what replaces
+    it is narrowness. The project and memory are named in configuration, never
+    in the request, so there is no scope for a caller to widen. The principal is
+    synthetic, carries `DATA_READ` alone, and has a `user_id` that matches no
+    real user, so private records stay invisible exactly as they would to a
+    stranger.
+
+    Metered before the model call, not after: the failure mode of a public
+    endpoint is a flood of requests that error, and counting afterwards gives
+    every one of them a free call.
+    """
+    from .auth import DATA_READ, Principal
+    from .contracts import AskRequest, RetrieveFilter
+    from .public_demo import DemoUnavailable, check_and_count, client_ip, release
+
+    settings = request.app.state.settings
+    if not settings.public_project_id:
+        raise HTTPException(status_code=404, detail="no public demo on this deployment")
+
+    question = (body or {}).get("question") or ""
+    if not question.strip():
+        raise HTTPException(status_code=400, detail="a question is required")
+    if len(question) > 500:
+        raise HTTPException(status_code=400, detail="question too long")
+
+    pool = request.app.state.pool
+    org_id = await pool.fetchval(
+        "SELECT org_id FROM projects WHERE project_id = $1", settings.public_project_id
+    )
+    if org_id is None:
+        raise HTTPException(status_code=404, detail="no public demo on this deployment")
+
+    try:
+        ask_id = await check_and_count(
+            pool, ip=client_ip(request), secret=settings.master_key_b64,
+            question=question, rate_per_hour=settings.public_rate_per_hour,
+            daily_cap=settings.public_daily_cap,
+        )
+    except DemoUnavailable as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+    # Matches no real user, so `private` records are as invisible here as they
+    # are to any stranger. Only what the org made org-visible is reachable.
+    visitor = Principal(
+        user_id="public", org_id=org_id, project_id=settings.public_project_id,
+        capabilities=frozenset({DATA_READ}), mode="public",
+    )
+    filters = RetrieveFilter(project_id=settings.public_project_id)
+    if settings.public_memory_id:
+        filters.memory_ids = [settings.public_memory_id]
+
+    try:
+        answer = await ask(
+            pool, request.app.state.embedder, request.app.state.answerer, visitor,
+            AskRequest(question=question, filter=filters,
+                       match=["vector", "lexical"]),
+            embed_generator=request.app.state.current_generators["embedding"],
+            graph=request.app.state.graph,
+        )
+    except Exception:
+        # The reservation is released rather than kept: a visitor who got no
+        # answer has not spent the day's budget, and an endpoint that charges
+        # for its own failures runs out fastest exactly when it is broken.
+        await release(pool, ask_id)
+        raise
+
+    # Deliberately not the full answer shape. `query_id`, model identity,
+    # generator versions and corpus counts are operational facts about the
+    # deployment, and an anonymous caller has no use for them and no business
+    # knowing them.
+    return {
+        "question": answer.question,
+        "answer": answer.answer,
+        "grounded": answer.grounded,
+        "citations": [
+            {"marker": c.marker, "text": c.text} for c in answer.citations
+        ],
+    }
+
+
 @app.get("/s/{token}")
 async def read_share(request: Request, token: str, password: str | None = None) -> dict:
     """The public surface. Deliberately unauthenticated -- the token *is* the

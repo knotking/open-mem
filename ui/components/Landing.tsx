@@ -9,7 +9,7 @@
  * typed is wrong within a month and wrong in the flattering direction.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import ThemeToggle from "./ThemeToggle";
 
@@ -52,6 +52,7 @@ type Capabilities = {
  * its anchor rather than leaving one that scrolls nowhere.
  */
 const SECTIONS = [
+  { label: "Try it", covers: ["demo"] },
   { label: "How it works", covers: ["flow"] },
   { label: "What it connects", covers: ["graph", "time"] },
   { label: "What it tells you", covers: ["alerts", "compaction"] },
@@ -630,6 +631,168 @@ function Receipt() {
   );
 }
 
+/**
+ * The public demo — a corpus anyone can question without an account.
+ *
+ * The whole landing page argues that this system turns documents into
+ * something answerable. A visitor has no way to check that claim: everything
+ * above is prose about a pipeline they cannot run. This is the one place the
+ * page stops describing and starts demonstrating, on a text nobody has to take
+ * on trust — Edwin Arnold's 1885 translation, public domain, eighteen chapters
+ * ingested exactly the way a customer's document would be.
+ *
+ * It renders only when the deployment has one configured. A demo box that
+ * errors on every question is worse than no demo box, so `available: false`
+ * removes the section rather than showing a broken one.
+ *
+ * The remaining-questions count is shown deliberately. A public model endpoint
+ * runs on a fixed daily budget, and a visitor who hits the cap should already
+ * know the number was finite rather than conclude the thing is broken.
+ */
+function PublicDemo() {
+  const [info, setInfo] = useState<{
+    available: boolean; title: string; subtitle: string;
+    remaining_today: number; daily_cap: number;
+  } | null>(null);
+  const [question, setQuestion] = useState("");
+  const [turns, setTurns] = useState<{
+    question: string; answer: string; grounded: boolean;
+    citations: { marker: number; text: string }[];
+  }[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [open, setOpen] = useState<number | null>(null);
+  const foot = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    void fetch("/api/proxy/api/v1/public/demo")
+      .then((r) => (r.ok ? r.json() : null))
+      .then(setInfo)
+      .catch(() => setInfo(null));
+  }, []);
+
+  useEffect(() => {
+    if (turns.length) foot.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [turns.length, busy]);
+
+  async function send(preset?: string) {
+    const asked = (preset ?? question).trim();
+    if (!asked || busy) return;
+    setBusy(true);
+    setError(null);
+    setQuestion("");
+    try {
+      const response = await fetch("/api/proxy/api/v1/public/ask", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question: asked }),
+      });
+      const body = await response.json();
+      if (!response.ok) {
+        // The server's sentence, not a status code. A visitor who has run out
+        // of questions is not looking at an error, and "429" reads as broken.
+        throw new Error(body?.detail ?? "Something went wrong.");
+      }
+      setTurns((previous) => [...previous, body]);
+      setInfo((i) => (i ? { ...i, remaining_today: Math.max(0, i.remaining_today - 1) } : i));
+    } catch (e) {
+      setError((e as Error).message);
+      setQuestion(asked);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!info?.available) return null;
+
+  return (
+    <section className="steps" id="demo">
+      <h2 className="section-title">{info.title}</h2>
+      <p className="hero-lede" style={{ marginBottom: 18 }}>
+        {info.subtitle} Every answer is drawn from the text and cites the passage it came from,
+        so a wrong answer is something you can check rather than something you have to believe.
+        When the text does not support an answer, it says so instead of composing one.
+      </p>
+
+      <div className="demo-box">
+        {turns.length === 0 && (
+          <div className="demo-starters">
+            {[
+              "What does Krishna say about acting without attachment to results?",
+              "What is said to follow from dwelling on the objects of the senses?",
+              "Why does Arjuna refuse to fight, and how is he answered?",
+            ].map((example) => (
+              <button key={example} className="secondary" disabled={busy}
+                      onClick={() => void send(example)}>
+                {example}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {turns.map((turn, i) => (
+          <div className="chatturn" key={i}>
+            <div className="bubble asked">{turn.question}</div>
+            <div className={`bubble answered${turn.grounded ? "" : " ungrounded"}`}>
+              {turn.answer}
+            </div>
+            <div className="turnfoot">
+              {!turn.grounded && (
+                <span className="chip warnchip">not supported by the text</span>
+              )}
+              {turn.citations.length > 0 && (
+                <button className="linkish"
+                        onClick={() => setOpen(open === i ? null : i)}>
+                  {open === i ? "▾" : "▸"} {turn.citations.length} passage
+                  {turn.citations.length === 1 ? "" : "s"}
+                </button>
+              )}
+            </div>
+            {open === i && (
+              <div className="turndetail">
+                {turn.citations.map((c) => (
+                  <div className="hit" key={c.marker}>
+                    <div className="meta"><span className="chip on">[{c.marker}]</span></div>
+                    <div className="text">{c.text}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+
+        {busy && (
+          <div className="chatturn">
+            <div className="bubble answered thinking">
+              <span className="dots"><i /><i /><i /></span> reading the text…
+            </div>
+          </div>
+        )}
+        <div ref={foot} />
+
+        <div className="demo-composer">
+          <input
+            type="text" value={question} disabled={busy}
+            placeholder="Ask the Gita a question…"
+            onChange={(e) => setQuestion(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void send(); } }}
+          />
+          <button onClick={() => void send()} disabled={busy || !question.trim()}>
+            {busy ? "Reading…" : "Ask"}
+          </button>
+        </div>
+        {error && <p className="err">{error}</p>}
+        <p className="demo-note">
+          Sir Edwin Arnold, <em>The Song Celestial</em> (1885) — public domain, from Project
+          Gutenberg. Eighteen chapters, ingested exactly as your own documents would be.{" "}
+          <strong>{info.remaining_today}</strong> of {info.daily_cap} questions left today —
+          the demo runs on a fixed daily budget so it stays free.
+        </p>
+      </div>
+    </section>
+  );
+}
+
 export default function Landing({ authEnabled }: { authEnabled: boolean }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -811,6 +974,8 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
           </div>
         )}
       </section>
+
+      <PublicDemo />
 
       <Receipt />
 

@@ -28,6 +28,10 @@ DB_HOST=$(gcloud sql instances describe "$INSTANCE" --project "$PROJECT" \
   --format="value(ipAddresses[0].ipAddress)")
 echo "    ${INSTANCE} -> ${DB_HOST}"
 
+# The public demo is off unless PUBLIC_PROJECT_ID is passed. An unauthenticated
+# endpoint that makes a model call per request is an open tap on the bill, so it
+# is switched on deliberately at deploy time and never inherited from a default.
+# Passing an empty value is how you turn it off again.
 step "Deploying ${SERVICE}"
 # Direct VPC egress rather than a Serverless VPC Access connector: the
 # instance has no public IP (org policy forbids one), so the service reaches
@@ -52,7 +56,7 @@ gcloud run deploy "$SERVICE" \
   --image "$IMAGE" \
   --service-account "$SA" \
   --network default --subnet default --vpc-egress private-ranges-only \
-  --set-env-vars "DB_HOST=${DB_HOST},DB_NAME=${DB_NAME},DB_USER=postgres,EMBED_DIM=768,EMBED_ENGINE=${EMBED_ENGINE:-gemini},EMBED_MODEL=${EMBED_MODEL:-gemini-embedding-001},RAW_BUCKET=${RAW_BUCKET},MEDIA_INTERPRETATION=true,MAX_TEXT_CHARS=${MAX_TEXT_CHARS:-4000000},EXTRACT_ENGINE=gemini,MULTIMODAL_MODEL=${MULTIMODAL_MODEL:-gemini-3.7-flash},TRANSCRIBE_MODEL=${TRANSCRIBE_MODEL:-gemini-3.5-transcribe},FIREBASE_PROJECT_ID=${PROJECT},OTEL_GCP_PROJECT=${PROJECT},IMAGE_TAG=${TAG}" \
+  --set-env-vars "DB_HOST=${DB_HOST},DB_NAME=${DB_NAME},DB_USER=postgres,EMBED_DIM=768,EMBED_ENGINE=${EMBED_ENGINE:-gemini},EMBED_MODEL=${EMBED_MODEL:-gemini-embedding-001},RAW_BUCKET=${RAW_BUCKET},MEDIA_INTERPRETATION=true,MAX_TEXT_CHARS=${MAX_TEXT_CHARS:-4000000},EXTRACT_ENGINE=gemini,MULTIMODAL_MODEL=${MULTIMODAL_MODEL:-gemini-3.7-flash},TRANSCRIBE_MODEL=${TRANSCRIBE_MODEL:-gemini-3.5-transcribe},FIREBASE_PROJECT_ID=${PROJECT},OTEL_GCP_PROJECT=${PROJECT},IMAGE_TAG=${TAG},PUBLIC_PROJECT_ID=${PUBLIC_PROJECT_ID:-},PUBLIC_MEMORY_ID=${PUBLIC_MEMORY_ID:-},PUBLIC_TITLE=${PUBLIC_TITLE:-},PUBLIC_SUBTITLE=${PUBLIC_SUBTITLE:-},PUBLIC_DAILY_CAP=${PUBLIC_DAILY_CAP:-500},PUBLIC_RATE_PER_HOUR=${PUBLIC_RATE_PER_HOUR:-20}" \
   --set-secrets "DB_PASSWORD=memdog-db-password:latest,MEMDOG_MASTER_KEY=memdog-master-key:latest,GEMINI_API_KEY=gemini-api-key:latest" \
   --allow-unauthenticated \
   --min-instances 0 --max-instances 4 \
