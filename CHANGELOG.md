@@ -10,7 +10,33 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 
 ## Unreleased
 
+### Added
+- **Pick a memory in Chat and see what is in it.**
+  `GET /api/v1/memories/{id}/context` returns record counts by state, the
+  templates its records were read under, the keywords its artifacts carry, the
+  entities its records name, and the relationships those records assert — all
+  scoped by the caller's own visibility, so two people may legitimately see
+  different totals for one memory. In the console the keywords and entities are
+  controls, not decoration: clicking a keyword narrows the question, clicking an
+  entity anchors the graph on it.
+- **Extraction reads the whole document.** Embedding has always chunked;
+  extraction never did, so a record's text was fully searchable while its
+  understanding described only what fitted in one model call. A 232,412-character
+  Bhagavad Gita came back titled *"Summary of Bhagavad Gita Chapters 1 through
+  16"* with 15 entities for 18 chapters — `text[:200_000]` discarded 32,412
+  characters and the artifact stored as a success. Documents are now split on
+  paragraph boundaries and merged: narrative fields from the first window, the
+  graph cumulative. Capped at `MAX_EXTRACT_WINDOWS` (default 12) because each
+  window is a model call, and the remainder is reported on the artifact as
+  `windows_skipped` rather than dropped silently.
+
 ### Fixed
+- **Chat said "Nothing in the corpus matched that question" for three different
+  situations.** After picking a lens or an anchor it read as *"your data does not
+  say"* when the real cause was a scope that selected no records to search at
+  all. It now distinguishes *no records are in scope* (naming the scope), *none
+  is searchable yet*, and *nothing matched among the N searchable records*.
+
 - **The Add data panel never said whether the graph was built.** The final step
   read *"title, summary, keywords and entities recorded"* — asserting entities
   on every successful enrichment and reporting no number, so a record that
