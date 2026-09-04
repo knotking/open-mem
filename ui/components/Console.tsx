@@ -10,7 +10,7 @@
  * accountable.
  */
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import Capture, { humanBytes, type Staged } from "./Capture";
 import ThemeToggle from "./ThemeToggle";
@@ -2735,22 +2735,56 @@ function CompactionSection({ projectId }: { projectId: string }) {
         return (
           <div className="card" key={j.job_id}>
             <h2>{j.name}</h2>
-            <p>
-              <code>{algorithms[j.algorithm]?.label ?? j.algorithm}</code> ·{" "}
-              {j.memory_title || j.memory_key} ({j.members} member
-              {j.members === 1 ? "" : "s"}) ·{" "}
-              {j.schedule.type === "interval"
-                ? `every ${Math.round((j.schedule.every_seconds ?? 0) / 3600)}h`
-                : "when you run it"}
-            </p>
-            <p>
-              {j.enabled ? <span className="ok">scheduled</span>
-                : approved(j) ? <span>ready, not scheduled</span>
-                : <span className="warn">needs a preview</span>}
-              {j.archived_total > 0 && <> · {j.archived_total} archived so far</>}
-              {j.last_run_at && <> · last ran {new Date(j.last_run_at).toLocaleString()}</>}
-            </p>
-            <p>
+            {/* Four facts joined by interpuncts across two paragraphs read as
+              * one long sentence. They are four different questions -- what it
+              * does, to what, how often, and where it got to -- so they get
+              * four rows that can be scanned rather than parsed. */}
+            <table className="kv">
+              <tbody>
+                <tr>
+                  <td>folds by</td>
+                  <td><code>{algorithms[j.algorithm]?.label ?? j.algorithm}</code></td>
+                </tr>
+                <tr>
+                  <td>memory</td>
+                  <td>
+                    {j.memory_title || j.memory_key}{" "}
+                    <span className="empty">
+                      · {j.members} member{j.members === 1 ? "" : "s"}
+                    </span>
+                  </td>
+                </tr>
+                <tr>
+                  <td>runs</td>
+                  <td>
+                    {j.schedule.type === "interval"
+                      ? `every ${Math.round((j.schedule.every_seconds ?? 0) / 3600)}h`
+                      : "only when you run it"}
+                  </td>
+                </tr>
+                <tr>
+                  <td>state</td>
+                  <td>
+                    {j.enabled ? <span className="ok">scheduled</span>
+                      : approved(j) ? <span>ready, not scheduled</span>
+                      : <span className="warn">needs a preview</span>}
+                    {j.archived_total > 0 && (
+                      <span className="empty"> · {j.archived_total} archived so far</span>
+                    )}
+                    {j.last_run_at && (
+                      <span className="empty">
+                        {" "}· last ran {new Date(j.last_run_at).toLocaleString()}
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            {/* `.row` rather than a paragraph. Five buttons inside a <p> have
+              * no gap between them and no wrapping rule, so they butt together
+              * into one bar -- and Delete sat flush against History, which is a
+              * misclick with an archive behind it. */}
+            <div className="row" style={{ marginTop: 14 }}>
               <button disabled={busy} onClick={() => void act(async () => {
                 const r = await call<CompactionRun>(
                   `api/v1/compaction/jobs/${j.job_id}/preview`, {});
@@ -2772,11 +2806,18 @@ function CompactionSection({ projectId }: { projectId: string }) {
                 setRuns((prev) => ({ ...prev, [j.job_id]: page.runs }));
                 setOpen(open === j.job_id ? null : j.job_id);
               })}>History</button>
-              <button disabled={busy} onClick={() => void act(
-                () => call(`api/v1/compaction/jobs/${j.job_id}`, undefined, "DELETE"))}>
+              {/* Pushed to the far end, away from the four routine actions.
+                * Everything else here is reversible; this one is not. */}
+              <button
+                className="secondary far"
+                disabled={busy}
+                title="Removes the job. Members it already archived stay archived."
+                onClick={() => void act(
+                  () => call(`api/v1/compaction/jobs/${j.job_id}`, undefined, "DELETE"))}
+              >
                 Delete
               </button>
-            </p>
+            </div>
 
             {pv && (
               <div className="card">
@@ -3867,29 +3908,122 @@ type Answer = {
   latency_ms: number;
 };
 
+/**
+ * Chat — a conversation with a corpus, scoped to what you point at.
+ *
+ * The first version of this screen was a transcript in the sense that it kept
+ * the turns; it was not a chat in any sense a person would recognise. Pressing
+ * Ask did nothing visible for several seconds — the question was not even
+ * echoed until the answer came back, so the only feedback was a button label
+ * changing. That is the difference between a conversation and a form
+ * submission, and it is the whole of what makes chat feel like chat.
+ *
+ * Four things follow from taking that seriously:
+ *
+ * **The question appears immediately**, before the answer exists, with the
+ * answer bubble showing that it is being worked on. The optimistic turn is
+ * discarded when the real one arrives, and restored into the composer if the
+ * request fails — a question typed and lost is worse than an error.
+ *
+ * **The newest turn scrolls into view.** A transcript that grows below the
+ * fold makes the reader hunt for the thing they just asked for.
+ *
+ * **The scope is a summary, not a wall.** Eighteen memories rendered as
+ * eighteen toggle buttons is the clutter this console keeps rediscovering; it
+ * is one line saying what is in scope, and the picker opens only when someone
+ * wants to change it. Memories with no records are shown and disabled rather
+ * than hidden, because "there is nothing in it" and "it does not exist" are
+ * different facts.
+ *
+ * **The instrumentation moves behind the evidence.** Latency, model, corpus
+ * counts and passage totals are how you audit an answer, not how you read one.
+ * Whether it was grounded stays visible, because that changes whether you
+ * should believe the sentence above it.
+ */
 function AskSection({ projectId }: { projectId: string }) {
-  const [question, setQuestion] = useState("What caused the rollback?");
+  // What to ask *of*. Empty means the whole project — "chat with everything" is
+  // a reasonable default and a poor only option: "what did we decide in the
+  // Acme thread" and "what does this project know" are different questions, and
+  // answering the second when somebody asked the first buries the answer.
+  const [memories, setMemories] = useState<Memory[]>([]);
+  const [scope, setScope] = useState<string[]>([]);
+  const [picking, setPicking] = useState(false);
+  useEffect(() => {
+    void call<{ memories: Memory[] }>(`api/v1/projects/${projectId}/memories`)
+      .then((r) => setMemories(r.memories))
+      .catch(() => setMemories([]));
+  }, [projectId]);
+
+  const [question, setQuestion] = useState("");
   const [turns, setTurns] = useState<Answer[]>([]);
+  // The question that has been asked but not yet answered. Rendered as a real
+  // turn so the transcript never sits still while work is happening.
+  const [pending, setPending] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
+  const pane = useRef<HTMLDivElement | null>(null);
+  // How much of the newest answer has been revealed. The API returns the whole
+  // answer at once, so this is pacing rather than streaming -- and that order
+  // is the right way round: the answer is complete and has been checked against
+  // its citations before a word of it is shown, where true token streaming
+  // would put text on screen before anything had verified it.
+  const [typed, setTyped] = useState<{ id: string; upto: number } | null>(null);
+
+  const newest = turns[turns.length - 1];
+  useEffect(() => {
+    if (!newest) return;
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+      setTyped({ id: newest.query_id, upto: newest.answer.length });
+      return;
+    }
+    setTyped({ id: newest.query_id, upto: 0 });
+    const total = newest.answer.length;
+    // Fixed duration rather than fixed speed: a long answer should not take
+    // proportionally longer to read out, or a good answer is a punishment.
+    const started = performance.now();
+    const span = Math.min(1800, 400 + total * 1.2);
+    let frame = 0;
+    const step = (now: number) => {
+      const done = Math.min(1, (now - started) / span);
+      setTyped({ id: newest.query_id, upto: Math.round(total * done) });
+      if (done < 1) frame = requestAnimationFrame(step);
+    };
+    frame = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(frame);
+  }, [newest]);
+
+  // Scroll the pane, never the page: the composer stays where the hand is.
+  useEffect(() => {
+    const el = pane.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [turns.length, pending, typed?.upto]);
+
+  const chosen = memories.filter((m) => scope.includes(m.memory_id));
+  const scopeLabel = scope.length === 0
+    ? "everything in this project"
+    : chosen.map((m) => m.title ?? m.memory_key ?? m.memory_id).join(", ");
 
   async function send(preset?: string) {
     const asked = (preset ?? question).trim();
     if (!asked) return;
     setBusy(true);
     setError(null);
+    setPending(asked);
+    setQuestion("");
     try {
       const answer = await call<Answer>("api/v1/ask", {
         question: asked,
-        filter: { project_id: projectId },
+        filter: { project_id: projectId, memory_ids: scope },
       });
       setTurns((previous) => [...previous, answer]);
-      setOpen(answer.query_id);
-      setQuestion("");
+      setOpen(null);
     } catch (e) {
       setError((e as Error).message);
+      // Give the question back rather than making somebody retype it.
+      setQuestion(asked);
     } finally {
+      setPending(null);
       setBusy(false);
     }
   }
@@ -3900,11 +4034,58 @@ function AskSection({ projectId }: { projectId: string }) {
       <p className="lede">
         Ask a question and a model answers from your records — the same retrieval as search, with
         the passages read back to you. Every claim carries the number of the passage it came from,
-        and those passages are shown, so a wrong answer is something you can check rather than
-        something you have to believe.
+        so a wrong answer is something you can check rather than something you have to believe.
       </p>
 
-      {turns.length === 0 && (
+      <div className="scopebar">
+        <span className="empty">Asking of <strong>{scopeLabel}</strong></span>
+        <button className="linkish far" onClick={() => setPicking(!picking)}>
+          {picking ? "done" : "change"}
+        </button>
+      </div>
+
+      {picking && (
+        <section className="panel">
+          <h2>What to ask of</h2>
+          <div className="row">
+            <button
+              className={scope.length === 0 ? "" : "secondary"}
+              onClick={() => setScope([])}
+            >
+              Everything in this project
+            </button>
+            {memories.map((m) => {
+              const on = scope.includes(m.memory_id);
+              const empty = m.members === 0;
+              return (
+                <button
+                  key={m.memory_id}
+                  className={on ? "" : "secondary"}
+                  disabled={empty}
+                  title={empty
+                    ? "Nothing has been written into this memory yet"
+                    : `${m.type} · ${m.members} record${m.members === 1 ? "" : "s"}`}
+                  onClick={() => setScope(on
+                    ? scope.filter((x) => x !== m.memory_id)
+                    : [...scope, m.memory_id])}
+                >
+                  {m.title ?? m.memory_key ?? m.memory_id}
+                  <span className="empty"> · {m.members}</span>
+                </button>
+              );
+            })}
+          </div>
+          <p className="empty" style={{ marginBottom: 0 }}>
+            {scope.length === 0
+              ? "Every record in the project is in scope."
+              : "Everything outside the selection is excluded, not merely ranked lower."}
+          </p>
+        </section>
+      )}
+
+      <div className="chatwindow">
+        <div className="chatpane" ref={pane}>
+      {turns.length === 0 && !pending && (
         <section className="panel">
           <p className="empty" style={{ marginTop: 0 }}>
             Answers come only from records you can already read. When your data does not support an
@@ -3931,53 +4112,64 @@ function AskSection({ projectId }: { projectId: string }) {
       )}
 
       {turns.map((turn) => (
-        <section className="panel" key={turn.query_id}>
-          <p className="question">{turn.question}</p>
-
-          <div className={turn.grounded ? "answer" : "answer ungrounded"}>{turn.answer}</div>
-
-          <div className="meta" style={{ marginTop: 10 }}>
-            <span className={`chip ${turn.grounded ? "enriched" : "stored"}`}>
-              {turn.grounded ? "grounded" : "not supported by the corpus"}
-            </span>
-            <span className="chip">{turn.citations.length} cited</span>
-            <span className="chip">{turn.considered} passages read</span>
-            {turn.corpus && (
-              <span className="chip">
-                {turn.corpus.enriched} enriched of {turn.corpus.total}
-              </span>
+        <div className="chatturn" key={turn.query_id}>
+          <div className="bubble asked">{turn.question}</div>
+          <div className={`bubble answered${turn.grounded ? "" : " ungrounded"}`}>
+            {typed && typed.id === turn.query_id
+              ? turn.answer.slice(0, typed.upto)
+              : turn.answer}
+            {typed && typed.id === turn.query_id && typed.upto < turn.answer.length && (
+              <span className="typecaret" aria-hidden="true" />
             )}
-            <span className="chip">{turn.served_by_model || turn.model_id}</span>
-            {turn.fallback_depth > 0 && (
-              <span className="chip warnchip">
-                fallback: {turn.served_by_engine} answered
-              </span>
-            )}
-            <span className="chip">{turn.latency_ms} ms</span>
-            {!turn.answer_stored && <span className="chip">text not stored</span>}
           </div>
 
-          {turn.citations.length > 0 && (
-            <>
-              <h3
-                style={{ cursor: "pointer" }}
+          <div className="turnfoot">
+            {!turn.grounded && (
+              <span className="chip warnchip">not supported by the corpus</span>
+            )}
+            {turn.citations.length > 0 && (
+              <button
+                className="linkish"
                 onClick={() => setOpen(open === turn.query_id ? null : turn.query_id)}
               >
-                {open === turn.query_id ? "▾" : "▸"} The evidence it rests on
-              </h3>
-              {open === turn.query_id &&
-                turn.citations.map((citation) => (
-                  <div className="hit" key={citation.chunk_id}>
-                    <div className="meta">
-                      <span className="chip on">[{citation.marker}]</span>
-                      <span className="chip">score {citation.score.toFixed(4)}</span>
-                      <span className={`chip ${citation.state}`}>{citation.state}</span>
-                    </div>
-                    <div className="text">{citation.text}</div>
-                    <p className="provenance">{citation.data_id}</p>
+                {open === turn.query_id ? "▾" : "▸"} {turn.citations.length} source
+                {turn.citations.length === 1 ? "" : "s"}
+              </button>
+            )}
+          </div>
+
+          {open === turn.query_id && (
+            <div className="turndetail">
+              {/* Instrumentation lives with the evidence: it is how you audit an
+                * answer, not how you read one. */}
+              <div className="meta">
+                <span className="chip">{turn.considered} passages read</span>
+                <span className="chip">{turn.served_by_model || turn.model_id}</span>
+                {turn.corpus && (
+                  <span className="chip">
+                    {turn.corpus.enriched} enriched of {turn.corpus.total}
+                  </span>
+                )}
+                {turn.fallback_depth > 0 && (
+                  <span className="chip warnchip">
+                    fallback: {turn.served_by_engine} answered
+                  </span>
+                )}
+                <span className="chip">{turn.latency_ms} ms</span>
+                {!turn.answer_stored && <span className="chip">text not stored</span>}
+              </div>
+              {turn.citations.map((citation) => (
+                <div className="hit" key={citation.chunk_id}>
+                  <div className="meta">
+                    <span className="chip on">[{citation.marker}]</span>
+                    <span className="chip">score {citation.score.toFixed(4)}</span>
+                    <span className={`chip ${citation.state}`}>{citation.state}</span>
                   </div>
-                ))}
-            </>
+                  <div className="text">{citation.text}</div>
+                  <p className="provenance">{citation.data_id}</p>
+                </div>
+              ))}
+            </div>
           )}
 
           {!turn.grounded && turn.corpus && turn.corpus.stored > 0 && (
@@ -3987,33 +4179,68 @@ function AskSection({ projectId }: { projectId: string }) {
               used. That is a likely cause of a thin answer.
             </p>
           )}
-        </section>
+        </div>
       ))}
 
-      <section className="panel">
+      {pending && (
+        <div className="chatturn">
+          <div className="bubble asked">{pending}</div>
+          <div className="bubble answered thinking">
+            <span className="dots"><i /><i /><i /></span>
+            reading the corpus…
+          </div>
+        </div>
+      )}
+
+        </div>
+
+        <div className="composer">
         <div className="row">
-          <input
-            type="text"
+          <textarea
+            className="askbox"
             value={question}
-            placeholder="Ask about this project&rsquo;s data…"
+            rows={1}
+            placeholder={scope.length === 0
+              ? "Ask about this project's data…"
+              : `Ask about ${scopeLabel}…`}
             onChange={(e) => setQuestion(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && void send()}
+            /* Enter sends, Shift+Enter breaks a line — the convention every
+               chat uses, and the reason this is a textarea and not an input:
+               a question worth asking is often longer than one line. */
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                void send();
+              }
+            }}
             style={{ flex: 1 }}
           />
           <button onClick={() => void send()} disabled={busy || !question.trim()}>
             {busy ? "Reading…" : "Ask"}
           </button>
+          {turns.length > 0 && (
+            <button className="secondary" disabled={busy} onClick={() => setTurns([])}>
+              Clear
+            </button>
+          )}
         </div>
         {error && <p className="err">{error}</p>}
         <p className="empty">
-          Answers are generated from retrieved records. Records are treated as evidence, never as
-          instructions — a record containing &ldquo;ignore your instructions&rdquo; is reported as
-          content, not obeyed.
+          {/* Said plainly because the shape of this screen implies otherwise. A
+            * transcript looks like a conversation, and a conversation implies
+            * "what about the second one?" works. It does not: retrieval runs
+            * per question. Letting the layout promise something the API does
+            * not do is the failure this note exists to prevent. */}
+          <strong>Each question is answered on its own</strong> — ask a follow-up as a whole
+          question rather than referring back. Records are evidence, never instructions: one
+          containing &ldquo;ignore your instructions&rdquo; is reported as content, not obeyed.
         </p>
-      </section>
+        </div>
+      </div>
     </>
   );
 }
+
 
 /* ------------------------------------------------------------ 4. search */
 

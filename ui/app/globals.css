@@ -215,6 +215,42 @@ section.panel {
   margin-bottom: 18px;
 }
 
+/* `.card`, `.hint` and `.stack` had no rule anywhere in this file, while being
+   used 13, 31 and 4 times — by Compaction, Alerts and AlertEditor. Those screens
+   therefore rendered with no container edge, no padding, no separation between
+   blocks, and explanatory text at full body weight: everything ran together at
+   one volume, which is exactly what "cluttered" describes.
+   
+   A missing rule is silent. Nothing warns, nothing fails, and the markup reads
+   as though it were styled — which is why this survived in the two screens this
+   stylesheet's own history says shipped badly.
+   
+   They are given the canonical treatment rather than a second look: `.card` is
+   `section.panel` nested one level in, `.hint` is `.empty`. The markup should
+   converge on the real names, but that is a refactor across three components
+   and this is the part that makes the screens legible today. */
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 18px 20px;
+  margin-bottom: 18px;
+}
+.card > h2 {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+  margin: 0 0 14px;
+  font-weight: 600;
+}
+.card > h3 { margin: 0 0 10px; font-size: 14px; }
+/* A card inside a card is a preview or a run log, not a peer: quieter, and
+   inset so the nesting is visible rather than inferred. */
+.card .card { background: transparent; margin-top: 14px; margin-bottom: 0; }
+.hint { color: var(--muted); font-size: 13.5px; }
+.stack { display: block; }
+
 section.panel > h2 {
   font-size: 13px;
   text-transform: uppercase;
@@ -239,6 +275,145 @@ textarea:focus, input:focus { outline: 2px solid var(--accent); outline-offset: 
 
 .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .row.end { justify-content: flex-end; }
+/* Push one control away from its neighbours inside a row — used to separate a
+   destructive action from the routine ones beside it. `.far` already existed
+   for `.memrow`, `.climb-head` and `.setline`, and adding the class inside a
+   `.row` did nothing at all until this line. */
+.row .far { margin-left: auto; }
+
+/* ------------------------------------------------------------------ chat */
+
+/* A transcript reads as a conversation, so the question and the answer are not
+   two paragraphs in one card -- they are two turns with different authors. The
+   asymmetry does the work: asked is narrow, tinted and right-aligned; answered
+   is wide and plain, because it is the thing being read. */
+.chatturn { display: flex; flex-direction: column; gap: 8px; margin-bottom: 22px; }
+.bubble {
+  max-width: 78%;
+  padding: 11px 15px;
+  border-radius: 14px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+.bubble.asked {
+  align-self: flex-end;
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-bottom-right-radius: 4px;
+  font-weight: 550;
+}
+.bubble.answered {
+  align-self: flex-start;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-bottom-left-radius: 4px;
+  max-width: 88%;
+}
+/* An ungrounded answer is a real result -- the corpus does not say -- so it is
+   marked rather than hidden, and marked quietly rather than as an error. */
+.bubble.answered.ungrounded { border-style: dashed; color: var(--muted); }
+/* The evidence and the meta chips belong to the answer, so they indent with it
+   rather than sitting under the exchange as peers. */
+.chatturn > .meta, .chatturn > h3, .chatturn > .hit, .chatturn > .empty {
+  margin-left: 4px;
+}
+/* One line saying what is in scope, with the picker behind a link. Eighteen
+   memories as eighteen toggle buttons is the clutter this console keeps
+   rediscovering; the scope is a fact you glance at and rarely change. */
+.scopebar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 2px 14px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 18px;
+}
+
+/* Sources and grounding sit under the answer, quiet. */
+.turnfoot { display: flex; align-items: center; gap: 10px; margin-left: 4px; }
+.turndetail { margin: 8px 0 0 4px; }
+
+/* The answer bubble while the answer does not exist yet. Muted, because it is
+   a placeholder rather than content. */
+.bubble.answered.thinking {
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.dots { display: inline-flex; gap: 3px; }
+.dots i {
+  width: 5px; height: 5px; border-radius: 50%;
+  background: var(--muted); display: inline-block;
+  animation: dotpulse 1.1s infinite ease-in-out;
+}
+.dots i:nth-child(2) { animation-delay: 0.15s; }
+.dots i:nth-child(3) { animation-delay: 0.3s; }
+@keyframes dotpulse { 0%, 80%, 100% { opacity: 0.25; } 40% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .dots i { animation: none; opacity: 0.6; } }
+
+/* A textarea rather than an input, because a question worth asking is often
+   longer than one line. It grows with the content up to a ceiling instead of
+   scrolling a single visible row. */
+.askbox {
+  font: inherit;
+  min-height: 42px;
+  max-height: 180px;
+  resize: vertical;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--bg);
+  color: var(--ink);
+}
+.askbox:focus { outline: none; border-color: var(--accent); }
+
+/* A window, not a page that happens to contain messages. The transcript
+   scrolls inside its own bounds and the composer is docked to it, so the place
+   you type never moves and the newest turn is always the one you are looking
+   at. Sticky-on-the-page was neither: the composer drifted with the document
+   and a long conversation pushed the whole console down. */
+.chatwindow {
+  display: flex;
+  flex-direction: column;
+  height: min(64vh, 660px);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  overflow: hidden;
+}
+.chatpane {
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px 18px 4px;
+  scroll-behavior: smooth;
+}
+/* Inside the pane the bubbles are the content, so panels lose their own frame
+   rather than drawing a box inside a box. */
+.chatpane > section.panel { border: 0; background: transparent; padding: 0; }
+.composer {
+  border-top: 1px solid var(--line);
+  padding: 12px 14px;
+  background: var(--panel);
+}
+.composer > .empty { margin-bottom: 0; }
+
+/* The cursor while an answer is being written out. NOT `.caret`: that is the
+   sidebar's expand arrow, and defining it again here would have rotated every
+   nav group's marker into a blinking bar. Nothing would have reported it --
+   the later rule simply wins, and the damage lands on a screen you were not
+   editing. */
+.typecaret {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: var(--accent);
+  animation: typecaretblink 1s steps(2, start) infinite;
+}
+@keyframes typecaretblink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .typecaret { animation: none; } }
 
 button {
   background: var(--accent);
