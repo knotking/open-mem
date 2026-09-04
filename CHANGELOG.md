@@ -11,6 +11,10 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **The public demo's transcript can be cleared.** The console's chat has had a
+  Clear since it was built and the demo shipped without one, so a visitor done
+  with a conversation had no way back to an empty card — or to the starter
+  questions, which only render when there are no turns.
 - **Anyone can question a corpus here without an account.** The landing page is
   now a chat over Sir Edwin Arnold's *The Song Celestial* (1885, public domain)
   — eighteen chapters ingested exactly as your own documents would be. Every
