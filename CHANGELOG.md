@@ -11,6 +11,14 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Fixed
+- **The progress panel gave up on work that was going fine.** It watched for two
+  minutes and reported "still queued", which was right when every job was one or
+  two model calls — a long document is thousands of chunks and ~20 sequential
+  embedding calls. The window now scales with the item (two minutes plus a
+  minute per 200KB, capped at fifteen), rather than being raised for everyone: a
+  ceiling generous enough for a book makes every genuinely stuck note look
+  healthy. The message no longer leads with "still queued", because nothing has
+  gone wrong when it fires.
 - **The live viewfinder was blank while recording video.** The `<video>` renders
   only once recording has started, but the stream was attached before either
   state update had rendered — so the ref was still `null` and the `&& video.current`
