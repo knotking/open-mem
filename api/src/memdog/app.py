@@ -2581,6 +2581,21 @@ async def prompt_registry_endpoint(actor: Principal = Depends(principal)) -> dic
     }
 
 
+@app.get("/api/v1/projects/{project_id}/tags")
+async def list_tags_endpoint(
+    request: Request, project_id: str, limit: int = 200,
+    actor: Principal = Depends(principal),
+) -> dict:
+    """Tags in use, so a screen can offer them rather than ask them to be typed."""
+    from .retrieval import project_tags
+
+    try:
+        return {"tags": await project_tags(
+            request.app.state.pool, actor, project_id, limit=limit)}
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
 @app.get("/api/v1/projects/{project_id}/keywords")
 async def list_keywords_endpoint(
     request: Request, project_id: str, limit: int = 200,

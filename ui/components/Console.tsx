@@ -7117,6 +7117,12 @@ function ReprocessSection({ projectId }: { projectId: string }) {
   const [runId, setRunId] = useState("");
   const [staleOnly, setStaleOnly] = useState(false);
 
+  // The vocabularies this screen selects from. Typing a data type meant
+  // guessing at a closed set the server already publishes -- and a typo is not
+  // an error here, it is a selector that quietly matches nothing, previews
+  // "0 records", and looks like an empty corpus rather than a misspelling.
+  const [dataTypes, setDataTypes] = useState<string[]>([]);
+  const [tagsInUse, setTagsInUse] = useState<string[]>([]);
   const [stair, setStair] = useState<Stair | null>(null);
   const [stale, setStale] = useState<StaleArtifact[] | null>(null);
   const [preview, setPreview] = useState<ReprocessPreview | null>(null);
@@ -7136,6 +7142,12 @@ function ReprocessSection({ projectId }: { projectId: string }) {
       // key is the failure that renders an empty screen with a 200 behind it.
       setStale((await call<{ stale: StaleArtifact[] }>(
         "api/v1/artifacts/stale?limit=100")).stale);
+      // The closed set of types the classifier can produce, from the same
+      // registry the Prompts screen reads, so the two cannot disagree.
+      setDataTypes((await call<{ prompts: { data_type: string }[] }>("api/v1/prompts"))
+        .prompts.map((r) => r.data_type).sort());
+      setTagsInUse((await call<{ tags: { tag: string }[] }>(
+        `api/v1/projects/${projectId}/tags`)).tags.map((r) => r.tag));
     } catch (e) {
       setError((e as Error).message);
     }
@@ -7253,17 +7265,47 @@ function ReprocessSection({ projectId }: { projectId: string }) {
         <div className="row">
           <label>
             Data type
-            <input type="text" placeholder="email · issue · note"
-                   value={dataType} onChange={(e) => setDataType(e.target.value)} />
+            <select value={dataType} onChange={(e) => setDataType(e.target.value)}>
+              <option value="">any type</option>
+              {dataTypes.map((dt) => <option key={dt} value={dt}>{dt}</option>)}
+            </select>
           </label>
           <label>
             Tags
-            <input type="text" placeholder="source:acme, crawler:crw_…"
-                   value={tags} onChange={(e) => setTags(e.target.value)} />
+            {/* Offered when the project has any, typed when it does not -- a
+              * select with nothing in it is a dead control, and tags are an
+              * open set somebody may be about to invent. */}
+            {tagsInUse.length > 0 ? (
+              <select
+                value=""
+                onChange={(e) => {
+                  const picked = e.target.value;
+                  if (!picked) return;
+                  const already = tags.split(",").map((x) => x.trim()).filter(Boolean);
+                  if (!already.includes(picked)) setTags([...already, picked].join(", "));
+                }}
+              >
+                <option value="">add a tag…</option>
+                {tagsInUse.map((tg) => <option key={tg} value={tg}>{tg}</option>)}
+              </select>
+            ) : (
+              <input type="text" placeholder="none in this project yet"
+                     value={tags} onChange={(e) => setTags(e.target.value)} />
+            )}
           </label>
+          {tags.trim() !== "" && (
+            <label>
+              Chosen tags
+              <input type="text" value={tags} onChange={(e) => setTags(e.target.value)} />
+            </label>
+          )}
           <label>
             Run
-            <input type="text" placeholder="run_… — everything one crawl emitted"
+            {/* Still typed, and correctly so: a run id is copied from Crawlers
+              * or Workflows, not chosen from a set this screen can know. The
+              * placeholder says where it comes from rather than what it looks
+              * like. */}
+            <input type="text" placeholder="paste a run id from Crawlers"
                    value={runId} onChange={(e) => setRunId(e.target.value)} />
           </label>
           <label className="check">

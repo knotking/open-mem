@@ -749,6 +749,35 @@ async def project_keywords(
     return [{"keyword": r["keyword"], "records": r["records"]} for r in rows]
 
 
+async def project_tags(pool, principal, project_id: str, *, limit: int = 200) -> list[dict]:
+    """The tags actually in use, counted over what the caller can see.
+
+    The sibling of `project_keywords`, and deliberately a separate function
+    rather than a parameter: a tag is an assertion by a person and a keyword is
+    a model's guess, and the moment one endpoint returns both nobody can tell
+    which said what.
+
+    Scoped by visibility for the same reason as keywords -- a tag applied only
+    to records the caller cannot see must not appear, because the tag itself
+    would disclose that they exist.
+    """
+    org_id, user_id, principals = visibility_params(principal)
+    predicate = visibility_sql("d", 2, 3, 4)
+    rows = await pool.fetch(
+        f"""
+        SELECT tag, count(*) AS records
+        FROM data_items d
+        CROSS JOIN LATERAL unnest(d.tags) AS tag
+        WHERE d.project_id = $1 AND d.deleted_at IS NULL AND {predicate}
+        GROUP BY tag
+        ORDER BY records DESC, tag ASC
+        LIMIT $5
+        """,
+        project_id, org_id, user_id, principals, min(limit, 500),
+    )
+    return [{"tag": r["tag"], "records": r["records"]} for r in rows]
+
+
 async def memory_members(pool: asyncpg.Pool, principal: Principal, memory_id: str) -> list[dict]:
     principal.require(DATA_READ)
     org_id, user_id, principals = visibility_params(principal)
