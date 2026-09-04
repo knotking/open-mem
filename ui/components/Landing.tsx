@@ -793,6 +793,20 @@ function PublicDemo({ info, setInfo }: {
           <button onClick={() => void send()} disabled={busy || !question.trim()}>
             {busy ? "Reading…" : "Ask"}
           </button>
+          {/* Clearing also brings the starter questions back, which is the
+            * point: a transcript somebody is done with is the one thing on the
+            * card standing between them and asking something else. The opened
+            * citation goes with it -- an index into turns that no longer exist
+            * would reopen an unrelated answer's passages. */}
+          {turns.length > 0 && (
+            <button
+              className="secondary"
+              disabled={busy}
+              onClick={() => { setTurns([]); setOpen(null); setError(null); }}
+            >
+              Clear
+            </button>
+          )}
         </div>
         {error && <p className="err">{error}</p>}
         <p className="demo-note">
