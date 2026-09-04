@@ -261,3 +261,73 @@ async def test_an_edge_says_whether_it_was_read_off_the_page_or_into_it(pool, te
     classes = {e.predicate: e.confidence_class for e in found.edges}
     assert classes["teaches"] == "interpretive"
     assert classes["about"] == "structural"
+
+
+# ------------------------------------------------- anchoring on a named entity
+
+
+async def test_a_named_anchor_replaces_the_one_parsed_from_the_question(pool, tenant):
+    """`graph_seeds` scrapes entity names out of the question text, which works
+    for "what did Krishna teach" and not for a question that never names its
+    subject. Naming the anchor is the difference between hoping the graph arm
+    keys off the right thing and saying where to start."""
+    from memdog.retrieval import graph_seeds, seeds_for_ids
+
+    ids, _ = await _ingest(
+        pool, tenant, "anchor-1",
+        [{"subject": "Krishna", "predicate": "teaches", "object": "karma yoga"}],
+        template="scripture",
+    )
+    actor = await _principal(pool, tenant)
+
+    # A question that names nobody resolves to nothing by parsing...
+    parsed = await graph_seeds(
+        pool, actor, project_id=tenant.project_id,
+        query="what does it say about detachment")
+    assert parsed == []
+
+    # ...and to exactly the chosen entity when the caller says so.
+    chosen = await seeds_for_ids(
+        pool, actor, project_id=tenant.project_id,
+        entity_ids=[ids["Krishna"]])
+    assert [s.display_name for s in chosen] == ["Krishna"]
+    # Reported as chosen, not matched -- a reader can tell an entity the system
+    # found from one a person insisted on.
+    assert chosen[0].matched_on == "chosen"
+
+
+async def test_an_entity_you_cannot_see_is_not_a_usable_anchor(pool, tenant):
+    """An id is far easier to enumerate than a name, so passing one must not
+    confirm the entity exists to somebody who can see no record naming it."""
+    from memdog.bootstrap import create_user
+    from memdog.retrieval import seeds_for_ids
+
+    other = await create_user(pool, f"outsider-{new_id('x')}@example.com")
+    data_id = await _item(pool, tenant, f"private-{new_id('x')}", template="scripture")
+    await pool.execute(
+        "UPDATE data_items SET access_level = 'private', owner_id = $2 WHERE data_id = $1",
+        data_id, other,
+    )
+    async with pool.acquire() as conn, conn.transaction():
+        resolved = await resolve_mentions(
+            conn, data_id=data_id, org_id=tenant.org_id,
+            project_id=tenant.project_id,
+            candidates=[{"name": "Secret Doctrine", "type": "topic"}],
+        )
+    hidden = resolved[0]["entity_id"]
+
+    seeds = await seeds_for_ids(
+        pool, await _principal(pool, tenant), project_id=tenant.project_id,
+        entity_ids=[hidden])
+    assert seeds == [], "an entity whose only evidence is unreadable is not an anchor"
+
+
+async def test_an_unresolvable_anchor_narrows_rather_than_fails(pool, tenant):
+    """The caller is a scope picker sending what it last loaded. One stale id
+    should narrow the answer, not turn the question into an error."""
+    from memdog.retrieval import seeds_for_ids
+
+    seeds = await seeds_for_ids(
+        pool, await _principal(pool, tenant), project_id=tenant.project_id,
+        entity_ids=["ent_does_not_exist"])
+    assert seeds == []

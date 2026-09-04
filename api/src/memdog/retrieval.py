@@ -125,6 +125,46 @@ async def graph_seeds(
     ]
 
 
+async def seeds_for_ids(
+    pool: asyncpg.Pool, principal: Principal, *, project_id: str,
+    entity_ids: list[str],
+) -> list[GraphSeed]:
+    """Seeds the caller named, rather than seeds scraped from the question.
+
+    Visibility is asked the same way `graph_seeds` asks it: an entity is
+    reachable only through a record that mentions it and that the caller can
+    read. Without that, passing an id would confirm the entity exists to
+    somebody who cannot see a single record containing it -- and an id is far
+    easier to enumerate than a name.
+
+    An id that does not resolve is dropped rather than raised. The caller is a
+    scope picker sending what it last loaded, and one stale entity should
+    narrow the answer, not fail the question.
+    """
+    if not entity_ids:
+        return []
+    org_id, user_id, principals = visibility_params(principal)
+    rows = await pool.fetch(
+        f"""
+        SELECT e.entity_id, e.display_name, e.type
+        FROM entities e
+        WHERE e.project_id = $1 AND e.entity_id = ANY($2::text[])
+          AND EXISTS (
+              SELECT 1 FROM entity_mentions m
+              JOIN data_items d ON d.data_id = m.data_id
+              WHERE m.entity_id = e.entity_id AND {visibility_sql("d", 3, 4, 5)}
+          )
+        ORDER BY e.display_name
+        """,
+        project_id, entity_ids, org_id, user_id, principals,
+    )
+    return [
+        GraphSeed(entity_id=r["entity_id"], display_name=r["display_name"],
+                  type=r["type"], matched_on="chosen")
+        for r in rows
+    ]
+
+
 async def _expand(
     graph, principal: Principal, seeds: list[GraphSeed], *, limit: int,
     valid_at=None, as_of=None, template: str | None = None,
@@ -215,6 +255,7 @@ async def _retrieve(
     memories_p = bind(request.filter.memory_ids)
     keywords_p = bind(request.filter.keywords)
     template_p = bind(request.filter.template)
+    entities_p = bind(request.filter.entity_ids)
 
     # `EXISTS` rather than a join: a record can be in several of the selected
     # memories and a join would return it once per membership, which the fusion
@@ -231,6 +272,10 @@ async def _retrieve(
               JOIN artifact_sources s2 ON s2.artifact_id = a2.artifact_id
               WHERE s2.data_id = d.data_id AND a2.keywords && {keywords_p}::text[]))
         AND ({template_p}::text IS NULL OR d.template = {template_p})
+        AND ({entities_p}::text[] = '{{}}' OR EXISTS (
+              SELECT 1 FROM entity_mentions em
+              WHERE em.data_id = d.data_id
+                AND em.entity_id = ANY({entities_p}::text[])))
         AND ({since_p}::timestamptz IS NULL OR d.event_time >= {since_p})
         AND ({until_p}::timestamptz IS NULL OR d.event_time <= {until_p})
     """
@@ -273,7 +318,13 @@ async def _retrieve(
     seeds: list[GraphSeed] = []
     reachable: dict[str, int] = {}
     if "graph" in request.match:
-        seeds = await graph_seeds(
+        # A named anchor replaces the parsed one rather than adding to it. If
+        # the caller said where to start, starting somewhere else as well is
+        # not extra recall -- it is the scope they set being quietly widened.
+        seeds = await seeds_for_ids(
+            pool, principal, project_id=request.filter.project_id,
+            entity_ids=request.filter.entity_ids,
+        ) if request.filter.entity_ids else await graph_seeds(
             pool, principal, project_id=request.filter.project_id, query=request.query
         )
         if seeds:

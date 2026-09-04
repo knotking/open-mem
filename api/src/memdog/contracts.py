@@ -223,6 +223,18 @@ class RetrieveFilter(BaseModel):
     # filter, not a record filter that happens to be followed by a graph that
     # ignores it.
     template: str | None = None
+    # Entities to anchor on, named outright rather than parsed from the query.
+    #
+    # This narrows twice, and the second half is the point. As a record filter
+    # it keeps only records that mention one of them. As *graph seeds* it
+    # replaces the guesswork in `graph_seeds()`, which scrapes entity names out
+    # of the question text -- fine for "what did Priya decide", useless for a
+    # question that never names its subject, and silently wrong when two
+    # entities share a name.
+    #
+    # Naming the anchor is the difference between "search everything and hope
+    # the graph arm keys off the right thing" and "start here".
+    entity_ids: list[str] = Field(default_factory=list)
 
 
 class RetrieveRequest(BaseModel):
@@ -279,7 +291,11 @@ class GraphSeed(BaseModel):
     entity_id: str
     display_name: str
     type: str
-    matched_on: Literal["name", "identifier"]
+    # "chosen" is not a match at all -- it is the caller naming the entity
+    # outright instead of hoping the question spelled it recognisably. Kept
+    # distinct from a resolved name so a reader can tell an entity the system
+    # found from one a person insisted on.
+    matched_on: Literal["name", "identifier", "chosen"]
 
 
 class Corpus(BaseModel):

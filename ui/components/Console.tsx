@@ -4026,6 +4026,11 @@ type Answer = {
   considered: number;
   corpus: { total: number; stored: number; searchable: number; enriched: number } | null;
   excluded: { data_id: string; reason: string; score: number | null; state: string | null }[];
+  // What the graph arm started from. Empty when it was not asked for — which
+  // is a different fact from it having found nothing connected, and the two
+  // must not render the same.
+  graph_seeds: { entity_id: string; display_name: string; type: string;
+                 matched_on: "name" | "identifier" | "chosen" }[];
   model_id: string;
   served_by_model: string | null;
   fallback_depth: number;
@@ -4092,6 +4097,33 @@ function AskSection({ projectId }: { projectId: string }) {
       .catch(() => setMemories([]));
   }, [projectId]);
 
+  // Anchors. Naming the entity outright is the difference between hoping the
+  // graph arm keys off the right thing and saying where to start: the parser
+  // scrapes names out of the question text, which is fine for "what did Priya
+  // decide" and useless for a question that never names its subject.
+  const [anchors, setAnchors] = useState<Entity[]>([]);
+  const [anchored, setAnchored] = useState<string[]>([]);
+  useEffect(() => {
+    void call<{ entities: Entity[] }>(`api/v1/projects/${projectId}/entities?limit=60`)
+      .then((r) => setAnchors(r.entities))
+      .catch(() => setAnchors([]));
+  }, [projectId]);
+
+  // The lens the content was read under.
+  const [lens, setLens] = useState("");
+  const [lenses, setLenses] = useState<GraphTemplate[]>([]);
+  useEffect(() => {
+    void call<{ templates: GraphTemplate[] }>("api/v1/templates")
+      .then((r) => setLenses(r.templates))
+      .catch(() => setLenses([]));
+  }, []);
+
+  // The graph arm. Off by default, and that default is not laziness: it
+  // answers "what else is connected to this?", which is a different question
+  // from "what matches this?", and it is only as good as the entity layer
+  // underneath it. Turning it on is a decision, so it is a control.
+  const [follow, setFollow] = useState(false);
+
   const [question, setQuestion] = useState("");
   const [turns, setTurns] = useState<Answer[]>([]);
   // The question that has been asked but not yet answered. Rendered as a real
@@ -4138,11 +4170,17 @@ function AskSection({ projectId }: { projectId: string }) {
   }, [turns.length, pending, typed?.upto]);
 
   const chosen = memories.filter((m) => scope.includes(m.memory_id));
+  const anchorNames = anchors
+    .filter((a) => anchored.includes(a.entity_id))
+    .map((a) => a.display_name);
   const scopeLabel = [
     scope.length === 0
       ? "everything in this project"
       : chosen.map((m) => m.title ?? m.memory_key ?? m.memory_id).join(", "),
     about.length > 0 ? `about ${about.join(", ")}` : null,
+    lens ? `read as ${lens}` : null,
+    anchorNames.length > 0 ? `anchored on ${anchorNames.join(", ")}` : null,
+    follow ? "following connections" : null,
   ].filter(Boolean).join(" · ");
 
   async function send(preset?: string) {
@@ -4155,7 +4193,14 @@ function AskSection({ projectId }: { projectId: string }) {
     try {
       const answer = await call<Answer>("api/v1/ask", {
         question: asked,
-        filter: { project_id: projectId, memory_ids: scope, keywords: about },
+        filter: {
+          project_id: projectId, memory_ids: scope, keywords: about,
+          template: lens || null, entity_ids: anchored,
+        },
+        // The graph is an arm of the same retrieval search uses, not a
+        // separate mode. Adding it widens what can be found; it does not
+        // change what an answer is.
+        match: follow ? ["vector", "lexical", "graph"] : ["vector", "lexical"],
       });
       setTurns((previous) => [...previous, answer]);
       setOpen(null);
@@ -4249,6 +4294,71 @@ function AskSection({ projectId }: { projectId: string }) {
               </p>
             </>
           )}
+
+          {lenses.length > 0 && (
+            <>
+              <h3>Or narrow by what it was read as</h3>
+              <div className="row">
+                <button className={lens === "" ? "" : "secondary"} onClick={() => setLens("")}>
+                  any lens
+                </button>
+                {lenses.map((x) => (
+                  <button key={x.template} className={lens === x.template ? "" : "secondary"}
+                          title={x.description}
+                          onClick={() => setLens(lens === x.template ? "" : x.template)}>
+                    {x.template}
+                  </button>
+                ))}
+              </div>
+              <p className="empty" style={{ marginBottom: 0 }}>
+                A lens is declared when a record is written. Choosing one keeps only records read
+                that way — and walks only the relationships that reading produced.
+              </p>
+            </>
+          )}
+
+          <h3>Start from</h3>
+          <p className="empty" style={{ marginTop: 0 }}>
+            Anchor the question on something the corpus already knows about. Without an anchor the
+            graph has to scrape a name out of your question — which works for{" "}
+            <em>what did Krishna teach</em> and not for a question that never names its subject.
+          </p>
+          <div className="row">
+            {anchors.length === 0 ? (
+              <span className="empty">
+                Nothing extracted yet — entities appear after an enrichment pass.
+              </span>
+            ) : anchors.slice(0, 40).map((a) => {
+              const on = anchored.includes(a.entity_id);
+              return (
+                <button key={a.entity_id} className={on ? "" : "secondary"}
+                        title={`${a.type} · ${a.visible_mentions} mention${a.visible_mentions === 1 ? "" : "s"}`}
+                        onClick={() => setAnchored(on
+                          ? anchored.filter((x) => x !== a.entity_id)
+                          : [...anchored, a.entity_id])}>
+                  {a.display_name}
+                  <span className="empty"> · {a.type}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          <h3>How far to look</h3>
+          <div className="row">
+            <label className="check">
+              <input type="checkbox" checked={follow}
+                     onChange={(e) => setFollow(e.target.checked)} />
+              Follow connections — reach records through the graph
+            </label>
+          </div>
+          <p className="empty" style={{ marginBottom: 0 }}>
+            {follow
+              ? "Records connected to your anchors are searched too, even when they never contain "
+                + "the words you asked about. That is the question the other arms cannot answer — "
+                + "and it is only as good as the entities underneath it."
+              : "Only records matching the question itself. Turn this on to also reach records "
+                + "joined to them by a relationship some document asserted."}
+          </p>
         </section>
       )}
 
@@ -4327,6 +4437,22 @@ function AskSection({ projectId }: { projectId: string }) {
                 <span className="chip">{turn.latency_ms} ms</span>
                 {!turn.answer_stored && <span className="chip">text not stored</span>}
               </div>
+              {/* A result that arrived only through the graph is otherwise
+                * unexplainable: it does not contain the words that were
+                * searched for, so without the seed a reader cannot tell
+                * whether the connection was the one they meant. */}
+              {turn.graph_seeds.length > 0 && (
+                <p className="provenance">
+                  Followed connections from{" "}
+                  {turn.graph_seeds.map((s, i) => (
+                    <span key={s.entity_id}>
+                      {i > 0 ? ", " : ""}
+                      <strong>{s.display_name}</strong>
+                      {s.matched_on === "chosen" ? " (you chose it)" : " (found in your question)"}
+                    </span>
+                  ))}
+                </p>
+              )}
               {turn.citations.map((citation) => (
                 <div className="hit" key={citation.chunk_id}>
                   <div className="meta">
