@@ -10,7 +10,24 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 
 ## Unreleased
 
+### Fixed
+- **The Add data panel never said whether the graph was built.** The final step
+  read *"title, summary, keywords and entities recorded"* — asserting entities
+  on every successful enrichment and reporting no number, so a record that
+  produced eighteen and one that produced none looked identical. There is now a
+  **connected** step saying what was actually recorded (*"18 entities and 9
+  relationships, read as scripture"*, or *"nothing to connect — no scripture
+  relationships were found in this text"*), and the headline says *"Enriched —
+  but nothing was named, so it is not in the graph"* when that is what happened.
+  Entities with no edges is named as the ordinary case rather than a fault: a
+  relationship has to be stated, and most text names things without asserting
+  anything between them.
+
 ### Added
+- `GET /api/v1/data/{id}` returns `entity_count`, `edge_count` and `template`,
+  counted in the item's own query — a panel needing two calls to decide whether
+  a step finished will eventually show one of them stale.
+
 - **Chat can search the graph, anchored on what you point at.** The Chat scope
   picker had one control — memories — while retrieval already accepted tags,
   keywords and templates and could run a graph arm nobody could reach. It now
