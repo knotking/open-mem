@@ -87,6 +87,20 @@ JOB_SECRETS="DB_PASSWORD=memdog-db-password:latest,MEMDOG_MASTER_KEY=memdog-mast
 # redeploys runs code the service no longer has, and this one issues the first
 # credential -- the worst possible thing to run from a stale build.
 #
+# `shared`, not `personal`, and that argument is load-bearing. A personal
+# connection binds its producer to the user who bootstrapped it, and the write
+# path refuses anybody else:
+#
+#     this producer is bound to another user's personal connection
+#
+# The console sends the *signed-in user's* identity, not a service credential,
+# so with `personal` every account except the bootstrap owner is refused at
+# Add data. That is correct behaviour for a personal deployment and wrong for a
+# console several people sign into. Found 2026-09-04, immediately after a
+# from-scratch rebuild: the previous tenant's connection was shared, this
+# argument recreated it as personal, and the screen broke for everyone but the
+# owner.
+#
 # Restoring it to `bootstrap-to-secret` costs nothing: `refuse_if_occupied`
 # turns it into a no-op on a deployment that already has a tenant, and a fresh
 # project needs exactly this. The secret *name* in the args is config; the
@@ -94,7 +108,7 @@ JOB_SECRETS="DB_PASSWORD=memdog-db-password:latest,MEMDOG_MASTER_KEY=memdog-mast
 # Run Job is Cloud Logging.
 for job_spec in "memdog-reconcile:reconcile" "memdog-crawl-tick:crawl-tick" \
                 "memdog-alert-tick:alert-tick" \
-                "memdog-bootstrap:bootstrap-to-secret,owner@memdog.dev,personal,${PROJECT},memdog-demo-key" \
+                "memdog-bootstrap:bootstrap-to-secret,owner@memdog.dev,shared,${PROJECT},memdog-demo-key" \
                 "memdog-seed:seed,--demo"; do
   job="${job_spec%%:*}"
   command="${job_spec##*:}"
