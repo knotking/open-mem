@@ -1,12 +1,17 @@
-# Documents too big to hold
+# Things too big to hold
 
-A gigabyte document is not a bigger version of the current problem. Every stage
-of the write path assumes the thing fits in memory once, and at that size four
-separate assumptions break at the same time. This is what would have to change,
-and — more usefully — what already exists.
+A gigabyte document, or a two-hour recording, is not a bigger version of the
+current problem. The write path assumes throughout that the thing fits in memory
+once and is processed in one pass, and past a certain size several of those
+assumptions fail together. This is what would have to change, and — more
+usefully — how much of it already exists.
 
-The short version: **the transport is already designed, and the processing is
-not.** Bytes have a path that never touches the API. Text does not.
+The short version: **the transport is largely solved and unused; the processing
+is not.** Bytes already have a path that never passes through the API. What
+happens to them afterwards still assumes they are small.
+
+Two sections: documents, then media. They share a shape — divide at ingestion,
+one memory holding the parts — and differ in what it costs to cut them.
 
 ---
 
@@ -84,6 +89,73 @@ That single change addresses most of the table:
 is a per-document budget guard, and a limit large enough to admit a gigabyte
 admits it into a pipeline that cannot carry it — which converts a clear refusal
 into an hour of silent work and a failure with no partial result.
+
+---
+
+## Media that will not fit
+
+**None of this is built.** What exists today is one number and an honest refusal:
+`MAX_INLINE_BYTES` is 18 MB, the console's `Capture` matches it, and anything
+larger is recorded as `needs_model` with the reason on the row. There is no
+segmenting, no audio extraction, no downsampling, and duration is not modelled
+at all.
+
+Media is worth treating separately from text because **it is never divided**. A
+long document is already chunked — length costs time, not success. A recording
+is one payload in one call, so 17 MB works and 19 MB does not, and nothing in
+between degrades.
+
+### Two walls, and only one of them needs splitting
+
+Conflating these is what makes the problem look bigger than it is.
+
+**The transport wall — 18 MB — does not need divide-and-conquer.** It is the
+provider's *inline* limit, not a limit on what the provider can read. Sending
+media by reference instead of as base64 lifts it to whatever the provider's file
+service allows, which is a different order of magnitude. `POST /uploads` already
+grants a signed URL and mints a storage key, so the bytes already have somewhere
+to live; what is missing is handing the provider a reference to them instead of
+inlining. That is the cheap change, and it is the one that unlocks most real
+files — a phone video, a meeting recording, a scanned report.
+
+**The duration wall does.** A model has a bounded context however the bytes
+arrive, so a two-hour recording has to become segments whatever the transport.
+This is where the part-record shape from above applies unchanged: split on time,
+one part per segment, all in one memory.
+
+Doing the second without the first would be building the expensive half to solve
+the cheap problem.
+
+### What splitting media costs that splitting text does not
+
+**Bytes cannot be cut arbitrarily.** A container is not a stream of independent
+frames: a cut has to land on a packet boundary and be re-muxed, or the segment is
+undecodable. That means a media toolchain — `ffmpeg` or equivalent — and the API
+image is `python:3.12-slim` with no such thing. This is a real dependency, not a
+function.
+
+**Extracting audio is usually the better trade.** When only speech matters, a
+500 MB video becomes a few MB of audio — often clearing the transport wall
+outright without any splitting. It needs the same toolchain, and it is a
+*policy* choice rather than an automatic one: discarding the visual track is
+correct for a meeting recording and wrong for a screen capture whose content is
+what is on screen.
+
+**Time is the boundary, and it needs an overlap.** Chunked text overlaps so a
+sentence spanning a cut is still retrievable; segmented audio needs the same, or
+a word split across a boundary is lost from both transcripts.
+
+**A segment is not a citation.** A transcript's value is that a claim points at a
+passage. A part-record must carry its offset in the original, or a citation says
+"segment 4" and the reader cannot find the moment.
+
+### Duration should bound this, not bytes
+
+Today the only guard is size, and size is a poor proxy: a 15 MB hour-long
+low-bitrate recording passes the check and then meets the provider's token limit,
+which surfaces as a provider error rather than a clear refusal. Whatever is built
+here should bound what the model must actually process — minutes of media —
+rather than what it costs to transfer.
 
 ---
 

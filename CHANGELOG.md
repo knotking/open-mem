@@ -51,7 +51,13 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   smaller ceiling". The new stage clears the derived text and re-reads the bytes,
   which are untouched, so nothing is re-uploaded.
 - **[`docs/ingestion/large-documents.md`](docs/ingestion/large-documents.md)** —
-  what would have to change for gigabyte documents. The transport is already
+  what would have to change for gigabyte documents **and long media**, none of
+  which is built. For media the useful distinction is that there are *two* walls
+  and only one needs splitting: the 18 MB ceiling is the provider's *inline*
+  limit and lifts by sending a reference instead of base64, while the duration
+  wall needs segments however the bytes arrive. Records what splitting media
+  costs that splitting text does not — a container cannot be cut arbitrarily, so
+  it needs a media toolchain the API image does not have. The transport is already
   designed (`POST /uploads` grants a signed URL; bytes never pass through the
   API); the processing is not. Proposes splitting one upload into part-records
   inside one memory, which is the only change that makes failure partial and
