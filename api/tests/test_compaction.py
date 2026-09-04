@@ -61,7 +61,7 @@ class FakeExtractor:
     def __init__(self):
         self.calls = 0
 
-    async def extract(self, text, *, data_type, prompt=None):
+    async def extract(self, text, *, data_type, prompt=None, template=None):
         self.calls += 1
 
         class Envelope:

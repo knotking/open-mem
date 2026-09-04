@@ -112,6 +112,14 @@ class WriteItem(BaseModel):
     tags: list[str] = Field(default_factory=list)
     identifiers: list[str] = Field(default_factory=list)
     access: ItemAccess | None = None
+    # What this content is *for*, declared by the caller and orthogonal to
+    # `data_type`, which is derived from the bytes. A .docx is a `document`
+    # whether it is a contract or a novel; the template says which, and the
+    # graph extracted from it differs accordingly.
+    #
+    # Per item rather than per request, for the same reason `access` is: one
+    # write carries many items and a batch is not uniform.
+    template: str | None = None
     memory: MemoryRef | None = None
     case: CaseRef | None = None
     metadata: dict = Field(default_factory=dict)
@@ -208,6 +216,13 @@ class RetrieveFilter(BaseModel):
     # ask about time is unaffected.
     valid_at: datetime | None = None
     as_of: datetime | None = None
+    # Read under which lens. This narrows two things at once and deliberately
+    # so: which records are searched (those declared as this kind of content)
+    # and which edges the graph arm may walk (those the template drew). Asking
+    # "what does the scripture in this project claim leads to what" is one
+    # filter, not a record filter that happens to be followed by a graph that
+    # ignores it.
+    template: str | None = None
 
 
 class RetrieveRequest(BaseModel):

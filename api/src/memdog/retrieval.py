@@ -127,7 +127,7 @@ async def graph_seeds(
 
 async def _expand(
     graph, principal: Principal, seeds: list[GraphSeed], *, limit: int,
-    valid_at=None, as_of=None,
+    valid_at=None, as_of=None, template: str | None = None,
 ) -> dict[str, int]:
     """Seeds, plus what one hop reaches, with the fewest hops to each.
 
@@ -153,7 +153,7 @@ async def _expand(
             found = await graph.neighbourhood(
                 principal, entity_id=seed.entity_id, depth=1,
                 predicates=None, limit=limit,
-                valid_at=valid_at, as_of=as_of,
+                valid_at=valid_at, as_of=as_of, template=template,
             )
         except GraphError:
             # The entity resolved a moment ago and is gone, or is not visible
@@ -214,6 +214,7 @@ async def _retrieve(
     since_p, until_p = bind(request.filter.since), bind(request.filter.until)
     memories_p = bind(request.filter.memory_ids)
     keywords_p = bind(request.filter.keywords)
+    template_p = bind(request.filter.template)
 
     # `EXISTS` rather than a join: a record can be in several of the selected
     # memories and a join would return it once per membership, which the fusion
@@ -229,6 +230,7 @@ async def _retrieve(
               SELECT 1 FROM artifacts a2
               JOIN artifact_sources s2 ON s2.artifact_id = a2.artifact_id
               WHERE s2.data_id = d.data_id AND a2.keywords && {keywords_p}::text[]))
+        AND ({template_p}::text IS NULL OR d.template = {template_p})
         AND ({since_p}::timestamptz IS NULL OR d.event_time >= {since_p})
         AND ({until_p}::timestamptz IS NULL OR d.event_time <= {until_p})
     """
@@ -279,6 +281,11 @@ async def _retrieve(
                 graph or build_graph(pool), principal, seeds,
                 limit=request.limit * 8,
                 valid_at=request.filter.valid_at, as_of=request.filter.as_of,
+                # The same lens on both halves. A search narrowed to scripture
+                # records whose graph arm walked every edge in the project
+                # would rank records by connections the filter excluded, and
+                # nothing in the result would show it.
+                template=request.filter.template,
             )
     if reachable:
         ids_p = bind(list(reachable))

@@ -2645,6 +2645,7 @@ async def entity_graph_endpoint(
     request: Request, entity_id: str, depth: int = 1,
     predicates: str | None = None, limit: int = 120,
     valid_at: datetime | None = None, as_of: datetime | None = None,
+    template: str | None = None,
     actor: Principal = Depends(principal),
 ) -> dict:
     """The neighbourhood around an entity, as asserted edges.
@@ -2657,19 +2658,28 @@ async def entity_graph_endpoint(
     are different questions and a backfill separates them: a document imported
     today about last year is visible at `valid_at=last year` and invisible at
     `as_of=last month`. Both default to now.
+
+    `template` narrows the traversal to edges a given template drew, and it is
+    applied inside the recursion rather than to the result: a path is within a
+    template only if every hop of it is, and filtering afterwards would return
+    endpoints joined by edges the filter excluded.
     """
     try:
         result = await request.app.state.graph.neighbourhood(
             actor, entity_id=entity_id, depth=depth,
             predicates=[p for p in (predicates or "").split(",") if p] or None,
-            limit=limit, valid_at=valid_at, as_of=as_of,
+            limit=limit, valid_at=valid_at, as_of=as_of, template=template,
         )
     except (GraphError, AuthError) as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
     return {
         "root": vars(result.root),
         "nodes": [vars(n) for n in result.nodes],
-        "edges": [vars(e) for e in result.edges],
+        # `confidence_class` is a property rather than a field, so `vars()`
+        # does not reach it -- and it is the one thing on an edge that says
+        # whether a claim was read off the page or read into it.
+        "edges": [{**vars(e), "confidence_class": e.confidence_class}
+                  for e in result.edges],
         "truncated": result.truncated,
     }
 
@@ -2700,10 +2710,30 @@ async def graph_predicates_endpoint(actor: Principal = Depends(principal)) -> di
     which claims supersede one another, so a caller writing facts needs to know
     that a second `located_in` closes the first and a second `works_for` does not.
     """
+    from . import predicates as predicates_mod
     from .graph import MAX_DEPTH, PREDICATES, SINGLE_VALUED
 
+    # `describe()` carries the domain, range and confidence class alongside the
+    # name. A caller writing facts needs the first two to know which edge it may
+    # assert, and a caller reading them needs the third to know whether an edge
+    # was stated or interpreted -- neither is inferable from the name.
     return {"predicates": list(PREDICATES), "max_depth": MAX_DEPTH,
-            "single_valued": sorted(SINGLE_VALUED)}
+            "single_valued": sorted(SINGLE_VALUED),
+            "vocabulary": predicates_mod.describe()}
+
+
+@app.get("/api/v1/templates")
+async def templates_endpoint(actor: Principal = Depends(principal)) -> dict:
+    """The templates a write may declare, served rather than documented twice.
+
+    Each carries the questions it exists to answer and the predicates it
+    offers, because a template is chosen by what you want to ask of the content
+    later — and a name alone cannot tell you that `scripture` will record what
+    the text claims leads to what while `incident` will record what caused what.
+    """
+    from . import graph_templates
+
+    return {"templates": graph_templates.registry()}
 
 
 @app.get("/api/v1/entities/{entity_id}/history")

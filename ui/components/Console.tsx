@@ -887,6 +887,12 @@ function AddData({
   // the point of them -- a saved override would change what a project does with
   // no audit trail on the setting that appears to control it.
   const [promptOverride, setPromptOverride] = useState("");
+  // What the content is *for*, which the bytes cannot say. Separate from
+  // the prompt override beside it: a prompt replaces the instruction
+  // wholesale, a template also narrows the relationships the model may
+  // report -- so it changes the graph, not just the summary.
+  const [template, setTemplate] = useState("");
+  const [templates, setTemplates] = useState<GraphTemplate[]>([]);
   const [modelOverride, setModelOverride] = useState("");
   // Sealed before any other phase runs, and no endpoint changes it afterwards.
   const [level, setLevel] = useState("");
@@ -917,6 +923,17 @@ function AddData({
       .catch(() => setMemories([]));
   }, [projectId]);
   useEffect(() => { loadMemories(); }, [loadMemories]);
+
+  const chosenTemplate = templates.find((x) => x.template === template) ?? null;
+
+  // Served rather than hardcoded, for the reason every vocabulary in this
+  // console is: a list typed here drifts from what the server will accept, and
+  // the write is refused with a name the screen offered.
+  useEffect(() => {
+    void call<{ templates: GraphTemplate[] }>("api/v1/templates")
+      .then((r) => setTemplates(r.templates))
+      .catch(() => setTemplates([]));
+  }, []);
 
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
@@ -989,6 +1006,7 @@ function AddData({
         producer_id: producerId,
         items: [{
           external_id: externalId, content, memory,
+          template: template || undefined,
           access: meeting
             ? { level: room.level, principals: room.principals }
             : level
@@ -1229,6 +1247,46 @@ function AddData({
           over either — otherwise a lock would be advisory. Saved instruction blocks live under{" "}
           <strong>Prompts</strong>; assignment per purpose lives under <strong>Models</strong>.
         </p>
+
+        <div className="row" style={{ marginTop: 14 }}>
+          <label style={{ flex: 1, minWidth: 280 }}>
+            What this is for
+            <select value={template} disabled={!enrich || !summarize}
+                    title={!enrich || !summarize
+                      ? "Needs interpretation and summarising — a template shapes what is extracted, and nothing is being extracted"
+                      : undefined}
+                    onChange={(e) => setTemplate(e.target.value)}>
+              <option value="">no template — extract whatever is there</option>
+              {templates.map((tpl) => (
+                <option key={tpl.template} value={tpl.template}>
+                  {tpl.template} — {tpl.description}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        {chosenTemplate ? (
+          <div className="notice" style={{ marginBottom: 0 }}>
+            <strong>Read as {chosenTemplate.template}.</strong> The model will be asked to look
+            for{" "}
+            {chosenTemplate.predicates.map((pred, i) => (
+              <span key={pred}>
+                {i > 0 ? ", " : ""}<code>{pred}</code>
+              </span>
+            ))}{" "}
+            and nothing else, so questions like{" "}
+            <em>{chosenTemplate.questions[0]}</em> become answerable from the graph. Citations use{" "}
+            <code>{chosenTemplate.citation_unit}</code>.{" "}
+            <strong>A template is a hint, not a promise</strong> — content that is not this kind of
+            thing is extracted plainly rather than forced into the shape.
+          </div>
+        ) : (
+          <p className="empty" style={{ marginBottom: 0 }}>
+            Without one, relationships are extracted from the full vocabulary — which is right when
+            you do not know what the content is, and produces mostly{" "}
+            <code>related_to</code> when the content is an argument rather than a workplace record.
+          </p>
+        )}
       </Step>
 
       <Step n={5} name="acl" title="Who can see it" value={audienceSummary}>
@@ -1688,6 +1746,16 @@ type GraphNode = { entity_id: string; display_name: string; type: string; depth:
 type GraphEdge = {
   subject_id: string; predicate: string; object_id: string;
   evidence: number; source_data_ids: string[]; confidence: number;
+  // Which template drew this edge; null is open-domain extraction.
+  template: string | null;
+  // Whether the predicate is read off the page or into it. It decides how much
+  // an answer resting on this hop is worth, so it belongs beside the edge and
+  // not in a detail view nobody opens.
+  confidence_class: "structural" | "interpretive";
+};
+type GraphTemplate = {
+  template: string; description: string; questions: string[];
+  predicates: string[]; citation_unit: string; digest: string;
 };
 type GraphView = {
   root: GraphNode; nodes: GraphNode[]; edges: GraphEdge[]; truncated: boolean;
@@ -1740,13 +1808,25 @@ function EntitiesSection({
     }
   }, [projectId, kind]);
 
+  // Which lens to walk the graph through. Empty is every edge, which is what
+  // this screen has always shown.
+  const [lens, setLens] = useState("");
+  const [lenses, setLenses] = useState<GraphTemplate[]>([]);
+  useEffect(() => {
+    void call<{ templates: GraphTemplate[] }>("api/v1/templates")
+      .then((r) => setLenses(r.templates))
+      .catch(() => setLenses([]));
+  }, []);
+
   const inspect = useCallback(
     async (entityId: string) => {
       try {
         const [d, g, c] = await Promise.all([
           call<EntityDetail>(`api/v1/entities/${entityId}`, undefined, "GET"),
           call<GraphView>(
-            `api/v1/entities/${entityId}/graph?depth=${depth}`, undefined, "GET"),
+            `api/v1/entities/${entityId}/graph?depth=${depth}` +
+              (lens ? `&template=${encodeURIComponent(lens)}` : ""),
+            undefined, "GET"),
           call<{ co_mentions: CoMention[] }>(
             `api/v1/entities/${entityId}/co-mentions`, undefined, "GET"),
         ]);
@@ -1757,7 +1837,7 @@ function EntitiesSection({
         setError((e as Error).message);
       }
     },
-    [depth],
+    [depth, lens],
   );
 
   useEffect(() => {
@@ -1927,14 +2007,44 @@ function EntitiesSection({
                   {d} hop{d > 1 ? "s" : ""}
                 </button>
               ))}
+              {lenses.length > 0 && (
+                <select
+                  value={lens}
+                  disabled={busy}
+                  title="Walk only the edges a given template drew. Applied inside the traversal, so a path is shown only when every hop of it is within the template."
+                  onChange={(e) =>
+                    act("", async () => {
+                      const next = e.target.value;
+                      setLens(next);
+                      setGraph(
+                        await call<GraphView>(
+                          `api/v1/entities/${graph.root.entity_id}/graph?depth=${depth}` +
+                            (next ? `&template=${encodeURIComponent(next)}` : ""),
+                          undefined, "GET"),
+                      );
+                    })
+                  }
+                >
+                  <option value="">every relationship</option>
+                  {lenses.map((x) => (
+                    <option key={x.template} value={x.template}>
+                      read as {x.template}
+                    </option>
+                  ))}
+                </select>
+              )}
             </div>
           </div>
 
           {graph.edges.length === 0 ? (
             <p className="empty">
-              No asserted relationships yet. Edges come from what a document actually stated —
-              &ldquo;Priya works for Northwind&rdquo; — so they need an enrichment pass that read
-              for them. Co-mentions below need nothing and work today.
+              {lens
+                ? `No relationships drawn under the ${lens} template. That is a different fact from `
+                  + "having none at all — this entity may be well connected through edges other "
+                  + "templates or an open-domain pass produced."
+                : "No asserted relationships yet. Edges come from what a document actually stated — "
+                  + "\u201cPriya works for Northwind\u201d — so they need an enrichment pass that "
+                  + "read for them. Co-mentions below need nothing and work today."}
             </p>
           ) : (
             <>
@@ -1952,6 +2062,22 @@ function EntitiesSection({
                       <span className="chip">
                         {edge.evidence} record{edge.evidence === 1 ? "" : "s"} assert this
                       </span>
+                      {/* Whether the claim was stated or interpreted. It is the
+                        * one thing on an edge that changes how much a path
+                        * through it is worth, so it is a column rather than
+                        * something you click to find. */}
+                      {edge.confidence_class === "interpretive" && (
+                        <span className="chip warnchip"
+                              title="This predicate records a reading of what the content argues, not a statement it made plainly. An answer that depends on this hop is an interpretation.">
+                          a reading, not a quote
+                        </span>
+                      )}
+                      {edge.template && (
+                        <span className="chip"
+                              title={`Drawn under the ${edge.template} template — the content was declared to be this kind of thing when it was written`}>
+                          read as {edge.template}
+                        </span>
+                      )}
                     </div>
                     <div className="text">
                       {name(edge.subject_id)} <span className="edge-arrow">→</span>{" "}

@@ -63,6 +63,7 @@ export const ALLOWED = [
   // What the corpus is about, aggregated from model keywords.
   /^api\/v1\/projects\/[A-Za-z0-9_]+\/keywords(\?.*)?$/,
   /^api\/v1\/projects\/[A-Za-z0-9_]+\/tags(\?.*)?$/,
+  /^api\/v1\/templates$/,
   /^api\/v1\/memories\/[A-Za-z0-9_]+\/members$/,
   // Deriving: what can be made from a memory, and what has been.
   /^api\/v1\/generators$/,

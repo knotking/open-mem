@@ -334,7 +334,7 @@ async def _enrich_with_recorder(
     class Recorder:
         model_id = "recorder-v1"
 
-        async def extract(self, text, *, data_type, prompt=None):
+        async def extract(self, text, *, data_type, prompt=None, template=None):
             from memdog.extraction import Envelope
 
             prompts_seen.append(prompt)

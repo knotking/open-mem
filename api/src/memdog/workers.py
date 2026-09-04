@@ -346,6 +346,37 @@ class EnrichWorker:
         self._restricted[key] = (narrowed, version)
         return narrowed, version, None
 
+    async def _template_generator(self, generator: str | None,
+                                  template: str | None, model_id: str) -> str | None:
+        """Fold a template's digest into the generator version, and register it.
+
+        `generators` is the table every artifact's version points at, so a
+        composite that is never inserted leaves rows naming a generator nothing
+        describes -- and the reconciler, which decides what is stale by reading
+        that table, would treat every templated artifact as unrecognised.
+        """
+        from .graph_templates import get as _template
+
+        if not template or generator is None:
+            return generator
+        try:
+            spec = _template(template)
+        except Exception:
+            return generator
+        if spec is None:
+            return generator
+        composite = f"{generator}+tpl.{spec.name}.{spec.digest()}"
+        await self._pool.execute(
+            """
+            INSERT INTO generators (generator_version, purpose, model_id, spec)
+            VALUES ($1, $2, $3, $4) ON CONFLICT (generator_version) DO NOTHING
+            """,
+            composite, EXTRACT_PURPOSE, model_id,
+            {"envelope": "core-v1", "template": spec.name,
+             "predicates": list(spec.predicates)},
+        )
+        return composite
+
     async def _enrich(
         self,
         data_id: str,
@@ -368,7 +399,8 @@ class EnrichWorker:
         row = await self._pool.fetchrow(
             """
             SELECT org_id, project_id, owner_id, indexable_text, data_type,
-                   access_level, shared_with, deleted_at, ingested_at, run_id
+                   access_level, shared_with, deleted_at, ingested_at, run_id,
+                   template
             FROM data_items WHERE data_id = $1
             """,
             data_id,
@@ -472,8 +504,18 @@ class EnrichWorker:
             # raced and one ran with the other's prompt -- recording a
             # generator version it was not produced by.
             envelope = await extractor.extract(
-                row["indexable_text"], data_type=data_type, prompt=prompt
+                row["indexable_text"], data_type=data_type, prompt=prompt,
+                template=row["template"],
             )
+
+        # A template changes both halves of the request -- the instruction block
+        # and the enum the model may answer with -- so an artifact read under
+        # one is not the same artifact as one read without. Folding its digest
+        # into the version is what makes editing a template detectably stale
+        # everything it produced, which is the whole reason `/reprocess` can
+        # rebuild exactly those records and nothing else.
+        generator = await self._template_generator(generator, row["template"],
+                                                   extractor.model_id)
 
         # One source here, but the rule is written for the general case: an
         # artifact spanning mixed-ACL sources takes the intersection.
@@ -546,7 +588,12 @@ class EnrichWorker:
                 org_id=row["org_id"],
                 project_id=row["project_id"],
                 candidates=envelope.entities,
-                generator_version=self.generator_version,
+                # The mention was produced by the same pass as the edge, so it
+                # carries the same version -- including the template digest.
+                # `self.generator_version` here was the deployment's default,
+                # which is not necessarily the extractor that ran: a narrowed
+                # or reassigned engine already recorded a different one.
+                generator_version=generator,
             )
             # Edges after mentions, in the same transaction: a relation names
             # its endpoints by name, and the only thing that can turn a name
@@ -558,7 +605,8 @@ class EnrichWorker:
                 project_id=row["project_id"],
                 resolved=resolved,
                 relations=envelope.relations,
-                generator_version=self.generator_version,
+                generator_version=generator,
+                template=row["template"],
             )
             await conn.execute(
                 "UPDATE data_items SET state = 'enriched', updated_at = now() WHERE data_id = $1",

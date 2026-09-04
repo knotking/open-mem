@@ -29,6 +29,7 @@ import httpx
 from . import usage
 from pydantic import BaseModel, Field
 
+from . import graph_templates, predicates as predicates_mod
 from .inference import EmbeddingUnavailable
 
 EXTRACT_PURPOSE = "extraction"
@@ -102,7 +103,8 @@ class Extractor(Protocol):
     model_id: str
 
     async def extract(
-        self, text: str, *, data_type: str, prompt: str | None = None
+        self, text: str, *, data_type: str, prompt: str | None = None,
+        template: str | None = None,
     ) -> Envelope: ...
     """`prompt` replaces the shipped instruction block for this call only.
 
@@ -113,18 +115,36 @@ class Extractor(Protocol):
     produced by, which is the failure that cannot be reconstructed afterwards.
 
     Optional, and ignored by implementations that have no prompt.
+
+    `template` is the caller's declared intent -- what the document is *for*,
+    which the bytes cannot say. It narrows the relation enum and appends its
+    own instruction block, and it is deliberately separate from `prompt`: a
+    prompt override replaces the shipped instruction wholesale and is a policy
+    lever, while a template composes with it and is a statement about the
+    content. Both may be set.
     """
 
 
 def build_prompt(
-    text: str, *, data_type: str, schema: dict, block: str | None = None
+    text: str, *, data_type: str, schema: dict, block: str | None = None,
+    template: str | None = None,
 ) -> tuple[str, str]:
     """Returns (system, user). The nonce is per-request and unguessable, so a
     document cannot terminate its own fence and start issuing instructions."""
+    from .graph_templates import get as _template
+
     nonce = secrets.token_hex(8)
     # The type-specific block goes in the system half, with the defence -- not
     # beside the content, where a document could imitate its formatting.
     system = SYSTEM_PROMPT if block is None else f"{SYSTEM_PROMPT}\n\n{block}"
+    # The template block goes *after* the type block, because it is the more
+    # specific statement: the type says this is a document, the template says
+    # it is a design document, and where they disagree about what is
+    # interesting the second should win. It is in the system half for the same
+    # reason the first one is.
+    spec = _template(template)
+    if spec is not None:
+        system = f"{system}\n\n{spec.block()}"
     user = (
         f"SCHEMA\n{json.dumps(schema, sort_keys=True)}\n\n"
         f"DATA TYPE: {data_type}\n\n"
@@ -136,11 +156,13 @@ def build_prompt(
 # Entities ride the pass that is already reading the text. A separate
 # extraction call would double the cost and the latency of enrichment to read
 # the same document twice, and would let the two disagree about what it said.
-RELATION_PREDICATES = (
-    "works_for", "member_of", "reports_to", "collaborates_with",
-    "located_in", "part_of", "owns", "produces", "uses",
-    "attended", "about", "related_to",
-)
+#
+# The vocabulary itself now lives in `predicates.py`. It was defined here *and*
+# in `graph.PREDICATES` -- two copies of the same twelve strings, with nothing
+# failing if they drifted. A predicate added to one and not the other is
+# offered to the model, accepted by the schema, and rejected by a CHECK
+# constraint at the very end of enrichment.
+RELATION_PREDICATES = predicates_mod.NAMES
 
 ENTITY_SCHEMA = {
     "type": "array",
@@ -162,33 +184,69 @@ ENTITY_SCHEMA = {
 # Relations ride the same pass as entities. Naming the endpoints rather than
 # ids is deliberate: the model cannot know our identifiers, so it says what the
 # document said and the resolver matches it back.
-RELATION_SCHEMA = {
-    "type": "array",
-    "items": {
-        "type": "object",
-        "required": ["subject", "predicate", "object"],
-        "properties": {
-            "subject": {"type": "string"},
-            "predicate": {"type": "string", "enum": list(RELATION_PREDICATES)},
-            "object": {"type": "string"},
-            "confidence": {"type": ["number", "null"]},
-        },
-    },
-}
+def relation_schema(offered: tuple[str, ...] = RELATION_PREDICATES) -> dict:
+    """The relation array, with the enum narrowed to what is on offer.
 
-ENVELOPE_SCHEMA = {
-    "type": "object",
-    "required": ["title"],
-    "properties": {
-        "title": {"type": "string"},
-        "description": {"type": ["string", "null"]},
-        "summary": {"type": ["string", "null"]},
-        "keywords": {"type": "array", "items": {"type": "string"}},
-        "language": {"type": ["string", "null"]},
-        "entities": ENTITY_SCHEMA,
-        "relations": RELATION_SCHEMA,
-    },
-}
+    A template narrows this, which is most of what a template *does*: asking
+    for six relevant predicates instead of seventeen mostly-irrelevant ones
+    turns open-ended extraction into slot-filling, and the model cannot answer
+    with a predicate that was never in the enum.
+    """
+    return {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "required": ["subject", "predicate", "object"],
+            "properties": {
+                "subject": {"type": "string"},
+                "predicate": {"type": "string", "enum": list(offered)},
+                "object": {"type": "string"},
+                "confidence": {"type": ["number", "null"]},
+            },
+        },
+    }
+
+
+RELATION_SCHEMA = relation_schema()
+
+def envelope_schema(offered: tuple[str, ...] = RELATION_PREDICATES) -> dict:
+    """Property order is load-bearing, not cosmetic.
+
+    A schema-constrained model emits properties in the order the schema lists
+    them, and the output budget is finite -- so whatever is last is what gets
+    dropped when something earlier runs long. `entities` and `relations` were
+    last, behind an unbounded `summary`, which made the graph the first
+    casualty of a verbose one.
+
+    That was not hypothetical. A templated extraction of a page of the Gita
+    rambled through 4,045 of a 4,096-token budget inside `summary` and emitted
+    no entities and no relations at all: an artifact that looked successful,
+    with a title, a description, and an empty graph. The record enriched, the
+    state said `enriched`, and nothing anywhere reported that the part the
+    template existed for had been truncated away.
+
+    Entities and relations now come first. They are small, bounded by the
+    content, and they are the part that cannot be reconstructed from the text
+    later without paying for the call again -- a summary that gets clipped is a
+    worse summary, while a graph that gets clipped is a graph that silently
+    never existed.
+    """
+    return {
+        "type": "object",
+        "required": ["title"],
+        "properties": {
+            "title": {"type": "string"},
+            "entities": ENTITY_SCHEMA,
+            "relations": relation_schema(offered),
+            "description": {"type": ["string", "null"]},
+            "keywords": {"type": "array", "items": {"type": "string"}},
+            "language": {"type": ["string", "null"]},
+            "summary": {"type": ["string", "null"]},
+        },
+    }
+
+
+ENVELOPE_SCHEMA = envelope_schema()
 
 _WORD = re.compile(r"[A-Za-z][A-Za-z'-]+")
 _SENTENCE = re.compile(r"(?<=[.!?])\s+")
@@ -218,7 +276,8 @@ class LocalHeuristicExtractor:
         self.model_id = "local-heuristic-v1"
 
     async def extract(
-        self, text: str, *, data_type: str, prompt: str | None = None
+        self, text: str, *, data_type: str, prompt: str | None = None,
+        template: str | None = None,
     ) -> Envelope:
         # Deterministic and promptless. Accepting the argument and ignoring it
         # keeps it behind the same protocol; silently honouring it would be a
@@ -257,17 +316,21 @@ class OllamaExtractor:
         self._base_url = base_url.rstrip("/")
 
     async def extract(
-        self, text: str, *, data_type: str, prompt: str | None = None
+        self, text: str, *, data_type: str, prompt: str | None = None,
+        template: str | None = None,
     ) -> Envelope:
+        offered = graph_templates.predicates_for(template)
+        schema = envelope_schema(offered)
         system, user = build_prompt(text, data_type=data_type,
-                                    schema=ENVELOPE_SCHEMA, block=prompt)
+                                    schema=schema, block=prompt,
+                                    template=template)
         try:
             async with httpx.AsyncClient(timeout=120.0) as client:
                 response = await client.post(
                     f"{self._base_url}/api/chat",
                     json={
                         "model": self.model_id,
-                        "format": ENVELOPE_SCHEMA,   # schema-constrained output
+                        "format": schema,            # schema-constrained output
                         "stream": False,
                         "options": {"temperature": 0},
                         "messages": [
@@ -311,7 +374,8 @@ class GeminiExtractor:
         self._base = "https://generativelanguage.googleapis.com/v1beta"
 
     async def extract(
-        self, text: str, *, data_type: str, prompt: str | None = None
+        self, text: str, *, data_type: str, prompt: str | None = None,
+        template: str | None = None,
     ) -> Envelope:
         from .prompts import for_data_type
 
@@ -320,8 +384,10 @@ class GeminiExtractor:
             # An org or project override. The shipped block is still resolved
             # above so the name stays available for the artifact's provenance.
             block = prompt
+        offered = graph_templates.predicates_for(template)
         system, user = build_prompt(
-            text[:200_000], data_type=data_type, schema=ENVELOPE_SCHEMA, block=block
+            text[:200_000], data_type=data_type, schema=envelope_schema(offered),
+            block=block, template=template,
         )
         try:
             async with httpx.AsyncClient(timeout=300.0) as client:
@@ -333,12 +399,16 @@ class GeminiExtractor:
                         "contents": [{"role": "user", "parts": [{"text": user}]}],
                         "generationConfig": {
                             "temperature": 0,
-                            "maxOutputTokens": 4096,
+                            # Raised from 4096 after a templated extraction spent 4,045 of
+                            # them inside `summary`. Reordering the schema is the
+                            # real fix; this is the margin, so a verbose summary
+                            # costs tokens rather than the whole envelope.
+                            "maxOutputTokens": 8192,
                             # Schema-constrained: the parsed artifact *is* the
                             # response, so there is no raw text to store on
                             # success and nothing to salvage by parsing prose.
                             "responseMimeType": "application/json",
-                            "responseSchema": _gemini_schema(),
+                            "responseSchema": _gemini_schema(offered),
                         },
                     },
                 )
@@ -375,31 +445,15 @@ class GeminiExtractor:
         return envelope
 
 
-def _gemini_schema() -> dict:
+def _gemini_schema(offered: tuple[str, ...] = RELATION_PREDICATES) -> dict:
     """Gemini wants its own dialect: no nullable unions, so optional fields are
-    simply not required."""
+    simply not required. Property order matches `envelope_schema` and matters
+    for the same reason -- see the note there."""
     return {
         "type": "object",
         "required": ["title"],
         "properties": {
             "title": {"type": "string"},
-            "description": {"type": "string"},
-            "summary": {"type": "string"},
-            "keywords": {"type": "array", "items": {"type": "string"}},
-            "language": {"type": "string"},
-            "relations": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "required": ["subject", "predicate", "object"],
-                    "properties": {
-                        "subject": {"type": "string"},
-                        "predicate": {"type": "string",
-                                      "enum": list(RELATION_PREDICATES)},
-                        "object": {"type": "string"},
-                    },
-                },
-            },
             "entities": {
                 "type": "array",
                 "items": {
@@ -414,6 +468,30 @@ def _gemini_schema() -> dict:
                     },
                 },
             },
+            "relations": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["subject", "predicate", "object"],
+                    "properties": {
+                        "subject": {"type": "string"},
+                        "predicate": {"type": "string", "enum": list(offered)},
+                        "object": {"type": "string"},
+                        # Omitted from this dialect until now, though
+                        # `RELATION_SCHEMA` has always carried it and
+                        # `record_edges` has always read it -- so every edge
+                        # Gemini produced landed at the 0.5 default and the
+                        # column said nothing. Survivable while all predicates
+                        # are equally certain; not once a template mixes
+                        # structural claims with interpretive ones.
+                        "confidence": {"type": "number"},
+                    },
+                },
+            },
+            "description": {"type": "string"},
+            "keywords": {"type": "array", "items": {"type": "string"}},
+            "language": {"type": "string"},
+            "summary": {"type": "string"},
         },
     }
 
@@ -448,9 +526,11 @@ class ChainedExtractor:
         return ChainedExtractor(chain) if chain is not None else None
 
     async def extract(
-        self, text: str, *, data_type: str, prompt: str | None = None
+        self, text: str, *, data_type: str, prompt: str | None = None,
+        template: str | None = None,
     ) -> Envelope:
-        served = await self._chain.run(text, data_type=data_type, prompt=prompt)
+        served = await self._chain.run(text, data_type=data_type, prompt=prompt,
+                                       template=template)
         envelope = served.result
         envelope.fields["fallback_depth"] = served.depth
         envelope.fields["served_by_engine"] = served.step.name

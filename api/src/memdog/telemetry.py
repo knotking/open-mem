@@ -150,6 +150,17 @@ def setup(service_name: str = "memdog-api") -> None:
         description="Entity mentions resolved, by type and by what resolved them",
     )
 
+    # Edges the type check refused. This is the number that says whether the
+    # domain/range constraints are protecting the graph or quietly eating it:
+    # a handful means the model occasionally miswires an endpoint, and a flood
+    # means a predicate's declared types are wrong and real claims are being
+    # dropped. Labelled by predicate, because that is the unit you would fix.
+    _metrics["graph_edge_refused"] = meter.create_counter(
+        "memdog.graph.edge.refused",
+        description="Extracted edges refused because the predicate does not "
+                    "permit those endpoint types",
+    )
+
     # ------------------------------------------------------------------ cost
     #
     # The meter in `usage.py` is the durable record and these are the live view
