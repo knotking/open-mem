@@ -10,6 +10,71 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 
 ## Unreleased
 
+### Added
+- **Anyone can question a corpus here without an account.** The landing page is
+  now a chat over Sir Edwin Arnold's *The Song Celestial* (1885, public domain)
+  — eighteen chapters ingested exactly as your own documents would be. Every
+  answer cites the passage behind it, and when the text does not support one it
+  says so instead of composing it. `GET /api/v1/public/demo` reports whether the
+  demo is on and how much of the day's budget is left; `POST /api/v1/public/ask`
+  answers one question. The project and memory are named in **configuration,
+  never in the request**, so there is no scope for a caller to widen, and the
+  principal is synthetic with `DATA_READ` alone and a `user_id` matching no real
+  user — private records stay as invisible to it as they are to a stranger.
+  Metered before the model call, not after: an endpoint that counts afterwards
+  gives every failing request a free one. Off unless `PUBLIC_PROJECT_ID` is set.
+- **The overview answers "can a vector search find this?".** Every number on
+  that screen could be right — all records enriched, every chunk embedded, one
+  vector space, the configured model and dimension — while vector search matched
+  nothing at all, and nothing anywhere disagreed. It now reports which vector
+  spaces the records are in, which one retrieval queries, how many records are
+  stranded outside it, and whether the index still returns a full set of
+  neighbours for a vector it already holds.
+
+### Fixed
+- **Vector search returned nothing, and every other number said it was fine.**
+  Lexical search worked, so questions phrased in words the text uses literally
+  were answered and the rest came back *"nothing matched"*. Two causes stacked.
+  The HNSW graph had degraded: re-embedding deletes and reinserts every chunk of
+  a record, and a corpus re-embedded a few times over while an extraction is
+  being got right leaves enough dead tuples that a top-40 search for a vector
+  *already in the table* returns 11 rows — eventually none. And the vector arm
+  asked the index for exactly as many candidates as it wanted: `ef_search`
+  defaults to 40, the arm over-fetches 40, and the ACL and filters are applied
+  *after* the scan, so any filtering at all comes straight out of the result.
+- **The public demo could not be used from a browser at all.** The proxy
+  forwarded its body without a content-type — `apiFetch` sets one, but after the
+  credential-free branch has already returned, and that is the branch an
+  anonymous request takes. FastAPI parsed the JSON as a string and answered
+  *"Input should be a valid dictionary"*, which the page rendered as
+  `[object Object]`, because a validation `detail` is a list of objects and
+  `new Error(list)` stringifies to exactly that. The proxy sends the type now,
+  and the page turns whatever `detail` holds into a sentence.
+
+### Changed
+- **The landing page leads with the corpus, not with a sign-in form.** The demo
+  is the hero and sign-in is a panel off the top bar: the first thing a visitor
+  can do is ask a question, and a form demanding an account they do not have is
+  the opposite of that. The transcript scrolls inside its own card so the
+  composer does not walk down the page with every answer.
+
+### Migrations
+- `0050_rebuild_vector_index.sql` — drops and recreates the HNSW index over
+  `embeddings`. Run before deploying; it is a rebuild, so it takes time
+  proportional to the corpus.
+- `0049_public_asks.sql` — `public_asks`, the rate-limit and daily-cap ledger
+  behind the public endpoint. Run before deploying.
+
+### Configuration
+- `PUBLIC_PROJECT_ID`, `PUBLIC_MEMORY_ID`, `PUBLIC_TITLE`, `PUBLIC_SUBTITLE`,
+  `PUBLIC_DAILY_CAP` (500) and `PUBLIC_RATE_PER_HOUR` (20) configure the public
+  endpoint. Without `PUBLIC_PROJECT_ID` it 404s and the landing page shows the
+  sign-in card in the hero instead. Note that `--set-env-vars` splits on commas,
+  so a subtitle containing one silently truncates the whole list.
+- `HNSW_EF_SEARCH` (200) is how many candidates the vector arm's index scan
+  visits before the ACL and filters cut it down. It must exceed what the arm
+  over-fetches or filtering eats the result.
+
 ### Fixed
 - **A book produced the graph of a single page, and then of nothing at all.**
   Three stacked defects, each hidden by the last:
