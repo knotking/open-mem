@@ -121,9 +121,13 @@ export function assess(
       "because it is the part that spends money.";
     offerEnrich = true;
   } else if (gaveUp && !enriched) {
+    // Deliberately not phrased as a failure. Nothing has gone wrong here: this
+    // screen has a budget for watching and the work has its own, longer one.
+    // The previous wording led with "still queued" and read as a stall.
     reason =
-      "Still queued after two minutes. This screen stopped watching; the work did not stop. " +
-      "The reconciler sweeps every ten minutes and re-enqueues anything that was dropped.";
+      "This screen has stopped watching — the work has not stopped. Long documents are " +
+      "thousands of chunks and take a while. Reopen this record to see where it got to, and " +
+      "the reconciler re-enqueues anything genuinely dropped every ten minutes.";
   }
 
   const steps: Step[] = [

@@ -31,7 +31,21 @@ import { assess, type Climb, type Step, type StepState } from "@/lib/progress";
 export { assess };
 export type { Climb, Step, StepState };
 
-const CEILING_MS = 120_000;
+// How long to keep watching. Two minutes was right when every job was one or
+// two model calls; a long document is thousands of chunks and ~20 sequential
+// embedding calls, and the screen was giving up while the work was healthy and
+// halfway done. The reader then reads "stopped watching" as "broken".
+//
+// Scaled by size rather than raised for everyone, because a small item that has
+// genuinely stalled should still say so quickly: a ceiling generous enough for a
+// book makes every stuck note look like it is still working.
+const CEILING_BASE_MS = 120_000;
+const CEILING_MAX_MS = 900_000;
+/** ~1 minute per 200KB, on top of the base. */
+function ceilingFor(sizeBytes: number | null | undefined): number {
+  if (!sizeBytes || sizeBytes <= 0) return CEILING_BASE_MS;
+  return Math.min(CEILING_MAX_MS, CEILING_BASE_MS + (sizeBytes / 200_000) * 60_000);
+}
 
 
 /**
@@ -78,7 +92,9 @@ export function useTracked(onTick?: () => Promise<void>) {
           setWatching(false);
           return;
         }
-        if (age > CEILING_MS) {
+        // Read from the item each pass rather than captured once: the size is
+        // not known until the first fetch returns.
+        if (age > ceilingFor(current?.size_bytes)) {
           setGaveUp(true);
           setWatching(false);
           return;
