@@ -36,6 +36,15 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   neighbours for a vector it already holds.
 
 ### Fixed
+- **An alert on a fact, scoped to a memory, matched nothing forever.**
+  `fact.*` events carry no `data_id` — a fact is not a record — and the scope
+  filter built its candidate set from that column alone, so any container scope
+  (`memory_id`, `case_id`, `producer_id`) over a fact surface intersected with
+  an empty set. No error, no empty state, and a rule that never fires looks
+  exactly like a quiet week. A derived fact does stand on records, so the scope
+  now resolves through its edges' evidence and the fact survives if any of that
+  evidence is in the container. An asserted fact has none and still survives no
+  container scope — `entity_id` is the scope that reaches it.
 - **Vector search returned nothing, and every other number said it was fine.**
   Lexical search worked, so questions phrased in words the text uses literally
   were answered and the rest came back *"nothing matched"*. Two causes stacked.
