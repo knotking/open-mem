@@ -285,3 +285,79 @@ async def test_without_a_job_the_snapshot_fails_rather_than_waiting(pool, tenant
         "SELECT status, reason FROM repo_snapshots WHERE snapshot_id = $1", snapshot_id)
     assert row["status"] == "failed"
     assert "REPO_ANALYSIS_JOB" in row["reason"]
+
+
+# ------------------------------------------------------- the review envelope
+
+async def test_the_repo_reports_ask_for_findings_not_a_summary():
+    """The bug report described the codebase instead of answering, four runs
+    running, and no wording fixed it.
+
+    The cause was the *shape*: the envelope's one open field is `summary`,
+    documented everywhere as what the document covers, so a prompt asking for
+    located defects was answered with a description of the material. Three of
+    the four reports survived that because their answers are naturally
+    summary-shaped. This asserts the shape, because the wording never was the
+    problem.
+    """
+    from memdog.derive import GENERATORS
+    from memdog.extraction import REVIEWED, envelope_schema
+
+    for name in ("repo_design", "repo_quality", "repo_bugs", "repo_deps"):
+        assert GENERATORS[name]["data_type"] == "code_review"
+    assert "code_review" in REVIEWED
+
+    schema = envelope_schema(findings="code_review" in REVIEWED)
+    finding = schema["properties"]["findings"]["items"]
+    # A finding that cannot say where it is cannot be checked, so the schema
+    # refuses to let one exist.
+    assert "file" in finding["required"]
+    assert "statement" in finding["required"]
+
+    # And the ordinary document envelope must not grow a findings field: a core
+    # field that is null for every other data type is not a core field.
+    assert "findings" not in envelope_schema()["properties"]
+
+
+async def test_a_review_that_found_nothing_is_stored_as_nothing():
+    """`[]` and a missing key are different answers.
+
+    "Reviewed and found no locatable defect" is a result somebody can act on;
+    "never reviewed" is not, and rendering them the same is how a report that
+    did not run reads as a clean bill of health.
+    """
+    from memdog.extraction import Envelope
+
+    envelope = Envelope(title="t")
+    parsed = {"findings": []}
+    if isinstance(parsed.get("findings"), list):
+        envelope.fields["findings"] = parsed["findings"]
+    assert envelope.fields["findings"] == []
+    assert "findings" in envelope.fields
+
+
+async def test_the_gemini_findings_schema_has_no_nullable_unions():
+    """Gemini rejects `{"type": ["string", "null"]}` with a 400 on the whole
+    request, not a complaint about the property.
+
+    That is why this is worth a test rather than a comment: the failure is not
+    local to the field. One nullable union anywhere fails every extraction
+    carrying the schema, three of those trip the breaker, and every artifact
+    afterwards records `circuit open` -- which names the symptom and hides the
+    cause. Ordinary enrichment kept working throughout, because its schema has
+    no such field, so the model looked healthy while the review path was dead.
+    """
+    from memdog.extraction import _gemini_schema, envelope_schema
+
+    findings = _gemini_schema(findings=True)["properties"]["findings"]
+    nullable = [name for name, spec in findings["items"]["properties"].items()
+                if isinstance(spec.get("type"), list)]
+    assert nullable == [], f"Gemini will 400 on: {nullable}"
+    # Optional is still expressed, just by absence from `required`.
+    assert "symbol" not in findings["items"]["required"]
+    assert "file" in findings["items"]["required"]
+
+    # The permissive dialect keeps its unions: the fix is per-engine, not a
+    # narrowing of the contract everywhere.
+    other = envelope_schema(findings=True)["properties"]["findings"]
+    assert isinstance(other["items"]["properties"]["symbol"]["type"], list)

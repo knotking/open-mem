@@ -320,6 +320,17 @@ def build_prompt(
             "most five `reliability` notes and five `missing` questions, each "
             "one sentence. Say less rather than padding a list to five."
         )
+    if "findings" in (schema.get("properties") or {}):
+        # Same reasoning as `quality`: this is emitted ahead of `summary`, so an
+        # unbounded list of findings costs the summary and then the envelope.
+        # The cap is also a quality instruction -- eight located defects are
+        # worth more than thirty guesses, and the prompt says so too.
+        system += (
+            "\n\nLENGTH: give at most eight `findings`, each `statement` under "
+            "300 characters. An empty array is a correct and useful answer: "
+            "report nothing rather than padding the list with what you cannot "
+            "locate."
+        )
     # The template block goes *after* the type block, because it is the more
     # specific statement: the type says this is a document, the template says
     # it is a design document, and where they disagree about what is
@@ -439,6 +450,69 @@ QUALITY_REQUIRED = ["page_kind", "substance", "evidence", "retrieval_value",
 # still a PDF and is not one of them.
 JUDGED = {"document_html"}
 
+# Reviewing code is a different question from summarising a document, and it
+# needs a different *shape* rather than a different instruction.
+#
+# This exists because telling a summariser to find bugs does not make it one.
+# The envelope's unbounded field is `summary`, described everywhere as what the
+# document covers, so a prompt asking for located defects still gets answered
+# with a description of the material -- fluently, and with nothing to act on.
+# Three of the four repository reports survived that because their answers are
+# naturally summary-shaped; the bug report is the one that is not, and it came
+# back describing the codebase every time.
+#
+# A finding has to name where it is or it cannot be checked, so `file` is
+# required and the model is given somewhere to put it. An empty array is a
+# first-class answer and the honest one for code with no locatable defect.
+FINDING_PROPERTIES = {
+    "file": {"type": "string"},
+    "symbol": {"type": ["string", "null"]},
+    "severity": {"type": "string", "enum": ["high", "medium", "low"]},
+    "statement": {"type": "string"},
+    # What would have to be true for this to bite. A finding that cannot say
+    # this is a suspicion wearing a finding's clothes.
+    "trigger": {"type": ["string", "null"]},
+}
+FINDING_REQUIRED = ["file", "severity", "statement"]
+
+REVIEWED = {"code_review"}
+
+
+def findings_schema() -> dict:
+    return {
+        "type": "array",
+        "items": {"type": "object", "required": FINDING_REQUIRED,
+                  "properties": FINDING_PROPERTIES},
+    }
+
+
+def _gemini_findings_schema() -> dict:
+    """The same shape without nullable unions.
+
+    Gemini rejects `{"type": ["string", "null"]}` outright, and the rejection is
+    a 400 on the whole request rather than a complaint about one property -- so
+    one nullable field fails every extraction carrying it. Three of those trip
+    the breaker, and from then on every artifact records `circuit open`, which
+    names the symptom and hides the cause: ordinary enrichment kept working,
+    because its schema has no such field, so the model looked healthy while one
+    path was dead.
+
+    Optional is expressed by absence from `required`, which is how the rest of
+    this dialect already does it.
+    """
+    return {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "required": FINDING_REQUIRED,
+            "properties": {
+                name: ({"type": "string"} if isinstance(spec.get("type"), list)
+                       else spec)
+                for name, spec in FINDING_PROPERTIES.items()
+            },
+        },
+    }
+
 
 def quality_schema() -> dict:
     return {"type": "object", "required": QUALITY_REQUIRED,
@@ -446,7 +520,7 @@ def quality_schema() -> dict:
 
 
 def envelope_schema(offered: tuple[str, ...] = RELATION_PREDICATES,
-                    *, quality: bool = False) -> dict:
+                    *, quality: bool = False, findings: bool = False) -> dict:
     """Property order is load-bearing, not cosmetic.
 
     A schema-constrained model emits properties in the order the schema lists
@@ -479,6 +553,7 @@ def envelope_schema(offered: tuple[str, ...] = RELATION_PREDICATES,
             "keywords": {"type": "array", "items": {"type": "string"}},
             "language": {"type": ["string", "null"]},
             **({"quality": quality_schema()} if quality else {}),
+            **({"findings": findings_schema()} if findings else {}),
             "summary": {"type": ["string", "null"]},
         },
     }
@@ -595,7 +670,8 @@ class OllamaExtractor:
         template: str | None = None,
     ) -> Envelope:
         offered = graph_templates.predicates_for(template)
-        schema = envelope_schema(offered, quality=data_type in JUDGED)
+        schema = envelope_schema(offered, quality=data_type in JUDGED,
+                                 findings=data_type in REVIEWED)
         system, user = build_prompt(text, data_type=data_type,
                                     schema=schema, block=prompt,
                                     template=template)
@@ -666,9 +742,10 @@ class GeminiExtractor:
         # otherwise be rejected -- but callers should hand this a window rather
         # than a book. `extract_long` does the splitting.
         judged = data_type in JUDGED
+        reviewed = data_type in REVIEWED
         system, user = build_prompt(
             text[:GEMINI_WINDOW], data_type=data_type,
-            schema=envelope_schema(offered, quality=judged),
+            schema=envelope_schema(offered, quality=judged, findings=reviewed),
             block=block, template=template,
         )
         try:
@@ -690,7 +767,8 @@ class GeminiExtractor:
                             # response, so there is no raw text to store on
                             # success and nothing to salvage by parsing prose.
                             "responseMimeType": "application/json",
-                            "responseSchema": _gemini_schema(offered, quality=judged),
+                            "responseSchema": _gemini_schema(offered, quality=judged,
+                                                             findings=reviewed),
                         },
                     },
                 )
@@ -725,6 +803,11 @@ class GeminiExtractor:
         # `fields` is the namespaced home the envelope already documents.
         if isinstance(parsed.get("quality"), dict):
             envelope.fields["quality"] = parsed["quality"]
+        # Same reasoning, same home. An empty list is stored rather than
+        # dropped: "reviewed and found nothing" and "never reviewed" are
+        # different answers and must not both render as an absent key.
+        if isinstance(parsed.get("findings"), list):
+            envelope.fields["findings"] = parsed["findings"]
         envelope.fields["prompt"] = prompt_name
         envelope.fields["tokens"] = meta.get("totalTokenCount", 0)
         # The build that answered, not the alias we asked for.
@@ -734,7 +817,7 @@ class GeminiExtractor:
 
 
 def _gemini_schema(offered: tuple[str, ...] = RELATION_PREDICATES,
-                   *, quality: bool = False) -> dict:
+                   *, quality: bool = False, findings: bool = False) -> dict:
     """Gemini wants its own dialect: no nullable unions, so optional fields are
     simply not required. Property order matches `envelope_schema` and matters
     for the same reason -- see the note there."""
@@ -763,6 +846,11 @@ def _gemini_schema(offered: tuple[str, ...] = RELATION_PREDICATES,
             ["title", "entities", "relations", "description", "keywords",
              "language"]
             + (["quality"] if quality else [])
+            # Findings sit ahead of `summary` for the reason everything else
+            # does: `summary` is the field that pays when the budget runs out,
+            # and a report whose findings were truncated away is a report that
+            # says nothing while looking complete.
+            + (["findings"] if findings else [])
             + ["summary"]
         ),
         "properties": {
@@ -804,7 +892,8 @@ def _gemini_schema(offered: tuple[str, ...] = RELATION_PREDICATES,
             "description": {"type": "string"},
             "keywords": {"type": "array", "items": {"type": "string"}},
             "language": {"type": "string"},
-            **({"quality": quality_schema()} if quality else {}),
+**({"quality": quality_schema()} if quality else {}),
+            **({"findings": _gemini_findings_schema()} if findings else {}),
             "summary": {"type": "string"},
         },
     }

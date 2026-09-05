@@ -120,6 +120,7 @@ GENERATORS: dict[str, dict] = {
     # one and cannot be checked, which is the code-review equivalent of the
     # hallucinated edge the graph vocabulary is careful about.
     "repo_design": {
+        "data_type": "code_review",
         "label": "Design",
         "describe": "How the codebase is arranged -- its layers, the seams between "
                     "them, and where the arrangement is not what it appears to be.",
@@ -142,6 +143,7 @@ GENERATORS: dict[str, dict] = {
         "archivable": False,
     },
     "repo_quality": {
+        "data_type": "code_review",
         "label": "Code quality",
         "describe": "Duplication, oversized modules, dead code and the shape of the "
                     "test coverage -- each pointing at a file.",
@@ -163,6 +165,7 @@ GENERATORS: dict[str, dict] = {
         "archivable": False,
     },
     "repo_bugs": {
+        "data_type": "code_review",
         "label": "Functional bugs",
         "describe": "Specific defects, each located at a file and symbol, with the "
                     "input or state that would trigger it.",
@@ -190,6 +193,7 @@ GENERATORS: dict[str, dict] = {
         "archivable": False,
     },
     "repo_deps": {
+        "data_type": "code_review",
         "label": "Dependencies",
         "describe": "Advisories from the supplied vulnerability data, plus pinning, "
                     "abandonment and licence problems visible in the manifests.",
@@ -325,9 +329,15 @@ async def derive(
             "no extraction model is configured, and every generator here needs one",
             status=503)
 
+    # The *shape* of the answer, not only the wording of the question. A
+    # generator asking for located defects gets an envelope with a `findings`
+    # array; everything else gets the ordinary document envelope. Telling a
+    # summariser to find bugs and leaving the schema alone produces a fluent
+    # description of the material every time -- which is what this fixes.
     with span("derive", generator=generator, memory_id=memory_id):
         envelope = await extractor.extract(
-            "\n\n".join(joined)[:200_000], data_type="document_text",
+            "\n\n".join(joined)[:200_000],
+            data_type=spec.get("data_type") or "document_text",
             prompt=spec["prompt"])
 
     # The strictest ACL among the sources, which is the rule everywhere a
@@ -342,8 +352,9 @@ async def derive(
             """
             INSERT INTO artifacts (artifact_id, org_id, project_id, kind, title,
                 summary, model_id, generator_version, served_by_model,
-                access_level, shared_with, owner_id)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $7, $9, $10::jsonb, $11)
+                access_level, shared_with, owner_id, fields)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $7, $9, $10::jsonb, $11,
+                    $12::jsonb)
             """,
             artifact_id, memory["org_id"], memory["project_id"], generator,
             (getattr(envelope, "title", None) or GENERATORS[generator]["label"])[:200],
@@ -356,6 +367,9 @@ async def derive(
             # would exist, be correct, and be invisible to everyone including
             # the person who asked for it.
             _owner_of(members, acl.access_level),
+            # Everything the envelope carried beyond the core columns --
+            # `findings` for a review, and whatever a later generator adds.
+            json.dumps(getattr(envelope, "fields", None) or {}),
         )
         for data_id, start, end in offsets:
             await conn.execute(
@@ -416,6 +430,11 @@ async def artifacts_for(
         f"""
         SELECT DISTINCT a.artifact_id, a.kind, a.title, a.summary, a.model_id,
                a.generator_version, a.access_level, a.created_at,
+               -- `fields` carries what the core columns cannot: `findings` for
+               -- a review, `quality` for a judged page. Selecting the columns
+               -- and not this returns an artifact that answered the question
+               -- with the answer removed.
+               a.fields,
                (SELECT count(*) FROM artifact_sources s2 WHERE s2.artifact_id = a.artifact_id)
                  AS sources,
                (SELECT g.generator_version <> a.generator_version FROM generators g
