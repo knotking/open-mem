@@ -851,6 +851,33 @@ function StoredMedia({ item }: { item: Item }) {
  * reach a button. Each header states its current value, so what is collapsed is
  * still visible — closed is not hidden.
  */
+/** The 11-character video id in a YouTube URL, or null.
+ *
+ * A deliberately small echo of the parser in `memdog/youtube.py`, and only for
+ * two cosmetic jobs: deciding whether the button is pressable, and building the
+ * canonical URL used as the external id so one video pasted three ways is one
+ * record. The server parses it again and refuses what it disagrees with, so
+ * this being generous is a worse label, never a worse permission.
+ */
+function youtubeId(raw: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(raw.trim());
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+  const host = url.hostname.toLowerCase().replace(/^www\./, "");
+  const parts = url.pathname.split("/").filter(Boolean);
+  let id = "";
+  if (host === "youtu.be") id = parts[0] ?? "";
+  else if (host === "youtube.com" || host === "m.youtube.com" || host === "youtube-nocookie.com") {
+    if (url.pathname === "/watch") id = url.searchParams.get("v") ?? "";
+    else if (parts.length >= 2 && ["shorts", "embed", "live", "v"].includes(parts[0])) id = parts[1];
+  }
+  return /^[A-Za-z0-9_-]{11}$/.test(id) ? id : null;
+}
+
 function AddData({
   projectId,
   producerId,
@@ -865,7 +892,8 @@ function AddData({
   const [text, setText] = useState(
     "The checkout service returned 502s for eleven minutes after a bad deploy.\n\nRollback completed at 14:02 UTC and error rates recovered.",
   );
-  const [source, setSource] = useState<"text" | "file">("text");
+  const [source, setSource] = useState<"text" | "file" | "video">("text");
+  const [videoUrl, setVideoUrl] = useState("");
   const [staged, setStaged] = useState<Staged | null>(null);
   // Which optional steps are open. Closed by default because each has a
   // working default and the button is what people came for.
@@ -977,7 +1005,11 @@ function AddData({
   // than left for someone to work out from a greyed-out control.
   const blocked = source === "text"
     ? (text.trim() ? null : "Nothing typed yet")
-    : (staged ? null : "Choose a file or record something first");
+    : source === "video"
+      ? (youtubeId(videoUrl) ? null : videoUrl.trim()
+          ? "That is not a YouTube video link"
+          : "Paste a YouTube link first")
+      : (staged ? null : "Choose a file or record something first");
   const aclIncomplete = !meeting && (level === "restricted" || level === "shared")
     && principals.length === 0;
 
@@ -986,11 +1018,22 @@ function AddData({
     setError(null);
     setNote(null);
     try {
-      const externalId = source === "text" ? `text-${Date.now()}` : staged!.name;
+      // The canonical watch URL is the external id, so the same video pasted
+      // as a share link, a short link and a timestamped link is one record
+      // rather than three. The server parses it again and refuses anything it
+      // disagrees with — this is for the id, not for the security.
+      const watchUrl = source === "video"
+        ? `https://www.youtube.com/watch?v=${youtubeId(videoUrl)}` : "";
+      const externalId = source === "text" ? `text-${Date.now()}`
+        : source === "video" ? watchUrl : staged!.name;
       const content = source === "text"
         ? { kind: "inline", text }
-        : { kind: "inline", bytes_b64: staged!.base64, mime_type: staged!.mime };
-      const label = source === "text" ? "Text" : `${staged!.name} (${humanBytes(staged!.size)})`;
+        : source === "video"
+          ? { kind: "pending", provider: "youtube", resource_id: watchUrl }
+          : { kind: "inline", bytes_b64: staged!.base64, mime_type: staged!.mime };
+      const label = source === "text" ? "Text"
+        : source === "video" ? watchUrl
+        : `${staged!.name} (${humanBytes(staged!.size)})`;
 
       const memory = meeting
         ? { type: "meeting", key: memoryKey || externalId }
@@ -1106,13 +1149,57 @@ function AddData({
             />
             A file, a recording, or a photo
           </label>
+          <label className="check">
+            <input
+              type="radio"
+              name="add-source"
+              checked={source === "video"}
+              onChange={() => { setSource("video"); setStaged(null); }}
+            />
+            A YouTube video
+          </label>
         </div>
       </section>
 
       <section className="panel">
-        <h2><span className="stepn">2</span> {source === "text" ? "The text" : "The file"}</h2>
+        <h2><span className="stepn">2</span> {
+          source === "text" ? "The text" : source === "video" ? "The video" : "The file"
+        }</h2>
         {source === "text" ? (
           <textarea value={text} onChange={(e) => setText(e.target.value)} />
+        ) : source === "video" ? (
+          <>
+            <input
+              type="url"
+              value={videoUrl}
+              placeholder="https://www.youtube.com/watch?v=…"
+              onChange={(e) => setVideoUrl(e.target.value)}
+              style={{ width: "100%" }}
+            />
+            {/* What actually happens, because it is not what the words
+              * "add a video" imply. Nothing is downloaded and no transcript is
+              * stored: a model watches it and writes an account of it, and the
+              * account is the record. Said here rather than discovered from a
+              * result that is shorter than expected. */}
+            <div className="notice">
+              <strong>A model watches the video and writes an account of it.</strong> Nothing is
+              downloaded, and what is stored is a section-by-section description with timestamps,
+              the terms and people introduced, and short attributed quotes — not a transcript.
+              A verbatim copy is refused by the model, and would be reproducing the video rather
+              than describing it.
+            </div>
+            <p className="hint">
+              Charged per video and recorded on the revision: roughly{" "}
+              <strong>100,000 input tokens for 20 minutes</strong> of video, since the model reads
+              the frames as well as the audio. A long video costs proportionally more.
+            </p>
+            {youtubeId(videoUrl) && (
+              <p className="ok">
+                Reads as <code>https://www.youtube.com/watch?v={youtubeId(videoUrl)}</code> — the
+                same video pasted another way lands on this record rather than a second one.
+              </p>
+            )}
+          </>
         ) : (
           <>
             <div className="notice">
