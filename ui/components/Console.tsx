@@ -14,7 +14,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 
 import Capture, { humanBytes, type Staged } from "./Capture";
 import ThemeToggle from "./ThemeToggle";
-import { WriteProgress, useTracked } from "./Progress";
+import { WriteProgress, assess, useTracked } from "./Progress";
 // The ceiling rule is mirrored from `acl.py` and tested against it there.
 // Two copies of an access rule is how they drift.
 import { LEVELS, ceilingFor } from "@/lib/acl";
@@ -35,6 +35,7 @@ import {
   CompactionJob,
   CompactionRun,
   FullVersion,
+  DomainEvent,
   ObservedEvent,
   PageQuality,
   REPO_REPORTS,
@@ -1817,6 +1818,11 @@ function UpdateData({
 
   const [selected, setSelected] = useState<Item | null>(null);
   const [versions, setVersions] = useState<Version[]>([]);
+  // The event log, because the state alone cannot say which of three things is
+  // true: `searchable` is the same row whether the summary is queued, refused,
+  // or was never asked for. That answer only exists in the events, which is why
+  // `assess` reads them beside the item rather than inferring from the rung.
+  const [itemEvents, setItemEvents] = useState<DomainEvent[]>([]);
   // The page reading, when this record is a fetched page. It lives on the
   // artifact rather than the item, so it takes its own call.
   const [quality, setQuality] = useState<PageQuality | null>(null);
@@ -1882,6 +1888,13 @@ function UpdateData({
       setDraft(item.content_text ?? item.extracted_text ?? "");
       setVersions((await call<{ versions: Version[] }>(
         `api/v1/data/${dataId}/versions`)).versions);
+      // Best-effort, like the artifacts below: an item with no events yet still
+      // opens, and the climb degrades to what the state alone can say rather
+      // than the detail view failing to render at all.
+      setItemEvents(
+        (await call<{ events: DomainEvent[] }>(
+          `api/v1/events?data_id=${dataId}&limit=50`).catch(() => ({ events: [] }))).events,
+      );
       // Best-effort and separate: a record with no artifact yet is the
       // ordinary case, not a failure of the detail view.
       try {
@@ -2049,6 +2062,30 @@ function UpdateData({
           </button>
           <section className="panel">
             <h2>{selected.external_id ?? selected.data_id}</h2>
+            {/* Where the item got to, rebuilt from the record and its events.
+              *
+              * The same reading Add data shows while a write is in flight —
+              * except that one lives in component state and dies the moment you
+              * navigate away, so an item added and then left was unrecoverable:
+              * the console knew its state and had nowhere to say it. This is
+              * the answer to "what happened to the thing I added", and it works
+              * an hour later and in another session, because it is derived from
+              * what is stored rather than from what was watched.
+              *
+              * `watching={false}`: this is a reading of a finished or stalled
+              * climb, not a live one. Saying "watching" of a page nobody is
+              * polling would be the screen claiming something untrue. */}
+            <WriteProgress
+              climb={assess(selected, itemEvents, false)}
+              watching={false}
+              elapsed={0}
+              dataId={selected.data_id}
+              onEnrich={async () => {
+                await call(`api/v1/data/${selected.data_id}/enrich`,
+                           { embed: true, summarize: true });
+                setNote("Enrichment requested. Reopen the item to see it move.");
+              }}
+            />
             <ItemDetail item={selected} versions={versions} />
             <PageReading quality={quality} />
             <StoredMedia item={selected} />
