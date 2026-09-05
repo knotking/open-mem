@@ -73,6 +73,13 @@ export const ALLOWED = [
   /^api\/v1\/generators$/,
   /^api\/v1\/memories\/[A-Za-z0-9_]+\/derive$/,
   /^api\/v1\/memories\/[A-Za-z0-9_]+\/artifacts$/,
+  // Repository analysis. `snapshots/{id}` is listed before the `{case_id}`
+  // form for the same reason the routes are declared in that order on the
+  // server: the literal segment has to win, or a snapshot id is read as a case.
+  /^api\/v1\/projects\/[A-Za-z0-9_]+\/repos$/,
+  /^api\/v1\/repos\/analyze$/,
+  /^api\/v1\/repos\/snapshots\/[A-Za-z0-9_]+$/,
+  /^api\/v1\/repos\/[A-Za-z0-9_]+\/snapshots(\?.*)?$/,
   // The hierarchy: `part_of` in both directions, and the link that builds it.
   /^api\/v1\/memories\/[A-Za-z0-9_]+\/tree(\?.*)?$/,
   /^api\/v1\/memories\/[A-Za-z0-9_]+\/links(\?.*)?$/,

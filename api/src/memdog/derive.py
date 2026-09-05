@@ -109,6 +109,92 @@ GENERATORS: dict[str, dict] = {
         ),
         "archivable": False,
     },
+    # The four repository reports. They read a snapshot's members -- the code
+    # graph `graphify` produced, the manifests, the OSV result, and the bounded
+    # file set the job selected -- and never the repository, which exceeds every
+    # ceiling in `docs/limit.md` by orders of magnitude.
+    #
+    # All four share one rule, stated in every prompt because it is the failure
+    # that matters: **a finding that cannot name a file is not a finding.** An
+    # unlocatable claim about somebody's codebase reads exactly like a located
+    # one and cannot be checked, which is the code-review equivalent of the
+    # hallucinated edge the graph vocabulary is careful about.
+    "repo_design": {
+        "label": "Design",
+        "describe": "How the codebase is arranged -- its layers, the seams between "
+                    "them, and where the arrangement is not what it appears to be.",
+        "prompt": (
+            "You are describing the design of a codebase from the graph and files "
+            "below. Cover: what the major components are and what each is "
+            "responsible for; how they depend on one another; where the boundaries "
+            "are clean and where they leak. Name every component by its actual path "
+            "or module name from the material. Where the structure suggests an "
+            "intended layering that the dependencies violate, say so and name the "
+            "edge that violates it. Do not praise or grade the design; describe it. "
+            "If the material does not show something, say it is not visible here "
+            "rather than inferring it from convention."
+        ),
+        "archivable": False,
+    },
+    "repo_quality": {
+        "label": "Code quality",
+        "describe": "Duplication, oversized modules, dead code and the shape of the "
+                    "test coverage -- each pointing at a file.",
+        "prompt": (
+            "You are assessing code quality from the graph and files below. Report "
+            "only what the material supports: modules that are far larger or more "
+            "connected than their peers; apparent duplication; symbols nothing "
+            "references; areas with no visible test coverage. For each observation "
+            "name the file and, where you have it, the symbol. Order by how much "
+            "the observation would matter to someone maintaining this code. Do not "
+            "report style preferences, and do not produce a score -- a number "
+            "invites comparison between codebases this analysis cannot support."
+        ),
+        "archivable": False,
+    },
+    "repo_bugs": {
+        "label": "Functional bugs",
+        "describe": "Specific defects, each located at a file and symbol, with the "
+                    "input or state that would trigger it.",
+        "prompt": (
+            "You are looking for functional bugs in the code below. Report a defect "
+            "only when you can name the file, the symbol, and the concrete input or "
+            "state that produces the wrong behaviour, and say what the wrong "
+            "behaviour is. Prefer few certain findings to many possible ones. "
+            "**If you suspect a problem but cannot locate it in the material, omit "
+            "it entirely** -- an unlocatable finding cannot be checked and reads "
+            "exactly like one that can. Do not report style, formatting, or missing "
+            "tests here. Note that you are seeing a selected subset of the "
+            "repository, so absence of a bug is not evidence of correctness, and "
+            "say so if the selection looks too partial to judge."
+        ),
+        "archivable": False,
+    },
+    "repo_deps": {
+        "label": "Dependencies",
+        "describe": "Advisories from the supplied vulnerability data, plus pinning, "
+                    "abandonment and licence problems visible in the manifests.",
+        # The hard constraint here is not a preference. A model asked whether a
+        # version is vulnerable produces fluent, plausible, wrong CVE numbers,
+        # and a wrong advisory is a security claim about somebody's software.
+        # The facts come from OSV in the job; this reasons over them and over
+        # what the manifests plainly show.
+        "prompt": (
+            "You are reviewing dependencies from the manifests, lockfiles and "
+            "vulnerability data below. **Report a vulnerability only if it appears "
+            "in the supplied vulnerability data.** Never state, imply or guess that "
+            "a package or version is affected by an advisory that is not in that "
+            "data, and never invent an advisory identifier -- if the data is absent "
+            "or empty, say that no vulnerability data was supplied and report "
+            "nothing about vulnerabilities. Separately, report what the manifests "
+            "themselves show: unpinned or wide version ranges, two major versions "
+            "of one package resolved together, direct use of something declared "
+            "only transitively, dependencies that appear unmaintained where the "
+            "material says so, and licence terms that conflict with the project's "
+            "own. Name the package and version for every finding."
+        ),
+        "archivable": False,
+    },
     "timeline": {
         "label": "Timeline",
         "describe": "What happened in order, with the date each event is stated to have "

@@ -37,6 +37,10 @@ import {
   FullVersion,
   ObservedEvent,
   PageQuality,
+  REPO_REPORTS,
+  Repo,
+  RepoReport,
+  RepoSnapshot,
   Setting,
   Subscription,
   describeEvent,
@@ -70,7 +74,7 @@ type Member = { user_id: string; email: string | null; role: string };
 
 type Section =
   | "overview"
-  | "add" | "update" | "search" | "ask" | "inbound" | "crawlers" | "mcp"
+  | "add" | "update" | "search" | "ask" | "inbound" | "crawlers" | "repos" | "mcp"
   | "memory" | "cases" | "entities" | "compaction" | "reprocess" | "workflows"
   | "alerts" | "standing"
   | "audit" | "sharing" | "deletion"
@@ -115,6 +119,7 @@ const GROUPS: { title: string; items: { key: Section; label: string; hint: strin
     items: [
       { key: "inbound", label: "Inbound", hint: "webhooks providers post to" },
       { key: "crawlers", label: "Crawlers", hint: "pull what won't push" },
+      { key: "repos", label: "Repositories", hint: "graph and analyse a repo" },
       { key: "producers", label: "Producers", hint: "freshness and status" },
     ],
   },
@@ -624,6 +629,7 @@ export default function Console({
         {section === "ask" && <AskSection projectId={projectId} />}
         {section === "inbound" && <InboundSection projectId={projectId} />}
         {section === "crawlers" && <CrawlersSection projectId={projectId} />}
+        {section === "repos" && <ReposSection projectId={projectId} />}
         {section === "audit" && <Audit projectId={projectId} />}
         {section === "memory" && <MemorySection projectId={projectId} />}
         {section === "cases" && <CasesSection projectId={projectId} />}
@@ -3691,6 +3697,395 @@ function AlertsSection({ projectId }: { projectId: string }) {
   );
 }
 
+
+/**
+ * Repositories — analyse a repo at one commit, and read what came back.
+ *
+ * The shape of this screen follows the one thing the feature does not do:
+ * **there is no trend.** A snapshot is `owner/repo@sha` and is comparable to
+ * nothing, so the list is a list rather than a chart, and nothing here implies
+ * that two snapshots of one repository can be read against each other.
+ *
+ * Two things it is careful to make visible, because both are silent failures
+ * otherwise. **What the analysis actually read** — a report over twelve files
+ * and a report over forty are different claims, and a thin report with no file
+ * count reads as a clean bill of health. And **whether OSV answered** — "no
+ * advisories" and "the vulnerability service was unreachable" produce the same
+ * empty dependency section unless the screen says which happened.
+ */
+function ReposSection({ projectId }: { projectId: string }) {
+  const [repos, setRepos] = useState<Repo[]>([]);
+  const [snapshots, setSnapshots] = useState<RepoSnapshot[]>([]);
+  const [openRepo, setOpenRepo] = useState<Repo | null>(null);
+  const [detail, setDetail] = useState<
+    (RepoSnapshot & { reports?: RepoReport[] }) | null
+  >(null);
+  const [url, setUrl] = useState("");
+  const [gitRef, setGitRef] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const page = await call<{ repos: Repo[] }>(`api/v1/projects/${projectId}/repos`);
+      setRepos(page.repos);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function act(message: string, work: () => Promise<void>) {
+    setBusy(true);
+    setError(null);
+    setNote(null);
+    try {
+      await work();
+      setNote(message);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function analyse() {
+    await act("Snapshot requested.", async () => {
+      const created = await call<RepoSnapshot>("api/v1/repos/analyze", {
+        project_id: projectId,
+        repo_url: url.trim(),
+        ...(gitRef.trim() ? { ref: gitRef.trim() } : {}),
+      });
+      setNote(
+        created.reused
+          ? `That commit was already analysed — showing the existing snapshot rather than paying for it twice.`
+          : `Analysing ${created.repo_url} at ${created.commit_sha.slice(0, 7)}.`,
+      );
+      await load();
+      if (created.case_id) await openSnapshots({ case_id: created.case_id } as Repo);
+      await openDetail(created.snapshot_id);
+    });
+  }
+
+  async function openSnapshots(repo: Repo) {
+    setOpenRepo(repo);
+    setDetail(null);
+    try {
+      const page = await call<{ snapshots: RepoSnapshot[] }>(
+        `api/v1/repos/${repo.case_id}/snapshots`,
+      );
+      setSnapshots(page.snapshots);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  async function openDetail(snapshotId: string) {
+    try {
+      setDetail(
+        await call<RepoSnapshot & { reports: RepoReport[] }>(
+          `api/v1/repos/snapshots/${snapshotId}`,
+        ),
+      );
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  return (
+    <div className="stack">
+      <h1>Repositories</h1>
+      <p className="hint">
+        A repository at one commit, reduced to a code graph and then read four ways. Each snapshot
+        stands alone: it is analysed whole, pinned to its commit, and compared to nothing.
+      </p>
+
+      <section>
+        <h2>Analyse a commit</h2>
+        <div className="row" style={{ gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <input
+            style={{ flex: "2 1 320px" }}
+            placeholder="https://github.com/owner/repo"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+          />
+          <input
+            style={{ flex: "1 1 140px" }}
+            placeholder="branch, tag or sha (optional)"
+            value={gitRef}
+            onChange={(e) => setGitRef(e.target.value)}
+          />
+          <button
+            onClick={analyse}
+            disabled={busy || !url.trim()}
+            title={!url.trim() ? "Paste a GitHub repository URL first" : undefined}
+          >
+            Analyse
+          </button>
+        </div>
+        <p className="empty" style={{ marginTop: 6 }}>
+          Costs a clone, a full parse and <strong>four model calls</strong> — charged when the
+          snapshot is requested, because a queued job cannot be un-spent. A branch is resolved to
+          the commit it points at now and the commit is what is stored: a report attributed to
+          <code> main </code> is one nobody can reproduce later. Public repositories only.
+        </p>
+        {note && <p className="ok">{note}</p>}
+        {error && <p className="err">{error}</p>}
+      </section>
+
+      <section>
+        <h2>Analysed repositories</h2>
+        {repos.length === 0 ? (
+          <p className="empty">
+            Nothing analysed yet. Paste a GitHub URL above — <code>https://github.com/owner/repo</code>
+            {" "}— and the first snapshot will appear here.
+          </p>
+        ) : (
+          <table className="kv">
+            <tbody>
+              {repos.map((repo) => (
+                <tr key={repo.case_id}>
+                  <td style={{ width: "auto" }}>
+                    <button className="chip" onClick={() => void openSnapshots(repo)}>
+                      {repo.repo.replace(/^github\.com\//, "")}
+                    </button>
+                  </td>
+                  <td>
+                    {repo.snapshots === 0
+                      ? "no snapshots"
+                      : `${repo.snapshots} snapshot${repo.snapshots === 1 ? "" : "s"}`}
+                    {repo.last_sha && (
+                      <span className="hint"> · latest {repo.last_sha.slice(0, 7)}</span>
+                    )}
+                  </td>
+                  <td>
+                    <SnapshotState status={repo.last_status} reason={repo.last_reason} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+
+      {openRepo && (
+        <section>
+          <h2>Snapshots of {openRepo.repo?.replace(/^github\.com\//, "") ?? "this repository"}</h2>
+          <p className="empty">
+            Newest first. These are separate analyses of separate commits — nothing here compares
+            one to another, because deciding what &ldquo;comparable&rdquo; means across two commits
+            is a question this does not answer.
+          </p>
+          {snapshots.length === 0 ? (
+            <p className="empty">No snapshots recorded for this repository.</p>
+          ) : (
+            <table className="kv">
+              <tbody>
+                {snapshots.map((snap) => (
+                  <tr key={snap.snapshot_id}>
+                    <td style={{ width: "auto" }}>
+                      <button className="chip" onClick={() => void openDetail(snap.snapshot_id)}>
+                        {snap.commit_sha.slice(0, 7)}
+                      </button>
+                    </td>
+                    <td>
+                      {snap.ref && <span className="hint">{snap.ref} · </span>}
+                      {new Date(snap.created_at).toLocaleString()}
+                    </td>
+                    <td>
+                      <SnapshotState status={snap.status} reason={snap.reason} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </section>
+      )}
+
+      {detail && <SnapshotDetail snapshot={detail} />}
+    </div>
+  );
+}
+
+/** Status as a sentence, with the reason beside it rather than a click away. */
+function SnapshotState({
+  status,
+  reason,
+}: {
+  status: RepoSnapshot["status"] | null;
+  reason: string | null;
+}) {
+  if (!status) return <span className="empty">never analysed</span>;
+  if (status === "complete") return <span className="ok">analysed</span>;
+  if (status === "pending") return <span className="hint">queued — not started yet</span>;
+  if (status === "running") return <span className="hint">running — cloning and parsing</span>;
+  return (
+    <span className="err">
+      failed{reason ? ` — ${reason}` : " — no reason was recorded, which is itself a bug"}
+    </span>
+  );
+}
+
+/**
+ * One snapshot: what it read, what it cost, and the four reports.
+ *
+ * The stat tiles come before the reports on purpose. A report is only as good
+ * as the material behind it, and "forty files of a repository with nine hundred"
+ * is the sentence that decides how much weight to put on the paragraphs below.
+ */
+function SnapshotDetail({ snapshot }: { snapshot: RepoSnapshot & { reports?: RepoReport[] } }) {
+  const stats = snapshot.stats ?? {};
+  const reports = snapshot.reports ?? [];
+  const byKind = new Map(reports.map((r) => [r.kind, r]));
+  const osv = stats.osv_status;
+
+  return (
+    <section>
+      <h2>
+        {snapshot.commit_sha.slice(0, 7)}
+        {stats.subject && <span className="hint"> — {stats.subject}</span>}
+      </h2>
+
+      {snapshot.status !== "complete" && (
+        <p className={snapshot.status === "failed" ? "err" : "hint"}>
+          <SnapshotState status={snapshot.status} reason={snapshot.reason} />
+        </p>
+      )}
+
+      <div className="statgrid">
+        <div className="stattile">
+          <div className="tile-label">Graph</div>
+          <div className="tile-value">{stats.nodes ?? "—"}</div>
+          <div className="tile-note">{stats.edges ?? 0} edges between them</div>
+        </div>
+        <div className="stattile">
+          <div className="tile-label">Files read</div>
+          <div className="tile-value">{stats.files_selected ?? "—"}</div>
+          <div className="tile-note">
+            manifests, entry points and the most-connected modules — not the whole repository
+          </div>
+        </div>
+        <div className="stattile">
+          <div className="tile-label">Dependencies</div>
+          <div className="tile-value">{stats.dependencies ?? "—"}</div>
+          <div className="tile-note">
+            {osv === "ok"
+              ? `${stats.osv_affected ?? 0} with a known advisory`
+              : osv === "unavailable"
+                ? "OSV was unreachable — advisories were not checked"
+                : osv === "no_dependencies_found"
+                  ? "no manifests found to check"
+                  : "not checked"}
+          </div>
+        </div>
+        <div className="stattile">
+          <div className="tile-label">Records stored</div>
+          <div className="tile-value">{stats.records_written ?? "—"}</div>
+          <div className="tile-note">graph, manifests and the selected files</div>
+        </div>
+      </div>
+
+      {osv === "unavailable" && (
+        <p className="err" style={{ marginTop: 10 }}>
+          The vulnerability service could not be reached, so the dependency report contains no
+          advisories. That is not the same as finding none — read it as unchecked.
+        </p>
+      )}
+
+      <table className="kv" style={{ marginTop: 12 }}>
+        <tbody>
+          <tr>
+            <td>Commit</td>
+            <td><code>{snapshot.commit_sha}</code></td>
+          </tr>
+          {snapshot.ref && (
+            <tr>
+              <td>Asked for</td>
+              <td>{snapshot.ref} — resolved to the commit above</td>
+            </tr>
+          )}
+          {stats.primary_language && (
+            <tr>
+              <td>Mostly</td>
+              <td>
+                {stats.primary_language}
+                {stats.license && ` · ${stats.license}`}
+              </td>
+            </tr>
+          )}
+          {stats.graphify_version && (
+            <tr>
+              <td>Parsed by</td>
+              <td>graphify {stats.graphify_version}</td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+
+      <h3 style={{ marginTop: 18 }}>Reports</h3>
+      {REPO_REPORTS.map(({ key, label, hint }) => {
+        const report = byKind.get(key);
+        return (
+          <div className="card" key={key} style={{ marginTop: 10 }}>
+            <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
+              <strong>{label}</strong>
+              {report && <span className="hint">{report.model_id}</span>}
+            </div>
+            <p className="empty" style={{ marginTop: 2 }}>{hint}</p>
+            {report ? (
+              <p style={{ marginTop: 8, whiteSpace: "pre-wrap" }}>
+                {report.summary || report.description || "The report was produced but is empty."}
+              </p>
+            ) : (
+              <p className="hint" style={{ marginTop: 8 }}>
+                {snapshot.status === "complete"
+                  ? "Not produced — the analysis finished without this report, which usually means the model call failed."
+                  : "Not produced yet."}
+              </p>
+            )}
+          </div>
+        );
+      })}
+
+      {stats.selection && stats.selection.length > 0 && (
+        <>
+          <h3 style={{ marginTop: 18 }}>What it read</h3>
+          <p className="empty">
+            The reports above are based on these files and the code graph — nothing else. A defect
+            in a file that is not listed here would not have been seen, so absence of a finding is
+            not evidence of correctness.
+          </p>
+          <table className="kv">
+            <tbody>
+              {stats.selection.map((entry) => {
+                const cut = entry.lastIndexOf(":");
+                return (
+                  <tr key={entry}>
+                    <td style={{ width: "auto" }}><code>{entry.slice(0, cut)}</code></td>
+                    <td className="hint">{SELECTION_REASONS[entry.slice(cut + 1)] ?? entry.slice(cut + 1)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </>
+      )}
+    </section>
+  );
+}
+
+/** Why a file was read, as a sentence rather than the job's own token. */
+const SELECTION_REASONS: Record<string, string> = {
+  manifest: "declares dependencies",
+  readme: "says what the project is",
+  entry_point: "an entry point",
+  connected: "among the most connected in the graph",
+};
 
 function CrawlersSection({ projectId }: { projectId: string }) {
   const [crawlers, setCrawlers] = useState<Crawler[]>([]);

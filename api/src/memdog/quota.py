@@ -135,6 +135,26 @@ def estimate_write(*, items: int, enrich: bool) -> int:
     return items * (10 if enrich else 1)
 
 
+# Four reports over one repository snapshot, each a generation that may run
+# several extraction windows.
+REPO_ANALYSIS_GENERATORS = 4
+
+
+def estimate_repo_analysis(*, generators: int = REPO_ANALYSIS_GENERATORS) -> int:
+    """Charged when the snapshot is *requested*, not when the reports are made.
+
+    The spend is authorised at the endpoint and happens minutes later in a job,
+    so charging on completion would let a caller queue fifty analyses against a
+    budget that only ever refuses the first one to finish. An enqueued job
+    cannot be un-spent, which is the whole reason the gate is here.
+
+    Blunt and high, for the same reason `GENERATION_ESTIMATE` is: this exists to
+    stop a loop from queueing a hundred clones, and a precise number would not
+    do that job any better.
+    """
+    return generators * GENERATION_ESTIMATE
+
+
 # --- the burst bucket --------------------------------------------------------
 
 

@@ -446,3 +446,81 @@ export type TreeNode = {
   stale_since: string | null;
   stale_reason: string | null;
 };
+
+/**
+ * A repository analysed at one commit.
+ *
+ * `stats` is deliberately loose: the job records what it found, and the shape
+ * grows as it learns to find more. The console reads named keys and renders
+ * nothing for the rest rather than failing on a key it has not met.
+ */
+export type RepoSnapshot = {
+  snapshot_id: string;
+  case_id?: string;
+  memory_id?: string;
+  repo_url?: string;
+  repo?: string;
+  commit_sha: string;
+  ref: string | null;
+  status: "pending" | "running" | "complete" | "failed";
+  reason: string | null;
+  stats: {
+    nodes?: number;
+    edges?: number;
+    files_selected?: number;
+    selection?: string[];
+    dependencies?: number;
+    osv_status?: "ok" | "unavailable" | "no_dependencies_found";
+    osv_affected?: number;
+    records_written?: number;
+    graphify_version?: string;
+    size_kb?: number;
+    primary_language?: string;
+    license?: string;
+    stars?: number;
+    subject?: string;
+    committed_at?: string;
+  };
+  created_at: string;
+  reused?: boolean;
+};
+
+/** One repository, carrying the state of its most recent snapshot. */
+export type Repo = {
+  case_id: string;
+  repo: string;
+  title: string | null;
+  snapshots: number;
+  last_analysed: string | null;
+  last_status: RepoSnapshot["status"] | null;
+  last_reason: string | null;
+  last_sha: string | null;
+  last_snapshot_id: string | null;
+};
+
+/** A saved report. The four repo generators produce these like any other. */
+export type RepoReport = {
+  artifact_id: string;
+  kind: string;
+  title: string | null;
+  summary: string | null;
+  description: string | null;
+  keywords: string[];
+  model_id: string;
+  generator_version: string;
+  created_at: string;
+};
+
+/** The four reports, in the order they are read rather than alphabetically. */
+export const REPO_REPORTS = [
+  { key: "repo_design", label: "Design",
+    hint: "layers, seams, and where the arrangement leaks" },
+  { key: "repo_quality", label: "Code quality",
+    hint: "duplication, oversized modules, dead code, test shape" },
+  { key: "repo_bugs", label: "Functional bugs",
+    hint: "located defects only — file, symbol, triggering input" },
+  { key: "repo_deps", label: "Dependencies",
+    hint: "advisories from OSV, plus pinning and licence problems" },
+] as const;
+
+export type RepoReportKey = (typeof REPO_REPORTS)[number]["key"];

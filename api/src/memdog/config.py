@@ -80,6 +80,18 @@ class Settings:
         default_factory=lambda: _env("FIREBASE_PROJECT_ID", "")
     )
 
+    # The Cloud Run Job that clones and graphs a repository, fully qualified:
+    # `projects/{p}/locations/{l}/jobs/{name}`. Named once so nothing assembles
+    # it from three settings that can disagree.
+    #
+    # Empty disables repo analysis, which is the correct default: the job clones
+    # arbitrary public repositories and spends four model calls per snapshot, so
+    # it is switched on deliberately rather than inherited. A snapshot requested
+    # without it is recorded and marked failed with that as the reason -- never
+    # left pending, which would read as still running.
+    repo_analysis_job: str = field(
+        default_factory=lambda: _env("REPO_ANALYSIS_JOB", ""))
+
     raw_bucket: str = field(default_factory=lambda: _env("RAW_BUCKET", ""))
     blob_root: str = field(default_factory=lambda: _env("BLOB_ROOT", "./.blobs"))
 

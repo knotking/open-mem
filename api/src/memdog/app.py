@@ -164,6 +164,14 @@ async def lifespan(app: FastAPI):
     app.state.alert_worker = AlertWorker(pool)
     app.state.alert_worker.register(queue)
 
+    # Repo analysis. Registered whether or not a job is configured: without one
+    # the worker marks the snapshot failed with that as the reason, which is a
+    # far better outcome than a message with no consumer, where the snapshot
+    # sits `pending` forever and reads as still running.
+    from .repos import RepoAnalysisWorker
+
+    RepoAnalysisWorker(pool, settings).register(queue)
+
     # The meter needs somewhere to write before the first model call, which
     # the workers above can make as soon as they are registered.
     usage.configure(pool)
@@ -2528,6 +2536,99 @@ async def memory_artifacts(
     try:
         return {"artifacts": await artifacts_for(request.app.state.pool, actor, memory_id)}
     except AuthError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/repos/analyze")
+async def analyze_repo(
+    request: Request, body: dict, actor: Principal = Depends(principal)
+) -> dict:
+    """Analyse a GitHub repository at one commit.
+
+    Returns immediately with a snapshot in `pending`: the clone and the parse
+    are minutes of CPU and belong in a job, not in the process that also serves
+    every read. Asking twice for the same commit returns the first snapshot
+    rather than starting a second run, and says so with `reused`.
+
+    The quota gate is *before* the enqueue on purpose. An enqueued job cannot be
+    un-spent, so charging on completion would let a caller stack fifty clones
+    against a budget that refuses only the first one to come back.
+    """
+    from .repos import RepoError, request_snapshot
+
+    state = request.app.state
+    project_id = body.get("project_id") or actor.project_id
+    if not project_id:
+        raise HTTPException(status_code=400, detail="project_id is required")
+    if not body.get("repo_url"):
+        raise HTTPException(status_code=400, detail="repo_url is required")
+    try:
+        async with admitted(
+            request, actor, quota.estimate_repo_analysis(), project_id=project_id
+        ):
+            return await request_snapshot(
+                state.pool, state.queue, actor,
+                project_id=project_id,
+                repo_url=body["repo_url"],
+                ref=body.get("ref"),
+            )
+    except (RepoError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/projects/{project_id}/repos")
+async def list_project_repos(
+    request: Request, project_id: str, actor: Principal = Depends(principal)
+) -> dict:
+    """Analysed repositories, each carrying its latest snapshot's state."""
+    from .repos import RepoError, repos_for_project
+
+    try:
+        return {"repos": await repos_for_project(request.app.state.pool, actor, project_id)}
+    except (RepoError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/repos/snapshots/{snapshot_id}")
+async def read_repo_snapshot(
+    request: Request, snapshot_id: str, actor: Principal = Depends(principal)
+) -> dict:
+    """One snapshot, with its reports and whatever it could not do.
+
+    The reports are read through the artifacts path rather than copied onto the
+    row, so what is returned here is what `generator_version` currently says is
+    current -- a snapshot whose prompt has since changed shows a stale report as
+    stale rather than as fact.
+    """
+    from .derive import artifacts_for
+    from .repos import RepoError, get
+
+    try:
+        snapshot = await get(request.app.state.pool, actor, snapshot_id)
+        artifacts = await artifacts_for(
+            request.app.state.pool, actor, snapshot["memory_id"]
+        )
+    except (RepoError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    return {**snapshot, "reports": artifacts}
+
+
+@app.get("/api/v1/repos/{case_id}/snapshots")
+async def list_repo_snapshots(
+    request: Request, case_id: str, actor: Principal = Depends(principal)
+) -> dict:
+    """Every snapshot of one repository, newest first.
+
+    A list, not a comparison. The case correlates snapshots of the same
+    repository; nothing here claims two of them are comparable, because deciding
+    what "comparable" means across two commits is the feature this deliberately
+    does not have.
+    """
+    from .repos import RepoError, snapshots_for
+
+    try:
+        return {"snapshots": await snapshots_for(request.app.state.pool, actor, case_id)}
+    except (RepoError, AuthError) as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
 
 
