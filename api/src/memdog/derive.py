@@ -133,6 +133,11 @@ GENERATORS: dict[str, dict] = {
             "edge that violates it. Do not praise or grade the design; describe it. "
             "If the material does not show something, say it is not visible here "
             "rather than inferring it from convention."
+            " Keep the whole report under 400 words and at most eight findings, "
+            "ordered by what matters most. Brevity is not a style preference "
+            "here: the envelope is JSON, and an answer that runs long is cut "
+            "off mid-string and parses as nothing at all -- a ninth finding "
+            "costs the other eight."
         ),
         "archivable": False,
     },
@@ -149,6 +154,11 @@ GENERATORS: dict[str, dict] = {
             "the observation would matter to someone maintaining this code. Do not "
             "report style preferences, and do not produce a score -- a number "
             "invites comparison between codebases this analysis cannot support."
+            " Keep the whole report under 400 words and at most eight findings, "
+            "ordered by what matters most. Brevity is not a style preference "
+            "here: the envelope is JSON, and an answer that runs long is cut "
+            "off mid-string and parses as nothing at all -- a ninth finding "
+            "costs the other eight."
         ),
         "archivable": False,
     },
@@ -166,7 +176,16 @@ GENERATORS: dict[str, dict] = {
             "exactly like one that can. Do not report style, formatting, or missing "
             "tests here. Note that you are seeing a selected subset of the "
             "repository, so absence of a bug is not evidence of correctness, and "
-            "say so if the selection looks too partial to judge."
+            "say so if the selection looks too partial to judge. **If you find "
+            "no locatable defect, say exactly that and name how many files you "
+            "read** -- a report that describes the code instead of answering is "
+            "worse than one that reports nothing, because only the second can be "
+            "acted on."
+            " Keep the whole report under 400 words and at most eight findings, "
+            "ordered by what matters most. Brevity is not a style preference "
+            "here: the envelope is JSON, and an answer that runs long is cut "
+            "off mid-string and parses as nothing at all -- a ninth finding "
+            "costs the other eight."
         ),
         "archivable": False,
     },
@@ -192,6 +211,11 @@ GENERATORS: dict[str, dict] = {
             "only transitively, dependencies that appear unmaintained where the "
             "material says so, and licence terms that conflict with the project's "
             "own. Name the package and version for every finding."
+            " Keep the whole report under 400 words and at most eight findings, "
+            "ordered by what matters most. Brevity is not a style preference "
+            "here: the envelope is JSON, and an answer that runs long is cut "
+            "off mid-string and parses as nothing at all -- a ninth finding "
+            "costs the other eight."
         ),
         "archivable": False,
     },

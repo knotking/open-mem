@@ -343,27 +343,31 @@ Each of these presents as a different bug than it is.
 
   **A `401` is a different problem from a `429` and reads identically.** Found
   2026-09-05: `fallback_reason` was
-  `gemini: EmbeddingUnavailable: Client error '401 Unauthorized'`, and the key
-  in `gemini-api-key` began `AQ.A` rather than `AIza` — it is not an AI Studio
-  API key at all. Quota exhaustion is worth waiting out; an invalid credential
-  never resolves itself, and every model call falls back silently in the
-  meantime. The corpus keeps ingesting, artifacts keep being written, and every
-  summary is the first few lines of its own input, which reads as a bad model
-  rather than a missing credential.
+  `gemini: EmbeddingUnavailable: Client error '401 Unauthorized'`. Quota
+  exhaustion is worth waiting out; an expired or revoked credential never
+  resolves itself, and every model call falls back silently in the meantime.
+  The corpus keeps ingesting, artifacts keep being written, and every summary
+  is the first few lines of its own input — which reads as a bad model rather
+  than a dead credential.
 
-  Check the key before blaming the model, and check the *shape* first — it costs
-  nothing:
+  **Do not judge the key by its prefix.** Keys here are `AQ.A…`, not the
+  `AIza…` older AI Studio issued, and both are valid — an hour was spent
+  concluding from the prefix that the key was "not an API key at all" when the
+  format was fine and the credential had simply stopped working. The only test
+  that means anything is asking the model:
 
   ```bash
   GK=$(gcloud secrets versions access latest --secret gemini-api-key --project memdog-dev-506718)
-  echo "${GK:0:4}"   # AIza = an API key. Anything else is not one.
   curl -s -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent" \
     -H "x-goog-api-key: $GK" -H 'content-type: application/json' \
     -d '{"contents":[{"parts":[{"text":"hi"}]}]}' | head -5
   ```
 
-  Rotating it is the fix, and it must reach the jobs as well as the service —
-  see the rotation block above, which exists for exactly this.
+  **A new secret version is not a rotation.** `--set-secrets NAME=secret:latest`
+  resolves at *deploy* time, so adding version 4 changes nothing until the
+  service and every job are rolled — see the rotation block above. Confirm the
+  fix by enriching one item and reading `fallback_depth`: `0` means the model
+  was actually reached.
 
   **Ask the API which quota it means** — the answer names the tier outright, and
   is the difference between "wait" and "pay":
