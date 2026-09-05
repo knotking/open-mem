@@ -12,6 +12,8 @@ space.
 
 from __future__ import annotations
 
+import os
+
 import asyncpg
 
 from .acl import visibility_params, visibility_sql
@@ -33,6 +35,11 @@ from .inference import EmbeddingEngine
 
 RRF_K = 60  # the usual constant; large enough that rank 1 does not dominate
 
+# How many candidates the HNSW scan visits before the ACL and the filters
+# cut it down. The default is 40, which is the same number the arm asks for,
+# so any filtering at all comes straight out of the result.
+HNSW_EF_SEARCH = int(os.environ.get("HNSW_EF_SEARCH", "200"))
+
 
 class NotFound(Exception):
     pass
@@ -51,7 +58,25 @@ async def get_item(
                d.content_text, d.extracted_text, d.storage_ref, d.pending_ref,
                d.is_downloaded, d.parse_status, d.parse_detail,
                d.size_bytes, d.checksum, d.event_time, d.ingested_at, d.tags,
-               d.identifiers, d.producer_id, d.connection_id, d.run_id, d.metadata
+               d.identifiers, d.producer_id, d.connection_id, d.run_id,
+               d.metadata, d.template,
+               -- What this record contributed to the graph.
+               --
+               -- The progress panel claimed "entities recorded" on every
+               -- successful enrichment and reported no number, so a record that
+               -- produced eighteen entities and one that produced none rendered
+               -- identically -- and the second is the case somebody needs to
+               -- know about, because it is the difference between "the graph is
+               -- built" and "the graph is empty and nothing said so".
+               --
+               -- Counted here rather than in a second request: it is one row
+               -- of the item's own state, and a panel that has to make two
+               -- calls to say whether a step finished will eventually show one
+               -- of them stale.
+               (SELECT count(*) FROM entity_mentions m
+                 WHERE m.data_id = d.data_id) AS entity_count,
+               (SELECT count(*) FROM entity_edges e
+                 WHERE e.source_data_id = d.data_id) AS edge_count
         FROM data_items d
         WHERE d.data_id = $1 AND {predicate}
         """,
@@ -125,9 +150,49 @@ async def graph_seeds(
     ]
 
 
+async def seeds_for_ids(
+    pool: asyncpg.Pool, principal: Principal, *, project_id: str,
+    entity_ids: list[str],
+) -> list[GraphSeed]:
+    """Seeds the caller named, rather than seeds scraped from the question.
+
+    Visibility is asked the same way `graph_seeds` asks it: an entity is
+    reachable only through a record that mentions it and that the caller can
+    read. Without that, passing an id would confirm the entity exists to
+    somebody who cannot see a single record containing it -- and an id is far
+    easier to enumerate than a name.
+
+    An id that does not resolve is dropped rather than raised. The caller is a
+    scope picker sending what it last loaded, and one stale entity should
+    narrow the answer, not fail the question.
+    """
+    if not entity_ids:
+        return []
+    org_id, user_id, principals = visibility_params(principal)
+    rows = await pool.fetch(
+        f"""
+        SELECT e.entity_id, e.display_name, e.type
+        FROM entities e
+        WHERE e.project_id = $1 AND e.entity_id = ANY($2::text[])
+          AND EXISTS (
+              SELECT 1 FROM entity_mentions m
+              JOIN data_items d ON d.data_id = m.data_id
+              WHERE m.entity_id = e.entity_id AND {visibility_sql("d", 3, 4, 5)}
+          )
+        ORDER BY e.display_name
+        """,
+        project_id, entity_ids, org_id, user_id, principals,
+    )
+    return [
+        GraphSeed(entity_id=r["entity_id"], display_name=r["display_name"],
+                  type=r["type"], matched_on="chosen")
+        for r in rows
+    ]
+
+
 async def _expand(
     graph, principal: Principal, seeds: list[GraphSeed], *, limit: int,
-    valid_at=None, as_of=None,
+    valid_at=None, as_of=None, template: str | None = None,
 ) -> dict[str, int]:
     """Seeds, plus what one hop reaches, with the fewest hops to each.
 
@@ -153,7 +218,7 @@ async def _expand(
             found = await graph.neighbourhood(
                 principal, entity_id=seed.entity_id, depth=1,
                 predicates=None, limit=limit,
-                valid_at=valid_at, as_of=as_of,
+                valid_at=valid_at, as_of=as_of, template=template,
             )
         except GraphError:
             # The entity resolved a moment ago and is gone, or is not visible
@@ -212,11 +277,30 @@ async def _retrieve(
     arm_limit_p = bind(max(request.limit * 4, 40))
     tags_p = bind(request.filter.tags)
     since_p, until_p = bind(request.filter.since), bind(request.filter.until)
+    memories_p = bind(request.filter.memory_ids)
+    keywords_p = bind(request.filter.keywords)
+    template_p = bind(request.filter.template)
+    entities_p = bind(request.filter.entity_ids)
 
+    # `EXISTS` rather than a join: a record can be in several of the selected
+    # memories and a join would return it once per membership, which the fusion
+    # step would then read as several separate hits and rank accordingly.
     filters = f"""
         d.project_id = {project_p}
         AND {predicate}
         AND ({tags_p}::text[] = '{{}}' OR d.tags && {tags_p}::text[])
+        AND ({memories_p}::text[] = '{{}}' OR EXISTS (
+              SELECT 1 FROM memory_members mm
+              WHERE mm.data_id = d.data_id AND mm.memory_id = ANY({memories_p}::text[])))
+        AND ({keywords_p}::text[] = '{{}}' OR EXISTS (
+              SELECT 1 FROM artifacts a2
+              JOIN artifact_sources s2 ON s2.artifact_id = a2.artifact_id
+              WHERE s2.data_id = d.data_id AND a2.keywords && {keywords_p}::text[]))
+        AND ({template_p}::text IS NULL OR d.template = {template_p})
+        AND ({entities_p}::text[] = '{{}}' OR EXISTS (
+              SELECT 1 FROM entity_mentions em
+              WHERE em.data_id = d.data_id
+                AND em.entity_id = ANY({entities_p}::text[])))
         AND ({since_p}::timestamptz IS NULL OR d.event_time >= {since_p})
         AND ({until_p}::timestamptz IS NULL OR d.event_time <= {until_p})
     """
@@ -259,7 +343,13 @@ async def _retrieve(
     seeds: list[GraphSeed] = []
     reachable: dict[str, int] = {}
     if "graph" in request.match:
-        seeds = await graph_seeds(
+        # A named anchor replaces the parsed one rather than adding to it. If
+        # the caller said where to start, starting somewhere else as well is
+        # not extra recall -- it is the scope they set being quietly widened.
+        seeds = await seeds_for_ids(
+            pool, principal, project_id=request.filter.project_id,
+            entity_ids=request.filter.entity_ids,
+        ) if request.filter.entity_ids else await graph_seeds(
             pool, principal, project_id=request.filter.project_id, query=request.query
         )
         if seeds:
@@ -267,6 +357,11 @@ async def _retrieve(
                 graph or build_graph(pool), principal, seeds,
                 limit=request.limit * 8,
                 valid_at=request.filter.valid_at, as_of=request.filter.as_of,
+                # The same lens on both halves. A search narrowed to scripture
+                # records whose graph arm walked every edge in the project
+                # would rank records by connections the filter excluded, and
+                # nothing in the result would show it.
+                template=request.filter.template,
             )
     if reachable:
         ids_p = bind(list(reachable))
@@ -373,7 +468,19 @@ async def _retrieve(
     # The search still runs through everything below -- the query row, the
     # corpus counts, the audit -- because a search that found nothing is still
     # a search that happened, and the trace is the part that explains why.
-    rows = await pool.fetch(sql, *params) if arms else []
+    if not arms:
+        rows = []
+    elif "vector" in request.match:
+        # HNSW visits `ef_search` candidates and *then* applies the WHERE
+        # clause, so leaving it at the default 40 while the arm also asks for 40
+        # means a single excluded row costs a result. Raised for the vector arm
+        # only, and `SET LOCAL` so it dies with the transaction rather than
+        # riding a pooled connection into somebody else's query.
+        async with pool.acquire() as conn, conn.transaction():
+            await conn.execute(f"SET LOCAL hnsw.ef_search = {HNSW_EF_SEARCH}")
+            rows = await conn.fetch(sql, *params)
+    else:
+        rows = await pool.fetch(sql, *params)
 
     query_id = new_id("qry")
     all_hits = [
@@ -702,6 +809,70 @@ async def list_memories(pool: asyncpg.Pool, principal: Principal, project_id: st
     return [dict(r) for r in rows]
 
 
+async def project_keywords(
+    pool, principal, project_id: str, *, limit: int = 200
+) -> list[dict]:
+    """What this project is about, as the model has described it.
+
+    Counted over artifacts the caller can actually see, not over the project:
+    a keyword whose every record is hidden must not appear, or the count itself
+    discloses that something exists. This is the same rule entity listing
+    follows and for the same reason.
+
+    Counts are of *records*, not of mentions. A keyword repeated across five
+    chunks of one document is one record's worth of evidence, and ranking by
+    mentions would put a long document above a broad theme.
+    """
+    org_id, user_id, principals = visibility_params(principal)
+    predicate = visibility_sql("d", 2, 3, 4)
+    rows = await pool.fetch(
+        f"""
+        SELECT keyword, count(DISTINCT s.data_id) AS records
+        FROM artifacts a
+        JOIN artifact_sources s ON s.artifact_id = a.artifact_id
+        JOIN data_items d ON d.data_id = s.data_id
+        CROSS JOIN LATERAL unnest(a.keywords) AS keyword
+        WHERE a.project_id = $1
+          AND d.deleted_at IS NULL
+          AND {predicate}
+        GROUP BY keyword
+        ORDER BY records DESC, keyword ASC
+        LIMIT $5
+        """,
+        project_id, org_id, user_id, principals, min(limit, 500),
+    )
+    return [{"keyword": r["keyword"], "records": r["records"]} for r in rows]
+
+
+async def project_tags(pool, principal, project_id: str, *, limit: int = 200) -> list[dict]:
+    """The tags actually in use, counted over what the caller can see.
+
+    The sibling of `project_keywords`, and deliberately a separate function
+    rather than a parameter: a tag is an assertion by a person and a keyword is
+    a model's guess, and the moment one endpoint returns both nobody can tell
+    which said what.
+
+    Scoped by visibility for the same reason as keywords -- a tag applied only
+    to records the caller cannot see must not appear, because the tag itself
+    would disclose that they exist.
+    """
+    org_id, user_id, principals = visibility_params(principal)
+    predicate = visibility_sql("d", 2, 3, 4)
+    rows = await pool.fetch(
+        f"""
+        SELECT tag, count(*) AS records
+        FROM data_items d
+        CROSS JOIN LATERAL unnest(d.tags) AS tag
+        WHERE d.project_id = $1 AND d.deleted_at IS NULL AND {predicate}
+        GROUP BY tag
+        ORDER BY records DESC, tag ASC
+        LIMIT $5
+        """,
+        project_id, org_id, user_id, principals, min(limit, 500),
+    )
+    return [{"tag": r["tag"], "records": r["records"]} for r in rows]
+
+
 async def memory_members(pool: asyncpg.Pool, principal: Principal, memory_id: str) -> list[dict]:
     principal.require(DATA_READ)
     org_id, user_id, principals = visibility_params(principal)
@@ -825,7 +996,8 @@ async def list_items(
 
 
 async def project_overview(
-    pool: asyncpg.Pool, principal: Principal, project_id: str
+    pool: asyncpg.Pool, principal: Principal, project_id: str,
+    embedder: EmbeddingEngine | None = None,
 ) -> dict:
     """One call that answers "is this working, and what is in it?".
 
@@ -899,6 +1071,104 @@ async def project_overview(
         project_id, org_id, user_id, principals,
     )
 
+    # Which vector space the stored embeddings are actually in, and whether the
+    # configured embedder queries it. `vector_spaces: 1` says the corpus is
+    # consistent with itself; it does not say it is consistent with retrieval.
+    # A corpus embedded under one model and searched under another reports
+    # every record enriched and answers every vector search with nothing, and
+    # until this row existed there was no number anywhere that disagreed.
+    spaces = await pool.fetch(
+        f"""
+        SELECT e.model_id, count(*) AS embeddings,
+               count(DISTINCT e.data_id) AS records
+        FROM embeddings e JOIN data_items d ON d.data_id = e.data_id
+        WHERE d.project_id = $1 AND {predicate}
+        GROUP BY 1 ORDER BY 2 DESC LIMIT 6
+        """,
+        project_id, org_id, user_id, principals,
+    )
+    # The vector arm joins embeddings to chunks by `chunk_id`, so an embedding
+    # whose chunk was rewritten under it is counted above and reachable by
+    # nothing.
+    joinable = await pool.fetchrow(
+        f"""
+        SELECT count(*) AS rows,
+               count(*) FILTER (WHERE e.embedding IS NULL) AS empty,
+               min(vector_dims(e.embedding)) AS dims
+        FROM embeddings e
+        JOIN chunks c ON c.chunk_id = e.chunk_id
+        JOIN data_items d ON d.data_id = c.data_id
+        WHERE d.project_id = $1 AND {predicate}
+        """,
+        project_id, org_id, user_id, principals,
+    )
+    queried = embedder.model_id if embedder else None
+    # The same shape the vector arm runs -- joins, ACL, model filter, index
+    # scan -- but with a vector already in the table as the query. If this
+    # returns rows and the arm does not, the storage side is sound and the
+    # question is what the *query* embedded to.
+    probe = await pool.fetchval(
+        f"""
+        WITH probe AS (
+            SELECT e.embedding AS v FROM embeddings e
+            JOIN data_items d ON d.data_id = e.data_id
+            WHERE d.project_id = $1 AND {predicate} LIMIT 1
+        )
+        SELECT count(*) FROM (
+            SELECT c.chunk_id FROM embeddings e
+            JOIN chunks c ON c.chunk_id = e.chunk_id
+            JOIN data_items d ON d.data_id = c.data_id
+            CROSS JOIN probe
+            WHERE d.project_id = $1 AND {predicate}
+              AND ($5::text IS NULL OR e.model_id = $5)
+            ORDER BY e.embedding <=> probe.v LIMIT 40
+        ) t
+        """,
+        project_id, org_id, user_id, principals, queried,
+    )
+    # The same probe with the query vector as a *bound constant*, which is what
+    # lets the planner reach for the HNSW index -- the CROSS JOIN above cannot
+    # use it. Two different numbers here mean the vectors are fine and the
+    # index is not, which is otherwise indistinguishable from bad retrieval.
+    sample = await pool.fetchval(
+        f"""
+        SELECT e.embedding::text FROM embeddings e
+        JOIN data_items d ON d.data_id = e.data_id
+        WHERE d.project_id = $1 AND {predicate} LIMIT 1
+        """,
+        project_id, org_id, user_id, principals,
+    )
+    probe_indexed = None
+    if sample:
+        # Under the same `ef_search` the vector arm runs with, so this number is
+        # what retrieval will actually see. Reporting the default instead would
+        # show a healthy index as broken.
+        async with pool.acquire() as conn, conn.transaction():
+            await conn.execute(f"SET LOCAL hnsw.ef_search = {HNSW_EF_SEARCH}")
+            probe_indexed = await conn.fetchval(
+                f"""
+                SELECT count(*) FROM (
+                    SELECT c.chunk_id FROM embeddings e
+                    JOIN chunks c ON c.chunk_id = e.chunk_id
+                    JOIN data_items d ON d.data_id = c.data_id
+                    WHERE d.project_id = $1 AND {predicate}
+                    ORDER BY e.embedding <=> $5::vector LIMIT 40
+                ) t
+                """,
+                project_id, org_id, user_id, principals, sample,
+            )
+    vector_index = {
+        "queried_as": queried,
+        "spaces": [dict(r) | {"queried": r["model_id"] == queried} for r in spaces],
+        # The one number that answers "will vector search find anything?".
+        "reachable": dict(joinable),
+        "probe_neighbours": probe,
+        "probe_indexed": probe_indexed,
+        "searchable_here": sum(
+            r["records"] for r in spaces if r["model_id"] == queried
+        ),
+    }
+
     containers = await pool.fetchrow(
         """
         SELECT (SELECT count(*) FROM memories m
@@ -930,6 +1200,7 @@ async def project_overview(
         "not_read": [dict(r) for r in problems],
         "models": [dict(r) for r in models],
         "derived": dict(derived),
+        "vector_index": vector_index,
         "containers": dict(containers),
         "activity": dict(activity),
     }

@@ -19,6 +19,7 @@ determined is null rather than inferred from world knowledge.
 from __future__ import annotations
 
 import json
+import os
 import re
 import secrets
 from collections import Counter
@@ -29,7 +30,9 @@ import httpx
 from . import usage
 from pydantic import BaseModel, Field
 
+from . import graph_templates, predicates as predicates_mod
 from .inference import EmbeddingUnavailable
+from .telemetry import span
 
 EXTRACT_PURPOSE = "extraction"
 
@@ -98,11 +101,167 @@ class Envelope(BaseModel):
     response_id: str | None = None
 
 
+# How many windows one record may cost. A book is not a special case to be
+# refused; it is a normal thing to put in, and reading only its opening is the
+# behaviour that made a graph of eighteen chapters look like a graph of one.
+#
+# Bounded because each window is a model call: without a cap, one upload of a
+# large corpus quietly becomes hundreds of calls billed to a project that asked
+# for "add data". Twelve covers ~2.4M characters through Gemini -- several
+# books -- and what is skipped is reported rather than dropped in silence.
+MAX_WINDOWS = int(os.environ.get("MAX_EXTRACT_WINDOWS", "24"))
+
+
+def split_windows(text: str, size: int) -> list[str]:
+    """Cut text into windows, preferring a paragraph boundary near the end.
+
+    A hard slice at exactly `size` lands mid-sentence, and a model handed half a
+    sentence at each edge invents the other half -- which is the one failure a
+    graph cannot tolerate, because a hallucinated edge becomes a traversable
+    path rather than a sentence somebody can discount.
+
+    The search window is the last 10% so a document with no blank lines still
+    makes progress instead of degenerating to one character at a time.
+    """
+    if size <= 0 or len(text) <= size:
+        return [text]
+    windows, start = [], 0
+    while start < len(text):
+        end = min(start + size, len(text))
+        if end < len(text):
+            floor = start + int(size * 0.9)
+            # The delimiter stays with the window it ends, not the one it
+            # starts. Cutting *at* the separator left the full stop leading the
+            # next window -- so the split was still mid-sentence, which is the
+            # thing this search exists to avoid.
+            for sep in ("\n\n", "\n", ". "):
+                cut = text.rfind(sep, floor, end)
+                if cut > start:
+                    end = cut + len(sep)
+                    break
+        windows.append(text[start:end])
+        start = end
+    return [w for w in windows if w.strip()]
+
+
+def merge_envelopes(parts: list[Envelope], *, read: int, total: int) -> Envelope:
+    """One envelope from several windows.
+
+    The rule is not symmetric, deliberately. **Narrative fields come from the
+    first window; the graph is cumulative.** A title is a name for the whole
+    document and the opening is the best single guess at it, while entities and
+    relations are claims the text makes and every window makes more of them --
+    taking only the first window's would be the bug this exists to fix.
+
+    Summaries are joined rather than replaced, because a book's summary is
+    genuinely a sequence and one paragraph about its opening is not a summary of
+    it. They are capped: a summary nobody will read to the end of has stopped
+    being a summary.
+    """
+    first = parts[0]
+    entities, seen_e = [], set()
+    relations, seen_r = {}, None
+    keywords, seen_k = [], set()
+    summaries = []
+    for part in parts:
+        for e in part.entities or []:
+            name = (e.get("name") or "").strip()
+            kind = e.get("type") or "other"
+            if not name:
+                continue
+            key = (kind, name.casefold())
+            if key in seen_e:
+                continue
+            seen_e.add(key)
+            entities.append(e)
+        for r in part.relations or []:
+            key = ((r.get("subject") or "").strip().casefold(),
+                   (r.get("predicate") or "").strip(),
+                   (r.get("object") or "").strip().casefold())
+            if not all(key):
+                continue
+            # The same claim in two windows is corroboration, and the graph
+            # layer already counts evidence per record -- so here it is one
+            # relation at the best confidence either window offered.
+            existing = relations.get(key)
+            confidence = r.get("confidence")
+            if existing is None:
+                relations[key] = dict(r)
+            elif confidence is not None and (existing.get("confidence") or 0) < confidence:
+                existing["confidence"] = confidence
+        for k in part.keywords or []:
+            if k and k.casefold() not in seen_k:
+                seen_k.add(k.casefold())
+                keywords.append(k)
+        if part.summary:
+            summaries.append(part.summary.strip())
+
+    summary = "\n\n".join(summaries)
+    if len(summary) > 12_000:
+        summary = summary[:12_000].rstrip() + "…"
+
+    fields = dict(first.fields or {})
+    fields["windows_read"] = read
+    fields["windows_total"] = total
+    if read < total:
+        # Named, not silent. "We read 12 of 19 windows" is a fact somebody can
+        # act on; an envelope that simply describes less is not.
+        fields["windows_skipped"] = total - read
+    return Envelope(
+        title=first.title,
+        description=first.description,
+        summary=summary or first.summary,
+        keywords=keywords[:40],
+        language=first.language,
+        entities=entities,
+        relations=list(relations.values()),
+        fields=fields,
+        model_version=first.model_version,
+        response_id=first.response_id,
+    )
+
+
+async def extract_long(
+    extractor, text: str, *, data_type: str, prompt: str | None = None,
+    template: str | None = None, max_windows: int = MAX_WINDOWS,
+) -> Envelope:
+    """Extract across a whole document rather than its first window.
+
+    Embedding has always chunked; extraction never did. So a record's *text*
+    was fully searchable while its *understanding* -- title, keywords, entities,
+    relations -- described only as much as fitted in one model call. On a page
+    those are the same thing. On a book they are not, and the difference showed
+    up as a graph of eighteen chapters that had the density of one.
+
+    Sequential rather than concurrent: these are the expensive calls, they run
+    on a background task, and a burst of a dozen against a rate-limited provider
+    turns a slow success into a fast failure.
+    """
+    # The smaller of what the model *can* read and what it extracts well from.
+    # A model with no declared limit still gets the extraction window: the
+    # constraint is the model's behaviour on a wall of text, not its context.
+    limit = getattr(extractor, "max_input_chars", 0)
+    window = min(limit, EXTRACT_WINDOW) if limit else EXTRACT_WINDOW
+    parts = split_windows(text, window)
+    if len(parts) <= 1:
+        return await extractor.extract(
+            text, data_type=data_type, prompt=prompt, template=template)
+
+    read = parts[:max_windows]
+    envelopes = []
+    for index, part in enumerate(read):
+        with span("extract.window", index=index, of=len(parts)):
+            envelopes.append(await extractor.extract(
+                part, data_type=data_type, prompt=prompt, template=template))
+    return merge_envelopes(envelopes, read=len(read), total=len(parts))
+
+
 class Extractor(Protocol):
     model_id: str
 
     async def extract(
-        self, text: str, *, data_type: str, prompt: str | None = None
+        self, text: str, *, data_type: str, prompt: str | None = None,
+        template: str | None = None,
     ) -> Envelope: ...
     """`prompt` replaces the shipped instruction block for this call only.
 
@@ -113,18 +272,62 @@ class Extractor(Protocol):
     produced by, which is the failure that cannot be reconstructed afterwards.
 
     Optional, and ignored by implementations that have no prompt.
+
+    `template` is the caller's declared intent -- what the document is *for*,
+    which the bytes cannot say. It narrows the relation enum and appends its
+    own instruction block, and it is deliberately separate from `prompt`: a
+    prompt override replaces the shipped instruction wholesale and is a policy
+    lever, while a template composes with it and is a statement about the
+    content. Both may be set.
     """
 
 
 def build_prompt(
-    text: str, *, data_type: str, schema: dict, block: str | None = None
+    text: str, *, data_type: str, schema: dict, block: str | None = None,
+    template: str | None = None,
 ) -> tuple[str, str]:
     """Returns (system, user). The nonce is per-request and unguessable, so a
     document cannot terminate its own fence and start issuing instructions."""
+    from .graph_templates import get as _template
+
     nonce = secrets.token_hex(8)
     # The type-specific block goes in the system half, with the defence -- not
     # beside the content, where a document could imitate its formatting.
     system = SYSTEM_PROMPT if block is None else f"{SYSTEM_PROMPT}\n\n{block}"
+    # A length bound on the one unbounded field.
+    #
+    # `summary` is the only field with no natural end, and a model that starts
+    # rambling in it does not stop: one extraction produced several thousand
+    # words of run-on prose with no punctuation, exhausted the output budget,
+    # and truncated the JSON mid-sentence -- losing the whole envelope, not just
+    # the summary. The cap is stated in characters because that is what the
+    # reader of the field cares about, and it is stated here rather than in a
+    # per-type block so no override can drop it.
+    system += (
+        "\n\nLENGTH: keep `summary` under 1200 characters and `description` "
+        "under 300. Stop when the content is covered. Never repeat a phrase to "
+        "fill space -- an envelope truncated mid-field is discarded entirely, "
+        "so a short complete answer is worth more than a long incomplete one."
+    )
+    if "quality" in (schema.get("properties") or {}):
+        # Bounded here for the same reason `summary` is, and stated in the
+        # skeleton so no per-type block can raise it: this object is emitted
+        # ahead of `summary`, so a runaway `verdict` costs the summary, and a
+        # runaway `reliability` list costs the whole envelope.
+        system += (
+            "\n\nLENGTH: in `quality`, keep `verdict` under 400 characters, "
+            "`purpose`, `authorship` and `dated` under 200 each, and give at "
+            "most five `reliability` notes and five `missing` questions, each "
+            "one sentence. Say less rather than padding a list to five."
+        )
+    # The template block goes *after* the type block, because it is the more
+    # specific statement: the type says this is a document, the template says
+    # it is a design document, and where they disagree about what is
+    # interesting the second should win. It is in the system half for the same
+    # reason the first one is.
+    spec = _template(template)
+    if spec is not None:
+        system = f"{system}\n\n{spec.block()}"
     user = (
         f"SCHEMA\n{json.dumps(schema, sort_keys=True)}\n\n"
         f"DATA TYPE: {data_type}\n\n"
@@ -136,11 +339,13 @@ def build_prompt(
 # Entities ride the pass that is already reading the text. A separate
 # extraction call would double the cost and the latency of enrichment to read
 # the same document twice, and would let the two disagree about what it said.
-RELATION_PREDICATES = (
-    "works_for", "member_of", "reports_to", "collaborates_with",
-    "located_in", "part_of", "owns", "produces", "uses",
-    "attended", "about", "related_to",
-)
+#
+# The vocabulary itself now lives in `predicates.py`. It was defined here *and*
+# in `graph.PREDICATES` -- two copies of the same twelve strings, with nothing
+# failing if they drifted. A predicate added to one and not the other is
+# offered to the model, accepted by the schema, and rejected by a CHECK
+# constraint at the very end of enrichment.
+RELATION_PREDICATES = predicates_mod.NAMES
 
 ENTITY_SCHEMA = {
     "type": "array",
@@ -162,33 +367,124 @@ ENTITY_SCHEMA = {
 # Relations ride the same pass as entities. Naming the endpoints rather than
 # ids is deliberate: the model cannot know our identifiers, so it says what the
 # document said and the resolver matches it back.
-RELATION_SCHEMA = {
-    "type": "array",
-    "items": {
-        "type": "object",
-        "required": ["subject", "predicate", "object"],
-        "properties": {
-            "subject": {"type": "string"},
-            "predicate": {"type": "string", "enum": list(RELATION_PREDICATES)},
-            "object": {"type": "string"},
-            "confidence": {"type": ["number", "null"]},
-        },
-    },
-}
+def relation_schema(offered: tuple[str, ...] = RELATION_PREDICATES) -> dict:
+    """The relation array, with the enum narrowed to what is on offer.
 
-ENVELOPE_SCHEMA = {
-    "type": "object",
-    "required": ["title"],
-    "properties": {
-        "title": {"type": "string"},
-        "description": {"type": ["string", "null"]},
-        "summary": {"type": ["string", "null"]},
-        "keywords": {"type": "array", "items": {"type": "string"}},
-        "language": {"type": ["string", "null"]},
-        "entities": ENTITY_SCHEMA,
-        "relations": RELATION_SCHEMA,
-    },
+    A template narrows this, which is most of what a template *does*: asking
+    for six relevant predicates instead of seventeen mostly-irrelevant ones
+    turns open-ended extraction into slot-filling, and the model cannot answer
+    with a predicate that was never in the enum.
+    """
+    return {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "required": ["subject", "predicate", "object"],
+            "properties": {
+                "subject": {"type": "string"},
+                "predicate": {"type": "string", "enum": list(offered)},
+                "object": {"type": "string"},
+                "confidence": {"type": ["number", "null"]},
+            },
+        },
+    }
+
+
+RELATION_SCHEMA = relation_schema()
+
+# What a *page* gets asked that a file does not.
+#
+# Enumerated rather than free text, and that is the whole point of the block: a
+# paragraph of prose about a page's quality can be read but not counted, and the
+# question people actually have is "which of the four hundred pages I ingested
+# are marketing with no sources". A verdict you cannot filter on is a verdict
+# nobody uses twice.
+#
+# Every list is bounded and every string is capped in the prompt. The envelope's
+# own history is the argument: `summary` was unbounded, one extraction spent the
+# entire output budget inside it, and the graph -- the part that could not be
+# reconstructed -- was what got dropped.
+PAGE_KINDS = [
+    "article", "news_report", "documentation", "reference", "tutorial",
+    "blog_post", "marketing", "product_page", "listing", "forum_thread",
+    "academic", "press_release", "legal", "personal", "aggregator",
+    "error_or_empty", "login_or_paywall",
+]
+SUBSTANCE = ["original", "synthesised", "derivative", "thin"]
+EVIDENCE = ["primary", "quantified", "cited", "asserted", "none"]
+COMMERCIAL = ["none", "advertising", "affiliate", "lead_capture", "paywall",
+              "product_page", "sponsored"]
+# `not_content` is the one that earns its place. A login wall and a parked
+# domain both arrive as HTTP 200 with fluent text, and without a value that says
+# so they are stored as pages that merely summarise badly.
+RETRIEVAL_VALUE = ["keep", "keep_with_caveats", "low_value", "not_content"]
+
+QUALITY_PROPERTIES = {
+    "page_kind": {"type": "string", "enum": PAGE_KINDS},
+    "purpose": {"type": "string"},
+    "substance": {"type": "string", "enum": SUBSTANCE},
+    "evidence": {"type": "string", "enum": EVIDENCE},
+    "authorship": {"type": "string"},
+    "dated": {"type": "string"},
+    "commercial": {"type": "string", "enum": COMMERCIAL},
+    "reliability": {"type": "array", "items": {"type": "string"}},
+    "missing": {"type": "array", "items": {"type": "string"}},
+    "retrieval_value": {"type": "string", "enum": RETRIEVAL_VALUE},
+    "verdict": {"type": "string"},
 }
+QUALITY_REQUIRED = ["page_kind", "substance", "evidence", "retrieval_value",
+                    "verdict"]
+
+# The data types that get asked the page questions. A PDF fetched from a URL is
+# still a PDF and is not one of them.
+JUDGED = {"document_html"}
+
+
+def quality_schema() -> dict:
+    return {"type": "object", "required": QUALITY_REQUIRED,
+            "properties": QUALITY_PROPERTIES}
+
+
+def envelope_schema(offered: tuple[str, ...] = RELATION_PREDICATES,
+                    *, quality: bool = False) -> dict:
+    """Property order is load-bearing, not cosmetic.
+
+    A schema-constrained model emits properties in the order the schema lists
+    them, and the output budget is finite -- so whatever is last is what gets
+    dropped when something earlier runs long. `entities` and `relations` were
+    last, behind an unbounded `summary`, which made the graph the first
+    casualty of a verbose one.
+
+    That was not hypothetical. A templated extraction of a page of the Gita
+    rambled through 4,045 of a 4,096-token budget inside `summary` and emitted
+    no entities and no relations at all: an artifact that looked successful,
+    with a title, a description, and an empty graph. The record enriched, the
+    state said `enriched`, and nothing anywhere reported that the part the
+    template existed for had been truncated away.
+
+    Entities and relations now come first. They are small, bounded by the
+    content, and they are the part that cannot be reconstructed from the text
+    later without paying for the call again -- a summary that gets clipped is a
+    worse summary, while a graph that gets clipped is a graph that silently
+    never existed.
+    """
+    return {
+        "type": "object",
+        "required": ["title"],
+        "properties": {
+            "title": {"type": "string"},
+            "entities": ENTITY_SCHEMA,
+            "relations": relation_schema(offered),
+            "description": {"type": ["string", "null"]},
+            "keywords": {"type": "array", "items": {"type": "string"}},
+            "language": {"type": ["string", "null"]},
+            **({"quality": quality_schema()} if quality else {}),
+            "summary": {"type": ["string", "null"]},
+        },
+    }
+
+
+ENVELOPE_SCHEMA = envelope_schema()
 
 _WORD = re.compile(r"[A-Za-z][A-Za-z'-]+")
 _SENTENCE = re.compile(r"(?<=[.!?])\s+")
@@ -200,6 +496,41 @@ _STOP = {
     "after", "before", "into", "than", "then", "them", "she", "his", "her",
     "our", "out", "who", "why", "how", "all", "any", "can", "will", "would",
 }
+
+
+# How much text an extractor reads in one call. Zero means no limit.
+#
+# This was a bare `text[:200_000]` inside the Gemini call, which is the right
+# guard and the wrong place for it: a slice hides the discarded remainder from
+# everything upstream, so a document longer than the window produced an
+# envelope describing its opening and nothing recorded that the rest existed.
+# A 232,000-character Bhagavad Gita came back titled "Summary of Bhagavad Gita
+# Chapters 1 through 16" -- the model named its own truncation point and the
+# system stored the artifact as a success.
+GEMINI_WINDOW = 200_000
+OLLAMA_WINDOW = 100_000
+
+# The window extraction actually uses, which is *not* the model's context limit.
+#
+# Those are different numbers and conflating them was the second bug in this
+# area. A 200,000-character window fits comfortably in the model's context and
+# is far too large to extract from: handed that much text the model writes a
+# long summary and returns an empty `entities` array and an empty `keywords`
+# array -- not truncated, not refused, simply absent. Measured on one document,
+# same text, same prompt, same template:
+#
+#     200,000 chars  ->   0 entities,  0 edges,  0 keywords
+#      40,000 chars  ->  12 entities,  6 edges
+#      32,000 chars  ->   5 entities
+#
+# So the ceiling that matters is behavioural, not technical. Reordering the
+# schema so entities precede the summary was necessary and not sufficient: the
+# model was not running out of room, it was answering a different question.
+#
+# Smaller windows cost more calls -- this book is six instead of one -- which is
+# the honest price of a graph that reflects the whole document rather than an
+# artifact that looks successful and is empty.
+EXTRACT_WINDOW = int(os.environ.get("EXTRACT_WINDOW_CHARS", "40000"))
 
 
 class LocalHeuristicExtractor:
@@ -218,7 +549,8 @@ class LocalHeuristicExtractor:
         self.model_id = "local-heuristic-v1"
 
     async def extract(
-        self, text: str, *, data_type: str, prompt: str | None = None
+        self, text: str, *, data_type: str, prompt: str | None = None,
+        template: str | None = None,
     ) -> Envelope:
         # Deterministic and promptless. Accepting the argument and ignoring it
         # keeps it behind the same protocol; silently honouring it would be a
@@ -245,6 +577,8 @@ class LocalHeuristicExtractor:
 
 
 class OllamaExtractor:
+    max_input_chars = OLLAMA_WINDOW
+
     """The model path. Defers rather than falling back, exactly as embedding does.
 
     `served_by_model` is recorded separately from `model_id` for the case this
@@ -257,17 +591,21 @@ class OllamaExtractor:
         self._base_url = base_url.rstrip("/")
 
     async def extract(
-        self, text: str, *, data_type: str, prompt: str | None = None
+        self, text: str, *, data_type: str, prompt: str | None = None,
+        template: str | None = None,
     ) -> Envelope:
+        offered = graph_templates.predicates_for(template)
+        schema = envelope_schema(offered, quality=data_type in JUDGED)
         system, user = build_prompt(text, data_type=data_type,
-                                    schema=ENVELOPE_SCHEMA, block=prompt)
+                                    schema=schema, block=prompt,
+                                    template=template)
         try:
             async with httpx.AsyncClient(timeout=120.0) as client:
                 response = await client.post(
                     f"{self._base_url}/api/chat",
                     json={
                         "model": self.model_id,
-                        "format": ENVELOPE_SCHEMA,   # schema-constrained output
+                        "format": schema,            # schema-constrained output
                         "stream": False,
                         "options": {"temperature": 0},
                         "messages": [
@@ -293,6 +631,8 @@ class OllamaExtractor:
 
 
 class GeminiExtractor:
+    max_input_chars = GEMINI_WINDOW
+
     """Extraction with the shipped per-type prompts.
 
     The prompt is chosen by `data_type`, which is what the classification
@@ -311,7 +651,8 @@ class GeminiExtractor:
         self._base = "https://generativelanguage.googleapis.com/v1beta"
 
     async def extract(
-        self, text: str, *, data_type: str, prompt: str | None = None
+        self, text: str, *, data_type: str, prompt: str | None = None,
+        template: str | None = None,
     ) -> Envelope:
         from .prompts import for_data_type
 
@@ -320,8 +661,15 @@ class GeminiExtractor:
             # An org or project override. The shipped block is still resolved
             # above so the name stays available for the artifact's provenance.
             block = prompt
+        offered = graph_templates.predicates_for(template)
+        # Still bounded here -- the guard belongs at the call that would
+        # otherwise be rejected -- but callers should hand this a window rather
+        # than a book. `extract_long` does the splitting.
+        judged = data_type in JUDGED
         system, user = build_prompt(
-            text[:200_000], data_type=data_type, schema=ENVELOPE_SCHEMA, block=block
+            text[:GEMINI_WINDOW], data_type=data_type,
+            schema=envelope_schema(offered, quality=judged),
+            block=block, template=template,
         )
         try:
             async with httpx.AsyncClient(timeout=300.0) as client:
@@ -333,12 +681,16 @@ class GeminiExtractor:
                         "contents": [{"role": "user", "parts": [{"text": user}]}],
                         "generationConfig": {
                             "temperature": 0,
-                            "maxOutputTokens": 4096,
+                            # Raised from 4096 after a templated extraction spent 4,045 of
+                            # them inside `summary`. Reordering the schema is the
+                            # real fix; this is the margin, so a verbose summary
+                            # costs tokens rather than the whole envelope.
+                            "maxOutputTokens": 8192,
                             # Schema-constrained: the parsed artifact *is* the
                             # response, so there is no raw text to store on
                             # success and nothing to salvage by parsing prose.
                             "responseMimeType": "application/json",
-                            "responseSchema": _gemini_schema(),
+                            "responseSchema": _gemini_schema(offered, quality=judged),
                         },
                     },
                 )
@@ -367,6 +719,12 @@ class GeminiExtractor:
             tokens_cached=meta.get("cachedContentTokenCount", 0),
             prompt=prompt_name,
         )
+        # `quality` is not an Envelope field -- the filter above drops it -- and
+        # it should not be: it applies to one family of types, and a core field
+        # that is null for twenty-three of twenty-four is not a core field.
+        # `fields` is the namespaced home the envelope already documents.
+        if isinstance(parsed.get("quality"), dict):
+            envelope.fields["quality"] = parsed["quality"]
         envelope.fields["prompt"] = prompt_name
         envelope.fields["tokens"] = meta.get("totalTokenCount", 0)
         # The build that answered, not the alias we asked for.
@@ -375,31 +733,40 @@ class GeminiExtractor:
         return envelope
 
 
-def _gemini_schema() -> dict:
+def _gemini_schema(offered: tuple[str, ...] = RELATION_PREDICATES,
+                   *, quality: bool = False) -> dict:
     """Gemini wants its own dialect: no nullable unions, so optional fields are
-    simply not required."""
+    simply not required. Property order matches `envelope_schema` and matters
+    for the same reason -- see the note there."""
     return {
         "type": "object",
-        "required": ["title"],
+        # Entities and relations are REQUIRED, and that is the whole fix.
+        #
+        # Listing them first in `properties` did nothing: Gemini does not emit
+        # in declaration order, and an optional property may simply be absent.
+        # A windowed extraction of the Gita returned
+        # `{title, description, language, summary}` -- no entities key at all --
+        # then ran out of output tokens mid-sentence inside `summary`, so the
+        # JSON was truncated, parsing raised, and the item retried five times
+        # and was dropped. The graph was empty because the field was never
+        # emitted, not because the model found nothing.
+        #
+        # Required forces the key; an empty array remains a correct answer.
+        "required": ["title", "entities", "relations"],
+        # Honoured by Gemini, unlike declaration order. Putting the graph ahead
+        # of the summary means a runaway summary costs the summary rather than
+        # the whole envelope.
+        # `quality` sits ahead of `summary` and behind the graph. It is bounded,
+        # it is what a page was fetched to find out, and `summary` remains the
+        # field that pays when something runs long.
+        "propertyOrdering": (
+            ["title", "entities", "relations", "description", "keywords",
+             "language"]
+            + (["quality"] if quality else [])
+            + ["summary"]
+        ),
         "properties": {
             "title": {"type": "string"},
-            "description": {"type": "string"},
-            "summary": {"type": "string"},
-            "keywords": {"type": "array", "items": {"type": "string"}},
-            "language": {"type": "string"},
-            "relations": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "required": ["subject", "predicate", "object"],
-                    "properties": {
-                        "subject": {"type": "string"},
-                        "predicate": {"type": "string",
-                                      "enum": list(RELATION_PREDICATES)},
-                        "object": {"type": "string"},
-                    },
-                },
-            },
             "entities": {
                 "type": "array",
                 "items": {
@@ -414,6 +781,31 @@ def _gemini_schema() -> dict:
                     },
                 },
             },
+            "relations": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["subject", "predicate", "object"],
+                    "properties": {
+                        "subject": {"type": "string"},
+                        "predicate": {"type": "string", "enum": list(offered)},
+                        "object": {"type": "string"},
+                        # Omitted from this dialect until now, though
+                        # `RELATION_SCHEMA` has always carried it and
+                        # `record_edges` has always read it -- so every edge
+                        # Gemini produced landed at the 0.5 default and the
+                        # column said nothing. Survivable while all predicates
+                        # are equally certain; not once a template mixes
+                        # structural claims with interpretive ones.
+                        "confidence": {"type": "number"},
+                    },
+                },
+            },
+            "description": {"type": "string"},
+            "keywords": {"type": "array", "items": {"type": "string"}},
+            "language": {"type": "string"},
+            **({"quality": quality_schema()} if quality else {}),
+            "summary": {"type": "string"},
         },
     }
 
@@ -443,14 +835,44 @@ class ChainedExtractor:
         """
         return [step.model_id for step in self._chain.steps]
 
+    @property
+    def max_input_chars(self) -> int:
+        """The narrowest window any step in the chain can read.
+
+        The chain is what the worker actually holds -- every concrete extractor
+        sits behind it -- so a window declared only on the concrete classes is a
+        window nothing can see. `getattr(extractor, "max_input_chars", 0)`
+        returned 0, `split_windows` treated the document as one window, and the
+        book was truncated inside the Gemini call exactly as before. The fix
+        landed, the tests passed, and the deployed behaviour did not change; the
+        artifact carried no `windows_read`, which is the only reason this was
+        caught rather than believed.
+
+        The *narrowest*, not the primary's: a fallback is chosen when the
+        primary fails, and handing it a window its own context cannot hold
+        turns a degraded answer into no answer.
+        """
+        # `Step.call` is the extractor's bound `extract`, so the instance is
+        # reachable through `__self__`. Reading `step.handler` -- which does not
+        # exist -- would have silently yielded 0 for every step and put the
+        # window back where it started.
+        windows = [
+            getattr(getattr(step.call, "__self__", None), "max_input_chars", 0) or 0
+            for step in self._chain.steps
+        ]
+        windows = [w for w in windows if w > 0]
+        return min(windows) if windows else 0
+
     def restricted_to(self, allowed: set[str]) -> "ChainedExtractor | None":
         chain = self._chain.restricted(lambda step: step.model_id in allowed)
         return ChainedExtractor(chain) if chain is not None else None
 
     async def extract(
-        self, text: str, *, data_type: str, prompt: str | None = None
+        self, text: str, *, data_type: str, prompt: str | None = None,
+        template: str | None = None,
     ) -> Envelope:
-        served = await self._chain.run(text, data_type=data_type, prompt=prompt)
+        served = await self._chain.run(text, data_type=data_type, prompt=prompt,
+                                       template=template)
         envelope = served.result
         envelope.fields["fallback_depth"] = served.depth
         envelope.fields["served_by_engine"] = served.step.name

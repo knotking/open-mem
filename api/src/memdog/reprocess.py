@@ -24,6 +24,9 @@ from .audit import record_audit
 from .auth import DATA_WRITE, Principal
 from .ids import new_id
 from .queue import Message, Queue
+# The topic name lives with the worker that consumes it; duplicating the string
+# here is how a rename silently stops routing.
+from .workers import PARSE_TOPIC
 
 log = logging.getLogger(__name__)
 
@@ -61,8 +64,8 @@ async def request_reprocess(
     and `tags` are how that corpus is reached.
     """
     principal.require(DATA_WRITE)
-    if stage not in ("embed", "enrich", "interpret"):
-        raise ValueError("stage must be embed, enrich or interpret")
+    if stage not in ("parse", "embed", "enrich", "interpret"):
+        raise ValueError("stage must be parse, embed, enrich or interpret")
 
     org_id, user_id, principals = visibility_params(principal)
     predicate = visibility_sql("d", 2, 3, 4)
@@ -225,6 +228,57 @@ class ReprocessWorker:
                 )
         await dispatch_pending(self._pool, self._queue)
 
+    async def _reparse(self, run_id: str, data_ids: list[str]) -> None:
+        """Read the bytes again, under whatever the ceilings are now.
+
+        The parse worker refuses any row that already has text -- correct for an
+        at-least-once queue, where re-parsing every redelivery would be pure
+        waste, but it cannot tell "we already did this" from "we did this under
+        a smaller ceiling". So raising `MAX_TEXT_CHARS` could not reach a single
+        existing record, even by writing the same bytes again.
+
+        Clearing `extracted_text` is what makes the guard let go. It is safe
+        because the bytes and their checksum are untouched: the text is a
+        derivation, and this recomputes it. A row is dropped back to `stored`
+        for the same reason the embed rebuild does it -- claiming `searchable`
+        while its vectors are being replaced is a staircase that lies.
+
+        Rows whose text came from the caller are skipped. `content_text` is what
+        somebody sent, not something we derived, and there is nothing to recover
+        by re-reading bytes that were never parsed in the first place.
+        """
+        for data_id in data_ids:
+            async with self._pool.acquire() as conn, conn.transaction():
+                row = await conn.fetchrow(
+                    """
+                    SELECT content_text, storage_ref FROM data_items
+                    WHERE data_id = $1 AND deleted_at IS NULL
+                    """,
+                    data_id,
+                )
+                if row is None or row["content_text"] is not None or row["storage_ref"] is None:
+                    await conn.execute(
+                        "UPDATE run_items SET status = 'skipped', at = now() "
+                        "WHERE run_id = $1 AND data_id = $2",
+                        run_id, data_id,
+                    )
+                    continue
+                await conn.execute(
+                    """
+                    UPDATE data_items
+                    SET extracted_text = NULL, parse_status = NULL, parse_detail = NULL,
+                        state = 'stored', updated_at = now()
+                    WHERE data_id = $1
+                    """,
+                    data_id,
+                )
+                await conn.execute(
+                    "UPDATE run_items SET status = 'done', at = now() "
+                    "WHERE run_id = $1 AND data_id = $2",
+                    run_id, data_id,
+                )
+            await self._queue.publish(PARSE_TOPIC, {"data_id": data_id})
+
     async def handle(self, message: Message) -> None:
         run_id, stage = message.body["run_id"], message.body.get("stage", "enrich")
         await self._pool.execute(
@@ -235,6 +289,16 @@ class ReprocessWorker:
         )
         if stage == "interpret":
             await self._interpret(run_id, [r["data_id"] for r in rows])
+            await self._pool.execute(
+                """
+                UPDATE runs SET status = 'completed', done = total, finished_at = now()
+                WHERE run_id = $1
+                """,
+                run_id,
+            )
+            return
+        if stage == "parse":
+            await self._reparse(run_id, [r["data_id"] for r in rows])
             await self._pool.execute(
                 """
                 UPDATE runs SET status = 'completed', done = total, finished_at = now()

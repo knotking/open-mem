@@ -191,7 +191,7 @@ async def test_a_failed_extraction_leaves_the_item_searchable(
     class Broken:
         model_id = "broken-v1"
 
-        async def extract(self, text, *, data_type, prompt=None):
+        async def extract(self, text, *, data_type, prompt=None, template=None):
             raise ExtractionFailed("no title in output")
 
     actor = await principal_for(tenant.api_key)

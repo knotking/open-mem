@@ -121,7 +121,20 @@ cause, because two of them are deliberately quiet:
 3. **A membership exists.** Auto-provisioning creates a user and an identity but
    **never a membership**, so a brand-new account authenticates cleanly and then
    gets `403 this account is not a member of any organization`.
-4. **The membership is in the org the console is configured for.** Found
+4. **The bootstrap connection is `shared`, not `personal`.** Found 2026-09-04.
+   A personal connection binds its producer to the user who bootstrapped it, and
+   the write path refuses everyone else with *"this producer is bound to another
+   user's personal connection"*. Because the console sends the signed-in user's
+   identity rather than a service credential, `personal` breaks Add data for
+   every account except the bootstrap owner — while leaving reads working, so it
+   presents as "adding data is broken" rather than as a permissions choice.
+
+   It is fixed forward with
+   `PATCH /api/v1/connections/{id} {"scope":"shared"}`, which applies to future
+   writes only. `cloudrun.sh` now passes `shared`; a deployment genuinely meant
+   for one person should pass `personal` deliberately.
+
+5. **The membership is in the org the console is configured for.** Found
    2026-09-03. `MEMDOG_PRODUCER_ID` and `MEMDOG_PROJECT_ID` are baked in at
    deploy time and name one org; the console serves whoever signs in. When those
    disagree, every write fails with `404 unknown producer` — *for signed-in

@@ -10,7 +10,322 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 
 ## Unreleased
 
+### Added
+- **Paste a web-page URL into Add data, and the page is judged as well as
+  stored.** `provider: "url"` had been wired, SSRF-hardened and tested since
+  the beginning, and nothing had ever produced one. `document_html` now gets
+  its own extraction prompt, which fills a `quality` block on the artifact:
+  what kind of page it is, what it wants from the reader, whether anything is
+  sourced, who wrote it, when, how it is monetised, up to five specific reasons
+  to trust or doubt it, what it leaves unanswered, and whether it is worth
+  keeping at all. The values are enumerated rather than prose, so a corpus can
+  be filtered on them — `not_content` exists because an error page, a login
+  wall and a parked domain all arrive as HTTP 200 with fluent text, and one
+  stored as an article looks exactly like an article that summarised badly.
+  The block sits behind `entities` and `relations` and ahead of `summary`, and
+  every field is length-bounded in the skeleton where no per-type override can
+  raise it. The console renders it as sentences and chips on the record.
+- **Paste a YouTube URL into Add data.** The URL is written as a `Pending` ref
+  with `provider: "youtube"`; everything after the fetch — classification,
+  parsing, embedding, enrichment, entity resolution and edges — runs unchanged
+  and never learns a video was involved.
+
+  **What is stored is an account of the video, not a transcript.** Both
+  transcript routes are closed: YouTube's `timedtext` endpoint now answers a
+  bare request with 200 and zero bytes, and the official Data API hands
+  captions only to the account owning the video. Downloading and transcribing
+  hits the 18 MB inline ceiling — a minute of 720p exceeds it — and would need
+  ffmpeg in the runtime image, which `pyproject.toml` rules out. Gemini instead
+  takes the URL directly and watches the video, and asked for a verbatim
+  transcript it stops with `finishReason: RECITATION` and returns nothing.
+  Asked for a structured account — section by section with timestamps, terms
+  and people introduced, how they relate, short attributed quotes — it returns
+  what the graph actually needs. Measured on a 19-minute talk: 8,319 bytes,
+  10 entities, 5 edges, and questions about it answered with citations.
+
+  Needs `MEDIA_INTERPRETATION=true` and `GEMINI_API_KEY`; without them a
+  YouTube reference is refused as a configuration error rather than silently
+  doing nothing. Costs roughly **100,000 input tokens per 20 minutes** of
+  video, since the model reads frames as well as audio — stated next to the
+  field that spends it.
+- **The public demo's transcript can be cleared.** The console's chat has had a
+  Clear since it was built and the demo shipped without one, so a visitor done
+  with a conversation had no way back to an empty card — or to the starter
+  questions, which only render when there are no turns.
+- **Anyone can question a corpus here without an account.** The landing page is
+  now a chat over Sir Edwin Arnold's *The Song Celestial* (1885, public domain)
+  — eighteen chapters ingested exactly as your own documents would be. Every
+  answer cites the passage behind it, and when the text does not support one it
+  says so instead of composing it. `GET /api/v1/public/demo` reports whether the
+  demo is on and how much of the day's budget is left; `POST /api/v1/public/ask`
+  answers one question. The project and memory are named in **configuration,
+  never in the request**, so there is no scope for a caller to widen, and the
+  principal is synthetic with `DATA_READ` alone and a `user_id` matching no real
+  user — private records stay as invisible to it as they are to a stranger.
+  Metered before the model call, not after: an endpoint that counts afterwards
+  gives every failing request a free one. Off unless `PUBLIC_PROJECT_ID` is set.
+- **The overview answers "can a vector search find this?".** Every number on
+  that screen could be right — all records enriched, every chunk embedded, one
+  vector space, the configured model and dimension — while vector search matched
+  nothing at all, and nothing anywhere disagreed. It now reports which vector
+  spaces the records are in, which one retrieval queries, how many records are
+  stranded outside it, and whether the index still returns a full set of
+  neighbours for a vector it already holds.
+
 ### Fixed
+- **A web page fetched from a URL was classified as plain text.** `filetype`
+  knows containers and magic numbers, not markup, so a page guessed as nothing,
+  decoded cleanly and came back `text/plain` — making `document_html`
+  unreachable through the fetch path entirely, with every fetched page typed
+  `document_text` and read with the document prompt. The HTML check existed all
+  along, in the branch that only runs when there are no bytes. Both branches
+  share one now, and it looks past a BOM, an XML declaration or a licence
+  comment before giving up.
+- **"Send a test delivery as the provider would" was signed the generic way for
+  every provider.** The endpoint runs the real receive path precisely so a
+  producer whose signing is broken fails the test — and then it hand-rolled
+  `x-signature` over `{ts}.{body}` regardless of the preset. A producer on the
+  Slack preset got a signature Slack's scheme never looks for, so the console's
+  button answered 401 for a perfectly good secret; the same held for Zoom,
+  Linear, Shopify, Twilio, Stripe and Graph. `providers.sign()` is now the
+  mirror of `providers.verify()` and lives beside it, and `SignatureScheme`
+  gains a `prefix` so a signature we send carries `v0=` / `sha256=` the way the
+  provider's does. Checked across the whole registry.
+- **An alert on a fact, scoped to a memory, matched nothing forever.**
+  `fact.*` events carry no `data_id` — a fact is not a record — and the scope
+  filter built its candidate set from that column alone, so any container scope
+  (`memory_id`, `case_id`, `producer_id`) over a fact surface intersected with
+  an empty set. No error, no empty state, and a rule that never fires looks
+  exactly like a quiet week. A derived fact does stand on records, so the scope
+  now resolves through its edges' evidence and the fact survives if any of that
+  evidence is in the container. An asserted fact has none and still survives no
+  container scope — `entity_id` is the scope that reaches it.
+- **Vector search returned nothing, and every other number said it was fine.**
+  Lexical search worked, so questions phrased in words the text uses literally
+  were answered and the rest came back *"nothing matched"*. Two causes stacked.
+  The HNSW graph had degraded: re-embedding deletes and reinserts every chunk of
+  a record, and a corpus re-embedded a few times over while an extraction is
+  being got right leaves enough dead tuples that a top-40 search for a vector
+  *already in the table* returns 11 rows — eventually none. And the vector arm
+  asked the index for exactly as many candidates as it wanted: `ef_search`
+  defaults to 40, the arm over-fetches 40, and the ACL and filters are applied
+  *after* the scan, so any filtering at all comes straight out of the result.
+- **The public demo could not be used from a browser at all.** The proxy
+  forwarded its body without a content-type — `apiFetch` sets one, but after the
+  credential-free branch has already returned, and that is the branch an
+  anonymous request takes. FastAPI parsed the JSON as a string and answered
+  *"Input should be a valid dictionary"*, which the page rendered as
+  `[object Object]`, because a validation `detail` is a list of objects and
+  `new Error(list)` stringifies to exactly that. The proxy sends the type now,
+  and the page turns whatever `detail` holds into a sentence.
+
+### Changed
+- **`document_html` resolves to a new prompt**, so existing HTML artifacts are
+  detectably stale and will be re-derived by a reprocess. Nothing is lost; the
+  old summaries stand until then.
+- **The landing page leads with the corpus, not with a sign-in form.** The demo
+  takes the full column at the top of the page and sign-in is a panel off the
+  top bar: the first thing a visitor can do is ask a question, and a form
+  demanding an account they do not have is the opposite of that. The headline,
+  lede and counts follow underneath, as an explanation of something already
+  seen rather than a claim to be taken on faith. The transcript scrolls inside
+  its own card so the composer does not walk down the page with every answer.
+
+### Migrations
+- `0050_rebuild_vector_index.sql` — drops and recreates the HNSW index over
+  `embeddings`. Run before deploying; it is a rebuild, so it takes time
+  proportional to the corpus.
+- `0049_public_asks.sql` — `public_asks`, the rate-limit and daily-cap ledger
+  behind the public endpoint. Run before deploying.
+
+### Configuration
+- `PUBLIC_PROJECT_ID`, `PUBLIC_MEMORY_ID`, `PUBLIC_TITLE`, `PUBLIC_SUBTITLE`,
+  `PUBLIC_DAILY_CAP` (500) and `PUBLIC_RATE_PER_HOUR` (20) configure the public
+  endpoint. Without `PUBLIC_PROJECT_ID` it 404s and the landing page shows the
+  sign-in card in the hero instead. Note that `--set-env-vars` splits on commas,
+  so a subtitle containing one silently truncates the whole list.
+- `HNSW_EF_SEARCH` (200) is how many candidates the vector arm's index scan
+  visits before the ACL and filters cut it down. It must exceed what the arm
+  over-fetches or filtering eats the result.
+
+### Fixed
+- **A book produced the graph of a single page, and then of nothing at all.**
+  Three stacked defects, each hidden by the last:
+  `text[:200_000]` silently discarded the tail of any longer document (a
+  232,412-character Bhagavad Gita came back titled *"…Chapters 1 through 16"*);
+  the windowing that fixed it had no effect, because `max_input_chars` was
+  declared on the concrete extractors while the worker holds a
+  `ChainedExtractor`, so `getattr` returned 0 and nothing split; and the window
+  itself was sized by the model's **context limit** rather than by what it
+  extracts well from — at 200,000 characters the model writes a summary and
+  returns no entities and no keywords at all. `EXTRACT_WINDOW` (40,000,
+  env-overridable) is now a separate number and the narrower of the two wins.
+- **`entities` and `relations` were optional in the Gemini response schema.**
+  Listing them first did nothing — Gemini does not emit in declaration order and
+  an optional property may be absent entirely. A windowed extraction returned
+  `{title, description, language, summary}`, ran out of output tokens
+  mid-sentence, and the truncated JSON failed to parse, retried five times and
+  was dropped. They are required now, with `propertyOrdering` putting the graph
+  ahead of the summary so a runaway summary costs the summary and not the whole
+  envelope.
+- **`summary` had no length bound** and a model that starts rambling in it does
+  not stop — one extraction produced thousands of words of run-on prose and lost
+  the envelope. Bounded in the shared prompt, where no per-type override can
+  drop it.
+
+  Measured on the same book: **15 entities / 6 edges** before, **0** once
+  windowing exposed the schema defect, **35 entities / 19 edges** after, read as
+  six windows in under a minute.
+
+### Added
+- **Pick a memory in Chat and see what is in it.**
+  `GET /api/v1/memories/{id}/context` returns record counts by state, the
+  templates its records were read under, the keywords its artifacts carry, the
+  entities its records name, and the relationships those records assert — all
+  scoped by the caller's own visibility, so two people may legitimately see
+  different totals for one memory. In the console the keywords and entities are
+  controls, not decoration: clicking a keyword narrows the question, clicking an
+  entity anchors the graph on it.
+- **Extraction reads the whole document.** Embedding has always chunked;
+  extraction never did, so a record's text was fully searchable while its
+  understanding described only what fitted in one model call. A 232,412-character
+  Bhagavad Gita came back titled *"Summary of Bhagavad Gita Chapters 1 through
+  16"* with 15 entities for 18 chapters — `text[:200_000]` discarded 32,412
+  characters and the artifact stored as a success. Documents are now split on
+  paragraph boundaries and merged: narrative fields from the first window, the
+  graph cumulative. Capped at `MAX_EXTRACT_WINDOWS` (default 12) because each
+  window is a model call, and the remainder is reported on the artifact as
+  `windows_skipped` rather than dropped silently.
+
+### Fixed
+- **Chat said "Nothing in the corpus matched that question" for three different
+  situations.** After picking a lens or an anchor it read as *"your data does not
+  say"* when the real cause was a scope that selected no records to search at
+  all. It now distinguishes *no records are in scope* (naming the scope), *none
+  is searchable yet*, and *nothing matched among the N searchable records*.
+
+- **The Add data panel never said whether the graph was built.** The final step
+  read *"title, summary, keywords and entities recorded"* — asserting entities
+  on every successful enrichment and reporting no number, so a record that
+  produced eighteen and one that produced none looked identical. There is now a
+  **connected** step saying what was actually recorded (*"18 entities and 9
+  relationships, read as scripture"*, or *"nothing to connect — no scripture
+  relationships were found in this text"*), and the headline says *"Enriched —
+  but nothing was named, so it is not in the graph"* when that is what happened.
+  Entities with no edges is named as the ordinary case rather than a fault: a
+  relationship has to be stated, and most text names things without asserting
+  anything between them.
+
+### Added
+- `GET /api/v1/data/{id}` returns `entity_count`, `edge_count` and `template`,
+  counted in the item's own query — a panel needing two calls to decide whether
+  a step finished will eventually show one of them stale.
+
+- **Chat can search the graph, anchored on what you point at.** The Chat scope
+  picker had one control — memories — while retrieval already accepted tags,
+  keywords and templates and could run a graph arm nobody could reach. It now
+  offers *read as* (the template a record was written under, which narrows both
+  the records searched and the relationships walked), *start from* (entities
+  named outright), and *follow connections* (the graph arm). Answers report what
+  the graph started from: **"Followed connections from Krishna (you chose it)"**
+  — a result reached only through the graph does not contain the words searched
+  for, so without the seed a reader cannot tell whether the connection was the
+  one they meant.
+- **`RetrieveFilter.entity_ids` anchors retrieval on named entities.** It keeps
+  only records mentioning them *and* replaces the guesswork in `graph_seeds()`,
+  which scrapes entity names out of the question text. Asked *"what is the chain
+  that ends in ruin?"* the parser finds nothing to key off and the graph arm
+  sits idle; anchored, it starts there and answers. A named anchor replaces the
+  parsed one rather than adding to it — if the caller said where to start,
+  starting elsewhere as well is not extra recall, it is their scope being
+  quietly widened. `GraphSeed.matched_on` gains `chosen`, which is not a match
+  but the caller insisting, kept distinct so a reader can tell an entity the
+  system found from one a person named. Anchors are visibility-checked the way
+  name resolution is: an id is easier to enumerate than a name, and passing one
+  must not confirm an entity exists to somebody who can see no record naming it.
+
+- **Templates decide the shape of the graph before the document is read.** A
+  write may declare `template` per item — what the content is *for*, which the
+  bytes cannot say. It narrows the relationships the model may report and adds
+  an instruction block, so the same `.docx` read as `scripture` and read plainly
+  produce different graphs. `GET /api/v1/templates` serves the three shipped
+  (`scripture`, `design-doc`, `incident`) with the questions each exists to
+  answer; an unknown name is refused with a 400 naming the valid ones, because
+  ignoring a typo yields a generic graph the caller believes is specialised.
+  `GET /api/v1/entities/{id}/graph` takes `template=` to walk only the edges one
+  lens drew, and `RetrieveFilter.template` applies the same lens to both the
+  records searched and the graph arm.
+- **Five predicates, none domain-specific**: `teaches` — attribution, which the
+  graph could not express at all — plus `leads_to`, `contrasts_with`,
+  `caused_by` and `mitigated_by`. A causal chain rendered as `related_to` edges
+  asserts the opposite of what an ordered chain says.
+- **Predicates now carry a domain, a range and a confidence class.** An edge
+  whose endpoint types the predicate does not permit is refused at write time
+  rather than found later by someone reading a bad answer, and an edge reports
+  whether its predicate is *structural* (stated plainly) or *interpretive* (a
+  reading) — so a path resting on a reading can say so. Served from
+  `GET /api/v1/graph/predicates` as `vocabulary`.
+
+### Fixed
+- **A long summary silently ate the graph.** `entities` and `relations` were
+  last in the envelope schema, behind an unbounded `summary`, and a
+  schema-constrained model emits in schema order. A templated extraction spent
+  4,045 of a 4,096-token budget rambling inside `summary` and emitted no
+  entities and no relations — an artifact with a title, a description, an empty
+  graph and a state of `enriched`, with nothing reporting the truncation. The
+  graph is now written first and the budget is 8192: a clipped summary is a
+  worse summary, a clipped graph never existed.
+- **Every edge Gemini produced was stamped confidence 0.5.** The Gemini schema
+  dialect omitted the field although `RELATION_SCHEMA` carried it and
+  `record_edges` read it, so the column said nothing.
+- The predicate vocabulary was defined twice, in `graph.py` and
+  `extraction.py`, with nothing failing if the two drifted — one list now.
+
+### Migrations
+- `0048_graph_templates.sql` — five predicates added to the `entity_edges` and
+  `entity_facts` CHECK constraints; `template` on `data_items`, `entity_edges`
+  and `entity_facts`. Run before deploying.
+
+### Changed
+- **"Interpret & rebuild" chooses its scope instead of asking you to type it.**
+  Data type was a free-text box with three examples in the placeholder, for a
+  closed set of twenty-four the server already publishes — and a typo there is
+  not an error, it is a selector that matches nothing, previews *0 records*, and
+  reads as an empty corpus. It now comes from `GET /api/v1/prompts`, the same
+  registry the Prompts screen reads, so the two cannot drift. Tags are offered
+  from the new `GET /projects/{id}/tags` when the project has any and left as a
+  text field when it does not, since a select with nothing in it is a dead
+  control and tags are an open set. Run stays typed — a run id is copied from
+  Crawlers, not chosen from a set this screen can know — but the placeholder now
+  says where to get one.
+
+### Added
+- **The model's keywords became usable.** Every enriched record already carried
+  `artifacts.keywords` — the model's words for what it is about — read in exactly
+  one place: beside a record you had already found. Now there is a GIN index, a
+  `keywords` filter on `RetrieveFilter` (matching *any*, not all), and
+  `GET /projects/{id}/keywords` counting records per keyword over what the caller
+  can see, so a keyword whose every record is hidden does not appear. Chat can
+  narrow by topic. **Kept separate from tags** — a tag is a person's assertion, a
+  keyword is a model's guess, and merging them makes the guess unfalsifiable.
+
+### Fixed
+- **A freshly bootstrapped tenant refused every signed-in user at Add data**
+  with *"this producer is bound to another user's personal connection"*. The
+  bootstrap created a `personal` connection, which binds its producer to the user
+  who ran it, and the console writes as the *signed-in user* rather than with a
+  service credential — so only the bootstrap owner could write, while reads kept
+  working and it presented as "adding data is broken". `cloudrun.sh` now
+  bootstraps `shared`; a single-person deployment should pass `personal`
+  deliberately.
+- **The progress panel gave up on work that was going fine.** It watched for two
+  minutes and reported "still queued", which was right when every job was one or
+  two model calls — a long document is thousands of chunks and ~20 sequential
+  embedding calls. The window now scales with the item (two minutes plus a
+  minute per 200KB, capped at fifteen), rather than being raised for everyone: a
+  ceiling generous enough for a book makes every genuinely stuck note look
+  healthy. The message no longer leads with "still queued", because nothing has
+  gone wrong when it fires.
 - **The live viewfinder was blank while recording video.** The `<video>` renders
   only once recording has started, but the stream was attached before either
   state update had rendered — so the ref was still `null` and the `&& video.current`
@@ -35,11 +350,62 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   was wrong. The provider's message is kept, and the console already renders it.
 
 ### Added
+- **Chat can be scoped to the memories you point at.** `RetrieveFilter` gains
+  `memory_ids`, so "what did we decide in the Acme thread" is answered by that
+  thread instead of by everything the project knows. Filtered with `EXISTS`, not
+  a join — a record in several selected memories would otherwise return once per
+  membership and be ranked up for it.
+- **Chat is a chat window.** The question appears the moment you ask rather than
+  when the answer returns, the transcript scrolls inside its own bounds with the
+  composer docked to it, and the answer is written out with a cursor. The reveal
+  is pacing rather than streaming, and deliberately so: the answer is complete
+  and checked against its citations before a word of it is shown.
+
+### Fixed
+- **`.card`, `.hint` and `.stack` had no CSS rule anywhere**, while being used 13,
+  31 and 4 times — by Compaction, Alerts and AlertEditor. Those screens rendered
+  with no container edge, no padding and no separation between blocks. Compaction's
+  five actions also sat in a `<p>`, so they had no gap and Delete was flush against
+  History.
+- **[`docs/ingestion/templates.md`](docs/ingestion/templates.md)** — a design for
+  extraction templates, not built. Extraction is routed by `data_type`, which is
+  derived from the bytes, and the bytes cannot tell you what a document is *for*:
+  a novel, a design doc and a contract are all `document` and are interesting for
+  entirely different reasons. A template is declared intent, composed after the
+  type block and never over the injection-defended skeleton, versioned like any
+  other prompt so `/reprocess` already knows how to rebuild what it produced.
+  Includes a catalogue across documents, media, images and tabular data, and the
+  three rules that stop a template making things worse — chiefly that asking a
+  model to "extract the obligations" is asking it to find some.
+- **The text ceiling is a deployment setting** (`MAX_TEXT_CHARS`, default
+  2,000,000; 4,000,000 here) instead of a constant, and **`/reprocess` gains a
+  `parse` stage** that makes a raised ceiling reachable. Raising it alone changed
+  nothing: the parse worker skips any row that already has text — correct for an
+  at-least-once queue, but it cannot tell "already done" from "done under a
+  smaller ceiling". The new stage clears the derived text and re-reads the bytes,
+  which are untouched, so nothing is re-uploaded.
+- **[`docs/ingestion/large-documents.md`](docs/ingestion/large-documents.md)** —
+  what would have to change for gigabyte documents **and long media**, none of
+  which is built. For media the useful distinction is that there are *two* walls
+  and only one needs splitting: the 18 MB ceiling is the provider's *inline*
+  limit and lifts by sending a reference instead of base64, while the duration
+  wall needs segments however the bytes arrive. Records what splitting media
+  costs that splitting text does not — a container cannot be cut arbitrarily, so
+  it needs a media toolchain the API image does not have. The transport is already
+  designed (`POST /uploads` grants a signed URL; bytes never pass through the
+  API); the processing is not. Proposes splitting one upload into part-records
+  inside one memory, which is the only change that makes failure partial and
+  work resumable.
 - **"How to use this" in the console**, pinned top-right: four steps end to end
-  — get something in, watch it climb, get it back, prove it — then every section
-  grouped, with why each group exists. Each entry navigates and closes. The
-  per-item text is read from the same `GROUPS.hint` values the sidebar uses, so
-  the guide cannot drift from the menu it describes.
+  — get something in, watch it climb, get it back, prove it — then **a
+  walkthrough for every one of the twenty-six sections**, expanded one at a time,
+  each with a link straight into that screen. The steps were written against each
+  screen's own panels rather than from its label, and where a screen has a trap
+  the step says so: a minted signing secret leaves an inbound endpoint looking
+  configured while it rejects every real delivery; deliveries are stored and not
+  interpreted unless asked; a crawler's dry run walks the identical code and
+  stops short of the write. Per-item text is read from the same `GROUPS.hint`
+  values the sidebar uses, so the guide cannot drift from the menu it describes.
 
 ### Changed
 - **The console sidebar is readable on sign-in.** It rendered twenty-six

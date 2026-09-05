@@ -112,6 +112,14 @@ class WriteItem(BaseModel):
     tags: list[str] = Field(default_factory=list)
     identifiers: list[str] = Field(default_factory=list)
     access: ItemAccess | None = None
+    # What this content is *for*, declared by the caller and orthogonal to
+    # `data_type`, which is derived from the bytes. A .docx is a `document`
+    # whether it is a contract or a novel; the template says which, and the
+    # graph extracted from it differs accordingly.
+    #
+    # Per item rather than per request, for the same reason `access` is: one
+    # write carries many items and a batch is not uniform.
+    template: str | None = None
     memory: MemoryRef | None = None
     case: CaseRef | None = None
     metadata: dict = Field(default_factory=dict)
@@ -183,6 +191,22 @@ class WriteResponse(BaseModel):
 class RetrieveFilter(BaseModel):
     project_id: str
     tags: list[str] = Field(default_factory=list)
+    # Which containers to search. Empty means the whole project, which is the
+    # behaviour every existing caller already gets.
+    #
+    # A memory is the container people actually think in -- "what did we decide
+    # in the Acme thread" is a different question from "what does this project
+    # know", and answering the second when someone asked the first buries the
+    # answer under everything else. Scoping by tag was the nearest thing
+    # available and is not the same: a tag is a label somebody remembered to
+    # apply, a memory is where the record already lives.
+    memory_ids: list[str] = Field(default_factory=list)
+    # What the model said a record is about. Kept separate from `tags` on
+    # purpose: a tag is an assertion by a person and a keyword is a guess, and a
+    # filter that cannot tell you which one matched is a filter you cannot
+    # correct. Matching is ANY -- a record with one of these keywords qualifies,
+    # because narrowing by several is an intersection nobody asked for.
+    keywords: list[str] = Field(default_factory=list)
     since: datetime | None = None
     until: datetime | None = None
     # Two clocks for the graph arm, and neither is `since`/`until` -- those bound
@@ -192,6 +216,25 @@ class RetrieveFilter(BaseModel):
     # ask about time is unaffected.
     valid_at: datetime | None = None
     as_of: datetime | None = None
+    # Read under which lens. This narrows two things at once and deliberately
+    # so: which records are searched (those declared as this kind of content)
+    # and which edges the graph arm may walk (those the template drew). Asking
+    # "what does the scripture in this project claim leads to what" is one
+    # filter, not a record filter that happens to be followed by a graph that
+    # ignores it.
+    template: str | None = None
+    # Entities to anchor on, named outright rather than parsed from the query.
+    #
+    # This narrows twice, and the second half is the point. As a record filter
+    # it keeps only records that mention one of them. As *graph seeds* it
+    # replaces the guesswork in `graph_seeds()`, which scrapes entity names out
+    # of the question text -- fine for "what did Priya decide", useless for a
+    # question that never names its subject, and silently wrong when two
+    # entities share a name.
+    #
+    # Naming the anchor is the difference between "search everything and hope
+    # the graph arm keys off the right thing" and "start here".
+    entity_ids: list[str] = Field(default_factory=list)
 
 
 class RetrieveRequest(BaseModel):
@@ -248,7 +291,11 @@ class GraphSeed(BaseModel):
     entity_id: str
     display_name: str
     type: str
-    matched_on: Literal["name", "identifier"]
+    # "chosen" is not a match at all -- it is the caller naming the entity
+    # outright instead of hoping the question spelled it recognisably. Kept
+    # distinct from a resolved name so a reader can tell an entity the system
+    # found from one a person insisted on.
+    matched_on: Literal["name", "identifier", "chosen"]
 
 
 class Corpus(BaseModel):

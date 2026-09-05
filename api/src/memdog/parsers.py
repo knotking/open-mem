@@ -34,6 +34,7 @@ import csv
 import io
 import json
 import logging
+import os
 import re
 import tarfile
 import zipfile
@@ -45,7 +46,18 @@ log = logging.getLogger(__name__)
 
 # One document must not consume a workspace's budget. Both are deliberate,
 # documented ceilings rather than incidental limits.
-MAX_TEXT_CHARS = 2_000_000
+#
+# The text ceiling is per *deployment* rather than fixed, because what counts as
+# too much depends on what is being ingested and who is paying: a 2.4M-character
+# book is one document to a library and a runaway to a support-ticket corpus.
+# Raising it costs embedding calls in proportion -- roughly one per hundred
+# chunks of ~1,050 characters -- and the tail past the ceiling is stored and
+# durable either way, so this trades money for findability and nothing else.
+#
+# Raising it does not re-index anything by itself. Existing records keep the
+# text they were parsed with until they are reprocessed; the bytes are untouched,
+# so that needs no re-upload.
+MAX_TEXT_CHARS = int(os.environ.get("MAX_TEXT_CHARS", "2000000"))
 MAX_ARCHIVE_MEMBERS = 200
 MAX_SHEET_ROWS = 20_000
 

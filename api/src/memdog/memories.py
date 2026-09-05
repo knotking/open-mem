@@ -201,6 +201,147 @@ async def memories_for_item(pool: asyncpg.Pool, data_id: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+async def context(
+    pool: asyncpg.Pool, principal, memory_id: str, *, limit: int = 30
+) -> dict:
+    """Everything known about one memory, in a single request.
+
+    A memory is the container people actually think in -- "the Acme thread",
+    "the Gita" -- and until now the console could tell you how many records were
+    in one and nothing else. To find out what it was *about* you opened Data,
+    filtered, opened a record, read its keywords, then opened Entities and
+    guessed which of them came from here. The information existed in four places
+    and belonged in one.
+
+    Everything is scoped by the same visibility predicate as retrieval, applied
+    to the member records: a memory you can see may contain records you cannot,
+    and a summary that counted them would report a corpus you are not allowed to
+    read. So the counts here are *your* counts, and two people can legitimately
+    see different totals for the same memory.
+
+    One query per section rather than one joined query, deliberately: keywords
+    live on artifacts, entities on mentions, and edges on facts, and forcing
+    them into a single statement produces a cross join whose row count is the
+    product of three unrelated cardinalities.
+    """
+    from .acl import visibility_params, visibility_sql
+    from .auth import DATA_READ
+
+    principal.require(DATA_READ)
+    org_id, user_id, principals = visibility_params(principal)
+    visible = visibility_sql("d", 2, 3, 4)
+
+    memory = await pool.fetchrow(
+        """
+        SELECT m.memory_id, m.project_id, m.type, m.memory_key, m.title,
+               m.created_at
+          FROM memories m
+         WHERE m.memory_id = $1 AND m.deleted_at IS NULL
+        """,
+        memory_id,
+    )
+    if memory is None:
+        # Indistinguishable from "you cannot see it", which is the point.
+        from .retrieval import NotFound
+
+        raise NotFound(memory_id)
+
+    # The member set, once. Every section below is scoped to it.
+    members = f"""
+        SELECT d.data_id, d.state, d.template
+          FROM memory_members mm
+          JOIN data_items d ON d.data_id = mm.data_id
+         WHERE mm.memory_id = $1 AND d.deleted_at IS NULL AND {visible}
+    """
+    rows = await pool.fetch(members, memory_id, org_id, user_id, principals)
+    states = [r["state"] for r in rows]
+    records = {
+        "total": len(rows),
+        "stored": sum(1 for s in states if s == "stored"),
+        "searchable": sum(1 for s in states if s == "searchable"),
+        "enriched": sum(1 for s in states if s == "enriched"),
+    }
+    templates: dict[str, int] = {}
+    for r in rows:
+        if r["template"]:
+            templates[r["template"]] = templates.get(r["template"], 0) + 1
+
+    keywords = await pool.fetch(
+        f"""
+        SELECT keyword, count(DISTINCT d.data_id) AS records
+          FROM memory_members mm
+          JOIN data_items d ON d.data_id = mm.data_id
+          JOIN artifact_sources s ON s.data_id = d.data_id
+          JOIN artifacts a ON a.artifact_id = s.artifact_id
+          CROSS JOIN LATERAL unnest(a.keywords) AS keyword
+         WHERE mm.memory_id = $1 AND d.deleted_at IS NULL AND {visible}
+         GROUP BY keyword
+         ORDER BY count(DISTINCT d.data_id) DESC, keyword ASC
+         LIMIT $5
+        """,
+        memory_id, org_id, user_id, principals, limit,
+    )
+
+    entities = await pool.fetch(
+        f"""
+        SELECT e.entity_id, e.display_name, e.type,
+               count(DISTINCT em.data_id) AS records
+          FROM memory_members mm
+          JOIN data_items d ON d.data_id = mm.data_id
+          JOIN entity_mentions em ON em.data_id = d.data_id
+          JOIN entities e ON e.entity_id = em.entity_id
+         WHERE mm.memory_id = $1 AND d.deleted_at IS NULL AND {visible}
+           AND e.merged_into IS NULL
+         GROUP BY e.entity_id, e.display_name, e.type
+         ORDER BY count(DISTINCT em.data_id) DESC, e.display_name ASC
+         LIMIT $5
+        """,
+        memory_id, org_id, user_id, principals, limit,
+    )
+
+    # Edges asserted *by records in this memory*, named on both ends. Read from
+    # `entity_edges` rather than `entity_facts` because the question here is
+    # "what did the documents in this container say", which is evidence -- the
+    # merged claim may rest on records from elsewhere.
+    edges = await pool.fetch(
+        f"""
+        SELECT ev.predicate,
+               s.display_name AS subject, s.entity_id AS subject_id,
+               o.display_name AS object, o.entity_id AS object_id,
+               ev.template,
+               count(DISTINCT ev.source_data_id) AS evidence
+          FROM memory_members mm
+          JOIN data_items d ON d.data_id = mm.data_id
+          JOIN entity_edges ev ON ev.source_data_id = d.data_id
+          JOIN entities s ON s.entity_id = ev.subject_id
+          JOIN entities o ON o.entity_id = ev.object_id
+         WHERE mm.memory_id = $1 AND d.deleted_at IS NULL AND {visible}
+         GROUP BY ev.predicate, s.display_name, s.entity_id,
+                  o.display_name, o.entity_id, ev.template
+         ORDER BY count(DISTINCT ev.source_data_id) DESC, ev.predicate ASC
+         LIMIT $5
+        """,
+        memory_id, org_id, user_id, principals, limit,
+    )
+
+    from .predicates import REGISTRY
+
+    return {
+        "memory": dict(memory),
+        "records": records,
+        "templates": [{"template": k, "records": v}
+                      for k, v in sorted(templates.items(), key=lambda x: -x[1])],
+        "keywords": [dict(r) for r in keywords],
+        "entities": [dict(r) for r in entities],
+        "edges": [
+            {**dict(r),
+             "confidence_class": REGISTRY[r["predicate"]].confidence
+             if r["predicate"] in REGISTRY else "structural"}
+            for r in edges
+        ],
+    }
+
+
 def effective_expiry(memberships: list[dict]):
     """The MAXIMUM ttl across memberships, and null wins outright.
 

@@ -10,7 +10,7 @@
 import { SessionExpired, apiFetch } from "@/lib/api";
 // The allow-list is data, and lives where a test and the build check can
 // both import it rather than scrape it.
-import { CALLER_CREDENTIAL, allowed } from "@/lib/proxy-allow";
+import { CALLER_CREDENTIAL, NO_CREDENTIAL, allowed } from "@/lib/proxy-allow";
 
 
 /** The API key an MCP client sent, from either header the API itself accepts. */
@@ -72,9 +72,23 @@ async function forward(request: Request, path: string[], method: string) {
     }
   }
 
+  // The public demo travels with no console credential. `apiFetch` falls back
+  // to the service key when nobody is signed in, which would silently promote
+  // an anonymous visitor's request to whatever that key can do. The endpoint
+  // needs none: it decides what it answers from configuration, not from who is
+  // asking.
+  const anonymous = NO_CREDENTIAL.some((pattern) => pattern.test(joined));
+
   let upstream: Response;
   try {
-    upstream = await apiFetch(`/${joined}`, { method, body });
+    upstream = await apiFetch(`/${joined}`, {
+      method, body, skipAppCredential: anonymous,
+      // `skipAppCredential` returns early in `apiFetch`, before the branch that
+      // adds a content-type -- so without this the API receives a JSON body
+      // with no type and FastAPI parses it as a string, answering
+      // "Input should be a valid dictionary" to a perfectly good request.
+      ...(anonymous && body ? { headers: { "content-type": "application/json" } } : {}),
+    });
   } catch (error) {
     if (error instanceof SessionExpired) {
       // 401 rather than a silent downgrade, so the client signs in again.

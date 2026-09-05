@@ -100,6 +100,24 @@ class Settings:
     # wanted while that window is open; the daily rollup is what reporting reads
     # and is kept. 0 disables the purge for a deployment that ships them
     # elsewhere first.
+    # The public demo. Empty `public_project_id` disables the whole surface,
+    # which is the correct default: an unauthenticated endpoint that costs money
+    # per request must be switched on deliberately, never inherited.
+    public_project_id: str = field(
+        default_factory=lambda: _env("PUBLIC_PROJECT_ID", ""))
+    public_memory_id: str = field(
+        default_factory=lambda: _env("PUBLIC_MEMORY_ID", ""))
+    public_title: str = field(default_factory=lambda: _env("PUBLIC_TITLE", ""))
+    public_subtitle: str = field(default_factory=lambda: _env("PUBLIC_SUBTITLE", ""))
+    # Per-IP, per-hour. Low, because the thing being rationed is a model call.
+    public_rate_per_hour: int = field(
+        default_factory=lambda: int(_env("PUBLIC_RATE_PER_HOUR", "20")))
+    # Questions per day across everyone. This is the bill, and it is a hard
+    # stop rather than a throttle: the answer past it is "come back tomorrow",
+    # not a slower queue, because a queue still spends.
+    public_daily_cap: int = field(
+        default_factory=lambda: int(_env("PUBLIC_DAILY_CAP", "500")))
+
     usage_retention_days: int = field(
         default_factory=lambda: int(_env("USAGE_RETENTION_DAYS", "90"))
     )

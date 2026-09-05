@@ -59,7 +59,11 @@ for _surface in ("fact.asserted", "fact.superseded", "fact.retracted",
 # the edge layer is missing. It is not. The event now marks each write as a
 # candidate for a rebuild pass that has not been written, and its unconsumed
 # status has twice been read as a broken graph.
-NO_CONSUMER = {"graph.build.requested", "enrichment.refused"}
+# `work.abandoned` is an obituary, not a request: the queue already gave up, so
+# there is nothing to dispatch it to. It exists so the row can say why it
+# stopped -- the queue's own dead-letter list is in memory and dies with the
+# process, which on a scale-to-zero platform is the same as never recording it.
+NO_CONSUMER = {"graph.build.requested", "enrichment.refused", "work.abandoned"}
 
 MAX_ATTEMPTS = 5
 

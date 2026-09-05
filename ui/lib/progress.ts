@@ -69,7 +69,13 @@ export function assess(
   const request = events.find((e) => e.event_type === REQUESTED) ?? null;
   const refusal = events.find((e) => e.event_type === REFUSED) ?? null;
   const needsParse = item.parse_status !== null;
-  const parsed = item.parse_status === "parsed";
+  // `truncated` is a *success* with a warning: the handler read the bytes and
+  // the text ran past the index ceiling, so everything up to it was extracted
+  // and the rest is stored but not indexed. Treating it as a failure told
+  // somebody with a long document that "the bytes could not be read" and that
+  // "there is nothing to embed" -- of two million characters that were read,
+  // and which the API does queue for embedding.
+  const parsed = item.parse_status === "parsed" || item.parse_status === "truncated";
   const parseFailed = needsParse && !parsed && item.parse_status !== "pending";
   const parsePending = item.parse_status === "pending";
   const awaitingFetch = item.state === "awaiting_fetch";
@@ -115,9 +121,13 @@ export function assess(
       "because it is the part that spends money.";
     offerEnrich = true;
   } else if (gaveUp && !enriched) {
+    // Deliberately not phrased as a failure. Nothing has gone wrong here: this
+    // screen has a budget for watching and the work has its own, longer one.
+    // The previous wording led with "still queued" and read as a stall.
     reason =
-      "Still queued after two minutes. This screen stopped watching; the work did not stop. " +
-      "The reconciler sweeps every ten minutes and re-enqueues anything that was dropped.";
+      "This screen has stopped watching — the work has not stopped. Long documents are " +
+      "thousands of chunks and take a while. Reopen this record to see where it got to, and " +
+      "the reconciler re-enqueues anything genuinely dropped every ten minutes.";
   }
 
   const steps: Step[] = [
@@ -174,17 +184,59 @@ export function assess(
     step("enrich", "enriched", enrichState, enrichNote(enrichState)));
 
   function enrichNote(state: StepState): string {
-    if (state === "done") return "title, summary, keywords and entities recorded";
+    if (state === "done") return "title, summary and keywords recorded";
     if (refusal) return "withheld by a sensitivity policy";
     if (request === null) return "not requested";
     if (request.payload.summarize === false) return "not asked for — this write chose embedding only";
     return state === "stopped" ? "did not run" : "a model is summarising it";
   }
 
+  // The graph, as its own step.
+  //
+  // It was folded into the sentence above -- "title, summary, keywords and
+  // entities recorded" -- which asserted entities on every successful
+  // enrichment and reported no number. A record that produced eighteen
+  // entities and one that produced none rendered identically, and the second
+  // is the case somebody needs to know about: it is the difference between
+  // "the graph is built" and "the graph is empty and nothing said so".
+  //
+  // Zero is shown as a finished step with a note explaining why, not as a
+  // failure. Plenty of records legitimately name nothing, and a red mark on
+  // every meeting reminder would train people to ignore the row.
+  const entities = item.entity_count ?? null;
+  const edges = item.edge_count ?? null;
+  const lens = item.template ?? null;
+  if (enriched && entities !== null) {
+    steps.push(step("graph", "connected", entities > 0 ? "done" : "stopped", graphNote()));
+  } else if (request !== null && request.payload.summarize !== false) {
+    steps.push(step("graph", "connected", enrichState === "stopped" ? "stopped" : "waiting",
+                    enrichState === "stopped" ? "did not run" : "entities and relationships"));
+  }
+
+  function graphNote(): string {
+    if (entities === 0) {
+      return lens
+        ? `nothing to connect — no ${lens} relationships were found in this text`
+        : "nothing to connect — the model named nothing in this text";
+    }
+    const e = `${entities} entit${entities === 1 ? "y" : "ies"}`;
+    if (!edges) {
+      // Entities without edges is the ordinary case, not a fault: a
+      // relationship has to be *stated*, and most text names things without
+      // asserting anything between them.
+      return `${e}, no relationships stated between them`;
+    }
+    return `${e} and ${edges} relationship${edges === 1 ? "" : "s"}`
+      + (lens ? `, read as ${lens}` : "");
+  }
+
   const done = steps.filter((s) => s.state === "done").length;
   const percent = enriched ? 100 : Math.max(8, Math.round((done / steps.length) * 100));
 
   function describe(): string {
+    if (enriched && entities === 0) {
+      return "Enriched — but nothing was named, so it is not in the graph";
+    }
     if (enriched) return "Enriched — it reached the top of the staircase";
     if (gaveUp && !terminal) {
       return searchable

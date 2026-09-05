@@ -223,10 +223,16 @@ class FetchWorker:
     """
 
     def __init__(self, pool, blobs, settings, queue=None, envelope=None) -> None:
+        from .youtube import build_video_reader
+
         self._pool = pool
         self._blobs = blobs
         self._settings = settings
         self._queue = queue
+        # A video is not downloaded and then read; it is read where it lives.
+        # None when media interpretation is off, which makes a YouTube
+        # reference a configuration error rather than a silent no-op.
+        self._video = build_video_reader(settings)
         # Only a reference that names a connection needs this. Absent, such a
         # reference fails as a configuration problem rather than being fetched
         # unauthenticated and reported as the source refusing us.
@@ -302,6 +308,45 @@ class FetchWorker:
             )
         return headers
 
+    async def _watch(self, url: str) -> Fetched:
+        """A YouTube reference, read into text and returned as if downloaded.
+
+        Returning `Fetched` is the whole trick: everything after this point --
+        the blob write, classification, parsing, embedding, enrichment and
+        graph extraction -- runs unchanged and never learns a video was
+        involved. What it stores is an account of the video rather than the
+        video, which is what the model will produce and the only thing the
+        graph has any use for.
+
+        The title and channel are put at the top rather than left to the
+        enricher to invent: they are facts, they are free, and a record headed
+        `watch?v=aircAruvnKk` is one nobody recognises in a list.
+        """
+        from .youtube import NotAVideo, ReadUnavailable, video_id
+
+        vid = video_id(url)
+        if vid is None:
+            raise FetchError(f"not a YouTube video URL: {url[:200]}")
+        if self._video is None:
+            raise FetchError(
+                "reading a video needs media interpretation, which is off on "
+                "this deployment"
+            )
+        try:
+            watched = await self._video.read(vid)
+        except ReadUnavailable as exc:
+            raise FetchError(str(exc), retryable=exc.retryable) from exc
+        except NotAVideo as exc:
+            raise FetchError(str(exc)) from exc
+
+        heading = watched.title or watched.url
+        if watched.author:
+            heading = f"{heading} — {watched.author}"
+        document = f"{heading}\n{watched.url}\n\n{watched.account}\n"
+        return Fetched(payload=document.encode("utf-8"),
+                       mime_type="text/plain; charset=utf-8",
+                       final_url=watched.url, redirects=0)
+
     async def fetch(self, data_id: str) -> None:
         from .classify import classify, sniff_mime
         from .workers import record_version
@@ -320,15 +365,18 @@ class FetchWorker:
         provider = ref.get("provider")
         hints = dict(ref.get("hints") or {})
 
-        if provider == "url":
+        if provider == "youtube":
+            result = await self._watch(ref.get("resource_id", ""))
+        elif provider == "url":
             target, headers = ref.get("resource_id", ""), None
         else:
             target = download_url(provider, ref.get("resource_id", ""), hints)
             headers = await self._credential(ref.get("connection_id"),
                                              row["org_id"], provider)
 
-        result = await fetch_url(target, max_bytes=self._settings.max_upload_bytes,
-                                 headers=headers)
+        if provider != "youtube":
+            result = await fetch_url(target, max_bytes=self._settings.max_upload_bytes,
+                                     headers=headers)
         # The server sniffs; the sender's Content-Type is a hint like any other.
         mime = sniff_mime(result.payload, None, result.mime_type)
         storage_ref, checksum = await self._blobs.put(
@@ -336,8 +384,8 @@ class FetchWorker:
             kind="raw", payload=result.payload, mime_type=mime,
         )
         data_type, layer = classify(
-            explicit_data_type=None, source_type=None, mime_type=mime,
-            external_id=result.final_url,
+            explicit_data_type="transcript" if provider == "youtube" else None,
+            source_type=None, mime_type=mime, external_id=result.final_url,
         )
 
         async with self._pool.acquire() as conn, conn.transaction():

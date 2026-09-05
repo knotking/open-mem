@@ -388,7 +388,7 @@ async def test_retrieval_traverses_through_the_graph_store(pool, embedder, tenan
     class Watched(PostgresGraph):
         async def neighbourhood(self, principal, *, entity_id, depth=1,
                                 predicates=None, limit=120,
-                                valid_at=None, as_of=None):
+                                valid_at=None, as_of=None, template=None):
             calls.append(entity_id)
             return await super().neighbourhood(
                 principal, entity_id=entity_id, depth=depth,
@@ -421,7 +421,7 @@ async def test_a_store_that_reaches_nothing_yields_no_graph_hits(
     class Empty:
         async def neighbourhood(self, principal, *, entity_id, depth=1,
                                 predicates=None, limit=120,
-                                valid_at=None, as_of=None):
+                                valid_at=None, as_of=None, template=None):
             # Knows the entity, reaches nothing from it.
             return Neighbourhood(
                 root=Node(entity_id=entity_id, display_name="?", type="person",

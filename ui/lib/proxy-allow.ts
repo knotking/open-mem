@@ -60,6 +60,14 @@ export const ALLOWED = [
   /^api\/v1\/memories\/[A-Za-z0-9_]+(\?.*)?$/,
   /^api\/v1\/memories\/[A-Za-z0-9_]+\/members\/[A-Za-z0-9_]+$/,
   /^api\/v1\/projects\/[A-Za-z0-9_]+\/memories$/,
+  // What the corpus is about, aggregated from model keywords.
+  /^api\/v1\/projects\/[A-Za-z0-9_]+\/keywords(\?.*)?$/,
+  /^api\/v1\/projects\/[A-Za-z0-9_]+\/tags(\?.*)?$/,
+  /^api\/v1\/templates$/,
+  // The public demo. Unauthenticated by design -- see `public_demo.py`.
+  /^api\/v1\/public\/demo$/,
+  /^api\/v1\/public\/ask$/,
+  /^api\/v1\/memories\/[\w-]+\/context(\?.*)?$/,
   /^api\/v1\/memories\/[A-Za-z0-9_]+\/members$/,
   // Deriving: what can be made from a memory, and what has been.
   /^api\/v1\/generators$/,
@@ -176,6 +184,24 @@ export const GET_ONLY = [
 // worked.
 export const CALLER_CREDENTIAL = [
   /^api\/v1\/mcp$/,
+];
+
+/**
+ * Routes that must carry **no** console credential.
+ *
+ * The public demo is reachable without signing in, and `apiFetch` falls back to
+ * the deployment's service key when nobody is signed in — so without this a
+ * visitor's question would travel on the console's own credential. It would
+ * work, and it would mean an anonymous request had been silently promoted to
+ * whatever that key can do. The endpoint needs no credential at all: it decides
+ * what it will answer from configuration, not from who is asking.
+ *
+ * Kept separate from CALLER_CREDENTIAL, which is the opposite case — a route
+ * that demands the caller's own key.
+ */
+export const NO_CREDENTIAL = [
+  /^api\/v1\/public\/demo$/,
+  /^api\/v1\/public\/ask$/,
 ];
 
 export function allowed(path: string, method: string): boolean {

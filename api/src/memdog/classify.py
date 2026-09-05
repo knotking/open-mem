@@ -168,15 +168,42 @@ def sniff_mime(payload: bytes | None, text: str | None, declared: str | None) ->
         # crashing worker.
         if _looks_binary(decoded):
             return "application/octet-stream"
+        # The same question the text branch below asks, and it has to be asked
+        # here too: `filetype` knows containers and magic numbers, not markup,
+        # so a fetched web page guesses as nothing, decodes cleanly, and used to
+        # come back `text/plain`. That made `document_html` unreachable through
+        # the fetch path entirely -- every page pulled from a URL was typed
+        # `document_text` and read with the document prompt, which asks a file's
+        # questions of something that has an agenda, furniture, and a real
+        # chance of being a login wall.
+        if _looks_like_html(decoded):
+            return "text/html"
         return "text/plain"
     if text is not None:
         stripped = text.lstrip()
         if stripped[:1] in "{[" and stripped[-1:] in "}]":
             return "application/json"
-        if stripped[:5].lower() in ("<!doc", "<html"):
+        if _looks_like_html(text):
             return "text/html"
         return "text/plain"
     return declared
+
+
+def _looks_like_html(text: str) -> bool:
+    """Markup, by its opening rather than by its file name.
+
+    The prefix test alone is not enough on a fetched page: real documents open
+    with a BOM, an XML declaration, a licence comment or a stray blank line
+    before `<html` ever appears. Bounded to the head so this stays a look at the
+    start of a document rather than a search of the whole thing -- a page that
+    mentions `<html>` three screens down is discussing markup, not made of it.
+    """
+    head = text.lstrip("\ufeff \t\r\n")[:1024].lower()
+    if head[:5] in ("<!doc", "<html"):
+        return True
+    if head.startswith("<?xml") or head.startswith("<!--"):
+        return "<html" in head
+    return False
 
 
 # Tab, newline and carriage return are the only control characters that appear

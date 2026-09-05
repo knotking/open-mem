@@ -85,6 +85,32 @@ export type Item = {
   content_text: string | null;
   extracted_text: string | null;
   access_level?: string;
+  // What this record put into the graph. `null` on responses that predate the
+  // field; zero is a real answer and must not render as "unknown".
+  entity_count?: number | null;
+  edge_count?: number | null;
+  template?: string | null;
+};
+
+/** What extraction made of a fetched page.
+ *
+ * Present on the artifact's `fields.quality` for HTML records only — a page is
+ * asked things a PDF is not. Every field is optional because an older artifact
+ * predates the block entirely, and an absent reading is "not judged", never
+ * "judged and found wanting".
+ */
+export type PageQuality = {
+  page_kind?: string;
+  purpose?: string;
+  substance?: string;
+  evidence?: string;
+  authorship?: string;
+  dated?: string;
+  commercial?: string;
+  reliability?: string[];
+  missing?: string[];
+  retrieval_value?: string;
+  verdict?: string;
 };
 
 export type Memory = {

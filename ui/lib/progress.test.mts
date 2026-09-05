@@ -84,8 +84,13 @@ test("giving up watching is not the work finishing", () => {
   const climb = assess(item(), [requested()], true);
 
   assert.equal(climb.settled, false, "the work did not stop; this screen did");
-  assert.match(climb.reason ?? "", /This screen stopped watching; the work did not stop/);
-  assert.match(climb.reason ?? "", /reconciler sweeps/);
+  // Asserted on the distinction rather than the sentence. Pinning the exact
+  // wording made a copy change look like a regression, which is the opposite of
+  // what this test is for -- it exists to protect the *meaning*, that watching
+  // ended and the work did not.
+  assert.match(climb.reason ?? "", /stopped watching/i);
+  assert.match(climb.reason ?? "", /has not stopped/i);
+  assert.match(climb.reason ?? "", /reconciler/i);
 });
 
 test("a refusal is terminal and quotes the reason it was given", () => {

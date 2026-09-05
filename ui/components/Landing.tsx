@@ -9,7 +9,7 @@
  * typed is wrong within a month and wrong in the flattering direction.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import ThemeToggle from "./ThemeToggle";
 
@@ -52,6 +52,8 @@ type Capabilities = {
  * its anchor rather than leaving one that scrolls nowhere.
  */
 const SECTIONS = [
+  // No "Try it": the demo is the hero, so a nav entry for it would scroll a
+  // reader back to what they are already looking at.
   { label: "How it works", covers: ["flow"] },
   { label: "What it connects", covers: ["graph", "time"] },
   { label: "What it tells you", covers: ["alerts", "compaction"] },
@@ -630,14 +632,224 @@ function Receipt() {
   );
 }
 
+/**
+ * The public demo — a corpus anyone can question without an account.
+ *
+ * The whole landing page argues that this system turns documents into
+ * something answerable. A visitor has no way to check that claim: everything
+ * above is prose about a pipeline they cannot run. This is the one place the
+ * page stops describing and starts demonstrating, on a text nobody has to take
+ * on trust — Edwin Arnold's 1885 translation, public domain, eighteen chapters
+ * ingested exactly the way a customer's document would be.
+ *
+ * It renders only when the deployment has one configured. A demo box that
+ * errors on every question is worse than no demo box, so `available: false`
+ * removes the section rather than showing a broken one.
+ *
+ * The remaining-questions count is shown deliberately. A public model endpoint
+ * runs on a fixed daily budget, and a visitor who hits the cap should already
+ * know the number was finite rather than conclude the thing is broken.
+ */
+/** Whatever the API put in `detail`, as something a person can read. */
+function sentence(detail: unknown): string {
+  if (typeof detail === "string" && detail.trim()) return detail;
+  if (Array.isArray(detail)) {
+    const said = detail
+      .map((d) => (typeof d === "string" ? d : (d as { msg?: string })?.msg))
+      .filter(Boolean);
+    if (said.length) return said.join("; ");
+  }
+  return "Something went wrong. Try again in a moment.";
+}
+
+type DemoInfo = {
+  available: boolean; title: string; subtitle: string;
+  remaining_today: number; daily_cap: number;
+};
+
+function PublicDemo({ info, setInfo }: {
+  info: DemoInfo; setInfo: (f: (i: DemoInfo | null) => DemoInfo | null) => void;
+}) {
+  const [question, setQuestion] = useState("");
+  const [turns, setTurns] = useState<{
+    question: string; answer: string; grounded: boolean;
+    citations: { marker: number; text: string }[];
+  }[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [open, setOpen] = useState<number | null>(null);
+  const foot = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (turns.length) foot.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [turns.length, busy]);
+
+  async function send(preset?: string) {
+    const asked = (preset ?? question).trim();
+    if (!asked || busy) return;
+    setBusy(true);
+    setError(null);
+    setQuestion("");
+    try {
+      const response = await fetch("/api/proxy/api/v1/public/ask", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question: asked }),
+      });
+      const body = await response.json();
+      if (!response.ok) {
+        // The server's sentence, not a status code. A visitor who has run out
+        // of questions is not looking at an error, and "429" reads as broken.
+        // `detail` is not always a sentence: FastAPI answers a validation
+        // failure with a *list* of objects, and throwing that renders the
+        // useless "[object Object]" -- which is what a visitor saw when the
+        // proxy forwarded this body without a content-type.
+        throw new Error(sentence(body?.detail));
+      }
+      setTurns((previous) => [...previous, body]);
+      setInfo((i) => (i ? { ...i, remaining_today: Math.max(0, i.remaining_today - 1) } : i));
+    } catch (e) {
+      setError((e as Error).message);
+      setQuestion(asked);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="demo-card" id="demo">
+      <h2>{info.title}</h2>
+      <p className="empty" style={{ marginTop: 0 }}>
+        Ask it anything. Every answer is drawn from the text and cites the passage it came from,
+        so a wrong answer is one you can check rather than one you have to believe — and when the
+        text does not support an answer, it says so instead of composing one.
+      </p>
+
+      <div className="demo-box">
+        <div className="demo-scroll">
+        {turns.length === 0 && (
+          <div className="demo-starters">
+            {[
+              "What does Krishna say about acting without attachment to results?",
+              "What is said to follow from dwelling on the objects of the senses?",
+              "Why does Arjuna refuse to fight, and how is he answered?",
+            ].map((example) => (
+              <button key={example} className="secondary" disabled={busy}
+                      onClick={() => void send(example)}>
+                {example}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {turns.map((turn, i) => (
+          <div className="chatturn" key={i}>
+            <div className="bubble asked">{turn.question}</div>
+            <div className={`bubble answered${turn.grounded ? "" : " ungrounded"}`}>
+              {turn.answer}
+            </div>
+            <div className="turnfoot">
+              {!turn.grounded && (
+                <span className="chip warnchip">not supported by the text</span>
+              )}
+              {turn.citations.length > 0 && (
+                <button className="linkish"
+                        onClick={() => setOpen(open === i ? null : i)}>
+                  {open === i ? "▾" : "▸"} {turn.citations.length} passage
+                  {turn.citations.length === 1 ? "" : "s"}
+                </button>
+              )}
+            </div>
+            {open === i && (
+              <div className="turndetail">
+                {turn.citations.map((c) => (
+                  <div className="hit" key={c.marker}>
+                    <div className="meta"><span className="chip on">[{c.marker}]</span></div>
+                    <div className="text">{c.text}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+
+        {busy && (
+          <div className="chatturn">
+            <div className="bubble answered thinking">
+              <span className="dots"><i /><i /><i /></span> reading the text…
+            </div>
+          </div>
+        )}
+        <div ref={foot} />
+        </div>
+
+        <div className="demo-composer">
+          <input
+            type="text" value={question} disabled={busy}
+            placeholder="Ask the Gita a question…"
+            onChange={(e) => setQuestion(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void send(); } }}
+          />
+          <button onClick={() => void send()} disabled={busy || !question.trim()}>
+            {busy ? "Reading…" : "Ask"}
+          </button>
+          {/* Clearing also brings the starter questions back, which is the
+            * point: a transcript somebody is done with is the one thing on the
+            * card standing between them and asking something else. The opened
+            * citation goes with it -- an index into turns that no longer exist
+            * would reopen an unrelated answer's passages. */}
+          {turns.length > 0 && (
+            <button
+              className="secondary"
+              disabled={busy}
+              onClick={() => { setTurns([]); setOpen(null); setError(null); }}
+            >
+              Clear
+            </button>
+          )}
+        </div>
+        {error && <p className="err">{error}</p>}
+        <p className="demo-note">
+          Sir Edwin Arnold, <em>The Song Celestial</em> (1885) — public domain, from Project
+          Gutenberg. Eighteen chapters, ingested exactly as your own documents would be.{" "}
+          <strong>{info.remaining_today}</strong> of {info.daily_cap} questions left today —
+          the demo runs on a fixed daily budget so it stays free.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 export default function Landing({ authEnabled }: { authEnabled: boolean }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [caps, setCaps] = useState<Capabilities | null>(null);
+  const [demo, setDemo] = useState<DemoInfo | null>(null);
+  // The sign-in form is a panel off the top bar rather than half the hero: the
+  // first thing a visitor should be able to do here is ask the corpus a
+  // question, and a form demanding an account they do not have is the opposite
+  // of that. Signing in is still one click away, where a header keeps it.
+  const [signinOpen, setSigninOpen] = useState(false);
   const { present, active } = useSectionSpy();
   const progress = useScrollProgress();
+
+  useEffect(() => {
+    void fetch("/api/proxy/api/v1/public/demo")
+      .then((r) => (r.ok ? r.json() : null))
+      .then(setDemo)
+      .catch(() => setDemo(null));
+  }, []);
+
+  // Escape closes it, because a panel that can only be dismissed by finding
+  // the button again is a trap for anyone not using a mouse.
+  useEffect(() => {
+    if (!signinOpen) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setSigninOpen(false); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [signinOpen]);
 
   useEffect(() => {
     fetch("/api/capabilities")
@@ -678,74 +890,12 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
       ]
     : [];
 
-  return (
-    <div className="landing" id="top">
-      <header className="topbar">
-        {/* A real anchor rather than a scroll handler: it works without
-            JavaScript, is reachable by keyboard, and offers the usual
-            open-in-new-tab affordances a wordmark is expected to have. */}
-        <a className="wordmark" href="#top" aria-label="Back to the top">
-          <span className="dot" aria-hidden="true" />
-          mem-dog
-        </a>
-        <nav className="tabs" aria-label="Sections">
-          {present.map((section) => (
-            <a
-              key={section.id}
-              href={`#${section.id}`}
-              /* `aria-current` rather than a class: the state is "this is the
-                 page section you are in", which is exactly what the attribute
-                 means, and it reaches a screen reader as well as the eye. */
-              aria-current={active === section.id ? "true" : undefined}
-            >
-              {section.label}
-            </a>
-          ))}
-        </nav>
-        <div className="row">
-          <ThemeToggle />
-          <a className="tab-cta" href="#signin">Sign in</a>
-        </div>
-        {/* Sits on the bar's own bottom edge, so it reads as the bar filling
-            rather than as a second rule under it. */}
-        <div
-          className="railfill"
-          style={{ transform: `scaleX(${progress})` }}
-          aria-hidden="true"
-        />
-      </header>
-
-      <section className="hero-split">
-        <div>
-          <p className="eyebrow">Memory layer · sandbox</p>
-          <h1>
-            No answer without its source. No silence without its <em>reason</em>.
-          </h1>
-          <p className="hero-lede">
-            Documents, spreadsheets, calendars, email, audio and video — found by meaning, not by
-            keyword. Every sentence points at the passage it came from. Every record the search set
-            aside says why it was set aside. Anything can show you what it found; being told what it
-            passed over is what lets you check the answer instead of believing it.
-          </p>
-          {numbers.length > 0 && (
-            <div className="numbers">
-              {numbers.map((n) => (
-                <div key={n.label}>
-                  <span className="numbers-value">{n.value}</span>
-                  <span className="numbers-label">{n.label}</span>
-                </div>
-              ))}
-            </div>
-          )}
-          {caps && (
-            <p className="counted">
-              Counted from this build, not written into the copy — retrieval is running{" "}
-              <code>{caps.embed_model}</code>.
-            </p>
-          )}
-        </div>
-
-        {authEnabled ? (
+  // One definition, two homes: the top-bar panel when the demo holds the
+  // hero, and the hero itself when there is no demo to put there. Never
+  // both at once -- two elements carrying `id="signin"` would make the
+  // anchor mean whichever the browser happened to find first.
+  const heroHasDemo = Boolean(demo?.available);
+  const signInCard = authEnabled ? (
           <form className="signin-card" id="signin" onSubmit={submit}>
             <h2>Sign in</h2>
             <p className="empty" style={{ marginTop: 0 }}>
@@ -809,7 +959,100 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
               browser.
             </p>
           </div>
-        )}
+        );
+
+  return (
+    <div className="landing" id="top">
+      <header className="topbar">
+        {/* A real anchor rather than a scroll handler: it works without
+            JavaScript, is reachable by keyboard, and offers the usual
+            open-in-new-tab affordances a wordmark is expected to have. */}
+        <a className="wordmark" href="#top" aria-label="Back to the top">
+          <span className="dot" aria-hidden="true" />
+          mem-dog
+        </a>
+        <nav className="tabs" aria-label="Sections">
+          {present.map((section) => (
+            <a
+              key={section.id}
+              href={`#${section.id}`}
+              /* `aria-current` rather than a class: the state is "this is the
+                 page section you are in", which is exactly what the attribute
+                 means, and it reaches a screen reader as well as the eye. */
+              aria-current={active === section.id ? "true" : undefined}
+            >
+              {section.label}
+            </a>
+          ))}
+        </nav>
+        <div className="row">
+          <ThemeToggle />
+          {heroHasDemo ? (
+            <div className="signin-menu">
+              <button
+                className="tab-cta"
+                aria-expanded={signinOpen}
+                onClick={() => setSigninOpen(!signinOpen)}
+              >
+                {signinOpen ? "Close" : "Sign in"}
+              </button>
+              {signinOpen && <div className="signin-pop">{signInCard}</div>}
+            </div>
+          ) : (
+            <a className="tab-cta" href="#signin">Sign in</a>
+          )}
+        </div>
+        {/* Sits on the bar's own bottom edge, so it reads as the bar filling
+            rather than as a second rule under it. */}
+        <div
+          className="railfill"
+          style={{ transform: `scaleX(${progress})` }}
+          aria-hidden="true"
+        />
+      </header>
+
+      {/* The demo is the page's opening move, at full width and above the
+          argument for it. Somebody who has already asked the corpus a question
+          reads the copy below as an explanation of something they have seen;
+          the other order asks them to take it on faith first. */}
+      {heroHasDemo && (
+        <section className="hero-demo">
+          <p className="eyebrow">Memory layer · sandbox · no account needed</p>
+          <PublicDemo info={demo!} setInfo={setDemo} />
+        </section>
+      )}
+
+      <section className={heroHasDemo ? "hero-copy" : "hero-split"}>
+        <div>
+          {!heroHasDemo && <p className="eyebrow">Memory layer · sandbox</p>}
+          <h1>
+            No answer without its source. No silence without its <em>reason</em>.
+          </h1>
+          <p className="hero-lede">
+            Documents, spreadsheets, calendars, email, audio and video — found by meaning, not by
+            keyword. Every sentence points at the passage it came from. Every record the search set
+            aside says why it was set aside. Anything can show you what it found; being told what it
+            passed over is what lets you check the answer instead of believing it.
+          </p>
+          {numbers.length > 0 && (
+            <div className="numbers">
+              {numbers.map((n) => (
+                <div key={n.label}>
+                  <span className="numbers-value">{n.value}</span>
+                  <span className="numbers-label">{n.label}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {caps && (
+            <p className="counted">
+              Counted from this build, not written into the copy — retrieval is running{" "}
+              <code>{caps.embed_model}</code>.
+            </p>
+          )}
+        </div>
+
+        {!heroHasDemo && signInCard}
       </section>
 
       <Receipt />

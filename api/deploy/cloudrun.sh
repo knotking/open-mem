@@ -28,21 +28,40 @@ DB_HOST=$(gcloud sql instances describe "$INSTANCE" --project "$PROJECT" \
   --format="value(ipAddresses[0].ipAddress)")
 echo "    ${INSTANCE} -> ${DB_HOST}"
 
+# The public demo is off unless PUBLIC_PROJECT_ID is passed. An unauthenticated
+# endpoint that makes a model call per request is an open tap on the bill, so it
+# is switched on deliberately at deploy time and never inherited from a default.
+# Passing an empty value is how you turn it off again.
 step "Deploying ${SERVICE}"
 # Direct VPC egress rather than a Serverless VPC Access connector: the
 # instance has no public IP (org policy forbids one), so the service reaches
 # it over the VPC and speaks ordinary Postgres to a private address. No Cloud
 # SQL socket, no proxy sidecar.
+#
+# `--no-cpu-throttling` is load-bearing, not a performance preference. The queue
+# is in-process: `publish()` hands work to asyncio tasks in this same container,
+# and the endpoint that triggers enrichment returns as soon as the work is
+# *queued*. Under Cloud Run's default, CPU is throttled to near-zero the moment
+# a response is sent, so anything outliving its request is starved rather than
+# run.
+#
+# That is invisible until a job is large enough to matter. A summary or a
+# transcription is one model call and finishes inside the request; a
+# two-million-character document is ~1,900 chunks and ~19 sequential embedding
+# calls, and never finished. Nothing errored and nothing was logged, because the
+# task was not failing -- it was frozen. Found 2026-09-03, on a .docx that had
+# parsed and summarised perfectly and would not become searchable.
 gcloud run deploy "$SERVICE" \
   --project "$PROJECT" --region "$REGION" \
   --image "$IMAGE" \
   --service-account "$SA" \
   --network default --subnet default --vpc-egress private-ranges-only \
-  --set-env-vars "DB_HOST=${DB_HOST},DB_NAME=${DB_NAME},DB_USER=postgres,EMBED_DIM=768,EMBED_ENGINE=${EMBED_ENGINE:-gemini},EMBED_MODEL=${EMBED_MODEL:-gemini-embedding-001},RAW_BUCKET=${RAW_BUCKET},MEDIA_INTERPRETATION=true,EXTRACT_ENGINE=gemini,MULTIMODAL_MODEL=${MULTIMODAL_MODEL:-gemini-3.7-flash},TRANSCRIBE_MODEL=${TRANSCRIBE_MODEL:-gemini-3.5-transcribe},FIREBASE_PROJECT_ID=${PROJECT},OTEL_GCP_PROJECT=${PROJECT},IMAGE_TAG=${TAG}" \
+  --set-env-vars "DB_HOST=${DB_HOST},DB_NAME=${DB_NAME},DB_USER=postgres,EMBED_DIM=768,EMBED_ENGINE=${EMBED_ENGINE:-gemini},EMBED_MODEL=${EMBED_MODEL:-gemini-embedding-001},RAW_BUCKET=${RAW_BUCKET},MEDIA_INTERPRETATION=true,MAX_TEXT_CHARS=${MAX_TEXT_CHARS:-4000000},EXTRACT_ENGINE=gemini,MULTIMODAL_MODEL=${MULTIMODAL_MODEL:-gemini-3.7-flash},TRANSCRIBE_MODEL=${TRANSCRIBE_MODEL:-gemini-3.5-transcribe},FIREBASE_PROJECT_ID=${PROJECT},OTEL_GCP_PROJECT=${PROJECT},IMAGE_TAG=${TAG},PUBLIC_PROJECT_ID=${PUBLIC_PROJECT_ID:-},PUBLIC_MEMORY_ID=${PUBLIC_MEMORY_ID:-},PUBLIC_TITLE=${PUBLIC_TITLE:-},PUBLIC_SUBTITLE=${PUBLIC_SUBTITLE:-},PUBLIC_DAILY_CAP=${PUBLIC_DAILY_CAP:-500},PUBLIC_RATE_PER_HOUR=${PUBLIC_RATE_PER_HOUR:-20}" \
   --set-secrets "DB_PASSWORD=memdog-db-password:latest,MEMDOG_MASTER_KEY=memdog-master-key:latest,GEMINI_API_KEY=gemini-api-key:latest" \
   --allow-unauthenticated \
   --min-instances 0 --max-instances 4 \
   --cpu 1 --memory 1Gi --timeout 600 \
+  --no-cpu-throttling \
   --quiet
 
 # The reconciler runs the same image with the same configuration, and must be
@@ -54,7 +73,7 @@ gcloud run deploy "$SERVICE" \
 # Anything that reads `current_generators` has to agree with the service about
 # what "current" means, or its idea of stale is the inverse of the truth.
 step "Deploying the reconcile job"
-JOB_ENV="DB_HOST=${DB_HOST},DB_NAME=${DB_NAME},DB_USER=postgres,EMBED_DIM=768,EMBED_ENGINE=${EMBED_ENGINE:-gemini},EMBED_MODEL=${EMBED_MODEL:-gemini-embedding-001},RAW_BUCKET=${RAW_BUCKET},MEDIA_INTERPRETATION=true,EXTRACT_ENGINE=gemini,MULTIMODAL_MODEL=${MULTIMODAL_MODEL:-gemini-3.7-flash},TRANSCRIBE_MODEL=${TRANSCRIBE_MODEL:-gemini-3.5-transcribe},OTEL_GCP_PROJECT=${PROJECT},IMAGE_TAG=${TAG}"
+JOB_ENV="DB_HOST=${DB_HOST},DB_NAME=${DB_NAME},DB_USER=postgres,EMBED_DIM=768,EMBED_ENGINE=${EMBED_ENGINE:-gemini},EMBED_MODEL=${EMBED_MODEL:-gemini-embedding-001},RAW_BUCKET=${RAW_BUCKET},MEDIA_INTERPRETATION=true,MAX_TEXT_CHARS=${MAX_TEXT_CHARS:-4000000},EXTRACT_ENGINE=gemini,MULTIMODAL_MODEL=${MULTIMODAL_MODEL:-gemini-3.7-flash},TRANSCRIBE_MODEL=${TRANSCRIBE_MODEL:-gemini-3.5-transcribe},OTEL_GCP_PROJECT=${PROJECT},IMAGE_TAG=${TAG}"
 JOB_SECRETS="DB_PASSWORD=memdog-db-password:latest,MEMDOG_MASTER_KEY=memdog-master-key:latest,GEMINI_API_KEY=gemini-api-key:latest"
 
 # `memdog-seed` is here for the same reason the reconciler is: it was created by
@@ -72,6 +91,20 @@ JOB_SECRETS="DB_PASSWORD=memdog-db-password:latest,MEMDOG_MASTER_KEY=memdog-mast
 # redeploys runs code the service no longer has, and this one issues the first
 # credential -- the worst possible thing to run from a stale build.
 #
+# `shared`, not `personal`, and that argument is load-bearing. A personal
+# connection binds its producer to the user who bootstrapped it, and the write
+# path refuses anybody else:
+#
+#     this producer is bound to another user's personal connection
+#
+# The console sends the *signed-in user's* identity, not a service credential,
+# so with `personal` every account except the bootstrap owner is refused at
+# Add data. That is correct behaviour for a personal deployment and wrong for a
+# console several people sign into. Found 2026-09-04, immediately after a
+# from-scratch rebuild: the previous tenant's connection was shared, this
+# argument recreated it as personal, and the screen broke for everyone but the
+# owner.
+#
 # Restoring it to `bootstrap-to-secret` costs nothing: `refuse_if_occupied`
 # turns it into a no-op on a deployment that already has a tenant, and a fresh
 # project needs exactly this. The secret *name* in the args is config; the
@@ -79,7 +112,7 @@ JOB_SECRETS="DB_PASSWORD=memdog-db-password:latest,MEMDOG_MASTER_KEY=memdog-mast
 # Run Job is Cloud Logging.
 for job_spec in "memdog-reconcile:reconcile" "memdog-crawl-tick:crawl-tick" \
                 "memdog-alert-tick:alert-tick" \
-                "memdog-bootstrap:bootstrap-to-secret,owner@memdog.dev,personal,${PROJECT},memdog-demo-key" \
+                "memdog-bootstrap:bootstrap-to-secret,owner@memdog.dev,shared,${PROJECT},memdog-demo-key" \
                 "memdog-seed:seed,--demo"; do
   job="${job_spec%%:*}"
   command="${job_spec##*:}"

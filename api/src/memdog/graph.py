@@ -36,14 +36,16 @@ import asyncpg
 
 from .acl import visibility_params, visibility_sql
 from .auth import DATA_READ, DATA_WRITE, Principal
+from . import graph_templates, predicates as predicates_mod
 from .ids import new_id
-from .telemetry import span
+from .telemetry import record, span
 
-PREDICATES = (
-    "works_for", "member_of", "reports_to", "collaborates_with",
-    "located_in", "part_of", "owns", "produces", "uses",
-    "attended", "about", "related_to",
-)
+# The vocabulary lives in `predicates.py` now, with a domain and a range on
+# each. It was defined here and again in `extraction.RELATION_PREDICATES`, and
+# nothing failed if the two drifted -- a predicate the extractor offered and the
+# store did not accept is written by the model, passed by the schema, and
+# rejected by a CHECK at the very end of enrichment.
+PREDICATES = predicates_mod.NAMES
 
 MAX_DEPTH = 3
 
@@ -56,7 +58,12 @@ MAX_DEPTH = 3
 # since closing is not deletion, but wrong in a way that reads as correct. So the
 # list stays short and conservative, and `works_for` is deliberately not on it:
 # people hold two jobs, sit on boards, and consult.
-SINGLE_VALUED = frozenset({"located_in", "reports_to"})
+#
+# None of the template predicates is single-valued either, and `leads_to` is the
+# one worth naming: many things lead to the same outcome, and closing the
+# previous claim each time would leave a causal graph holding only whichever
+# cause was ingested last.
+SINGLE_VALUED = predicates_mod.SINGLE_VALUED
 
 # No model decides what stopped being true. Everywhere else in this codebase the
 # deterministic layer runs first -- six classification layers before any LLM,
@@ -84,6 +91,40 @@ def _fact_visibility(org_p: int, user_p: int, principals_p: int, alias: str = "f
         OR ({alias}.basis = 'asserted'
             AND {visibility_sql(alias, org_p, user_p, principals_p)})
     )"""
+
+
+def _drawn_under(template_p: int, org_p: int, user_p: int, principals_p: int,
+                 alias: str = "f") -> str:
+    """Whether any *visible evidence* for this fact was read under a template.
+
+    Asked of the evidence rather than of `entity_facts.template`, and the
+    difference is not academic. Facts merge across records -- a second document
+    asserting a claim we already hold corroborates it rather than creating a
+    new one -- so the claim's own `template` column records whichever lens
+    happened to write it first and is silent about every lens that agreed.
+
+    That is exactly what happened the first time this ran: the same passage was
+    ingested once plainly and once as scripture, the plain pass created the
+    facts, and the scripture pass corroborated them. Filtering on the claim's
+    column then reported one edge where seven had been drawn -- the filter
+    looked precise and was quietly wrong, which is the worst way for a filter
+    to fail.
+
+    A claim is not owned by one lens. It is *reachable through* a lens when
+    something that lens read asserts it, and a record may be read through
+    several.
+
+    The visibility join is not optional: without it, a template filter would
+    confirm that some record the caller cannot read was read under a given
+    template, which is the same structural leak the traversal ACL exists to
+    prevent.
+    """
+    return f"""(${template_p}::text IS NULL OR EXISTS (
+        SELECT 1 FROM entity_edges ev
+          JOIN data_items d ON d.data_id = ev.source_data_id
+         WHERE ev.fact_id = {alias}.fact_id
+           AND ev.template = ${template_p}
+           AND {visibility_sql("d", org_p, user_p, principals_p)}))"""
 
 
 def _temporal(valid_p: int, asof_p: int, alias: str = "f") -> str:
@@ -131,6 +172,20 @@ class Edge:
     # None means still true, which is not the same as "we stopped looking".
     valid_to: datetime | None = None
     basis: str = "derived"
+    # Which template drew this edge. None is open-domain extraction.
+    template: str | None = None
+
+    @property
+    def confidence_class(self) -> str:
+        """"structural" or "interpretive" -- a property of the predicate.
+
+        Carried on the edge because it is the thing a reader needs at the point
+        of traversal: a path crossing an interpretive edge is a reading, and an
+        answer resting on one should say so. Derived rather than stored, so
+        reclassifying a predicate does not require rewriting its edges.
+        """
+        return predicates_mod.REGISTRY[self.predicate].confidence \
+            if self.predicate in predicates_mod.REGISTRY else "structural"
 
 
 @dataclass
@@ -146,6 +201,7 @@ class GraphStore(Protocol):
         self, principal: Principal, *, entity_id: str, depth: int,
         predicates: list[str] | None, limit: int,
         valid_at: datetime | None = None, as_of: datetime | None = None,
+        template: str | None = None,
     ) -> Neighbourhood: ...
 
 
@@ -161,6 +217,7 @@ class PostgresGraph:
         self, principal: Principal, *, entity_id: str, depth: int = 1,
         predicates: list[str] | None = None, limit: int = 120,
         valid_at: datetime | None = None, as_of: datetime | None = None,
+        template: str | None = None,
     ) -> Neighbourhood:
         """`valid_at` asks what was true then; `as_of` asks what we believed then.
 
@@ -179,13 +236,13 @@ class PostgresGraph:
         with span("graph.neighbourhood", depth=depth, store=self.name):
             return await self._neighbourhood(
                 principal, entity_id, depth, predicates, limit,
-                valid_at or now, as_of or now,
+                valid_at or now, as_of or now, template,
             )
 
     async def _neighbourhood(
         self, principal: Principal, entity_id: str, depth: int,
         predicates: list[str] | None, limit: int,
-        valid_at: datetime, as_of: datetime,
+        valid_at: datetime, as_of: datetime, template: str | None = None,
     ) -> Neighbourhood:
         org_id, user_id, principals = visibility_params(principal)
         # An entity is visible only through a record the caller can read, so
@@ -221,6 +278,12 @@ class PostgresGraph:
                 SELECT f.subject_id, f.predicate, f.object_id
                   FROM entity_facts f
                  WHERE ($5::text[] IS NULL OR f.predicate = ANY($5))
+                   -- Inside the recursive term, not applied to the result. A
+                   -- path is only within a template if every hop of it is;
+                   -- filtering afterwards would return endpoints joined by
+                   -- edges the filter excluded, which reads as the template
+                   -- having asserted something it never saw.
+                   AND {_drawn_under(10, 2, 3, 4)}
                    AND {_temporal(8, 9)}
                    AND {_fact_visibility(2, 3, 4)}
             ),
@@ -252,7 +315,7 @@ class PostgresGraph:
              LIMIT $7
             """,
             entity_id, org_id, user_id, principals,
-            predicates, depth, limit, valid_at, as_of,
+            predicates, depth, limit, valid_at, as_of, template,
         )
         nodes = [
             Node(r["entity_id"], r["display_name"], r["type"], r["depth"])
@@ -269,7 +332,7 @@ class PostgresGraph:
         edges = await self.pool.fetch(
             f"""
             SELECT f.fact_id, f.subject_id, f.predicate, f.object_id,
-                   f.valid_from, f.valid_to, f.basis, f.confidence,
+                   f.valid_from, f.valid_to, f.basis, f.confidence, f.template,
                    count(DISTINCT ev.source_data_id) AS evidence,
                    coalesce(array_agg(DISTINCT ev.source_data_id)
                             FILTER (WHERE ev.source_data_id IS NOT NULL),
@@ -278,12 +341,14 @@ class PostgresGraph:
               LEFT JOIN entity_edges ev ON ev.fact_id = f.fact_id
              WHERE f.subject_id = ANY($4::text[]) AND f.object_id = ANY($4::text[])
                AND ($5::text[] IS NULL OR f.predicate = ANY($5))
+               AND {_drawn_under(8, 1, 2, 3)}
                AND {_temporal(6, 7)}
                AND {_fact_visibility(1, 2, 3)}
              GROUP BY f.fact_id
              ORDER BY count(DISTINCT ev.source_data_id) DESC, f.valid_from DESC
             """,
             org_id, user_id, principals, ids, predicates, valid_at, as_of,
+            template,
         ) if ids else []
 
         return Neighbourhood(
@@ -293,7 +358,8 @@ class PostgresGraph:
                 Edge(e["subject_id"], e["predicate"], e["object_id"],
                      e["evidence"], list(e["sources"]), float(e["confidence"] or 0),
                      fact_id=e["fact_id"], valid_from=e["valid_from"],
-                     valid_to=e["valid_to"], basis=e["basis"])
+                     valid_to=e["valid_to"], basis=e["basis"],
+                     template=e["template"])
                 for e in edges
             ],
             truncated=len(nodes) >= limit,
@@ -336,7 +402,7 @@ class PostgresGraph:
 async def record_edges(
     conn: asyncpg.Connection, *, data_id: str, org_id: str, project_id: str,
     resolved: list[dict], relations: list[dict],
-    generator_version: str | None = None,
+    generator_version: str | None = None, template: str | None = None,
 ) -> list[dict]:
     """Store the relationships a document asserted, in the enrichment transaction.
 
@@ -346,9 +412,17 @@ async def record_edges(
     inventing an endpoint would attach a real claim to the wrong node, and the
     graph has no way to show that later.
     """
-    by_name = {}
+    by_name, type_of = {}, {}
     for item in resolved:
-        by_name[item["name"].strip().casefold()] = item["entity_id"]
+        key = item["name"].strip().casefold()
+        by_name[key] = item["entity_id"]
+        type_of[key] = item.get("type")
+
+    # What the template said may be looked for. An edge outside that set is a
+    # predicate the model was not offered, which means it either ignored the
+    # enum or a template changed after this text was read -- both worth
+    # dropping rather than storing under a template that does not claim it.
+    offered = frozenset(graph_templates.predicates_for(template))
 
     # Valid time is the world's clock, so it comes from the record's event_time
     # rather than from now(). Backfilling a two-year-old document must place its
@@ -362,32 +436,43 @@ async def record_edges(
         predicate = (relation.get("predicate") or "").strip()
         subject = (relation.get("subject") or "").strip().casefold()
         obj = (relation.get("object") or "").strip().casefold()
-        if predicate not in PREDICATES:
+        if predicate not in PREDICATES or predicate not in offered:
             continue
         subject_id, object_id = by_name.get(subject), by_name.get(obj)
         if not subject_id or not object_id or subject_id == object_id:
+            continue
+        # Domain and range. `teaches` runs agent -> idea, so a city teaching a
+        # doctrine is refused here rather than discovered a quarter later by
+        # somebody reading a bad answer. An unknown or absent type passes:
+        # the type comes from the same model that produced the relation and is
+        # the least reliable thing on the row, so refusing a plausible claim
+        # over a shaky guess about one of its endpoints is the wrong trade.
+        if not predicates_mod.permits(predicate, type_of.get(subject),
+                                      type_of.get(obj)):
+            record("graph_edge_refused", 1, predicate=predicate)
             continue
         confidence = float(relation.get("confidence") or 0.5)
         fact_id = await _upsert_fact(
             conn, org_id=org_id, project_id=project_id, subject_id=subject_id,
             predicate=predicate, object_id=object_id, valid_from=valid_from,
             basis="derived", confidence=confidence,
-            generator_version=generator_version,
+            generator_version=generator_version, template=template,
         )
         await conn.execute(
             """
             INSERT INTO entity_edges (edge_id, org_id, project_id, subject_id,
                 predicate, object_id, source_data_id, confidence, generator_version,
-                fact_id)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                fact_id, template)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             ON CONFLICT (subject_id, predicate, object_id, source_data_id)
-            DO UPDATE SET fact_id = EXCLUDED.fact_id
+            DO UPDATE SET fact_id = EXCLUDED.fact_id, template = EXCLUDED.template
             """,
             new_id("edg"), org_id, project_id, subject_id, predicate,
-            object_id, data_id, confidence, generator_version, fact_id,
+            object_id, data_id, confidence, generator_version, fact_id, template,
         )
         written.append({"subject_id": subject_id, "predicate": predicate,
-                        "object_id": object_id, "fact_id": fact_id})
+                        "object_id": object_id, "fact_id": fact_id,
+                        "template": template})
     return written
 
 
@@ -396,7 +481,7 @@ async def _upsert_fact(
     object_id: str, valid_from, basis: str, confidence: float,
     generator_version: str | None = None, owner_id: str | None = None,
     access_level: str | None = None, shared_with: list[str] | None = None,
-    key_id: str | None = None,
+    key_id: str | None = None, template: str | None = None,
 ) -> str:
     """Record the claim, then close whatever it replaced.
 
@@ -413,8 +498,8 @@ async def _upsert_fact(
         INSERT INTO entity_facts (fact_id, org_id, project_id, subject_id,
             predicate, object_id, valid_from, basis, confidence,
             generator_version, owner_id, access_level, shared_with,
-            asserted_by_key_id)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14)
+            asserted_by_key_id, template)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14, $15)
         ON CONFLICT (project_id, subject_id, predicate, object_id)
             WHERE valid_to IS NULL AND retracted_at IS NULL
         -- A second source for a claim we already hold is more evidence, not a
@@ -432,7 +517,7 @@ async def _upsert_fact(
         """,
         new_id("fct"), org_id, project_id, subject_id, predicate, object_id,
         valid_from, basis, confidence, generator_version, owner_id, access_level,
-        json.dumps(shared_with or []), key_id,
+        json.dumps(shared_with or []), key_id, template,
     )
     fact_id = row["fact_id"]
 

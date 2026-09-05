@@ -556,6 +556,59 @@ async def test_events_about_a_memory_are_visible_to_its_owner_only(
     assert (await poll_events(pool, stranger, since=0))["events"] == []
 
 
+
+async def test_a_fact_alert_scoped_to_a_memory_reaches_its_evidence(
+    pool, tenant, principal_for
+):
+    """A fact is not an item, and a container scope used to drop it silently.
+
+    `fact.*` events carry no `data_id` -- a fact is not a record -- so scoping
+    one to a memory intersected the batch with an empty set and matched
+    nothing, forever, with no error to find. The fact stands on the records its
+    edges cite, and that is what the scope has to ask about.
+    """
+    from memdog.memories import add_member
+
+    actor = await principal_for(tenant.api_key)
+    memory_id = new_id("mem")
+    await pool.execute(
+        """
+        INSERT INTO memories (memory_id, org_id, project_id, type, memory_key, owner_id)
+        VALUES ($1, $2, $3, 'topic', 'scoped-facts', $4)
+        """,
+        memory_id, tenant.org_id, tenant.project_id, tenant.user_id,
+    )
+    inside = await _alert(pool, actor, tenant, surface="fact.asserted",
+                          where={"predicate": ["located_in"]},
+                          scope={"memory_id": memory_id})
+    outside = await _alert(pool, actor, tenant, surface="fact.asserted",
+                           where={"predicate": ["located_in"]},
+                           scope={"memory_id": new_id("mem")})
+    await _approve(pool, actor, inside["alert_id"])
+    await _approve(pool, actor, outside["alert_id"])
+
+    data_id = await _item(pool, tenant, "in-the-memory")
+    async with pool.acquire() as conn, conn.transaction():
+        resolved = await entities_mod.resolve_mentions(
+            conn, data_id=data_id, org_id=tenant.org_id,
+            project_id=tenant.project_id, candidates=PEOPLE,
+        )
+        await record_edges(
+            conn, data_id=data_id, org_id=tenant.org_id,
+            project_id=tenant.project_id, resolved=resolved,
+            relations=[{"subject": "Priya Raman", "predicate": "located_in",
+                        "object": "Lisbon"}],
+        )
+        await add_member(conn, memory_id, data_id, "explicit")
+
+    assert (await evaluate_gap(
+        pool, inside["alert_id"], trigger="tick"))["matches"] == 1
+    # And the scope still means something: a memory the evidence is not in
+    # matches nothing, which is the case that used to be indistinguishable.
+    assert (await evaluate_gap(
+        pool, outside["alert_id"], trigger="tick"))["matches"] == 0
+
+
 # -- the async consumer -----------------------------------------------------
 
 

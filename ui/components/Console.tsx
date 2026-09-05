@@ -10,7 +10,7 @@
  * accountable.
  */
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import Capture, { humanBytes, type Staged } from "./Capture";
 import ThemeToggle from "./ThemeToggle";
@@ -36,6 +36,7 @@ import {
   CompactionRun,
   FullVersion,
   ObservedEvent,
+  PageQuality,
   Setting,
   Subscription,
   describeEvent,
@@ -209,6 +210,125 @@ const GUIDE_PATH = [
   },
 ];
 
+/**
+ * How to work each screen, in the order its own panels are laid out.
+ *
+ * Written from the panels themselves rather than from memory, so a step names
+ * something that is actually on the page. Where a screen has a trap — a default
+ * that silently makes the work invisible, a control that must come before
+ * another — the step says so, because that is the part a person cannot infer
+ * from the layout.
+ */
+const HOW_TO: Partial<Record<Section, string[]>> = {
+  overview: [
+    "Read the rungs: stored is durable, searchable means it was embedded, enriched means a model has read it.",
+    "“Stored but not read” is the backlog — those records will not answer a search until they are interpreted.",
+    "Last 24 hours answers the question the rungs cannot: is anything still arriving.",
+  ],
+  alerts: [
+    "Say what to watch for, as conditions on what arrives.",
+    "Add a destination under “Where events get sent” — a rule with nowhere to send fires into nothing.",
+    "Come back to the run history: for anything on a schedule, silence and success look identical.",
+  ],
+  standing: [
+    "Describe what you want to be told about, rather than asking for it repeatedly.",
+    "“What it has caught” is the calibration — a query matching everything looks like one that works until you read the matches.",
+  ],
+  inbound: [
+    "Create an endpoint, then pick the provider preset — each provider signs a different string.",
+    "Store the provider's own signing secret. Minting ours instead leaves an endpoint that looks configured and rejects every real delivery.",
+    "Give them the URL, then send a test delivery: it signs and goes through the real receive path.",
+    "Turn on “Interpret deliveries” or the provider can post all day and nothing it sent is findable.",
+    "Watch “seconds since last item” — it catches a provider that stopped, which otherwise looks like a quiet week.",
+  ],
+  crawlers: [
+    "Create a crawler and attach the credential it pulls with.",
+    "Dry-run it first: the dry run walks the identical code and stops short of the write, so its count is what a live run would do.",
+    "Enable it only once the dry run looks right. Nothing in the catalog has been exercised against a live account.",
+  ],
+  producers: [
+    "“How far behind each source is” is the highest-value thing here — a source that stopped reads as a quiet week everywhere else.",
+  ],
+  add: [
+    "Pick what kind of thing you are adding, then give it the content.",
+    "Steps 3 to 5 all have working defaults; open them only to change where it goes, what is done to it, or who may see it.",
+    "Press Add data. What happened to it appears at the top — the climb from stored to searchable is watched there.",
+  ],
+  update: [
+    "Choose a memory to scope by — this walks the corpus by container rather than by query.",
+    "Narrow, then open one record, then one revision. Each step shows only what is needed to choose the next.",
+  ],
+  search: [
+    "Type a query and choose the arms — vector, lexical, and graph, which reaches records that never contain your words.",
+    "Read “Considered but not returned” as carefully as the results: every dropped record carries the reason it was dropped.",
+    "Provenance names the model that embedded it, which is what makes a bad result diagnosable.",
+  ],
+  ask: [
+    "Ask a question of the corpus rather than for records.",
+    "Every factual sentence carries the passage behind it. An answer reported as ungrounded means the corpus does not say — that is a result, not a failure.",
+  ],
+  memory: [
+    "A memory is a lifecycle container: it groups records and decides when they expire.",
+    "“Past its TTL” is what to act on. Changing or removing one affects everything mapped into it.",
+  ],
+  cases: [
+    "A case is a subject and its timeline, assembled from records that mention it.",
+  ],
+  entities: [
+    "Entities are the people, organisations and things the corpus mentions, each with the records that evidence it.",
+    "“Merge these two?” is where the same thing under two names gets reconciled. “Mentioned alongside” is computed at query time, not stored.",
+  ],
+  workflows: [
+    "Define a long process, then watch where each run actually is.",
+    "“How it got here” is the part worth reading when one is stuck.",
+  ],
+  reprocess: [
+    "“What is behind” counts records built by a generator that is no longer current.",
+    "Choose what to do and which records, then run it. This rebuilds what a stale generator produced — it cannot un-redact anything removed before storage.",
+  ],
+  compaction: [
+    "Fold a memory down without losing it: the detail is kept, the working set gets smaller.",
+    "The other half of this lifecycle is Deletion — one keeps everything, the other erases and proves it.",
+  ],
+  deletion: [
+    "Say what you are deleting: records, a memory, a mapping, or all account data.",
+    "Dry-run first. Then erase — and take the certificate under “Prove it”, which outlives the record it describes.",
+  ],
+  audit: [
+    "Who read and wrote what. Filter by action to answer a specific question rather than scroll a log.",
+  ],
+  sharing: [
+    "Everything currently public, and the control that takes it back.",
+  ],
+  settings: [
+    "Every effective value with where it came from — the answer to “why is this being used?” rather than just what it is.",
+    "A locked org setting is policy: a project cannot quietly replace it.",
+  ],
+  models: [
+    "Assign a model per purpose — extraction, answering, transcription — for this org.",
+    "Absent an assignment the deployment default applies, which is why most installations never configure this.",
+  ],
+  prompts: [
+    "Override a shipped extraction prompt per data type. Test before saving.",
+    "Changing a prompt is a versioning event: it makes everything the old prompt produced detectably stale, which is what makes Interpret & rebuild actionable.",
+  ],
+  mcp: [
+    "Point any MCP client at the URL shown, with an API key as a bearer token.",
+    "The tools listed are the same functions the REST API calls, so the credential and the access rules are the ones you already have.",
+  ],
+  projects: [
+    "Projects, groups, invites and members — the shape of the organisation.",
+    "Prefer a group over naming three people: a group resolves inside the ACL query, so adding somebody later gives them the records too.",
+  ],
+  keys: [
+    "Issue a key scoped to what it needs. It is shown once and cannot be read back — only replaced.",
+    "Revoking is immediate, and removing a member revokes theirs in the same transaction.",
+  ],
+  platform: [
+    "Operational shape only — records by rung and what needs attention. It counts across the deployment, not one tenant.",
+  ],
+};
+
 const GUIDE_WHY: Record<string, string> = {
   Monitor: "Is this working, and will it tell me when it is not.",
   Sources: "Is data still arriving, and where from.",
@@ -245,6 +365,9 @@ export default function Console({
   // what makes collapsing safe: nothing is unreachable if it can be named.
   const [filter, setFilter] = useState("");
   const [showGuide, setShowGuide] = useState(false);
+  // One section's steps at a time. Twenty-six sets of steps rendered at once is
+  // the wall of text the guide exists to replace.
+  const [guideOpen, setGuideOpen] = useState<Section | null>(null);
   // Only the group you are in. The previous default opened all eight, which
   // put twenty-six items and twenty-six hints on screen at once and made every
   // destination shout at the same volume.
@@ -416,8 +539,8 @@ export default function Console({
               <button className="secondary" onClick={() => setShowGuide(false)}>Close</button>
             </div>
             <p className="empty">
-              Four steps end to end, then what every section in the sidebar is for. Pick any of
-              them to go there.
+              Four steps end to end, then every section in the sidebar. Open one for how to work
+              it, or go straight there.
             </p>
 
             {GUIDE_PATH.map((step) => (
@@ -436,16 +559,42 @@ export default function Console({
                 {GUIDE_WHY[group.title] && (
                   <p className="guidewhy">{GUIDE_WHY[group.title]}</p>
                 )}
-                {group.items.map((item) => (
-                  <button
-                    className="guideitem"
-                    key={item.key}
-                    onClick={() => { setSection(item.key); setShowGuide(false); }}
-                  >
-                    <span className="navlabel">{item.label}</span>
-                    <span className="navhint">{item.hint}</span>
-                  </button>
-                ))}
+                {group.items.map((item) => {
+                  const steps = HOW_TO[item.key];
+                  const expanded = guideOpen === item.key;
+                  return (
+                    <div key={item.key}>
+                      <button
+                        className="guideitem"
+                        aria-expanded={expanded}
+                        onClick={() => setGuideOpen(expanded ? null : item.key)}
+                      >
+                        <span className="navlabel">
+                          {item.label}
+                          <span className="stepcaret"> {expanded ? "▾" : "▸"}</span>
+                        </span>
+                        <span className="navhint">{item.hint}</span>
+                      </button>
+                      {expanded && (
+                        <div className="guidesteps">
+                          {steps ? (
+                            <ol>{steps.map((s) => <li key={s}>{s}</li>)}</ol>
+                          ) : (
+                            /* Saying so beats an empty box: "nothing written
+                               yet" and "nothing to say" are different facts. */
+                            <p className="empty">No walkthrough written for this one yet.</p>
+                          )}
+                          <button
+                            className="secondary"
+                            onClick={() => { setSection(item.key); setShowGuide(false); }}
+                          >
+                            Open {item.label} →
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             ))}
           </aside>
@@ -533,9 +682,18 @@ function Staircase({ stair, compact }: { stair: Stair; compact?: boolean }) {
   );
 }
 
+/** `parsers.MAX_TEXT_CHARS` — one document must not consume a workspace's
+ *  embedding budget, so extraction stops here and says that it did. */
+const INDEX_CEILING = 2_000_000;
+
 function ItemDetail({ item, versions }: { item: Item; versions: Version[] }) {
   const text = item.extracted_text ?? item.content_text ?? "";
-  const stuck = item.parse_status !== null && item.parse_status !== "parsed";
+  // Same rule as `lib/progress.ts`: `truncated` read fine and simply ran past
+  // the index ceiling. It earns a note, not a "could not be read".
+  const stuck = item.parse_status !== null
+    && item.parse_status !== "parsed"
+    && item.parse_status !== "truncated";
+  const capped = item.parse_status === "truncated";
   return (
     <>
       <table className="kv">
@@ -556,11 +714,30 @@ function ItemDetail({ item, versions }: { item: Item; versions: Version[] }) {
         </tbody>
       </table>
 
+      {capped && (
+        <div className="notice" style={{ marginTop: 12 }}>
+          {/* Written as prose rather than assembled from the API's warning
+            * string. Splicing that in mid-sentence produced "…the rest is
+            * stored but not indexed The bytes are untouched" — no full stop,
+            * a lower-case sentence start, a raw 2000000, and the same fact
+            * stated twice. A machine-readable warning and a sentence for a
+            * person are not the same artifact. */}
+          <strong>Indexed up to the {INDEX_CEILING.toLocaleString()}-character ceiling.</strong>{" "}
+          This document is longer, so the text past that point is stored and durable but will not
+          be found by search. The bytes and their checksum are untouched, so raising the ceiling
+          re-indexes the rest without a re-upload.
+        </div>
+      )}
+
       {stuck && (
         <div className="notice" style={{ marginTop: 12 }}>
           <strong>Stored but not interpreted — {item.parse_status}.</strong>{" "}
-          {String((item.parse_detail?.reason as string) ?? "")} The bytes and their checksum are
-          untouched, so this is fixable without re-uploading.
+          {/* The reason is a sentence from the API and may or may not end in a
+            * full stop, so it gets its own paragraph rather than being spliced
+            * into the middle of ours. */}
+          <span className="provenance">{String((item.parse_detail?.reason as string) ?? "")}</span>
+          <br />
+          The bytes and their checksum are untouched, so this is fixable without re-uploading.
         </div>
       )}
 
@@ -612,6 +789,123 @@ function ItemDetail({ item, versions }: { item: Item; versions: Version[] }) {
  * audited, rather than by handing the browser a signed URL that outlives the
  * check.
  */
+/** How the page read, in sentences rather than as a payload.
+ *
+ * The values are enumerated on purpose, so this can say "marketing, nothing
+ * sourced, not worth keeping" as three chips a person can scan rather than a
+ * paragraph they have to parse. `not_content` is the one worth colouring: a
+ * login wall and a parked domain arrive as a perfectly good 200, and a record
+ * that stored one looks identical to a record that stored an article.
+ *
+ * Renders nothing at all when there is no reading — a PDF is not a page and an
+ * unjudged record is not a badly judged one.
+ */
+function PageReading({ quality }: { quality: PageQuality | null }) {
+  if (!quality) return null;
+
+  const KIND: Record<string, string> = {
+    error_or_empty: "an error or empty page",
+    login_or_paywall: "a login wall or paywall",
+    press_release: "a press release",
+    product_page: "a product page",
+    forum_thread: "a forum thread",
+    news_report: "a news report",
+    blog_post: "a blog post",
+  };
+  const SUBSTANCE: Record<string, string> = {
+    original: "has something only it has",
+    synthesised: "pulls together what others said",
+    derivative: "restates what is available elsewhere",
+    thin: "says very little at length",
+  };
+  const EVIDENCE: Record<string, string> = {
+    primary: "shows primary evidence",
+    quantified: "quantifies its claims",
+    cited: "cites its sources",
+    asserted: "asserts without sourcing",
+    none: "offers no evidence at all",
+  };
+  const VERDICT: Record<string, string> = {
+    keep: "worth keeping",
+    keep_with_caveats: "worth keeping, with caveats",
+    low_value: "little retrieval value",
+    not_content: "not content — nothing here to keep",
+  };
+  const COMMERCIAL: Record<string, string> = {
+    none: "not monetised",
+    lead_capture: "collects leads",
+    product_page: "sells the product it describes",
+  };
+  const say = (map: Record<string, string>, key?: string) =>
+    key ? map[key] ?? key.replace(/_/g, " ") : null;
+
+  const alarm = quality.retrieval_value === "not_content"
+    || quality.retrieval_value === "low_value";
+
+  return (
+    <section className="panel">
+      <h3>How this page read</h3>
+      <div className="row" style={{ flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
+        {quality.page_kind && (
+          <span className="chip">{say(KIND, quality.page_kind)}</span>
+        )}
+        {quality.substance && (
+          <span className="chip">{say(SUBSTANCE, quality.substance)}</span>
+        )}
+        {quality.evidence && (
+          <span className={quality.evidence === "none" || quality.evidence === "asserted"
+            ? "chip warnchip" : "chip on"}>
+            {say(EVIDENCE, quality.evidence)}
+          </span>
+        )}
+        {quality.commercial && quality.commercial !== "none" && (
+          <span className="chip">{say(COMMERCIAL, quality.commercial)}</span>
+        )}
+        {quality.retrieval_value && (
+          <span className={alarm ? "chip warnchip" : "chip on"}>
+            {say(VERDICT, quality.retrieval_value)}
+          </span>
+        )}
+      </div>
+
+      {quality.verdict && <p style={{ marginTop: 0 }}>{quality.verdict}</p>}
+
+      <table className="kv">
+        <tbody>
+          {quality.purpose && (
+            <tr><th>What it wants</th><td>{quality.purpose}</td></tr>
+          )}
+          <tr>
+            <th>Who wrote it</th>
+            <td>{quality.authorship || <span className="empty">unattributed</span>}</td>
+          </tr>
+          <tr>
+            <th>When</th>
+            <td>{quality.dated || <span className="empty">undated</span>}</td>
+          </tr>
+        </tbody>
+      </table>
+
+      {quality.reliability && quality.reliability.length > 0 && (
+        <>
+          <h4>Reasons to trust it, or not</h4>
+          <ul className="hint">
+            {quality.reliability.map((r, i) => <li key={i}>{r}</li>)}
+          </ul>
+        </>
+      )}
+      {quality.missing && quality.missing.length > 0 && (
+        <>
+          <h4>Raised and left unanswered</h4>
+          <ul className="hint">
+            {quality.missing.map((m, i) => <li key={i}>{m}</li>)}
+          </ul>
+        </>
+      )}
+    </section>
+  );
+}
+
 function StoredMedia({ item }: { item: Item }) {
   const src = `/api/proxy/api/v1/data/${item.data_id}/content`;
   const mime = item.mime_type ?? "";
@@ -675,6 +969,49 @@ function StoredMedia({ item }: { item: Item }) {
  * reach a button. Each header states its current value, so what is collapsed is
  * still visible — closed is not hidden.
  */
+/** The URL, normalised, if it is one the server would agree to fetch.
+ *
+ * Only the scheme is checked here. The host rules — no private addresses, no
+ * link-local, re-validated on every redirect — live on the server and are the
+ * ones that matter; repeating them in the browser would be a second copy of a
+ * security rule, and the second copy is always the one that goes stale.
+ */
+function httpUrl(raw: string): string | null {
+  try {
+    const url = new URL(raw.trim());
+    return url.protocol === "http:" || url.protocol === "https:" ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The 11-character video id in a YouTube URL, or null.
+ *
+ * A deliberately small echo of the parser in `memdog/youtube.py`, and only for
+ * two cosmetic jobs: deciding whether the button is pressable, and building the
+ * canonical URL used as the external id so one video pasted three ways is one
+ * record. The server parses it again and refuses what it disagrees with, so
+ * this being generous is a worse label, never a worse permission.
+ */
+function youtubeId(raw: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(raw.trim());
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+  const host = url.hostname.toLowerCase().replace(/^www\./, "");
+  const parts = url.pathname.split("/").filter(Boolean);
+  let id = "";
+  if (host === "youtu.be") id = parts[0] ?? "";
+  else if (host === "youtube.com" || host === "m.youtube.com" || host === "youtube-nocookie.com") {
+    if (url.pathname === "/watch") id = url.searchParams.get("v") ?? "";
+    else if (parts.length >= 2 && ["shorts", "embed", "live", "v"].includes(parts[0])) id = parts[1];
+  }
+  return /^[A-Za-z0-9_-]{11}$/.test(id) ? id : null;
+}
+
 function AddData({
   projectId,
   producerId,
@@ -689,7 +1026,9 @@ function AddData({
   const [text, setText] = useState(
     "The checkout service returned 502s for eleven minutes after a bad deploy.\n\nRollback completed at 14:02 UTC and error rates recovered.",
   );
-  const [source, setSource] = useState<"text" | "file">("text");
+  const [source, setSource] = useState<"text" | "file" | "video" | "page">("text");
+  const [videoUrl, setVideoUrl] = useState("");
+  const [pageUrl, setPageUrl] = useState("");
   const [staged, setStaged] = useState<Staged | null>(null);
   // Which optional steps are open. Closed by default because each has a
   // working default and the button is what people came for.
@@ -711,6 +1050,12 @@ function AddData({
   // the point of them -- a saved override would change what a project does with
   // no audit trail on the setting that appears to control it.
   const [promptOverride, setPromptOverride] = useState("");
+  // What the content is *for*, which the bytes cannot say. Separate from
+  // the prompt override beside it: a prompt replaces the instruction
+  // wholesale, a template also narrows the relationships the model may
+  // report -- so it changes the graph, not just the summary.
+  const [template, setTemplate] = useState("");
+  const [templates, setTemplates] = useState<GraphTemplate[]>([]);
   const [modelOverride, setModelOverride] = useState("");
   // Sealed before any other phase runs, and no endpoint changes it afterwards.
   const [level, setLevel] = useState("");
@@ -741,6 +1086,17 @@ function AddData({
       .catch(() => setMemories([]));
   }, [projectId]);
   useEffect(() => { loadMemories(); }, [loadMemories]);
+
+  const chosenTemplate = templates.find((x) => x.template === template) ?? null;
+
+  // Served rather than hardcoded, for the reason every vocabulary in this
+  // console is: a list typed here drifts from what the server will accept, and
+  // the write is refused with a name the screen offered.
+  useEffect(() => {
+    void call<{ templates: GraphTemplate[] }>("api/v1/templates")
+      .then((r) => setTemplates(r.templates))
+      .catch(() => setTemplates([]));
+  }, []);
 
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
@@ -784,7 +1140,15 @@ function AddData({
   // than left for someone to work out from a greyed-out control.
   const blocked = source === "text"
     ? (text.trim() ? null : "Nothing typed yet")
-    : (staged ? null : "Choose a file or record something first");
+    : source === "page"
+      ? (httpUrl(pageUrl) ? null : pageUrl.trim()
+          ? "That needs to be a http:// or https:// address"
+          : "Paste a link first")
+    : source === "video"
+      ? (youtubeId(videoUrl) ? null : videoUrl.trim()
+          ? "That is not a YouTube video link"
+          : "Paste a YouTube link first")
+      : (staged ? null : "Choose a file or record something first");
   const aclIncomplete = !meeting && (level === "restricted" || level === "shared")
     && principals.length === 0;
 
@@ -793,11 +1157,27 @@ function AddData({
     setError(null);
     setNote(null);
     try {
-      const externalId = source === "text" ? `text-${Date.now()}` : staged!.name;
+      // The canonical watch URL is the external id, so the same video pasted
+      // as a share link, a short link and a timestamped link is one record
+      // rather than three. The server parses it again and refuses anything it
+      // disagrees with — this is for the id, not for the security.
+      const watchUrl = source === "video"
+        ? `https://www.youtube.com/watch?v=${youtubeId(videoUrl)}` : "";
+      const page = source === "page" ? httpUrl(pageUrl) ?? "" : "";
+      const externalId = source === "text" ? `text-${Date.now()}`
+        : source === "video" ? watchUrl
+        : source === "page" ? page : staged!.name;
       const content = source === "text"
         ? { kind: "inline", text }
-        : { kind: "inline", bytes_b64: staged!.base64, mime_type: staged!.mime };
-      const label = source === "text" ? "Text" : `${staged!.name} (${humanBytes(staged!.size)})`;
+        : source === "video"
+          ? { kind: "pending", provider: "youtube", resource_id: watchUrl }
+          : source === "page"
+            ? { kind: "pending", provider: "url", resource_id: page }
+            : { kind: "inline", bytes_b64: staged!.base64, mime_type: staged!.mime };
+      const label = source === "text" ? "Text"
+        : source === "video" ? watchUrl
+        : source === "page" ? page
+        : `${staged!.name} (${humanBytes(staged!.size)})`;
 
       const memory = meeting
         ? { type: "meeting", key: memoryKey || externalId }
@@ -813,6 +1193,7 @@ function AddData({
         producer_id: producerId,
         items: [{
           external_id: externalId, content, memory,
+          template: template || undefined,
           access: meeting
             ? { level: room.level, principals: room.principals }
             : level
@@ -912,13 +1293,94 @@ function AddData({
             />
             A file, a recording, or a photo
           </label>
+          <label className="check">
+            <input
+              type="radio"
+              name="add-source"
+              checked={source === "video"}
+              onChange={() => { setSource("video"); setStaged(null); }}
+            />
+            A YouTube video
+          </label>
+          <label className="check">
+            <input
+              type="radio"
+              name="add-source"
+              checked={source === "page"}
+              onChange={() => { setSource("page"); setStaged(null); }}
+            />
+            A web page
+          </label>
         </div>
       </section>
 
       <section className="panel">
-        <h2><span className="stepn">2</span> {source === "text" ? "The text" : "The file"}</h2>
+        <h2><span className="stepn">2</span> {
+          source === "text" ? "The text"
+            : source === "video" ? "The video"
+            : source === "page" ? "The page"
+            : "The file"
+        }</h2>
         {source === "text" ? (
           <textarea value={text} onChange={(e) => setText(e.target.value)} />
+        ) : source === "page" ? (
+          <>
+            <input
+              type="url"
+              value={pageUrl}
+              placeholder="https://example.com/the-article"
+              onChange={(e) => setPageUrl(e.target.value)}
+              style={{ width: "100%" }}
+            />
+            {/* A page is not a file somebody handed you, and the extra thing
+              * done to it is worth saying before it happens rather than
+              * leaving it to be discovered in the result. */}
+            <div className="notice">
+              <strong>The page is fetched and then judged, not just stored.</strong> Alongside the
+              usual summary, keywords and graph, it records what kind of page it is, what it wants
+              from the reader, whether anything on it is sourced, who wrote it, when, how it is
+              paid for — and whether it is worth keeping at all. An error page, a login wall and a
+              parked domain all arrive as a perfectly good 200.
+            </div>
+            <p className="hint">
+              Fetched from this server, not your browser: private and link-local addresses are
+              refused, every redirect is re-checked, and the download is capped. Pages behind a
+              login will store the login page, and say so.
+            </p>
+          </>
+        ) : source === "video" ? (
+          <>
+            <input
+              type="url"
+              value={videoUrl}
+              placeholder="https://www.youtube.com/watch?v=…"
+              onChange={(e) => setVideoUrl(e.target.value)}
+              style={{ width: "100%" }}
+            />
+            {/* What actually happens, because it is not what the words
+              * "add a video" imply. Nothing is downloaded and no transcript is
+              * stored: a model watches it and writes an account of it, and the
+              * account is the record. Said here rather than discovered from a
+              * result that is shorter than expected. */}
+            <div className="notice">
+              <strong>A model watches the video and writes an account of it.</strong> Nothing is
+              downloaded, and what is stored is a section-by-section description with timestamps,
+              the terms and people introduced, and short attributed quotes — not a transcript.
+              A verbatim copy is refused by the model, and would be reproducing the video rather
+              than describing it.
+            </div>
+            <p className="hint">
+              Charged per video and recorded on the revision: roughly{" "}
+              <strong>100,000 input tokens for 20 minutes</strong> of video, since the model reads
+              the frames as well as the audio. A long video costs proportionally more.
+            </p>
+            {youtubeId(videoUrl) && (
+              <p className="ok">
+                Reads as <code>https://www.youtube.com/watch?v={youtubeId(videoUrl)}</code> — the
+                same video pasted another way lands on this record rather than a second one.
+              </p>
+            )}
+          </>
         ) : (
           <>
             <div className="notice">
@@ -1053,6 +1515,46 @@ function AddData({
           over either — otherwise a lock would be advisory. Saved instruction blocks live under{" "}
           <strong>Prompts</strong>; assignment per purpose lives under <strong>Models</strong>.
         </p>
+
+        <div className="row" style={{ marginTop: 14 }}>
+          <label style={{ flex: 1, minWidth: 280 }}>
+            What this is for
+            <select value={template} disabled={!enrich || !summarize}
+                    title={!enrich || !summarize
+                      ? "Needs interpretation and summarising — a template shapes what is extracted, and nothing is being extracted"
+                      : undefined}
+                    onChange={(e) => setTemplate(e.target.value)}>
+              <option value="">no template — extract whatever is there</option>
+              {templates.map((tpl) => (
+                <option key={tpl.template} value={tpl.template}>
+                  {tpl.template} — {tpl.description}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        {chosenTemplate ? (
+          <div className="notice" style={{ marginBottom: 0 }}>
+            <strong>Read as {chosenTemplate.template}.</strong> The model will be asked to look
+            for{" "}
+            {chosenTemplate.predicates.map((pred, i) => (
+              <span key={pred}>
+                {i > 0 ? ", " : ""}<code>{pred}</code>
+              </span>
+            ))}{" "}
+            and nothing else, so questions like{" "}
+            <em>{chosenTemplate.questions[0]}</em> become answerable from the graph. Citations use{" "}
+            <code>{chosenTemplate.citation_unit}</code>.{" "}
+            <strong>A template is a hint, not a promise</strong> — content that is not this kind of
+            thing is extracted plainly rather than forced into the shape.
+          </div>
+        ) : (
+          <p className="empty" style={{ marginBottom: 0 }}>
+            Without one, relationships are extracted from the full vocabulary — which is right when
+            you do not know what the content is, and produces mostly{" "}
+            <code>related_to</code> when the content is an argument rather than a workplace record.
+          </p>
+        )}
       </Step>
 
       <Step n={5} name="acl" title="Who can see it" value={audienceSummary}>
@@ -1195,6 +1697,9 @@ function UpdateData({
 
   const [selected, setSelected] = useState<Item | null>(null);
   const [versions, setVersions] = useState<Version[]>([]);
+  // The page reading, when this record is a fetched page. It lives on the
+  // artifact rather than the item, so it takes its own call.
+  const [quality, setQuality] = useState<PageQuality | null>(null);
   const [showing, setShowing] = useState<FullVersion | null>(null);
   const [loadingVersion, setLoadingVersion] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
@@ -1250,12 +1755,23 @@ function UpdateData({
 
   async function open(dataId: string) {
     setError(null); setNote(null); setShowing(null); setEditing(false);
+    setQuality(null);
     try {
       const item = await call<Item>(`api/v1/data/${dataId}`);
       setSelected(item);
       setDraft(item.content_text ?? item.extracted_text ?? "");
       setVersions((await call<{ versions: Version[] }>(
         `api/v1/data/${dataId}/versions`)).versions);
+      // Best-effort and separate: a record with no artifact yet is the
+      // ordinary case, not a failure of the detail view.
+      try {
+        const artifacts = (await call<{ artifacts: { fields?: Record<string, unknown> }[] }>(
+          `api/v1/data/${dataId}/artifacts`)).artifacts;
+        const found = artifacts.map((a) => a.fields?.quality).find(Boolean);
+        setQuality((found as PageQuality) ?? null);
+      } catch {
+        setQuality(null);
+      }
     } catch (e) {
       setError((e as Error).message);
     }
@@ -1414,6 +1930,7 @@ function UpdateData({
           <section className="panel">
             <h2>{selected.external_id ?? selected.data_id}</h2>
             <ItemDetail item={selected} versions={versions} />
+            <PageReading quality={quality} />
             <StoredMedia item={selected} />
 
             {!editing ? (
@@ -1512,6 +2029,28 @@ type GraphNode = { entity_id: string; display_name: string; type: string; depth:
 type GraphEdge = {
   subject_id: string; predicate: string; object_id: string;
   evidence: number; source_data_ids: string[]; confidence: number;
+  // Which template drew this edge; null is open-domain extraction.
+  template: string | null;
+  // Whether the predicate is read off the page or into it. It decides how much
+  // an answer resting on this hop is worth, so it belongs beside the edge and
+  // not in a detail view nobody opens.
+  confidence_class: "structural" | "interpretive";
+};
+type MemoryContext = {
+  memory: { memory_id: string; type: string; memory_key: string | null;
+            title: string | null };
+  records: { total: number; stored: number; searchable: number; enriched: number };
+  templates: { template: string; records: number }[];
+  keywords: { keyword: string; records: number }[];
+  entities: { entity_id: string; display_name: string; type: string; records: number }[];
+  edges: { predicate: string; subject: string; subject_id: string; object: string;
+           object_id: string; template: string | null; evidence: number;
+           confidence_class: "structural" | "interpretive" }[];
+};
+
+type GraphTemplate = {
+  template: string; description: string; questions: string[];
+  predicates: string[]; citation_unit: string; digest: string;
 };
 type GraphView = {
   root: GraphNode; nodes: GraphNode[]; edges: GraphEdge[]; truncated: boolean;
@@ -1564,13 +2103,25 @@ function EntitiesSection({
     }
   }, [projectId, kind]);
 
+  // Which lens to walk the graph through. Empty is every edge, which is what
+  // this screen has always shown.
+  const [lens, setLens] = useState("");
+  const [lenses, setLenses] = useState<GraphTemplate[]>([]);
+  useEffect(() => {
+    void call<{ templates: GraphTemplate[] }>("api/v1/templates")
+      .then((r) => setLenses(r.templates))
+      .catch(() => setLenses([]));
+  }, []);
+
   const inspect = useCallback(
     async (entityId: string) => {
       try {
         const [d, g, c] = await Promise.all([
           call<EntityDetail>(`api/v1/entities/${entityId}`, undefined, "GET"),
           call<GraphView>(
-            `api/v1/entities/${entityId}/graph?depth=${depth}`, undefined, "GET"),
+            `api/v1/entities/${entityId}/graph?depth=${depth}` +
+              (lens ? `&template=${encodeURIComponent(lens)}` : ""),
+            undefined, "GET"),
           call<{ co_mentions: CoMention[] }>(
             `api/v1/entities/${entityId}/co-mentions`, undefined, "GET"),
         ]);
@@ -1581,7 +2132,7 @@ function EntitiesSection({
         setError((e as Error).message);
       }
     },
-    [depth],
+    [depth, lens],
   );
 
   useEffect(() => {
@@ -1751,14 +2302,44 @@ function EntitiesSection({
                   {d} hop{d > 1 ? "s" : ""}
                 </button>
               ))}
+              {lenses.length > 0 && (
+                <select
+                  value={lens}
+                  disabled={busy}
+                  title="Walk only the edges a given template drew. Applied inside the traversal, so a path is shown only when every hop of it is within the template."
+                  onChange={(e) =>
+                    act("", async () => {
+                      const next = e.target.value;
+                      setLens(next);
+                      setGraph(
+                        await call<GraphView>(
+                          `api/v1/entities/${graph.root.entity_id}/graph?depth=${depth}` +
+                            (next ? `&template=${encodeURIComponent(next)}` : ""),
+                          undefined, "GET"),
+                      );
+                    })
+                  }
+                >
+                  <option value="">every relationship</option>
+                  {lenses.map((x) => (
+                    <option key={x.template} value={x.template}>
+                      read as {x.template}
+                    </option>
+                  ))}
+                </select>
+              )}
             </div>
           </div>
 
           {graph.edges.length === 0 ? (
             <p className="empty">
-              No asserted relationships yet. Edges come from what a document actually stated —
-              &ldquo;Priya works for Northwind&rdquo; — so they need an enrichment pass that read
-              for them. Co-mentions below need nothing and work today.
+              {lens
+                ? `No relationships drawn under the ${lens} template. That is a different fact from `
+                  + "having none at all — this entity may be well connected through edges other "
+                  + "templates or an open-domain pass produced."
+                : "No asserted relationships yet. Edges come from what a document actually stated — "
+                  + "\u201cPriya works for Northwind\u201d — so they need an enrichment pass that "
+                  + "read for them. Co-mentions below need nothing and work today."}
             </p>
           ) : (
             <>
@@ -1776,6 +2357,22 @@ function EntitiesSection({
                       <span className="chip">
                         {edge.evidence} record{edge.evidence === 1 ? "" : "s"} assert this
                       </span>
+                      {/* Whether the claim was stated or interpreted. It is the
+                        * one thing on an edge that changes how much a path
+                        * through it is worth, so it is a column rather than
+                        * something you click to find. */}
+                      {edge.confidence_class === "interpretive" && (
+                        <span className="chip warnchip"
+                              title="This predicate records a reading of what the content argues, not a statement it made plainly. An answer that depends on this hop is an interpretation.">
+                          a reading, not a quote
+                        </span>
+                      )}
+                      {edge.template && (
+                        <span className="chip"
+                              title={`Drawn under the ${edge.template} template — the content was declared to be this kind of thing when it was written`}>
+                          read as {edge.template}
+                        </span>
+                      )}
                     </div>
                     <div className="text">
                       {name(edge.subject_id)} <span className="edge-arrow">→</span>{" "}
@@ -2559,22 +3156,56 @@ function CompactionSection({ projectId }: { projectId: string }) {
         return (
           <div className="card" key={j.job_id}>
             <h2>{j.name}</h2>
-            <p>
-              <code>{algorithms[j.algorithm]?.label ?? j.algorithm}</code> ·{" "}
-              {j.memory_title || j.memory_key} ({j.members} member
-              {j.members === 1 ? "" : "s"}) ·{" "}
-              {j.schedule.type === "interval"
-                ? `every ${Math.round((j.schedule.every_seconds ?? 0) / 3600)}h`
-                : "when you run it"}
-            </p>
-            <p>
-              {j.enabled ? <span className="ok">scheduled</span>
-                : approved(j) ? <span>ready, not scheduled</span>
-                : <span className="warn">needs a preview</span>}
-              {j.archived_total > 0 && <> · {j.archived_total} archived so far</>}
-              {j.last_run_at && <> · last ran {new Date(j.last_run_at).toLocaleString()}</>}
-            </p>
-            <p>
+            {/* Four facts joined by interpuncts across two paragraphs read as
+              * one long sentence. They are four different questions -- what it
+              * does, to what, how often, and where it got to -- so they get
+              * four rows that can be scanned rather than parsed. */}
+            <table className="kv">
+              <tbody>
+                <tr>
+                  <td>folds by</td>
+                  <td><code>{algorithms[j.algorithm]?.label ?? j.algorithm}</code></td>
+                </tr>
+                <tr>
+                  <td>memory</td>
+                  <td>
+                    {j.memory_title || j.memory_key}{" "}
+                    <span className="empty">
+                      · {j.members} member{j.members === 1 ? "" : "s"}
+                    </span>
+                  </td>
+                </tr>
+                <tr>
+                  <td>runs</td>
+                  <td>
+                    {j.schedule.type === "interval"
+                      ? `every ${Math.round((j.schedule.every_seconds ?? 0) / 3600)}h`
+                      : "only when you run it"}
+                  </td>
+                </tr>
+                <tr>
+                  <td>state</td>
+                  <td>
+                    {j.enabled ? <span className="ok">scheduled</span>
+                      : approved(j) ? <span>ready, not scheduled</span>
+                      : <span className="warn">needs a preview</span>}
+                    {j.archived_total > 0 && (
+                      <span className="empty"> · {j.archived_total} archived so far</span>
+                    )}
+                    {j.last_run_at && (
+                      <span className="empty">
+                        {" "}· last ran {new Date(j.last_run_at).toLocaleString()}
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            {/* `.row` rather than a paragraph. Five buttons inside a <p> have
+              * no gap between them and no wrapping rule, so they butt together
+              * into one bar -- and Delete sat flush against History, which is a
+              * misclick with an archive behind it. */}
+            <div className="row" style={{ marginTop: 14 }}>
               <button disabled={busy} onClick={() => void act(async () => {
                 const r = await call<CompactionRun>(
                   `api/v1/compaction/jobs/${j.job_id}/preview`, {});
@@ -2596,11 +3227,18 @@ function CompactionSection({ projectId }: { projectId: string }) {
                 setRuns((prev) => ({ ...prev, [j.job_id]: page.runs }));
                 setOpen(open === j.job_id ? null : j.job_id);
               })}>History</button>
-              <button disabled={busy} onClick={() => void act(
-                () => call(`api/v1/compaction/jobs/${j.job_id}`, undefined, "DELETE"))}>
+              {/* Pushed to the far end, away from the four routine actions.
+                * Everything else here is reversible; this one is not. */}
+              <button
+                className="secondary far"
+                disabled={busy}
+                title="Removes the job. Members it already archived stay archived."
+                onClick={() => void act(
+                  () => call(`api/v1/compaction/jobs/${j.job_id}`, undefined, "DELETE"))}
+              >
                 Delete
               </button>
-            </p>
+            </div>
 
             {pv && (
               <div className="card">
@@ -3683,6 +4321,11 @@ type Answer = {
   considered: number;
   corpus: { total: number; stored: number; searchable: number; enriched: number } | null;
   excluded: { data_id: string; reason: string; score: number | null; state: string | null }[];
+  // What the graph arm started from. Empty when it was not asked for — which
+  // is a different fact from it having found nothing connected, and the two
+  // must not render the same.
+  graph_seeds: { entity_id: string; display_name: string; type: string;
+                 matched_on: "name" | "identifier" | "chosen" }[];
   model_id: string;
   served_by_model: string | null;
   fallback_depth: number;
@@ -3691,29 +4334,188 @@ type Answer = {
   latency_ms: number;
 };
 
+/**
+ * Chat — a conversation with a corpus, scoped to what you point at.
+ *
+ * The first version of this screen was a transcript in the sense that it kept
+ * the turns; it was not a chat in any sense a person would recognise. Pressing
+ * Ask did nothing visible for several seconds — the question was not even
+ * echoed until the answer came back, so the only feedback was a button label
+ * changing. That is the difference between a conversation and a form
+ * submission, and it is the whole of what makes chat feel like chat.
+ *
+ * Four things follow from taking that seriously:
+ *
+ * **The question appears immediately**, before the answer exists, with the
+ * answer bubble showing that it is being worked on. The optimistic turn is
+ * discarded when the real one arrives, and restored into the composer if the
+ * request fails — a question typed and lost is worse than an error.
+ *
+ * **The newest turn scrolls into view.** A transcript that grows below the
+ * fold makes the reader hunt for the thing they just asked for.
+ *
+ * **The scope is a summary, not a wall.** Eighteen memories rendered as
+ * eighteen toggle buttons is the clutter this console keeps rediscovering; it
+ * is one line saying what is in scope, and the picker opens only when someone
+ * wants to change it. Memories with no records are shown and disabled rather
+ * than hidden, because "there is nothing in it" and "it does not exist" are
+ * different facts.
+ *
+ * **The instrumentation moves behind the evidence.** Latency, model, corpus
+ * counts and passage totals are how you audit an answer, not how you read one.
+ * Whether it was grounded stays visible, because that changes whether you
+ * should believe the sentence above it.
+ */
 function AskSection({ projectId }: { projectId: string }) {
-  const [question, setQuestion] = useState("What caused the rollback?");
+  // What to ask *of*. Empty means the whole project — "chat with everything" is
+  // a reasonable default and a poor only option: "what did we decide in the
+  // Acme thread" and "what does this project know" are different questions, and
+  // answering the second when somebody asked the first buries the answer.
+  const [memories, setMemories] = useState<Memory[]>([]);
+  const [scope, setScope] = useState<string[]>([]);
+  const [picking, setPicking] = useState(false);
+  // What the corpus says it is about. The model produced these from the first
+  // enrichment onwards and nothing could reach them -- they were a field, not a
+  // way in. Offered here because "I do not know what to ask" is the real first
+  // problem with a chat over somebody else's data.
+  const [topics, setTopics] = useState<{ keyword: string; records: number }[]>([]);
+  const [about, setAbout] = useState<string[]>([]);
+  useEffect(() => {
+    void call<{ keywords: { keyword: string; records: number }[] }>(
+      `api/v1/projects/${projectId}/keywords?limit=24`)
+      .then((r) => setTopics(r.keywords))
+      .catch(() => setTopics([]));
+  }, [projectId]);
+  useEffect(() => {
+    void call<{ memories: Memory[] }>(`api/v1/projects/${projectId}/memories`)
+      .then((r) => setMemories(r.memories))
+      .catch(() => setMemories([]));
+  }, [projectId]);
+
+  // Anchors. Naming the entity outright is the difference between hoping the
+  // graph arm keys off the right thing and saying where to start: the parser
+  // scrapes names out of the question text, which is fine for "what did Priya
+  // decide" and useless for a question that never names its subject.
+  const [anchors, setAnchors] = useState<Entity[]>([]);
+  const [anchored, setAnchored] = useState<string[]>([]);
+  useEffect(() => {
+    void call<{ entities: Entity[] }>(`api/v1/projects/${projectId}/entities?limit=60`)
+      .then((r) => setAnchors(r.entities))
+      .catch(() => setAnchors([]));
+  }, [projectId]);
+
+  // What is actually in the memories you picked. A count of members says how
+  // much is in a container and nothing about what it holds — and "what is in
+  // here" is the question somebody asks *before* they know what to ask.
+  const [held, setHeld] = useState<MemoryContext | null>(null);
+  useEffect(() => {
+    if (scope.length !== 1) { setHeld(null); return; }
+    void call<MemoryContext>(`api/v1/memories/${scope[0]}/context`)
+      .then(setHeld)
+      .catch(() => setHeld(null));
+  }, [scope]);
+
+  // The lens the content was read under.
+  const [lens, setLens] = useState("");
+  const [lenses, setLenses] = useState<GraphTemplate[]>([]);
+  useEffect(() => {
+    void call<{ templates: GraphTemplate[] }>("api/v1/templates")
+      .then((r) => setLenses(r.templates))
+      .catch(() => setLenses([]));
+  }, []);
+
+  // The graph arm. Off by default, and that default is not laziness: it
+  // answers "what else is connected to this?", which is a different question
+  // from "what matches this?", and it is only as good as the entity layer
+  // underneath it. Turning it on is a decision, so it is a control.
+  const [follow, setFollow] = useState(false);
+
+  const [question, setQuestion] = useState("");
   const [turns, setTurns] = useState<Answer[]>([]);
+  // The question that has been asked but not yet answered. Rendered as a real
+  // turn so the transcript never sits still while work is happening.
+  const [pending, setPending] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
+  const pane = useRef<HTMLDivElement | null>(null);
+  // How much of the newest answer has been revealed. The API returns the whole
+  // answer at once, so this is pacing rather than streaming -- and that order
+  // is the right way round: the answer is complete and has been checked against
+  // its citations before a word of it is shown, where true token streaming
+  // would put text on screen before anything had verified it.
+  const [typed, setTyped] = useState<{ id: string; upto: number } | null>(null);
+
+  const newest = turns[turns.length - 1];
+  useEffect(() => {
+    if (!newest) return;
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+      setTyped({ id: newest.query_id, upto: newest.answer.length });
+      return;
+    }
+    setTyped({ id: newest.query_id, upto: 0 });
+    const total = newest.answer.length;
+    // Fixed duration rather than fixed speed: a long answer should not take
+    // proportionally longer to read out, or a good answer is a punishment.
+    const started = performance.now();
+    const span = Math.min(1800, 400 + total * 1.2);
+    let frame = 0;
+    const step = (now: number) => {
+      const done = Math.min(1, (now - started) / span);
+      setTyped({ id: newest.query_id, upto: Math.round(total * done) });
+      if (done < 1) frame = requestAnimationFrame(step);
+    };
+    frame = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(frame);
+  }, [newest]);
+
+  // Scroll the pane, never the page: the composer stays where the hand is.
+  useEffect(() => {
+    const el = pane.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [turns.length, pending, typed?.upto]);
+
+  const chosen = memories.filter((m) => scope.includes(m.memory_id));
+  const anchorNames = anchors
+    .filter((a) => anchored.includes(a.entity_id))
+    .map((a) => a.display_name);
+  const scopeLabel = [
+    scope.length === 0
+      ? "everything in this project"
+      : chosen.map((m) => m.title ?? m.memory_key ?? m.memory_id).join(", "),
+    about.length > 0 ? `about ${about.join(", ")}` : null,
+    lens ? `read as ${lens}` : null,
+    anchorNames.length > 0 ? `anchored on ${anchorNames.join(", ")}` : null,
+    follow ? "following connections" : null,
+  ].filter(Boolean).join(" · ");
 
   async function send(preset?: string) {
     const asked = (preset ?? question).trim();
     if (!asked) return;
     setBusy(true);
     setError(null);
+    setPending(asked);
+    setQuestion("");
     try {
       const answer = await call<Answer>("api/v1/ask", {
         question: asked,
-        filter: { project_id: projectId },
+        filter: {
+          project_id: projectId, memory_ids: scope, keywords: about,
+          template: lens || null, entity_ids: anchored,
+        },
+        // The graph is an arm of the same retrieval search uses, not a
+        // separate mode. Adding it widens what can be found; it does not
+        // change what an answer is.
+        match: follow ? ["vector", "lexical", "graph"] : ["vector", "lexical"],
       });
       setTurns((previous) => [...previous, answer]);
-      setOpen(answer.query_id);
-      setQuestion("");
+      setOpen(null);
     } catch (e) {
       setError((e as Error).message);
+      // Give the question back rather than making somebody retype it.
+      setQuestion(asked);
     } finally {
+      setPending(null);
       setBusy(false);
     }
   }
@@ -3724,11 +4526,260 @@ function AskSection({ projectId }: { projectId: string }) {
       <p className="lede">
         Ask a question and a model answers from your records — the same retrieval as search, with
         the passages read back to you. Every claim carries the number of the passage it came from,
-        and those passages are shown, so a wrong answer is something you can check rather than
-        something you have to believe.
+        so a wrong answer is something you can check rather than something you have to believe.
       </p>
 
-      {turns.length === 0 && (
+      <div className="scopebar">
+        <span className="empty">Asking of <strong>{scopeLabel}</strong></span>
+        <button className="linkish far" onClick={() => setPicking(!picking)}>
+          {picking ? "done" : "change"}
+        </button>
+      </div>
+
+      {picking && (
+        <section className="panel">
+          <h2>What to ask of</h2>
+          <div className="row">
+            <button
+              className={scope.length === 0 ? "" : "secondary"}
+              onClick={() => setScope([])}
+            >
+              Everything in this project
+            </button>
+            {memories.map((m) => {
+              const on = scope.includes(m.memory_id);
+              const empty = m.members === 0;
+              return (
+                <button
+                  key={m.memory_id}
+                  className={on ? "" : "secondary"}
+                  disabled={empty}
+                  title={empty
+                    ? "Nothing has been written into this memory yet"
+                    : `${m.type} · ${m.members} record${m.members === 1 ? "" : "s"}`}
+                  onClick={() => setScope(on
+                    ? scope.filter((x) => x !== m.memory_id)
+                    : [...scope, m.memory_id])}
+                >
+                  {m.title ?? m.memory_key ?? m.memory_id}
+                  <span className="empty"> · {m.members}</span>
+                </button>
+              );
+            })}
+          </div>
+          <p className="empty">
+            {scope.length === 0
+              ? "Every record in the project is in scope."
+              : "Everything outside the selection is excluded, not merely ranked lower."}
+          </p>
+
+          {topics.length > 0 && (
+            <>
+              <h3>Or narrow by what it is about</h3>
+              <div className="row">
+                {topics.map((k) => {
+                  const on = about.includes(k.keyword);
+                  return (
+                    <button
+                      key={k.keyword}
+                      className={on ? "" : "secondary"}
+                      title={`${k.records} record${k.records === 1 ? "" : "s"}`}
+                      onClick={() => setAbout(on
+                        ? about.filter((x) => x !== k.keyword)
+                        : [...about, k.keyword])}
+                    >
+                      {k.keyword} <span className="empty">· {k.records}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="empty" style={{ marginBottom: 0 }}>
+                These are the model&rsquo;s words for what each record is about, not tags anybody
+                applied — which is why they are shown separately from tags and can be wrong.
+                Selecting several matches a record carrying <strong>any</strong> of them.
+              </p>
+            </>
+          )}
+
+          {held && (
+            <div className="card" style={{ marginTop: 14 }}>
+              <h3 style={{ marginTop: 0 }}>
+                What is in {held.memory.title ?? held.memory.memory_key ?? "this memory"}
+              </h3>
+              <div className="meta">
+                <span className="chip">{held.records.total} record
+                  {held.records.total === 1 ? "" : "s"}</span>
+                <span className={`chip${held.records.enriched ? " on" : ""}`}>
+                  {held.records.enriched} enriched
+                </span>
+                {/* Stored-but-not-searchable is the one count that explains a
+                  * thin answer, so it is a warning rather than a number. */}
+                {held.records.stored > 0 && (
+                  <span className="chip warnchip"
+                        title="Stored but not embedded — search cannot reach these">
+                    {held.records.stored} not searchable
+                  </span>
+                )}
+                {held.templates.map((x) => (
+                  <span key={x.template} className="chip">
+                    {x.records} read as {x.template}
+                  </span>
+                ))}
+              </div>
+
+              {held.keywords.length > 0 && (
+                <>
+                  <p className="empty" style={{ marginBottom: 4 }}>What it is about</p>
+                  <div className="row">
+                    {held.keywords.slice(0, 16).map((k) => {
+                      const on = about.includes(k.keyword);
+                      return (
+                        <button key={k.keyword} className={on ? "" : "secondary"}
+                                title={`${k.records} record${k.records === 1 ? "" : "s"}`}
+                                onClick={() => setAbout(on
+                                  ? about.filter((x) => x !== k.keyword)
+                                  : [...about, k.keyword])}>
+                          {k.keyword} <span className="empty">· {k.records}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+
+              {held.entities.length > 0 && (
+                <>
+                  <p className="empty" style={{ marginBottom: 4 }}>
+                    Who and what is in it — click to anchor the question here
+                  </p>
+                  <div className="row">
+                    {held.entities.slice(0, 20).map((e) => {
+                      const on = anchored.includes(e.entity_id);
+                      return (
+                        <button key={e.entity_id} className={on ? "" : "secondary"}
+                                title={`${e.type} · named in ${e.records} record${e.records === 1 ? "" : "s"}`}
+                                onClick={() => setAnchored(on
+                                  ? anchored.filter((x) => x !== e.entity_id)
+                                  : [...anchored, e.entity_id])}>
+                          {e.display_name} <span className="empty">· {e.records}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+
+              {held.edges.length > 0 ? (
+                <>
+                  <p className="empty" style={{ marginBottom: 4 }}>
+                    What its records assert
+                  </p>
+                  {held.edges.slice(0, 12).map((e, i) => (
+                    <div className="hit" key={`${e.subject_id}-${e.predicate}-${i}`}>
+                      <div className="text">
+                        {e.subject} <span className="edge-arrow">→</span>{" "}
+                        <strong>{e.predicate.replace(/_/g, " ")}</strong>{" "}
+                        <span className="edge-arrow">→</span> {e.object}
+                      </div>
+                      <div className="meta">
+                        <span className="chip">{e.evidence} record
+                          {e.evidence === 1 ? "" : "s"}</span>
+                        {e.confidence_class === "interpretive" && (
+                          <span className="chip warnchip">a reading, not a quote</span>
+                        )}
+                        {e.template && <span className="chip">read as {e.template}</span>}
+                      </div>
+                    </div>
+                  ))}
+                </>
+              ) : (
+                <p className="empty" style={{ marginBottom: 0 }}>
+                  {held.records.enriched === 0
+                    ? "Nothing here has been interpreted yet, so there is no graph to show."
+                    : "Its records name things but assert no relationships between them — "
+                      + "which is ordinary. A relationship has to be stated, and most text "
+                      + "names things without saying how they connect."}
+                </p>
+              )}
+            </div>
+          )}
+          {scope.length > 1 && (
+            <p className="empty">
+              Pick a single memory to see what is in it. With several selected the
+              question is scoped to all of them, but there is no one container to summarise.
+            </p>
+          )}
+
+          {lenses.length > 0 && (
+            <>
+              <h3>Or narrow by what it was read as</h3>
+              <div className="row">
+                <button className={lens === "" ? "" : "secondary"} onClick={() => setLens("")}>
+                  any lens
+                </button>
+                {lenses.map((x) => (
+                  <button key={x.template} className={lens === x.template ? "" : "secondary"}
+                          title={x.description}
+                          onClick={() => setLens(lens === x.template ? "" : x.template)}>
+                    {x.template}
+                  </button>
+                ))}
+              </div>
+              <p className="empty" style={{ marginBottom: 0 }}>
+                A lens is declared when a record is written. Choosing one keeps only records read
+                that way — and walks only the relationships that reading produced.
+              </p>
+            </>
+          )}
+
+          <h3>Start from</h3>
+          <p className="empty" style={{ marginTop: 0 }}>
+            Anchor the question on something the corpus already knows about. Without an anchor the
+            graph has to scrape a name out of your question — which works for{" "}
+            <em>what did Krishna teach</em> and not for a question that never names its subject.
+          </p>
+          <div className="row">
+            {anchors.length === 0 ? (
+              <span className="empty">
+                Nothing extracted yet — entities appear after an enrichment pass.
+              </span>
+            ) : anchors.slice(0, 40).map((a) => {
+              const on = anchored.includes(a.entity_id);
+              return (
+                <button key={a.entity_id} className={on ? "" : "secondary"}
+                        title={`${a.type} · ${a.visible_mentions} mention${a.visible_mentions === 1 ? "" : "s"}`}
+                        onClick={() => setAnchored(on
+                          ? anchored.filter((x) => x !== a.entity_id)
+                          : [...anchored, a.entity_id])}>
+                  {a.display_name}
+                  <span className="empty"> · {a.type}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          <h3>How far to look</h3>
+          <div className="row">
+            <label className="check">
+              <input type="checkbox" checked={follow}
+                     onChange={(e) => setFollow(e.target.checked)} />
+              Follow connections — reach records through the graph
+            </label>
+          </div>
+          <p className="empty" style={{ marginBottom: 0 }}>
+            {follow
+              ? "Records connected to your anchors are searched too, even when they never contain "
+                + "the words you asked about. That is the question the other arms cannot answer — "
+                + "and it is only as good as the entities underneath it."
+              : "Only records matching the question itself. Turn this on to also reach records "
+                + "joined to them by a relationship some document asserted."}
+          </p>
+        </section>
+      )}
+
+      <div className="chatwindow">
+        <div className="chatpane" ref={pane}>
+      {turns.length === 0 && !pending && (
         <section className="panel">
           <p className="empty" style={{ marginTop: 0 }}>
             Answers come only from records you can already read. When your data does not support an
@@ -3755,53 +4806,80 @@ function AskSection({ projectId }: { projectId: string }) {
       )}
 
       {turns.map((turn) => (
-        <section className="panel" key={turn.query_id}>
-          <p className="question">{turn.question}</p>
-
-          <div className={turn.grounded ? "answer" : "answer ungrounded"}>{turn.answer}</div>
-
-          <div className="meta" style={{ marginTop: 10 }}>
-            <span className={`chip ${turn.grounded ? "enriched" : "stored"}`}>
-              {turn.grounded ? "grounded" : "not supported by the corpus"}
-            </span>
-            <span className="chip">{turn.citations.length} cited</span>
-            <span className="chip">{turn.considered} passages read</span>
-            {turn.corpus && (
-              <span className="chip">
-                {turn.corpus.enriched} enriched of {turn.corpus.total}
-              </span>
+        <div className="chatturn" key={turn.query_id}>
+          <div className="bubble asked">{turn.question}</div>
+          <div className={`bubble answered${turn.grounded ? "" : " ungrounded"}`}>
+            {typed && typed.id === turn.query_id
+              ? turn.answer.slice(0, typed.upto)
+              : turn.answer}
+            {typed && typed.id === turn.query_id && typed.upto < turn.answer.length && (
+              <span className="typecaret" aria-hidden="true" />
             )}
-            <span className="chip">{turn.served_by_model || turn.model_id}</span>
-            {turn.fallback_depth > 0 && (
-              <span className="chip warnchip">
-                fallback: {turn.served_by_engine} answered
-              </span>
-            )}
-            <span className="chip">{turn.latency_ms} ms</span>
-            {!turn.answer_stored && <span className="chip">text not stored</span>}
           </div>
 
-          {turn.citations.length > 0 && (
-            <>
-              <h3
-                style={{ cursor: "pointer" }}
+          <div className="turnfoot">
+            {!turn.grounded && (
+              <span className="chip warnchip">not supported by the corpus</span>
+            )}
+            {turn.citations.length > 0 && (
+              <button
+                className="linkish"
                 onClick={() => setOpen(open === turn.query_id ? null : turn.query_id)}
               >
-                {open === turn.query_id ? "▾" : "▸"} The evidence it rests on
-              </h3>
-              {open === turn.query_id &&
-                turn.citations.map((citation) => (
-                  <div className="hit" key={citation.chunk_id}>
-                    <div className="meta">
-                      <span className="chip on">[{citation.marker}]</span>
-                      <span className="chip">score {citation.score.toFixed(4)}</span>
-                      <span className={`chip ${citation.state}`}>{citation.state}</span>
-                    </div>
-                    <div className="text">{citation.text}</div>
-                    <p className="provenance">{citation.data_id}</p>
+                {open === turn.query_id ? "▾" : "▸"} {turn.citations.length} source
+                {turn.citations.length === 1 ? "" : "s"}
+              </button>
+            )}
+          </div>
+
+          {open === turn.query_id && (
+            <div className="turndetail">
+              {/* Instrumentation lives with the evidence: it is how you audit an
+                * answer, not how you read one. */}
+              <div className="meta">
+                <span className="chip">{turn.considered} passages read</span>
+                <span className="chip">{turn.served_by_model || turn.model_id}</span>
+                {turn.corpus && (
+                  <span className="chip">
+                    {turn.corpus.enriched} enriched of {turn.corpus.total}
+                  </span>
+                )}
+                {turn.fallback_depth > 0 && (
+                  <span className="chip warnchip">
+                    fallback: {turn.served_by_engine} answered
+                  </span>
+                )}
+                <span className="chip">{turn.latency_ms} ms</span>
+                {!turn.answer_stored && <span className="chip">text not stored</span>}
+              </div>
+              {/* A result that arrived only through the graph is otherwise
+                * unexplainable: it does not contain the words that were
+                * searched for, so without the seed a reader cannot tell
+                * whether the connection was the one they meant. */}
+              {turn.graph_seeds.length > 0 && (
+                <p className="provenance">
+                  Followed connections from{" "}
+                  {turn.graph_seeds.map((s, i) => (
+                    <span key={s.entity_id}>
+                      {i > 0 ? ", " : ""}
+                      <strong>{s.display_name}</strong>
+                      {s.matched_on === "chosen" ? " (you chose it)" : " (found in your question)"}
+                    </span>
+                  ))}
+                </p>
+              )}
+              {turn.citations.map((citation) => (
+                <div className="hit" key={citation.chunk_id}>
+                  <div className="meta">
+                    <span className="chip on">[{citation.marker}]</span>
+                    <span className="chip">score {citation.score.toFixed(4)}</span>
+                    <span className={`chip ${citation.state}`}>{citation.state}</span>
                   </div>
-                ))}
-            </>
+                  <div className="text">{citation.text}</div>
+                  <p className="provenance">{citation.data_id}</p>
+                </div>
+              ))}
+            </div>
           )}
 
           {!turn.grounded && turn.corpus && turn.corpus.stored > 0 && (
@@ -3811,33 +4889,68 @@ function AskSection({ projectId }: { projectId: string }) {
               used. That is a likely cause of a thin answer.
             </p>
           )}
-        </section>
+        </div>
       ))}
 
-      <section className="panel">
+      {pending && (
+        <div className="chatturn">
+          <div className="bubble asked">{pending}</div>
+          <div className="bubble answered thinking">
+            <span className="dots"><i /><i /><i /></span>
+            reading the corpus…
+          </div>
+        </div>
+      )}
+
+        </div>
+
+        <div className="composer">
         <div className="row">
-          <input
-            type="text"
+          <textarea
+            className="askbox"
             value={question}
-            placeholder="Ask about this project&rsquo;s data…"
+            rows={1}
+            placeholder={scope.length === 0
+              ? "Ask about this project's data…"
+              : `Ask about ${scopeLabel}…`}
             onChange={(e) => setQuestion(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && void send()}
+            /* Enter sends, Shift+Enter breaks a line — the convention every
+               chat uses, and the reason this is a textarea and not an input:
+               a question worth asking is often longer than one line. */
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                void send();
+              }
+            }}
             style={{ flex: 1 }}
           />
           <button onClick={() => void send()} disabled={busy || !question.trim()}>
             {busy ? "Reading…" : "Ask"}
           </button>
+          {turns.length > 0 && (
+            <button className="secondary" disabled={busy} onClick={() => setTurns([])}>
+              Clear
+            </button>
+          )}
         </div>
         {error && <p className="err">{error}</p>}
         <p className="empty">
-          Answers are generated from retrieved records. Records are treated as evidence, never as
-          instructions — a record containing &ldquo;ignore your instructions&rdquo; is reported as
-          content, not obeyed.
+          {/* Said plainly because the shape of this screen implies otherwise. A
+            * transcript looks like a conversation, and a conversation implies
+            * "what about the second one?" works. It does not: retrieval runs
+            * per question. Letting the layout promise something the API does
+            * not do is the failure this note exists to prevent. */}
+          <strong>Each question is answered on its own</strong> — ask a follow-up as a whole
+          question rather than referring back. Records are evidence, never instructions: one
+          containing &ldquo;ignore your instructions&rdquo; is reported as content, not obeyed.
         </p>
-      </section>
+        </div>
+      </div>
     </>
   );
 }
+
 
 /* ------------------------------------------------------------ 4. search */
 
@@ -6671,6 +7784,12 @@ function ReprocessSection({ projectId }: { projectId: string }) {
   const [runId, setRunId] = useState("");
   const [staleOnly, setStaleOnly] = useState(false);
 
+  // The vocabularies this screen selects from. Typing a data type meant
+  // guessing at a closed set the server already publishes -- and a typo is not
+  // an error here, it is a selector that quietly matches nothing, previews
+  // "0 records", and looks like an empty corpus rather than a misspelling.
+  const [dataTypes, setDataTypes] = useState<string[]>([]);
+  const [tagsInUse, setTagsInUse] = useState<string[]>([]);
   const [stair, setStair] = useState<Stair | null>(null);
   const [stale, setStale] = useState<StaleArtifact[] | null>(null);
   const [preview, setPreview] = useState<ReprocessPreview | null>(null);
@@ -6690,6 +7809,12 @@ function ReprocessSection({ projectId }: { projectId: string }) {
       // key is the failure that renders an empty screen with a 200 behind it.
       setStale((await call<{ stale: StaleArtifact[] }>(
         "api/v1/artifacts/stale?limit=100")).stale);
+      // The closed set of types the classifier can produce, from the same
+      // registry the Prompts screen reads, so the two cannot disagree.
+      setDataTypes((await call<{ prompts: { data_type: string }[] }>("api/v1/prompts"))
+        .prompts.map((r) => r.data_type).sort());
+      setTagsInUse((await call<{ tags: { tag: string }[] }>(
+        `api/v1/projects/${projectId}/tags`)).tags.map((r) => r.tag));
     } catch (e) {
       setError((e as Error).message);
     }
@@ -6807,17 +7932,47 @@ function ReprocessSection({ projectId }: { projectId: string }) {
         <div className="row">
           <label>
             Data type
-            <input type="text" placeholder="email · issue · note"
-                   value={dataType} onChange={(e) => setDataType(e.target.value)} />
+            <select value={dataType} onChange={(e) => setDataType(e.target.value)}>
+              <option value="">any type</option>
+              {dataTypes.map((dt) => <option key={dt} value={dt}>{dt}</option>)}
+            </select>
           </label>
           <label>
             Tags
-            <input type="text" placeholder="source:acme, crawler:crw_…"
-                   value={tags} onChange={(e) => setTags(e.target.value)} />
+            {/* Offered when the project has any, typed when it does not -- a
+              * select with nothing in it is a dead control, and tags are an
+              * open set somebody may be about to invent. */}
+            {tagsInUse.length > 0 ? (
+              <select
+                value=""
+                onChange={(e) => {
+                  const picked = e.target.value;
+                  if (!picked) return;
+                  const already = tags.split(",").map((x) => x.trim()).filter(Boolean);
+                  if (!already.includes(picked)) setTags([...already, picked].join(", "));
+                }}
+              >
+                <option value="">add a tag…</option>
+                {tagsInUse.map((tg) => <option key={tg} value={tg}>{tg}</option>)}
+              </select>
+            ) : (
+              <input type="text" placeholder="none in this project yet"
+                     value={tags} onChange={(e) => setTags(e.target.value)} />
+            )}
           </label>
+          {tags.trim() !== "" && (
+            <label>
+              Chosen tags
+              <input type="text" value={tags} onChange={(e) => setTags(e.target.value)} />
+            </label>
+          )}
           <label>
             Run
-            <input type="text" placeholder="run_… — everything one crawl emitted"
+            {/* Still typed, and correctly so: a run id is copied from Crawlers
+              * or Workflows, not chosen from a set this screen can know. The
+              * placeholder says where it comes from rather than what it looks
+              * like. */}
+            <input type="text" placeholder="paste a run id from Crawlers"
                    value={runId} onChange={(e) => setRunId(e.target.value)} />
           </label>
           <label className="check">
@@ -7968,9 +9123,100 @@ type OverviewData = {
   not_read: { parse_status: string; n: number }[];
   models: { model_id: string; calls: number; tokens: number }[];
   derived: { chunks: number; embeddings: number; vector_spaces: number; revisions: number };
+  vector_index?: {
+    queried_as: string | null;
+    spaces: { model_id: string; embeddings: number; records: number; queried: boolean }[];
+    reachable: { rows: number; empty: number; dims: number | null };
+    probe_neighbours: number | null;
+    probe_indexed: number | null;
+    searchable_here: number;
+  };
   containers: { memories: number; cases: number; live_shares: number };
   activity: { writes_24h: number; reads_24h: number; queries_24h: number };
 };
+
+/** Whether a vector search over this project can find anything at all.
+ *
+ * Two ways it silently cannot, both seen on this deployment:
+ *
+ * - The embeddings sit under a model id retrieval does not query, so the arm
+ *   filters every one of them out and the search returns nothing.
+ * - The HNSW graph is degraded. Re-embedding deletes and reinserts every chunk,
+ *   and enough passes leave the index returning a fraction of the neighbours it
+ *   holds -- eventually none. Nothing else on this screen changes.
+ */
+function VectorHealth({
+  vector,
+  embeddings,
+}: {
+  vector: OverviewData["vector_index"];
+  embeddings: number;
+}) {
+  if (!vector) return null;
+  const stranded = vector.spaces
+    .filter((space) => !space.queried)
+    .reduce((n, space) => n + space.records, 0);
+  // What a healthy index returns for a top-40 over a vector already in it.
+  const expected = Math.min(40, vector.reachable.rows);
+  const indexed = vector.probe_indexed;
+  const degraded = indexed !== null && expected > 0 && indexed < expected;
+
+  return (
+    <section className="panel">
+      <h2>Can a vector search find this?</h2>
+      {embeddings === 0 ? (
+        <p className="empty">
+          Nothing is embedded yet, so the vector arm has nothing to match. Lexical search still
+          works — which is why a half-indexed corpus answers some questions and not others.
+        </p>
+      ) : (
+        <>
+          <p className="empty" style={{ marginTop: 0 }}>
+            Retrieval queries{" "}
+            {vector.queried_as ? <code>{vector.queried_as}</code> : "no configured model"}.{" "}
+            An embedding written under any other model is stored, counted, and unreachable.
+          </p>
+          <table className="kv">
+            <tbody>
+              {vector.spaces.map((space) => (
+                <tr key={space.model_id}>
+                  <th>{space.model_id}</th>
+                  <td>
+                    {space.records} record{space.records === 1 ? "" : "s"}, {space.embeddings}{" "}
+                    embedding{space.embeddings === 1 ? "" : "s"}{" "}
+                    <span className={space.queried ? "chip on" : "chip warnchip"}>
+                      {space.queried ? "queried" : "not queried"}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {stranded > 0 && (
+            <p className="warn">
+              <strong>{stranded} record{stranded === 1 ? " is" : "s are"} embedded under a model
+              retrieval does not query.</strong> They will never match a vector search until they
+              are re-embedded. The reconcile sweep does this; nothing else will.
+            </p>
+          )}
+          {degraded ? (
+            <p className="warn">
+              <strong>The vector index is returning less than it holds.</strong> A search for a
+              vector already stored here came back with {indexed} of {expected} neighbours, so
+              real questions will match little or nothing. Rebuilding the index is the repair —
+              it degrades as records are re-embedded, not as they are added.
+            </p>
+          ) : (
+            <p className="ok">
+              {vector.searchable_here} record{vector.searchable_here === 1 ? "" : "s"} reachable by
+              vector search, and the index returns a full set of neighbours for one already in it.
+            </p>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
 
 function Overview({
   projectId,
@@ -8044,6 +9290,12 @@ function Overview({
         />
         <Tile value={humanBytes(counts.bytes_stored)} label="bytes in object storage" />
       </section>
+
+      {/* Every number above can be right while vector search answers nothing:
+          the records are enriched, the embeddings are all there, and they are
+          in a space -- or behind an index -- that retrieval cannot reach. That
+          failure is silent, so it needs a panel that says it out loud. */}
+      <VectorHealth vector={data.vector_index} embeddings={derived.embeddings} />
 
       <div className="two-up">
         <section className="panel">

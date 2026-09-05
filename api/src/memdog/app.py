@@ -72,7 +72,7 @@ from .retrieval import (
 from .extraction import build_extractor
 from .fetching import FetchWorker
 from .multimodal import build_multimodal
-from .events import dispatch_pending, emit_audited, list_events
+from .events import dispatch_pending, emit, emit_audited, list_events
 from .workers import (
     EmbedWorker,
     EnrichWorker,
@@ -97,7 +97,35 @@ async def lifespan(app: FastAPI):
     embedder = build_embedder(settings)
     # Refuse to serve against an index this engine cannot write to.
     await verify_index_dimension(pool, embedder)
-    queue = InProcessQueue()
+    async def _record_dead_letter(message, error: str) -> None:
+        """A job the queue gave up on, written where the item can show it.
+
+        The queue's own list is in memory and dies with the process, which on a
+        platform that scales to zero means an abandoned job leaves the record
+        sitting at its current state with nothing anywhere saying why. The
+        console already reads the event log to explain a stalled climb, so that
+        is where this belongs.
+        """
+        data_id = (message.body or {}).get("data_id")
+        if not data_id:
+            return
+        owner = await pool.fetchrow(
+            "SELECT org_id, project_id FROM data_items WHERE data_id = $1", data_id
+        )
+        if owner is None:
+            return
+        async with pool.acquire() as conn, conn.transaction():
+            await emit(
+                conn,
+                event_type="work.abandoned",
+                org_id=owner["org_id"],
+                project_id=owner["project_id"],
+                data_id=data_id,
+                payload={"topic": message.topic, "attempts": message.attempt,
+                         "error": error[:600]},
+            )
+
+    queue = InProcessQueue(on_dead_letter=_record_dead_letter)
     embed_worker = EmbedWorker(pool, embedder, settings, queue=queue)
     await embed_worker.ensure_generator()
     embed_worker.register(queue, EMBED_TOPIC)
@@ -528,7 +556,10 @@ async def get_overview(
 ) -> dict:
     """The numbers that answer "is this working?" in one call."""
     try:
-        return await project_overview(request.app.state.pool, actor, project_id)
+        return await project_overview(
+            request.app.state.pool, actor, project_id,
+            embedder=request.app.state.embedder,
+        )
     except AuthError as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
 
@@ -1096,6 +1127,124 @@ async def delete_share(
     return await _control(sharing.revoke_share)(request.app.state.pool, actor, share_id)
 
 
+# ------------------------------------------------------------- public demo
+
+
+@app.get("/api/v1/public/demo")
+async def public_demo_info(request: Request) -> dict:
+    """What the public demo is, or that there is not one.
+
+    Served unauthenticated so the landing page can decide whether to render the
+    demo at all, rather than hardcoding a corpus that may not be deployed.
+    `available: false` is the ordinary answer on a deployment that has not
+    switched it on, and is not an error.
+    """
+    settings = request.app.state.settings
+    if not settings.public_project_id:
+        return {"available": False}
+
+    counts = await request.app.state.pool.fetchrow(
+        """
+        SELECT count(*) FILTER (WHERE answered
+                                AND asked_at > date_trunc('day', now())) AS spent
+          FROM public_asks
+        """
+    )
+    spent = int(counts["spent"] or 0)
+    return {
+        "available": True,
+        "title": settings.public_title or "Ask the corpus",
+        "subtitle": settings.public_subtitle or "",
+        "remaining_today": max(0, settings.public_daily_cap - spent),
+        "daily_cap": settings.public_daily_cap,
+    }
+
+
+@app.post("/api/v1/public/ask")
+async def public_ask(request: Request, body: dict) -> dict:
+    """One question, one corpus, no login.
+
+    Every other route decides what you may read from who you are. This one has
+    no caller to identify, so it cannot borrow that machinery -- what replaces
+    it is narrowness. The project and memory are named in configuration, never
+    in the request, so there is no scope for a caller to widen. The principal is
+    synthetic, carries `DATA_READ` alone, and has a `user_id` that matches no
+    real user, so private records stay invisible exactly as they would to a
+    stranger.
+
+    Metered before the model call, not after: the failure mode of a public
+    endpoint is a flood of requests that error, and counting afterwards gives
+    every one of them a free call.
+    """
+    from .auth import DATA_READ, Principal
+    from .contracts import AskRequest, RetrieveFilter
+    from .public_demo import DemoUnavailable, check_and_count, client_ip, release
+
+    settings = request.app.state.settings
+    if not settings.public_project_id:
+        raise HTTPException(status_code=404, detail="no public demo on this deployment")
+
+    question = (body or {}).get("question") or ""
+    if not question.strip():
+        raise HTTPException(status_code=400, detail="a question is required")
+    if len(question) > 500:
+        raise HTTPException(status_code=400, detail="question too long")
+
+    pool = request.app.state.pool
+    org_id = await pool.fetchval(
+        "SELECT org_id FROM projects WHERE project_id = $1", settings.public_project_id
+    )
+    if org_id is None:
+        raise HTTPException(status_code=404, detail="no public demo on this deployment")
+
+    try:
+        ask_id = await check_and_count(
+            pool, ip=client_ip(request), secret=settings.master_key_b64,
+            question=question, rate_per_hour=settings.public_rate_per_hour,
+            daily_cap=settings.public_daily_cap,
+        )
+    except DemoUnavailable as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+    # Matches no real user, so `private` records are as invisible here as they
+    # are to any stranger. Only what the org made org-visible is reachable.
+    visitor = Principal(
+        user_id="public", org_id=org_id, project_id=settings.public_project_id,
+        capabilities=frozenset({DATA_READ}), mode="public",
+    )
+    filters = RetrieveFilter(project_id=settings.public_project_id)
+    if settings.public_memory_id:
+        filters.memory_ids = [settings.public_memory_id]
+
+    try:
+        answer = await ask(
+            pool, request.app.state.embedder, request.app.state.answerer, visitor,
+            AskRequest(question=question, filter=filters,
+                       match=["vector", "lexical"]),
+            embed_generator=request.app.state.current_generators["embedding"],
+            graph=request.app.state.graph,
+        )
+    except Exception:
+        # The reservation is released rather than kept: a visitor who got no
+        # answer has not spent the day's budget, and an endpoint that charges
+        # for its own failures runs out fastest exactly when it is broken.
+        await release(pool, ask_id)
+        raise
+
+    # Deliberately not the full answer shape. `query_id`, model identity,
+    # generator versions and corpus counts are operational facts about the
+    # deployment, and an anonymous caller has no use for them and no business
+    # knowing them.
+    return {
+        "question": answer.question,
+        "answer": answer.answer,
+        "grounded": answer.grounded,
+        "citations": [
+            {"marker": c.marker, "text": c.text} for c in answer.citations
+        ],
+    }
+
+
 @app.get("/s/{token}")
 async def read_share(request: Request, token: str, password: str | None = None) -> dict:
     """The public surface. Deliberately unauthenticated -- the token *is* the
@@ -1369,11 +1518,10 @@ async def send_test_delivery(
     pass for a producer whose signing is broken, which is exactly the case worth
     catching before a provider is pointed at it.
     """
-    import hashlib
-    import hmac
     import json as jsonlib
     import time as timelib
 
+    from . import providers as providers_mod
     from .auth import CONFIG_WRITE
     from .webhooks import WebhookError, receive as receive_webhook
 
@@ -1385,7 +1533,7 @@ async def send_test_delivery(
 
     producer = await state.pool.fetchrow(
         """
-        SELECT producer_id, org_id, inbound_auth, signing_secret_ct
+        SELECT producer_id, org_id, inbound_auth, signing_secret_ct, inbound_mapping
         FROM producers WHERE producer_id = $1 AND org_id = $2 AND type = 'webhook'
         """,
         producer_id, actor.org_id,
@@ -1407,11 +1555,23 @@ async def send_test_delivery(
         secret = state.envelope.decrypt(
             bytes(producer["signing_secret_ct"]), aad=actor.org_id.encode()
         )
-        ts = str(int(timelib.time()))
-        headers["x-signature-timestamp"] = ts
-        headers["x-signature"] = hmac.new(
-            secret, f"{ts}.".encode() + raw, hashlib.sha256
-        ).hexdigest()
+        # Signed the way this producer's provider signs, not the way the
+        # generic scheme does. Hand-rolling it here meant every preset --
+        # Slack, Zoom, Linear, Shopify, Twilio, Stripe, Graph -- got a generic
+        # signature its own scheme then refused, so the button reported 401 for
+        # a perfectly good secret. `sign` is the mirror of the `verify` this
+        # request is about to run.
+        mapping = producer["inbound_mapping"] or {}
+        if isinstance(mapping, str):
+            mapping = jsonlib.loads(mapping)
+        provider = providers_mod.get(mapping.get("provider"))
+        headers.update(providers_mod.sign(
+            provider,
+            request=providers_mod.Request(
+                raw_body=raw, headers=headers, url=_public_url(request),
+            ),
+            secret=secret,
+        ))
 
     try:
         result = await receive_webhook(
@@ -2553,6 +2713,41 @@ async def prompt_registry_endpoint(actor: Principal = Depends(principal)) -> dic
     }
 
 
+@app.get("/api/v1/projects/{project_id}/tags")
+async def list_tags_endpoint(
+    request: Request, project_id: str, limit: int = 200,
+    actor: Principal = Depends(principal),
+) -> dict:
+    """Tags in use, so a screen can offer them rather than ask them to be typed."""
+    from .retrieval import project_tags
+
+    try:
+        return {"tags": await project_tags(
+            request.app.state.pool, actor, project_id, limit=limit)}
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/projects/{project_id}/keywords")
+async def list_keywords_endpoint(
+    request: Request, project_id: str, limit: int = 200,
+    actor: Principal = Depends(principal),
+) -> dict:
+    """What this project is about, counted over what the caller can see.
+
+    Keywords were extracted from the first enrichment onwards and read in
+    exactly one place -- beside a record you had already found. This is the
+    endpoint that turns them from a field into a way in.
+    """
+    from .retrieval import project_keywords
+
+    try:
+        return {"keywords": await project_keywords(
+            request.app.state.pool, actor, project_id, limit=limit)}
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
 @app.get("/api/v1/projects/{project_id}/entities")
 async def list_entities_endpoint(
     request: Request, project_id: str, type: str | None = None,
@@ -2582,6 +2777,7 @@ async def entity_graph_endpoint(
     request: Request, entity_id: str, depth: int = 1,
     predicates: str | None = None, limit: int = 120,
     valid_at: datetime | None = None, as_of: datetime | None = None,
+    template: str | None = None,
     actor: Principal = Depends(principal),
 ) -> dict:
     """The neighbourhood around an entity, as asserted edges.
@@ -2594,19 +2790,28 @@ async def entity_graph_endpoint(
     are different questions and a backfill separates them: a document imported
     today about last year is visible at `valid_at=last year` and invisible at
     `as_of=last month`. Both default to now.
+
+    `template` narrows the traversal to edges a given template drew, and it is
+    applied inside the recursion rather than to the result: a path is within a
+    template only if every hop of it is, and filtering afterwards would return
+    endpoints joined by edges the filter excluded.
     """
     try:
         result = await request.app.state.graph.neighbourhood(
             actor, entity_id=entity_id, depth=depth,
             predicates=[p for p in (predicates or "").split(",") if p] or None,
-            limit=limit, valid_at=valid_at, as_of=as_of,
+            limit=limit, valid_at=valid_at, as_of=as_of, template=template,
         )
     except (GraphError, AuthError) as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
     return {
         "root": vars(result.root),
         "nodes": [vars(n) for n in result.nodes],
-        "edges": [vars(e) for e in result.edges],
+        # `confidence_class` is a property rather than a field, so `vars()`
+        # does not reach it -- and it is the one thing on an edge that says
+        # whether a claim was read off the page or read into it.
+        "edges": [{**vars(e), "confidence_class": e.confidence_class}
+                  for e in result.edges],
         "truncated": result.truncated,
     }
 
@@ -2629,6 +2834,34 @@ async def co_mentions_endpoint(
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
 
 
+@app.get("/api/v1/memories/{memory_id}/context")
+async def memory_context_endpoint(
+    request: Request, memory_id: str, limit: int = 30,
+    actor: Principal = Depends(principal),
+) -> dict:
+    """Everything known about one memory, in one request.
+
+    A memory is the container people think in — "the Acme thread", "the Gita" —
+    and the console could say how many records were in one and nothing else. To
+    learn what it was *about* you opened Data, filtered, opened a record, read
+    its keywords, then opened Entities and guessed which came from here. The
+    information existed in four places and belonged in one.
+
+    Counts are scoped to what the caller can read, so two people may
+    legitimately see different totals for the same memory: a memory you can see
+    may hold records you cannot, and summarising those would report a corpus you
+    are not allowed to read.
+    """
+    from .memories import context
+
+    try:
+        return await context(request.app.state.pool, actor, memory_id, limit=limit)
+    except NotFound as exc:
+        raise HTTPException(status_code=404, detail="not found") from exc
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
 @app.get("/api/v1/graph/predicates")
 async def graph_predicates_endpoint(actor: Principal = Depends(principal)) -> dict:
     """The closed predicate vocabulary, served rather than documented twice.
@@ -2637,10 +2870,30 @@ async def graph_predicates_endpoint(actor: Principal = Depends(principal)) -> di
     which claims supersede one another, so a caller writing facts needs to know
     that a second `located_in` closes the first and a second `works_for` does not.
     """
+    from . import predicates as predicates_mod
     from .graph import MAX_DEPTH, PREDICATES, SINGLE_VALUED
 
+    # `describe()` carries the domain, range and confidence class alongside the
+    # name. A caller writing facts needs the first two to know which edge it may
+    # assert, and a caller reading them needs the third to know whether an edge
+    # was stated or interpreted -- neither is inferable from the name.
     return {"predicates": list(PREDICATES), "max_depth": MAX_DEPTH,
-            "single_valued": sorted(SINGLE_VALUED)}
+            "single_valued": sorted(SINGLE_VALUED),
+            "vocabulary": predicates_mod.describe()}
+
+
+@app.get("/api/v1/templates")
+async def templates_endpoint(actor: Principal = Depends(principal)) -> dict:
+    """The templates a write may declare, served rather than documented twice.
+
+    Each carries the questions it exists to answer and the predicates it
+    offers, because a template is chosen by what you want to ask of the content
+    later — and a name alone cannot tell you that `scripture` will record what
+    the text claims leads to what while `incident` will record what caused what.
+    """
+    from . import graph_templates
+
+    return {"templates": graph_templates.registry()}
 
 
 @app.get("/api/v1/entities/{entity_id}/history")

@@ -182,6 +182,21 @@ async def _write(pool, queue, blobs, settings, principal, request,
     async with pool.acquire() as conn:
         producer = await _admit(conn, queue, settings, principal, request)
 
+        # Before anything is stored. A template names the graph schema this
+        # content will be read under, and an unknown one is refused rather than
+        # ignored: ignoring it produces a plain extraction the caller believes
+        # was specialised, and the difference is invisible afterwards because a
+        # relationship nobody looked for leaves no record of not having been
+        # sought. The valid names are discoverable at `GET /api/v1/templates`,
+        # so naming them in the error costs nothing.
+        from .graph_templates import UnknownTemplate, get as _template
+
+        for item in request.items:
+            try:
+                _template(item.template)
+            except UnknownTemplate as exc:
+                raise AdmissionError(str(exc), status=400) from exc
+
         if idempotency_key:
             replay = await conn.fetchrow(
                 "SELECT request_hash, response FROM idempotency_keys WHERE producer_id = $1 AND key = $2",
@@ -395,9 +410,9 @@ async def _write_one(
             external_id, access_level, shared_with, content_text, storage_ref,
             pending_ref, mime_type, source_type, data_type, classified_by_layer,
             size_bytes, checksum, event_time, state, identifiers, tags, run_id,
-            metadata)
+            metadata, template)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-                $16, $17, $18, $19, 'stored', $20, $21, $22, $23)
+                $16, $17, $18, $19, 'stored', $20, $21, $22, $23, $24)
         ON CONFLICT (project_id, producer_id, external_id) DO UPDATE SET
             content_text = EXCLUDED.content_text,
             storage_ref = EXCLUDED.storage_ref,
@@ -414,6 +429,7 @@ async def _write_one(
             identifiers = EXCLUDED.identifiers,
             tags = EXCLUDED.tags,
             metadata = EXCLUDED.metadata,
+            template = EXCLUDED.template,
             -- A rewrite belongs to the run that rewrote it.
             run_id = EXCLUDED.run_id,
             state = 'stored',
@@ -458,6 +474,12 @@ async def _write_one(
         # queried. It read back correctly in Python, which is why it survived --
         # the round trip through `json.loads` hid it.
         item.metadata or {},
+        # Validated at the door rather than at enrichment. A typo'd template
+        # reaching the worker produces a generic graph the caller believes is
+        # specialised -- and believes it about edges, where a predicate that was
+        # never looked for leaves no trace of its absence. Refusing costs a
+        # write; accepting costs a silently wrong graph.
+        item.template,
     )
     data_id, created = row["data_id"], row["created"]
 
