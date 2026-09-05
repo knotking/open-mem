@@ -11,6 +11,39 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **Paste a GitHub URL and get four reports about that exact commit** —
+  design, code quality, functional bugs, dependencies. Each is an artifact from
+  a named generator, so it records the prompt and model that produced it, goes
+  stale when either changes, and erases with its sources.
+
+  **It is per snapshot, and the constraint is in the schema.** `(project, url,
+  sha)` is UNIQUE, so asking twice for one commit returns the first snapshot
+  rather than paying for a second clone and four more model calls. A branch is
+  resolved once and the sha is stored — a report attributed to `main` is one
+  nobody can reproduce later.
+
+  **The code graph is the compression.** A repository exceeds every ceiling in
+  [`docs/limit.md`](docs/limit.md) by orders of magnitude, so it is reduced
+  first by graphify — tree-sitter, deterministic, no model — and the analysers
+  read that plus a bounded file set: manifests, entry points and the most
+  connected modules, capped at 40. Which files were read, and why each was
+  chosen, is stored per snapshot and rendered on the screen: a report over
+  twelve files and one over forty are different claims, and a thin report with
+  no file count reads as a clean bill of health.
+
+  **Vulnerability facts come from OSV, never from the model.** Asked whether a
+  version is affected, a model produces fluent, plausible, wrong CVE numbers,
+  and a wrong advisory is a security claim about somebody's software. The job
+  queries OSV and the dependency prompt forbids reporting any advisory absent
+  from that result. An unreachable OSV records `unavailable` rather than an
+  empty result, and the console says *unchecked* — "no advisories" and "nobody
+  asked" must not render the same.
+
+  Cloning and parsing run as a **Cloud Run Job**, not in the API: it autoscales
+  on request rate, so minutes of CPU count the same as a 20 ms write and starve
+  the pool without triggering a scale-up. The job holds no database credential
+  and writes back through the ordinary public write path.
+
 - **[`docs/usage/local.md`](docs/usage/local.md) — running *and using* the whole
   stack on one machine**, with no cloud account, no model key and no billing.
   Records the trap that costs the time: `EMBED_DIM` must match the index in
@@ -104,6 +137,21 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   Cloud Run injects `X-Forwarded-*`, which routes calls onto OpenClaw's
   trusted-proxy path — and its `/tools/invoke` is a full operator-access surface
   upstream says must never be public.
+
+### Configuration
+- **`REPO_ANALYSIS_JOB`** — the fully qualified Cloud Run Job
+  (`projects/{p}/locations/{l}/jobs/{name}`) that clones and graphs a
+  repository. **Empty disables repository analysis, which is the default**: the
+  job clones arbitrary public repositories and spends four model calls per
+  snapshot, so it is switched on deliberately rather than inherited. A snapshot
+  requested without it is recorded and immediately marked failed with that as
+  its reason — never left pending, which would read as still running.
+
+### Migrations
+- **`0051_repo_snapshots.sql`** — `repo_snapshots`. Additive. The UNIQUE on
+  `(project_id, repo_url, commit_sha)` is the per-snapshot rule itself, and a
+  CHECK requires a full 40-character lowercase sha so one commit cannot be
+  analysed twice under two spellings.
 
 ### Fixed
 - **The Hermes agent reported the mem-dog corpus as empty.** `mem_dog_search`

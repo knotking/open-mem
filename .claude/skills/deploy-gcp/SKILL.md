@@ -29,6 +29,7 @@ reachable as `pagarwal@buildgeek.ai`.
 | Images | Artifact Registry `memdog` | `us-central1-docker.pkg.dev/memdog-dev-506718/memdog` |
 | Identity | `memdog-api@memdog-dev-506718.iam.gserviceaccount.com` | both services and all jobs |
 | Jobs | `memdog-reconcile`, `memdog-crawl-tick`, `memdog-alert-tick`, `memdog-seed`, `memdog-bootstrap` | |
+| Repo analysis | Cloud Run Job `memdog-repo-analysis` | **Not on the API image** — own Dockerfile, own tag, own deploy. Off unless `REPO_ANALYSIS_JOB` is set. |
 | Schedules | `memdog-reconcile-tick` every 10 min → `memdog-reconcile`; `memdog-alert-sweep` every 1 min → `memdog-alert-tick` | |
 | Secrets | `memdog-db-password`, `memdog-master-key`, `memdog-demo-key`, `memdog-web-api-key`, `gemini-api-key` | |
 | Console sign-in | `owner@memdog.dev` (owner), `demo@memdog.dev` (admin) | Identity Platform; passwords in `memdog-owner-password` / `memdog-demo-password` |
@@ -78,6 +79,38 @@ service about what "current" means. Never deploy a job by hand.
   edit a migration that has been deployed — add the next number**, with
   `IF NOT EXISTS` so a database created from the edited version converges rather
   than failing.
+
+### The repo analysis job
+
+**It is not on the API image and is not in the job loop.** Every other job runs
+`memdog` and is redeployed with the API precisely so it cannot drift. This one
+carries `git`, `graphifyy` and 37 tree-sitter grammars — the reason it exists at
+all is to keep that out of the API image — so it has its own Dockerfile, its own
+tag, and its own deploy:
+
+```bash
+cd analysis/repo && PRODUCER_ID=<prd_...> ./deploy.sh <tag>   # e.g. repo-analysis-1
+```
+
+**It is off until the API is told its name.** Deploying the job does nothing on
+its own; `REPO_ANALYSIS_JOB` has to name it, fully qualified:
+
+```bash
+gcloud run services update memdog-api --project memdog-dev-506718 --region us-central1 \
+  --update-env-vars REPO_ANALYSIS_JOB=projects/memdog-dev-506718/locations/us-central1/jobs/memdog-repo-analysis
+```
+
+Empty is the correct default — the job clones arbitrary public repositories and
+spends four model calls per snapshot, so it is switched on deliberately. **A
+snapshot requested with it unset is not lost and does not hang**: it is recorded
+and immediately marked `failed` with that as its reason, because a snapshot left
+`pending` reads as one still running.
+
+It needs its own write credential (`memdog-repo-analysis-key`) and a producer to
+write through, because it reaches mem-dog only through the public write API — it
+holds no database credential and has no privileged path. `deploy.sh` grants the
+API's service account `roles/run.invoker` on the job, which is the whole
+permission needed to start an execution.
 
 **Database migrations need no step.** `app.py` runs `migrate()` on startup, so
 a new `api/src/memdog/migrations/*.sql` applies itself the first time the new
