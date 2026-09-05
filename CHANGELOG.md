@@ -11,6 +11,20 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **Paste a web-page URL into Add data, and the page is judged as well as
+  stored.** `provider: "url"` had been wired, SSRF-hardened and tested since
+  the beginning, and nothing had ever produced one. `document_html` now gets
+  its own extraction prompt, which fills a `quality` block on the artifact:
+  what kind of page it is, what it wants from the reader, whether anything is
+  sourced, who wrote it, when, how it is monetised, up to five specific reasons
+  to trust or doubt it, what it leaves unanswered, and whether it is worth
+  keeping at all. The values are enumerated rather than prose, so a corpus can
+  be filtered on them — `not_content` exists because an error page, a login
+  wall and a parked domain all arrive as HTTP 200 with fluent text, and one
+  stored as an article looks exactly like an article that summarised badly.
+  The block sits behind `entities` and `relations` and ahead of `summary`, and
+  every field is length-bounded in the skeleton where no per-type override can
+  raise it. The console renders it as sentences and chips on the record.
 - **Paste a YouTube URL into Add data.** The URL is written as a `Pending` ref
   with `provider: "youtube"`; everything after the fetch — classification,
   parsing, embedding, enrichment, entity resolution and edges — runs unchanged
@@ -59,6 +73,14 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   neighbours for a vector it already holds.
 
 ### Fixed
+- **A web page fetched from a URL was classified as plain text.** `filetype`
+  knows containers and magic numbers, not markup, so a page guessed as nothing,
+  decoded cleanly and came back `text/plain` — making `document_html`
+  unreachable through the fetch path entirely, with every fetched page typed
+  `document_text` and read with the document prompt. The HTML check existed all
+  along, in the branch that only runs when there are no bytes. Both branches
+  share one now, and it looks past a BOM, an XML declaration or a licence
+  comment before giving up.
 - **"Send a test delivery as the provider would" was signed the generic way for
   every provider.** The endpoint runs the real receive path precisely so a
   producer whose signing is broken fails the test — and then it hand-rolled
@@ -98,6 +120,9 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   and the page turns whatever `detail` holds into a sentence.
 
 ### Changed
+- **`document_html` resolves to a new prompt**, so existing HTML artifacts are
+  detectably stale and will be re-derived by a reprocess. Nothing is lost; the
+  old summaries stand until then.
 - **The landing page leads with the corpus, not with a sign-in form.** The demo
   takes the full column at the top of the page and sign-in is a panel off the
   top bar: the first thing a visitor can do is ask a question, and a form
