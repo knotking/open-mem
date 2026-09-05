@@ -11,6 +11,22 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **`docs/limit.md` — every ceiling on the way in, in one place.** Admission
+  caps that return 413 (500 items, 32 MiB inline, 512 MiB upload, crawler
+  budgets) separated from processing ceilings that store the bytes whole and
+  index less than all of them, plus a per-kind breakdown for documents, images,
+  audio and video — which ceiling binds depends on the kind, and it is rarely
+  the one people assume.
+
+  **Three things the code said and the docs did not.** `MAX_MEDIA_BYTES` is
+  defined in `config.py` and never read, so setting it does nothing and the
+  real ceiling is the hardcoded `MAX_INLINE_BYTES`. The 8,192-token *output*
+  cap — not the 18 MiB input cap — is the binding limit on media: audio small
+  enough to send still outruns its transcript at ~40–50 minutes of speech, and
+  a scanned PDF gets roughly its first eighth OCR'd. And that cap is the only
+  ceiling in the system that does not announce itself — `finishReason` is never
+  inspected, so a transcript cut off at `MAX_TOKENS` lands looking complete.
+  `structure.output_tokens` sitting at 8,192 is the only tell.
 - **Paste a web-page URL into Add data, and the page is judged as well as
   stored.** `provider: "url"` had been wired, SSRF-hardened and tested since
   the beginning, and nothing had ever produced one. `document_html` now gets

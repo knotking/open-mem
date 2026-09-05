@@ -1,5 +1,14 @@
 # mem-dog
 
+## Landing work
+
+Commit straight to `main`. No feature branch, no pull request — this is a
+single-maintainer repo, so a PR is a review request addressed to its own author.
+Invoke the `commit-to-main` skill before any commit, push or branch here, and
+whenever a pull request looks like the answer. There is no CI in this repo, so
+whatever a reviewer would have caught has to be caught before the commit. See
+`.claude/skills/commit-to-main/SKILL.md`.
+
 ## After every commit
 
 Invoke the `changelog` skill immediately after each successful `git commit`, and
