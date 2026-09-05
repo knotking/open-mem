@@ -11,27 +11,6 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
-- **OpenClaw runs against the same corpus as a Cloud Run Job** (`agents/openclaw/`),
-  and it needed no code to do it — mem-dog's MCP speaks `Authorization: Bearer`
-  and OpenClaw sends exactly that, so the integration is one `mcp.servers` entry.
-  It read and correctly attributed the record the Hermes agent had written about
-  its own investigation: two vendors' agent runtimes sharing memory through
-  mem-dog, neither aware of the other. A **Job rather than a service** because
-  Cloud Run injects `X-Forwarded-*`, which routes calls onto OpenClaw's
-  trusted-proxy path — and its `/tools/invoke` is a full operator-access surface
-  upstream says must never be public.
-
-### Fixed
-- **The Hermes agent reported the mem-dog corpus as empty.** `mem_dog_search`
-  requires a `project_id`, nothing in the MCP handshake supplies one, and the
-  agent had been discovering it by shelling out to `env | grep -i mem` — so it
-  only ever worked because the terminal tool was open, and closing that hole
-  turned every search into a silent miss. The ids are now seeded into `SOUL.md`
-  at boot. Prompt tokens for the same question fell from 366,821 to 12,163,
-  most of which was the agent hunting for an identifier it could have been
-  handed.
-
-### Added
 - **`docs/limit.md` — every ceiling on the way in, in one place.** Admission
   caps that return 413 (500 items, 32 MiB inline, 512 MiB upload, crawler
   budgets) separated from processing ceilings that store the bytes whole and
@@ -108,8 +87,25 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   spaces the records are in, which one retrieval queries, how many records are
   stranded outside it, and whether the index still returns a full set of
   neighbours for a vector it already holds.
+- **OpenClaw runs against the same corpus as a Cloud Run Job** (`agents/openclaw/`),
+  and it needed no code to do it — mem-dog's MCP speaks `Authorization: Bearer`
+  and OpenClaw sends exactly that, so the integration is one `mcp.servers` entry.
+  It read and correctly attributed the record the Hermes agent had written about
+  its own investigation: two vendors' agent runtimes sharing memory through
+  mem-dog, neither aware of the other. A **Job rather than a service** because
+  Cloud Run injects `X-Forwarded-*`, which routes calls onto OpenClaw's
+  trusted-proxy path — and its `/tools/invoke` is a full operator-access surface
+  upstream says must never be public.
 
 ### Fixed
+- **The Hermes agent reported the mem-dog corpus as empty.** `mem_dog_search`
+  requires a `project_id`, nothing in the MCP handshake supplies one, and the
+  agent had been discovering it by shelling out to `env | grep -i mem` — so it
+  only ever worked because the terminal tool was open, and closing that hole
+  turned every search into a silent miss. The ids are now seeded into `SOUL.md`
+  at boot. Prompt tokens for the same question fell from 366,821 to 12,163,
+  most of which was the agent hunting for an identifier it could have been
+  handed.
 - **A web page fetched from a URL was classified as plain text.** `filetype`
   knows containers and magic numbers, not markup, so a page guessed as nothing,
   decoded cleanly and came back `text/plain` — making `document_html`
