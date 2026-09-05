@@ -1199,13 +1199,35 @@ function AddData({
     },
   });
 
+  /**
+   * Report what the write actually did, per item.
+   *
+   * **`207` is Multi-Status, not success.** A write can return 207 with the
+   * item inside it `failed` or `dropped` and the reason in `error` -- and this
+   * used to read `results[0].data_id` regardless, so a refused item threw
+   * "cannot read properties of undefined" and the API's own explanation was
+   * discarded on the floor. Every diagnosis of "it just fails" started here:
+   * the server said exactly what was wrong and the screen replaced it with a
+   * type error.
+   */
   function afterWrite(
-    response: { results: { data_id: string; memories: string[] }[] },
+    response: {
+      results: { status?: string; error?: string | null; data_id?: string | null;
+                 memories?: string[] }[];
+    },
     label: string,
   ) {
-    const first = response.results[0];
+    const first = response.results?.[0];
+    if (!first) throw new Error("the write returned no result for this item");
+    if (first.status === "failed" || first.status === "dropped" || !first.data_id) {
+      throw new Error(
+        first.error
+          ? `${label} was ${first.status ?? "refused"}: ${first.error}`
+          : `${label} was ${first.status ?? "refused"}, and no reason was given`,
+      );
+    }
     setNote(
-      `${label} committed as ${first.data_id}, mapped into ${first.memories.length} memory(ies).`,
+      `${label} committed as ${first.data_id}, mapped into ${first.memories?.length ?? 0} memory(ies).`,
     );
     track(first.data_id);
     loadMemories();

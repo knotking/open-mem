@@ -70,7 +70,20 @@ export function useTracked(onTick?: () => Promise<void>) {
   const poll = useCallback(
     async (dataId: string, mine: number, startedAt: number) => {
       while (generation.current === mine) {
-        const current = await call<Item>(`api/v1/data/${dataId}`);
+        // The item fetch is guarded like the two beside it, and for a reason
+        // those two do not have: a 404 here is a *state*, not a transport
+        // failure. The item can be deleted while it is being watched -- an
+        // erasure run, a compaction, another session -- and the throw landed in
+        // whatever called `track()`, which is the write that had just
+        // succeeded. The screen then reported that the write failed. It had
+        // not; the thing it was watching had gone.
+        const current = await call<Item>(`api/v1/data/${dataId}`).catch(() => null);
+        if (generation.current !== mine) return;
+        if (!current) {
+          setGaveUp(true);
+          setWatching(false);
+          return;
+        }
         const log = await call<{ events: DomainEvent[] }>(
           `api/v1/events?data_id=${dataId}&limit=50`,
         ).catch(() => ({ events: [] as DomainEvent[] }));
