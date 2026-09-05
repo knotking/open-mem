@@ -327,10 +327,11 @@ UNCALLED_ENDPOINTS: dict[str, str] = {
     # is exactly why it has no caller here.
     "POST /api/v1/tokens/ephemeral": "for embedding hosts; the console holds its credential",
 
-    # Presigned upload. The console posts bytes inline instead, which is right
-    # for a paste and wrong for 500 MB.
-    "POST /api/v1/uploads": "the console uploads inline; presigned upload is Phase 4",
-    "POST /api/v1/uploads/{upload_id}/complete": "the other half of presigned upload",
+    # Upload sessions are wired into the console now, so they are no longer
+    # exempt. They were exempt on the grounds that inlining was "right for a
+    # paste and wrong for 500 MB" -- true, and the missing half meant a document
+    # too big to inline could not be added at all. This test is what noticed the
+    # exemption had gone stale, which is what it is for.
 
     # Graph and facts. The console reads entities and edges; asserting a fact
     # by hand, reading one entity's history and listing contradictions have no

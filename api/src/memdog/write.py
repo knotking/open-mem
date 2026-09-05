@@ -433,6 +433,27 @@ async def _write_one(
             -- A rewrite belongs to the run that rewrote it.
             run_id = EXCLUDED.run_id,
             state = 'stored',
+            -- **A write onto an erased row brings it back.**
+            --
+            -- The conflict target is `(project, producer, external_id)`, and it
+            -- matches a tombstoned row like any other -- so without this, adding
+            -- a file again after an erasure updated the dead row and returned
+            -- its id. The write reported success, and every read of that id
+            -- answered 404 because the ACL predicate excludes `deleted_at`.
+            -- The item was, exactly as it was described, never saved: written
+            -- into a row nothing can see, with no error anywhere to say so.
+            --
+            -- Clearing it is the honest reading of what happened. Somebody
+            -- supplied the content again; that is a new fact, and refusing it
+            -- forever would make one erasure permanently poison a filename. The
+            -- erasure itself is not rewritten -- the audit event and the
+            -- certificate still say it was erased, and when -- and the purge
+            -- columns go with it, because the bytes being written now are not
+            -- the bytes that were purged.
+            deleted_at = NULL,
+            deletion_reason = NULL,
+            deletion_run_id = NULL,
+            purged_at = NULL,
             updated_at = now()
         RETURNING data_id, (xmax = 0) AS created,
                   (SELECT access_level FROM prior) AS prior_access_level
