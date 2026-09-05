@@ -92,6 +92,27 @@ export type Item = {
   template?: string | null;
 };
 
+/** What extraction made of a fetched page.
+ *
+ * Present on the artifact's `fields.quality` for HTML records only — a page is
+ * asked things a PDF is not. Every field is optional because an older artifact
+ * predates the block entirely, and an absent reading is "not judged", never
+ * "judged and found wanting".
+ */
+export type PageQuality = {
+  page_kind?: string;
+  purpose?: string;
+  substance?: string;
+  evidence?: string;
+  authorship?: string;
+  dated?: string;
+  commercial?: string;
+  reliability?: string[];
+  missing?: string[];
+  retrieval_value?: string;
+  verdict?: string;
+};
+
 export type Memory = {
   memory_id: string;
   type: string;

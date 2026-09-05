@@ -36,6 +36,7 @@ import {
   CompactionRun,
   FullVersion,
   ObservedEvent,
+  PageQuality,
   Setting,
   Subscription,
   describeEvent,
@@ -788,6 +789,123 @@ function ItemDetail({ item, versions }: { item: Item; versions: Version[] }) {
  * audited, rather than by handing the browser a signed URL that outlives the
  * check.
  */
+/** How the page read, in sentences rather than as a payload.
+ *
+ * The values are enumerated on purpose, so this can say "marketing, nothing
+ * sourced, not worth keeping" as three chips a person can scan rather than a
+ * paragraph they have to parse. `not_content` is the one worth colouring: a
+ * login wall and a parked domain arrive as a perfectly good 200, and a record
+ * that stored one looks identical to a record that stored an article.
+ *
+ * Renders nothing at all when there is no reading — a PDF is not a page and an
+ * unjudged record is not a badly judged one.
+ */
+function PageReading({ quality }: { quality: PageQuality | null }) {
+  if (!quality) return null;
+
+  const KIND: Record<string, string> = {
+    error_or_empty: "an error or empty page",
+    login_or_paywall: "a login wall or paywall",
+    press_release: "a press release",
+    product_page: "a product page",
+    forum_thread: "a forum thread",
+    news_report: "a news report",
+    blog_post: "a blog post",
+  };
+  const SUBSTANCE: Record<string, string> = {
+    original: "has something only it has",
+    synthesised: "pulls together what others said",
+    derivative: "restates what is available elsewhere",
+    thin: "says very little at length",
+  };
+  const EVIDENCE: Record<string, string> = {
+    primary: "shows primary evidence",
+    quantified: "quantifies its claims",
+    cited: "cites its sources",
+    asserted: "asserts without sourcing",
+    none: "offers no evidence at all",
+  };
+  const VERDICT: Record<string, string> = {
+    keep: "worth keeping",
+    keep_with_caveats: "worth keeping, with caveats",
+    low_value: "little retrieval value",
+    not_content: "not content — nothing here to keep",
+  };
+  const COMMERCIAL: Record<string, string> = {
+    none: "not monetised",
+    lead_capture: "collects leads",
+    product_page: "sells the product it describes",
+  };
+  const say = (map: Record<string, string>, key?: string) =>
+    key ? map[key] ?? key.replace(/_/g, " ") : null;
+
+  const alarm = quality.retrieval_value === "not_content"
+    || quality.retrieval_value === "low_value";
+
+  return (
+    <section className="panel">
+      <h3>How this page read</h3>
+      <div className="row" style={{ flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
+        {quality.page_kind && (
+          <span className="chip">{say(KIND, quality.page_kind)}</span>
+        )}
+        {quality.substance && (
+          <span className="chip">{say(SUBSTANCE, quality.substance)}</span>
+        )}
+        {quality.evidence && (
+          <span className={quality.evidence === "none" || quality.evidence === "asserted"
+            ? "chip warnchip" : "chip on"}>
+            {say(EVIDENCE, quality.evidence)}
+          </span>
+        )}
+        {quality.commercial && quality.commercial !== "none" && (
+          <span className="chip">{say(COMMERCIAL, quality.commercial)}</span>
+        )}
+        {quality.retrieval_value && (
+          <span className={alarm ? "chip warnchip" : "chip on"}>
+            {say(VERDICT, quality.retrieval_value)}
+          </span>
+        )}
+      </div>
+
+      {quality.verdict && <p style={{ marginTop: 0 }}>{quality.verdict}</p>}
+
+      <table className="kv">
+        <tbody>
+          {quality.purpose && (
+            <tr><th>What it wants</th><td>{quality.purpose}</td></tr>
+          )}
+          <tr>
+            <th>Who wrote it</th>
+            <td>{quality.authorship || <span className="empty">unattributed</span>}</td>
+          </tr>
+          <tr>
+            <th>When</th>
+            <td>{quality.dated || <span className="empty">undated</span>}</td>
+          </tr>
+        </tbody>
+      </table>
+
+      {quality.reliability && quality.reliability.length > 0 && (
+        <>
+          <h4>Reasons to trust it, or not</h4>
+          <ul className="hint">
+            {quality.reliability.map((r, i) => <li key={i}>{r}</li>)}
+          </ul>
+        </>
+      )}
+      {quality.missing && quality.missing.length > 0 && (
+        <>
+          <h4>Raised and left unanswered</h4>
+          <ul className="hint">
+            {quality.missing.map((m, i) => <li key={i}>{m}</li>)}
+          </ul>
+        </>
+      )}
+    </section>
+  );
+}
+
 function StoredMedia({ item }: { item: Item }) {
   const src = `/api/proxy/api/v1/data/${item.data_id}/content`;
   const mime = item.mime_type ?? "";
@@ -851,6 +969,22 @@ function StoredMedia({ item }: { item: Item }) {
  * reach a button. Each header states its current value, so what is collapsed is
  * still visible — closed is not hidden.
  */
+/** The URL, normalised, if it is one the server would agree to fetch.
+ *
+ * Only the scheme is checked here. The host rules — no private addresses, no
+ * link-local, re-validated on every redirect — live on the server and are the
+ * ones that matter; repeating them in the browser would be a second copy of a
+ * security rule, and the second copy is always the one that goes stale.
+ */
+function httpUrl(raw: string): string | null {
+  try {
+    const url = new URL(raw.trim());
+    return url.protocol === "http:" || url.protocol === "https:" ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
 /** The 11-character video id in a YouTube URL, or null.
  *
  * A deliberately small echo of the parser in `memdog/youtube.py`, and only for
@@ -892,8 +1026,9 @@ function AddData({
   const [text, setText] = useState(
     "The checkout service returned 502s for eleven minutes after a bad deploy.\n\nRollback completed at 14:02 UTC and error rates recovered.",
   );
-  const [source, setSource] = useState<"text" | "file" | "video">("text");
+  const [source, setSource] = useState<"text" | "file" | "video" | "page">("text");
   const [videoUrl, setVideoUrl] = useState("");
+  const [pageUrl, setPageUrl] = useState("");
   const [staged, setStaged] = useState<Staged | null>(null);
   // Which optional steps are open. Closed by default because each has a
   // working default and the button is what people came for.
@@ -1005,6 +1140,10 @@ function AddData({
   // than left for someone to work out from a greyed-out control.
   const blocked = source === "text"
     ? (text.trim() ? null : "Nothing typed yet")
+    : source === "page"
+      ? (httpUrl(pageUrl) ? null : pageUrl.trim()
+          ? "That needs to be a http:// or https:// address"
+          : "Paste a link first")
     : source === "video"
       ? (youtubeId(videoUrl) ? null : videoUrl.trim()
           ? "That is not a YouTube video link"
@@ -1024,15 +1163,20 @@ function AddData({
       // disagrees with — this is for the id, not for the security.
       const watchUrl = source === "video"
         ? `https://www.youtube.com/watch?v=${youtubeId(videoUrl)}` : "";
+      const page = source === "page" ? httpUrl(pageUrl) ?? "" : "";
       const externalId = source === "text" ? `text-${Date.now()}`
-        : source === "video" ? watchUrl : staged!.name;
+        : source === "video" ? watchUrl
+        : source === "page" ? page : staged!.name;
       const content = source === "text"
         ? { kind: "inline", text }
         : source === "video"
           ? { kind: "pending", provider: "youtube", resource_id: watchUrl }
-          : { kind: "inline", bytes_b64: staged!.base64, mime_type: staged!.mime };
+          : source === "page"
+            ? { kind: "pending", provider: "url", resource_id: page }
+            : { kind: "inline", bytes_b64: staged!.base64, mime_type: staged!.mime };
       const label = source === "text" ? "Text"
         : source === "video" ? watchUrl
+        : source === "page" ? page
         : `${staged!.name} (${humanBytes(staged!.size)})`;
 
       const memory = meeting
@@ -1158,15 +1302,52 @@ function AddData({
             />
             A YouTube video
           </label>
+          <label className="check">
+            <input
+              type="radio"
+              name="add-source"
+              checked={source === "page"}
+              onChange={() => { setSource("page"); setStaged(null); }}
+            />
+            A web page
+          </label>
         </div>
       </section>
 
       <section className="panel">
         <h2><span className="stepn">2</span> {
-          source === "text" ? "The text" : source === "video" ? "The video" : "The file"
+          source === "text" ? "The text"
+            : source === "video" ? "The video"
+            : source === "page" ? "The page"
+            : "The file"
         }</h2>
         {source === "text" ? (
           <textarea value={text} onChange={(e) => setText(e.target.value)} />
+        ) : source === "page" ? (
+          <>
+            <input
+              type="url"
+              value={pageUrl}
+              placeholder="https://example.com/the-article"
+              onChange={(e) => setPageUrl(e.target.value)}
+              style={{ width: "100%" }}
+            />
+            {/* A page is not a file somebody handed you, and the extra thing
+              * done to it is worth saying before it happens rather than
+              * leaving it to be discovered in the result. */}
+            <div className="notice">
+              <strong>The page is fetched and then judged, not just stored.</strong> Alongside the
+              usual summary, keywords and graph, it records what kind of page it is, what it wants
+              from the reader, whether anything on it is sourced, who wrote it, when, how it is
+              paid for — and whether it is worth keeping at all. An error page, a login wall and a
+              parked domain all arrive as a perfectly good 200.
+            </div>
+            <p className="hint">
+              Fetched from this server, not your browser: private and link-local addresses are
+              refused, every redirect is re-checked, and the download is capped. Pages behind a
+              login will store the login page, and say so.
+            </p>
+          </>
         ) : source === "video" ? (
           <>
             <input
@@ -1516,6 +1697,9 @@ function UpdateData({
 
   const [selected, setSelected] = useState<Item | null>(null);
   const [versions, setVersions] = useState<Version[]>([]);
+  // The page reading, when this record is a fetched page. It lives on the
+  // artifact rather than the item, so it takes its own call.
+  const [quality, setQuality] = useState<PageQuality | null>(null);
   const [showing, setShowing] = useState<FullVersion | null>(null);
   const [loadingVersion, setLoadingVersion] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
@@ -1571,12 +1755,23 @@ function UpdateData({
 
   async function open(dataId: string) {
     setError(null); setNote(null); setShowing(null); setEditing(false);
+    setQuality(null);
     try {
       const item = await call<Item>(`api/v1/data/${dataId}`);
       setSelected(item);
       setDraft(item.content_text ?? item.extracted_text ?? "");
       setVersions((await call<{ versions: Version[] }>(
         `api/v1/data/${dataId}/versions`)).versions);
+      // Best-effort and separate: a record with no artifact yet is the
+      // ordinary case, not a failure of the detail view.
+      try {
+        const artifacts = (await call<{ artifacts: { fields?: Record<string, unknown> }[] }>(
+          `api/v1/data/${dataId}/artifacts`)).artifacts;
+        const found = artifacts.map((a) => a.fields?.quality).find(Boolean);
+        setQuality((found as PageQuality) ?? null);
+      } catch {
+        setQuality(null);
+      }
     } catch (e) {
       setError((e as Error).message);
     }
@@ -1735,6 +1930,7 @@ function UpdateData({
           <section className="panel">
             <h2>{selected.external_id ?? selected.data_id}</h2>
             <ItemDetail item={selected} versions={versions} />
+            <PageReading quality={quality} />
             <StoredMedia item={selected} />
 
             {!editing ? (

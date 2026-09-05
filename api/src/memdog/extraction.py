@@ -309,6 +309,17 @@ def build_prompt(
         "fill space -- an envelope truncated mid-field is discarded entirely, "
         "so a short complete answer is worth more than a long incomplete one."
     )
+    if "quality" in (schema.get("properties") or {}):
+        # Bounded here for the same reason `summary` is, and stated in the
+        # skeleton so no per-type block can raise it: this object is emitted
+        # ahead of `summary`, so a runaway `verdict` costs the summary, and a
+        # runaway `reliability` list costs the whole envelope.
+        system += (
+            "\n\nLENGTH: in `quality`, keep `verdict` under 400 characters, "
+            "`purpose`, `authorship` and `dated` under 200 each, and give at "
+            "most five `reliability` notes and five `missing` questions, each "
+            "one sentence. Say less rather than padding a list to five."
+        )
     # The template block goes *after* the type block, because it is the more
     # specific statement: the type says this is a document, the template says
     # it is a design document, and where they disagree about what is
@@ -381,7 +392,61 @@ def relation_schema(offered: tuple[str, ...] = RELATION_PREDICATES) -> dict:
 
 RELATION_SCHEMA = relation_schema()
 
-def envelope_schema(offered: tuple[str, ...] = RELATION_PREDICATES) -> dict:
+# What a *page* gets asked that a file does not.
+#
+# Enumerated rather than free text, and that is the whole point of the block: a
+# paragraph of prose about a page's quality can be read but not counted, and the
+# question people actually have is "which of the four hundred pages I ingested
+# are marketing with no sources". A verdict you cannot filter on is a verdict
+# nobody uses twice.
+#
+# Every list is bounded and every string is capped in the prompt. The envelope's
+# own history is the argument: `summary` was unbounded, one extraction spent the
+# entire output budget inside it, and the graph -- the part that could not be
+# reconstructed -- was what got dropped.
+PAGE_KINDS = [
+    "article", "news_report", "documentation", "reference", "tutorial",
+    "blog_post", "marketing", "product_page", "listing", "forum_thread",
+    "academic", "press_release", "legal", "personal", "aggregator",
+    "error_or_empty", "login_or_paywall",
+]
+SUBSTANCE = ["original", "synthesised", "derivative", "thin"]
+EVIDENCE = ["primary", "quantified", "cited", "asserted", "none"]
+COMMERCIAL = ["none", "advertising", "affiliate", "lead_capture", "paywall",
+              "product_page", "sponsored"]
+# `not_content` is the one that earns its place. A login wall and a parked
+# domain both arrive as HTTP 200 with fluent text, and without a value that says
+# so they are stored as pages that merely summarise badly.
+RETRIEVAL_VALUE = ["keep", "keep_with_caveats", "low_value", "not_content"]
+
+QUALITY_PROPERTIES = {
+    "page_kind": {"type": "string", "enum": PAGE_KINDS},
+    "purpose": {"type": "string"},
+    "substance": {"type": "string", "enum": SUBSTANCE},
+    "evidence": {"type": "string", "enum": EVIDENCE},
+    "authorship": {"type": "string"},
+    "dated": {"type": "string"},
+    "commercial": {"type": "string", "enum": COMMERCIAL},
+    "reliability": {"type": "array", "items": {"type": "string"}},
+    "missing": {"type": "array", "items": {"type": "string"}},
+    "retrieval_value": {"type": "string", "enum": RETRIEVAL_VALUE},
+    "verdict": {"type": "string"},
+}
+QUALITY_REQUIRED = ["page_kind", "substance", "evidence", "retrieval_value",
+                    "verdict"]
+
+# The data types that get asked the page questions. A PDF fetched from a URL is
+# still a PDF and is not one of them.
+JUDGED = {"document_html"}
+
+
+def quality_schema() -> dict:
+    return {"type": "object", "required": QUALITY_REQUIRED,
+            "properties": QUALITY_PROPERTIES}
+
+
+def envelope_schema(offered: tuple[str, ...] = RELATION_PREDICATES,
+                    *, quality: bool = False) -> dict:
     """Property order is load-bearing, not cosmetic.
 
     A schema-constrained model emits properties in the order the schema lists
@@ -413,6 +478,7 @@ def envelope_schema(offered: tuple[str, ...] = RELATION_PREDICATES) -> dict:
             "description": {"type": ["string", "null"]},
             "keywords": {"type": "array", "items": {"type": "string"}},
             "language": {"type": ["string", "null"]},
+            **({"quality": quality_schema()} if quality else {}),
             "summary": {"type": ["string", "null"]},
         },
     }
@@ -529,7 +595,7 @@ class OllamaExtractor:
         template: str | None = None,
     ) -> Envelope:
         offered = graph_templates.predicates_for(template)
-        schema = envelope_schema(offered)
+        schema = envelope_schema(offered, quality=data_type in JUDGED)
         system, user = build_prompt(text, data_type=data_type,
                                     schema=schema, block=prompt,
                                     template=template)
@@ -599,8 +665,10 @@ class GeminiExtractor:
         # Still bounded here -- the guard belongs at the call that would
         # otherwise be rejected -- but callers should hand this a window rather
         # than a book. `extract_long` does the splitting.
+        judged = data_type in JUDGED
         system, user = build_prompt(
-            text[:GEMINI_WINDOW], data_type=data_type, schema=envelope_schema(offered),
+            text[:GEMINI_WINDOW], data_type=data_type,
+            schema=envelope_schema(offered, quality=judged),
             block=block, template=template,
         )
         try:
@@ -622,7 +690,7 @@ class GeminiExtractor:
                             # response, so there is no raw text to store on
                             # success and nothing to salvage by parsing prose.
                             "responseMimeType": "application/json",
-                            "responseSchema": _gemini_schema(offered),
+                            "responseSchema": _gemini_schema(offered, quality=judged),
                         },
                     },
                 )
@@ -651,6 +719,12 @@ class GeminiExtractor:
             tokens_cached=meta.get("cachedContentTokenCount", 0),
             prompt=prompt_name,
         )
+        # `quality` is not an Envelope field -- the filter above drops it -- and
+        # it should not be: it applies to one family of types, and a core field
+        # that is null for twenty-three of twenty-four is not a core field.
+        # `fields` is the namespaced home the envelope already documents.
+        if isinstance(parsed.get("quality"), dict):
+            envelope.fields["quality"] = parsed["quality"]
         envelope.fields["prompt"] = prompt_name
         envelope.fields["tokens"] = meta.get("totalTokenCount", 0)
         # The build that answered, not the alias we asked for.
@@ -659,7 +733,8 @@ class GeminiExtractor:
         return envelope
 
 
-def _gemini_schema(offered: tuple[str, ...] = RELATION_PREDICATES) -> dict:
+def _gemini_schema(offered: tuple[str, ...] = RELATION_PREDICATES,
+                   *, quality: bool = False) -> dict:
     """Gemini wants its own dialect: no nullable unions, so optional fields are
     simply not required. Property order matches `envelope_schema` and matters
     for the same reason -- see the note there."""
@@ -681,8 +756,15 @@ def _gemini_schema(offered: tuple[str, ...] = RELATION_PREDICATES) -> dict:
         # Honoured by Gemini, unlike declaration order. Putting the graph ahead
         # of the summary means a runaway summary costs the summary rather than
         # the whole envelope.
-        "propertyOrdering": ["title", "entities", "relations", "description",
-                             "keywords", "language", "summary"],
+        # `quality` sits ahead of `summary` and behind the graph. It is bounded,
+        # it is what a page was fetched to find out, and `summary` remains the
+        # field that pays when something runs long.
+        "propertyOrdering": (
+            ["title", "entities", "relations", "description", "keywords",
+             "language"]
+            + (["quality"] if quality else [])
+            + ["summary"]
+        ),
         "properties": {
             "title": {"type": "string"},
             "entities": {
@@ -722,6 +804,7 @@ def _gemini_schema(offered: tuple[str, ...] = RELATION_PREDICATES) -> dict:
             "description": {"type": "string"},
             "keywords": {"type": "array", "items": {"type": "string"}},
             "language": {"type": "string"},
+            **({"quality": quality_schema()} if quality else {}),
             "summary": {"type": "string"},
         },
     }

@@ -288,6 +288,60 @@ that applies to the structured fields.
 Do not infer a purpose. A track between two points is a track between two points."""
 
 
+WEB_PAGE = """Extract from a web page, and judge it.
+
+A web page is not a document somebody handed you. It was published, and it was
+optimised for something -- ranking, converting, persuading, or occasionally
+informing. Say what it is and how much of it is worth anything.
+
+title:       the page's own headline, not the browser title with the site name
+             bolted on. "Postgres index bloat" not "Postgres index bloat | Acme
+             Blog | Acme".
+keywords:    domain terms a specialist would search, not the site's own tag soup.
+
+Ignore the furniture. Navigation, footers, cookie banners, newsletter prompts,
+share buttons, related-article rails, comment threads and "you may also like"
+blocks are not the page. Nothing in them belongs in the summary, and a claim
+made in a comment is not a claim the page makes.
+
+**First decide whether this is content at all.** An error page, a login wall, a
+paywall stub, a consent interstitial and a parked domain all return HTTP 200 and
+all produce fluent text. Say so plainly when that is what arrived, and do not
+summarise the apology as though it were an article.
+
+Then fill `quality`, which is the point of reading a page rather than a file:
+
+page_kind        what it IS, structurally.
+purpose          what it is trying to get the reader to do or believe. Every
+                 page wants something; "inform" is an answer, not a default.
+substance        could a reader get this anywhere, or is something here that
+                 only this page has? Original reporting, primary data, direct
+                 experience and specific numbers are substance. Restating the
+                 question five ways is not.
+evidence         does it name sources, link them, quantify, or simply assert?
+                 Confidence is not evidence: a page with no sources and no
+                 hedging is `asserted`, however authoritative it sounds.
+authorship       the byline and any stated credentials. "unattributed" when
+                 there is none -- which is itself the finding.
+dated            publication and update dates the page states. Say "undated"
+                 rather than inferring one; a rebuild date is not a write date.
+commercial       how the page is monetised, where that shapes what it says.
+reliability      up to five specific reasons to trust or doubt this page.
+                 Specific: "cites the 2024 CVE by number" or "every statistic
+                 is unsourced", never "seems reliable".
+missing          up to five questions the page raises and does not answer.
+retrieval_value  whether this is worth keeping in a searchable corpus, and the
+                 one field a person will actually filter on.
+verdict          one short paragraph: what this is, whether to keep it, what
+                 for.
+
+Length is not substance. A four-thousand-word page that says one thing slowly
+is `thin`, and saying so is more useful than a polite summary of the padding.
+
+Extract claims the page ASSERTS, and keep them separate from what it quotes or
+attributes. A page reporting somebody else's study is not the study."""
+
+
 # data_type -> prompt. The cascade produces the data_type; this maps it onto the
 # agent that handles it, which is the whole reason those are separate fields.
 BY_DATA_TYPE: dict[str, str] = {
@@ -295,7 +349,10 @@ BY_DATA_TYPE: dict[str, str] = {
     "message_email": EMAIL_MESSAGE,
     "document_pdf": DOCUMENT,
     "document_text": DOCUMENT,
-    "document_html": DOCUMENT,
+    # A fetched page is not a document that happens to be HTML. It has an
+    # agenda, furniture, and a real chance of not being content at all, and
+    # those are different questions from the ones a PDF raises.
+    "document_html": WEB_PAGE,
     "transcript": TRANSCRIPT,
     "structured_json": STRUCTURED_RECORD,
     "structured_csv": STRUCTURED_RECORD,
@@ -326,7 +383,7 @@ NAMES: dict[str, str] = {
         "chat_message": CHAT_MESSAGE, "email_message": EMAIL_MESSAGE,
         "document": DOCUMENT, "transcript": TRANSCRIPT,
         "structured_record": STRUCTURED_RECORD, "code_or_config": CODE_OR_CONFIG,
-        "image": IMAGE, "generic": GENERIC,
+        "image": IMAGE, "generic": GENERIC, "web_page": WEB_PAGE,
         "spreadsheet": SPREADSHEET, "presentation": PRESENTATION,
         "calendar": CALENDAR, "contact": CONTACT, "log": LOG,
         "config": CONFIG, "audio": AUDIO, "video": VIDEO,
