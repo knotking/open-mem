@@ -1933,19 +1933,32 @@ async def finish_upload(
     if session["status"] != "completed":
         raise HTTPException(status_code=409, detail=f"upload is {session['status']}")
 
+    # Everything an inline write can say about an item, an uploaded one must be
+    # able to say too. Without `access`, `template` and `options` here, choosing
+    # the upload path silently dropped the visibility, the graph template and
+    # the request to enrich -- so a large document would arrive stored, public
+    # to the project's default, and never become searchable, while the same file
+    # inlined honoured all three. A path that quietly means something different
+    # is worse than one that is missing.
+    item: dict = {
+        "external_id": body.get("external_id") or session["external_id"],
+        "content": {
+            "kind": "stored",
+            "storage_ref": session["storage_key"],
+            "mime_type": session["mime_type"],
+            "size": session["received_bytes"],
+            "checksum": session["checksum"],
+        },
+        "memory": body.get("memory"),
+    }
+    if body.get("access"):
+        item["access"] = body["access"]
+    if body.get("template"):
+        item["template"] = body["template"]
     write_request = WriteRequest(
         producer_id=session["producer_id"],
-        items=[{
-            "external_id": body.get("external_id") or session["external_id"],
-            "content": {
-                "kind": "stored",
-                "storage_ref": session["storage_key"],
-                "mime_type": session["mime_type"],
-                "size": session["received_bytes"],
-                "checksum": session["checksum"],
-            },
-            "memory": body.get("memory"),
-        }],
+        items=[item],
+        **({"options": body["options"]} if body.get("options") else {}),
     )
     try:
         response = await write_items(

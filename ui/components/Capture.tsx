@@ -15,7 +15,11 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-const MAX_BYTES = 18 * 1024 * 1024;
+// What an *upload session* accepts, not what fits in a JSON body. Bytes above
+// `INLINE_MAX` go through `POST /uploads` and never touch a base64 string, so
+// the old 18 MB inline ceiling is no longer the limit on what can be added --
+// it is only the point at which the path changes.
+const MAX_BYTES = 512 * 1024 * 1024;
 
 type Mode = "audio" | "video";
 
@@ -61,7 +65,15 @@ export function humanBytes(n: number): string {
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 
-export type Staged = { name: string; mime: string; base64: string; size: number };
+/** What Capture hands the parent.
+ *
+ * The blob, not an encoding of it. Staging used to base64 the payload the
+ * moment it was chosen, which meant a document was encoded before anyone had
+ * decided to write it, on the main thread, into a string -- and that is where
+ * documents died. The parent encodes only if it is going to inline, and for
+ * anything large it never encodes at all.
+ */
+export type Staged = { name: string; mime: string; size: number; blob: Blob };
 
 /**
  * Choose or record something. It does not write.
@@ -140,23 +152,14 @@ export default function Capture({
     const named = payload as File & { pickedName?: string };
     const extension = (payload.type.split("/")[1] ?? "bin").split(";")[0];
     const name = named.pickedName ?? `capture-${Date.now()}.${extension}`;
-    // A rejection here used to go nowhere: no catch, so the promise failed
-    // silently, `onStaged` was never called, and the screen sat with the write
-    // button disabled and nothing said. "It just fails" is what that looks
-    // like, and it is the half of this bug that made the other half invisible.
-    void toBase64(payload).then(
-      (base64) => {
-        if (!cancelled) onStaged({ name, mime: payload.type, base64, size: payload.size });
-      },
-      (reason: unknown) => {
-        if (cancelled) return;
-        setError(
-          `Could not read ${name}: ${(reason as Error)?.message ?? String(reason)}`,
-        );
-        onStaged(null);
-      },
-    );
-    return () => { cancelled = true; };
+    // Nothing async here any more. Staging used to encode the payload to base64
+    // the instant it was chosen -- before anyone had decided to write it -- and
+    // a failure in that step had nowhere to go: `onStaged` was simply never
+    // called, so the screen sat with the write button disabled saying nothing.
+    // "It just fails" is what that looked like. Handing over the blob cannot
+    // fail, and the encode now happens once, later, only if it is needed.
+    void cancelled;
+    onStaged({ name, mime: payload.type, size: payload.size, blob: payload });
   }, [preview, onStaged]);
 
   async function send() {

@@ -34,9 +34,15 @@ async function forward(request: Request, path: string[], method: string) {
     // endpoint the server can reach, including ones this UI never uses.
     return Response.json({ detail: "path not permitted" }, { status: 403 });
   }
+  // Raw bytes for an upload, text for everything else. `text()` on a PDF
+  // corrupts it -- the body has to stay binary all the way to the API, which is
+  // the entire point of uploading rather than inlining base64.
+  const isUpload = /^api\/v1\/uploads\/[A-Za-z0-9_]+\/bytes$/.test(joined);
   const body =
     method === "POST" || method === "PUT" || method === "PATCH"
-      ? await request.text()
+      ? isUpload
+        ? await request.arrayBuffer()
+        : await request.text()
       : undefined;
 
   // A tool call stands on the caller's own key, exactly as the webhook route
@@ -83,6 +89,19 @@ async function forward(request: Request, path: string[], method: string) {
   try {
     upstream = await apiFetch(`/${joined}`, {
       method, body, skipAppCredential: anonymous,
+      // The upload token *is* the capability for `PUT .../bytes`, exactly as a
+      // signed URL's signature is. `apiFetch` builds its own headers, so
+      // without forwarding this the API sees no token and answers 403 -- which
+      // reads as a permissions bug and is a proxy that dropped a header.
+      ...(isUpload
+        ? {
+            headers: {
+              "X-Upload-Token": request.headers.get("x-upload-token") ?? "",
+              "content-type":
+                request.headers.get("content-type") ?? "application/octet-stream",
+            },
+          }
+        : {}),
       // `skipAppCredential` returns early in `apiFetch`, before the branch that
       // adds a content-type -- so without this the API receives a JSON body
       // with no type and FastAPI parses it as a string, answering

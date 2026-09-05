@@ -76,6 +76,12 @@ export const ALLOWED = [
   // Repository analysis. `snapshots/{id}` is listed before the `{case_id}`
   // form for the same reason the routes are declared in that order on the
   // server: the literal segment has to win, or a snapshot id is read as a case.
+  // Upload sessions. Without these the console can only inline base64, which
+  // caps what it can add at what fits in a JSON body -- and a book-sized PDF
+  // does not. Their absence is why documents could not be added at all.
+  /^api\/v1\/uploads$/,
+  /^api\/v1\/uploads\/[A-Za-z0-9_]+\/bytes$/,
+  /^api\/v1\/uploads\/[A-Za-z0-9_]+\/complete$/,
   /^api\/v1\/projects\/[A-Za-z0-9_]+\/repos$/,
   /^api\/v1\/repos\/analyze$/,
   /^api\/v1\/repos\/snapshots\/[A-Za-z0-9_]+$/,

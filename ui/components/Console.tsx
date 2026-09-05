@@ -104,6 +104,16 @@ type Section =
  * somebody arrives in**: *is this working* is what people open the console
  * with, so it is first rather than fifth inside something collapsed.
  */
+// Where the write path changes. Below this a file rides in the JSON body as
+// base64, which is simple and costs a third more on the wire; above it the
+// bytes go up on their own through an upload session.
+//
+// 8 MB rather than the API's 32 MB payload cap: base64 inflates by a third, the
+// string has to exist in the tab before it is sent, and the point of the second
+// path is to stop asking the browser to hold a document twice. Nothing is
+// refused at this line -- it only decides which way the bytes travel.
+const INLINE_MAX = 8 * 1024 * 1024;
+
 const GROUPS: { title: string; items: { key: Section; label: string; hint: string }[] }[] = [
   {
     title: "Monitor",
@@ -1159,6 +1169,102 @@ function AddData({
   const aclIncomplete = !meeting && (level === "restricted" || level === "shared")
     && principals.length === 0;
 
+  // The three things every write says about an item, and the one thing every
+  // write does afterwards. Extracted because there are now two paths to a
+  // record -- inline and upload -- and a field defined in only one of them is
+  // a field the other silently drops.
+  const memoryFor = (externalId?: string) =>
+    meeting
+      ? { type: "meeting", key: memoryKey || externalId }
+      : chosenMemory
+        ? { type: chosenMemory.type, key: chosenMemory.memory_key }
+        : memoryChoice === "new" && (memoryType || memoryKey)
+          ? { type: memoryType || "default", key: memoryKey || null }
+          : undefined;
+
+  const accessFor = () =>
+    meeting
+      ? { level: room.level, principals: room.principals }
+      : level
+        ? { level, principals: level === "shared" || level === "restricted" ? principals : [] }
+        : undefined;
+
+  const optionsFor = () => ({
+    enrich,
+    enrichment: {
+      embed,
+      summarize,
+      prompt: promptOverride.trim() || null,
+      model_id: modelOverride.trim() || null,
+    },
+  });
+
+  function afterWrite(
+    response: { results: { data_id: string; memories: string[] }[] },
+    label: string,
+  ) {
+    const first = response.results[0];
+    setNote(
+      `${label} committed as ${first.data_id}, mapped into ${first.memories.length} memory(ies).`,
+    );
+    track(first.data_id);
+    loadMemories();
+    setStaged(null);
+  }
+
+  /** Base64, natively and in one pass. See `Capture` for why not by hand. */
+  async function toBase64(blob: Blob): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(reader.error ?? new Error("could not read the file"));
+      reader.onload = () => {
+        const out = String(reader.result ?? "");
+        const comma = out.indexOf(",");
+        if (comma < 0) reject(new Error("could not encode the file"));
+        else resolve(out.slice(comma + 1));
+      };
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  /**
+   * Three calls: take a capability, put the bytes at it, then complete.
+   *
+   * The bytes go straight up as a body rather than through a JSON field, which
+   * is the whole reason this path exists — base64 costs a third more on the
+   * wire and has to be held as a string first, and that is what stopped a real
+   * document from ever being added.
+   */
+  async function uploadLarge(file: Staged) {
+    const session = await call<{ upload_id: string; url: string; token: string }>(
+      "api/v1/uploads",
+      { producer_id: producerId, external_id: file.name,
+        mime_type: file.mime, size: file.size },
+    );
+    // The signer returns an absolute URL at the API. The browser reaches the
+    // API only through the proxy, so the path is what is used, not the host.
+    const put = await fetch(`/api/proxy/api/v1/uploads/${session.upload_id}/bytes`, {
+      method: "PUT",
+      headers: { "X-Upload-Token": session.token,
+                 "content-type": file.mime || "application/octet-stream" },
+      body: file.blob,
+    });
+    if (!put.ok) {
+      throw new Error(
+        `the upload was refused (${put.status}): ${(await put.text()).slice(0, 200)}`);
+    }
+    const response = await call<{
+      results: { data_id: string; memories: string[]; events: string[] }[];
+    }>(`api/v1/uploads/${session.upload_id}/complete`, {
+      external_id: file.name,
+      memory: memoryFor(),
+      access: accessFor(),
+      template: template || undefined,
+      options: optionsFor(),
+    });
+    afterWrite(response, `${file.name} (${humanBytes(file.size)})`);
+  }
+
   async function submit() {
     setBusy(true);
     setError(null);
@@ -1174,57 +1280,42 @@ function AddData({
       const externalId = source === "text" ? `text-${Date.now()}`
         : source === "video" ? watchUrl
         : source === "page" ? page : staged!.name;
+      // A file bigger than the inline ceiling goes through an upload session
+      // and returns early: the bytes never become a base64 string and never
+      // travel in a JSON body. This is the path `docs/ingestion/uploads.md`
+      // describes, and its absence is why a book-sized PDF could not be added
+      // at all -- the console had no way to send it and failed before the
+      // request was made.
+      if (staged && staged.size > INLINE_MAX) {
+        await uploadLarge(staged);
+        return;
+      }
       const content = source === "text"
         ? { kind: "inline", text }
         : source === "video"
           ? { kind: "pending", provider: "youtube", resource_id: watchUrl }
           : source === "page"
             ? { kind: "pending", provider: "url", resource_id: page }
-            : { kind: "inline", bytes_b64: staged!.base64, mime_type: staged!.mime };
+            : { kind: "inline", bytes_b64: await toBase64(staged!.blob),
+                mime_type: staged!.mime };
       const label = source === "text" ? "Text"
         : source === "video" ? watchUrl
         : source === "page" ? page
         : `${staged!.name} (${humanBytes(staged!.size)})`;
-
-      const memory = meeting
-        ? { type: "meeting", key: memoryKey || externalId }
-        : chosenMemory
-          ? { type: chosenMemory.type, key: chosenMemory.memory_key }
-          : memoryChoice === "new" && (memoryType || memoryKey)
-            ? { type: memoryType || "default", key: memoryKey || null }
-            : undefined;
 
       const response = await call<{
         results: { data_id: string; memories: string[]; events: string[] }[];
       }>("api/v1/write", {
         producer_id: producerId,
         items: [{
-          external_id: externalId, content, memory,
+          external_id: externalId, content,
+          memory: memoryFor(externalId),
           template: template || undefined,
-          access: meeting
-            ? { level: room.level, principals: room.principals }
-            : level
-              ? { level, principals: level === "shared" || level === "restricted"
-                                     ? principals : [] }
-              : undefined,
+          access: accessFor(),
         }],
-        options: {
-          enrich,
-          enrichment: {
-            embed,
-            summarize,
-            prompt: promptOverride.trim() || null,
-            model_id: modelOverride.trim() || null,
-          },
-        },
+        options: optionsFor(),
       });
-      const first = response.results[0];
-      setNote(
-        `${label} committed as ${first.data_id}, mapped into ${first.memories.length} memory(ies).`,
-      );
-      track(first.data_id);
-      loadMemories();
-      setStaged(null);
+      afterWrite(response, label);
     } catch (e) {
       setError((e as Error).message);
     } finally {
