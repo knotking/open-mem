@@ -11,6 +11,35 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **Open an item in Browse and see where it got to.** Add data watched a write
+  climb the staircase and threw the reading away the moment you navigated off
+  the page, so "what happened to the thing I added" had no answer anywhere. The
+  climb is now rebuilt from the record and its event log, so it works an hour
+  later, in another session, and for an item somebody else wrote. The events
+  are what make it worth having: `searchable` is the same row whether the
+  summary is queued, refused, or was never asked for, and enrichment is opt-in,
+  so a write that did not request it stops at `stored` permanently — correct
+  behaviour that reads as a broken screen.
+- **A report can ask for findings instead of a summary.** A generator may name
+  the shape it needs: `data_type: code_review` puts a `findings` array in the
+  envelope — file, symbol, severity, statement, trigger — with `file` required,
+  because a finding that cannot say where it is cannot be checked. **An empty
+  array is a first-class answer** and the honest one for code with no locatable
+  defect: `[]` and a missing key are different claims, and rendering them the
+  same is how a report that never ran reads as a clean bill of health. The bug
+  report described the codebase instead of answering it four runs running, and
+  no wording fixed it, because the envelope's one open field is `summary` and a
+  summariser told to find bugs still writes a summary.
+- **A page behind a bot wall can be read by the model.** When a fetch fails —
+  403, a bot wall, a shell that fills itself in with JavaScript — Gemini's URL
+  Context retrieves the page instead, and what was a stored record with no text
+  becomes a readable one. It is a fallback and the order is the design: a GET
+  returns the bytes somebody published, and this returns a model's reading of
+  them. **The retrieval status is the whole safety property** — asked about a
+  URL it could not reach, the model answers anyway, from training, and the
+  prose is indistinguishable from a real reading. An account is accepted only
+  when the metadata confirms retrieval; a response with no metadata is refused,
+  because silence is not success.
 - **Paste a GitHub URL and get four reports about that exact commit** —
   design, code quality, functional bugs, dependencies. Each is an artifact from
   a named generator, so it records the prompt and model that produced it, goes
@@ -139,6 +168,11 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   upstream says must never be public.
 
 ### Configuration
+- **`URL_CONTEXT`** — reads a page with Gemini's URL Context when the fetcher
+  cannot get it. **Off by default**: a page that fetches normally costs an HTTP
+  GET, and this costs a model call whose input includes the whole page. It
+  earns that only where the alternative is a record with no text.
+  **`URL_CONTEXT_MODEL`** overrides the model; empty means `MULTIMODAL_MODEL`.
 - **`REPO_ANALYSIS_JOB`** — the fully qualified Cloud Run Job
   (`projects/{p}/locations/{l}/jobs/{name}`) that clones and graphs a
   repository. **Empty disables repository analysis, which is the default**: the
@@ -154,6 +188,49 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   analysed twice under two spellings.
 
 ### Fixed
+- **A document larger than a JSON body could not be added at all.** The console
+  had exactly one way to send a file — base64 inline — and the three upload
+  endpoints were missing from the proxy allow-list, so a book-sized PDF had no
+  route in and failed before any request was made. Audio, images and short
+  recordings fit and worked, which is why this read as "PDFs are broken" rather
+  than as a missing path. Four things had to change: the proxy dropped
+  `X-Upload-Token` (the token *is* the capability, so the API answered 403,
+  which reads as a permissions bug and is a dropped header); the proxy read the
+  body as text, which corrupts a PDF; `POST /uploads/{id}/complete` accepted
+  only `external_id` and `memory`, so the upload path silently dropped the ACL,
+  the template and the request to enrich; and staging encoded to base64 the
+  instant a file was chosen, before anyone had decided to write it.
+- **A file erased once could never be added again.** The write upsert's
+  conflict target is `(project, producer, external_id)` and it matched
+  tombstoned rows without clearing `deleted_at` — so re-adding a file after an
+  erasure updated the dead row and returned its id. The response said success,
+  every read of that id answered 404 because the ACL predicate excludes deleted
+  rows, and the item was never saved: written into a row nothing could see,
+  with no error anywhere. A write onto an erased row now clears the tombstone.
+  The erasure itself is not rewritten — the audit event and the certificate
+  still say it was erased, and when.
+- **Audio was recorded as silent when it was not.** A recording of somebody
+  speaking came back empty from the configured `TRANSCRIBE_MODEL` and was
+  stored as "no interpretable content found in the media" — a true-sounding
+  sentence about something untrue. The same bytes through `MULTIMODAL_MODEL`
+  transcribed correctly. It is the quiet mirror of a failure already recorded
+  for video, which fails loudly against the same model and was routed away.
+  An empty answer from an overridden model is now retried once against the
+  engine's own model, and only silence from *that* is recorded as silence.
+- **The console reported successful writes as failures.** `207` is
+  Multi-Status, not success — it can carry an item that `failed` with the
+  reason in `error` — and the console read `results[0].data_id` regardless, so
+  a refusal raised "cannot read properties of undefined" and the API's own
+  explanation went on the floor. Separately, a 404 while watching an item was
+  fatal rather than a state: deleting a corpus while the console still held a
+  tracked id was enough to make every later write look broken. Both are the
+  same mistake — treating "I could not read the answer" as "the operation
+  failed" — and between them they hid every real cause behind a type error.
+- **A repository graphify finds no code in is a result, not a crash.** It
+  refuses to write `graph.json` when extraction produces no nodes, which is
+  correct for a docs-only repo, a notebook corpus, or a language with no
+  grammar. Failing the snapshot there threw away the manifests and the README,
+  which need no graph and are most of the dependency and design material.
 - **The Hermes agent reported the mem-dog corpus as empty.** `mem_dog_search`
   requires a `project_id`, nothing in the MCP handshake supplies one, and the
   agent had been discovering it by shelling out to `env | grep -i mem` — so it
