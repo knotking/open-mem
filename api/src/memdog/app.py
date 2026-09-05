@@ -2613,6 +2613,30 @@ async def read_repo_snapshot(
     return {**snapshot, "reports": artifacts}
 
 
+@app.patch("/api/v1/repos/snapshots/{snapshot_id}")
+async def update_repo_snapshot(
+    request: Request, snapshot_id: str, body: dict,
+    actor: Principal = Depends(principal),
+) -> dict:
+    """How the analysis went, reported by the job that ran it.
+
+    The job is an ordinary API client, so this is an ordinary authenticated
+    write. Without it a finished analysis reads as one still running, which is
+    worse than a failure that says so.
+    """
+    from .repos import RepoError, report_result
+
+    try:
+        return await report_result(
+            request.app.state.pool, actor, snapshot_id,
+            status=body.get("status", ""),
+            reason=body.get("reason"),
+            stats=body.get("stats"),
+        )
+    except (RepoError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
 @app.get("/api/v1/repos/{case_id}/snapshots")
 async def list_repo_snapshots(
     request: Request, case_id: str, actor: Principal = Depends(principal)

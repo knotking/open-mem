@@ -341,6 +341,30 @@ Each of these presents as a different bug than it is.
   burst, but `circuit open` means the client has stopped trying and will keep
   falling back until the breaker resets.
 
+  **A `401` is a different problem from a `429` and reads identically.** Found
+  2026-09-05: `fallback_reason` was
+  `gemini: EmbeddingUnavailable: Client error '401 Unauthorized'`, and the key
+  in `gemini-api-key` began `AQ.A` rather than `AIza` — it is not an AI Studio
+  API key at all. Quota exhaustion is worth waiting out; an invalid credential
+  never resolves itself, and every model call falls back silently in the
+  meantime. The corpus keeps ingesting, artifacts keep being written, and every
+  summary is the first few lines of its own input, which reads as a bad model
+  rather than a missing credential.
+
+  Check the key before blaming the model, and check the *shape* first — it costs
+  nothing:
+
+  ```bash
+  GK=$(gcloud secrets versions access latest --secret gemini-api-key --project memdog-dev-506718)
+  echo "${GK:0:4}"   # AIza = an API key. Anything else is not one.
+  curl -s -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.7-flash:generateContent" \
+    -H "x-goog-api-key: $GK" -H 'content-type: application/json' \
+    -d '{"contents":[{"parts":[{"text":"hi"}]}]}' | head -5
+  ```
+
+  Rotating it is the fix, and it must reach the jobs as well as the service —
+  see the rotation block above, which exists for exactly this.
+
   **Ask the API which quota it means** — the answer names the tier outright, and
   is the difference between "wait" and "pay":
 

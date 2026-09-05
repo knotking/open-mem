@@ -275,7 +275,7 @@ async def request_snapshot(
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending', $9::jsonb)
             """,
             snapshot_id, principal.org_id, project_id, case_id, memory_id,
-            url, sha, head["ref"], _stats_json(head),
+            url, sha, head["ref"], _stats(head),
         )
         await record_audit(
             conn, principal, action="repo.snapshot.requested", project_id=project_id,
@@ -300,10 +300,17 @@ async def request_snapshot(
     }
 
 
-def _stats_json(head: dict) -> str:
-    import json
+def _stats(head: dict) -> dict:
+    """A dict, not a JSON string.
 
-    return json.dumps({
+    The pool installs a jsonb codec (`db._init_connection`) whose encoder is
+    `json.dumps`, so a value that is already serialised gets serialised again
+    and lands as a jsonb *string* rather than an object. Nothing errors: the
+    row stores `"{\"nodes\": 990}"`, `stats || …` then concatenates two
+    strings into an array instead of merging them, and the console reads
+    `stats.nodes` off a list and renders nothing.
+    """
+    return ({
         "size_kb": head.get("size_kb"),
         "primary_language": head.get("language"),
         "license": head.get("license"),
@@ -324,8 +331,6 @@ async def mark(
     indistinguishable from one nobody ran, and the difference is the only thing
     a person looking at the screen wants to know.
     """
-    import json
-
     if status not in STATUSES:
         raise RepoError(f"unknown status {status!r}")
     await pool.execute(
@@ -336,8 +341,33 @@ async def mark(
             stats = CASE WHEN $4::jsonb IS NULL THEN stats ELSE stats || $4::jsonb END
         WHERE snapshot_id = $1
         """,
-        snapshot_id, status, reason, json.dumps(stats) if stats else None,
+        snapshot_id, status, reason, stats or None,
     )
+
+
+async def report_result(
+    pool: asyncpg.Pool, principal: Principal, snapshot_id: str,
+    *, status: str, reason: str | None = None, stats: dict | None = None,
+) -> dict:
+    """The job saying how it went.
+
+    Without this the row stops at `running` and stays there: the job exits 0,
+    the reports exist, and the console shows "cloning and parsing" forever. A
+    finished analysis that reads as an unfinished one is the exact failure the
+    status column exists to prevent, so the last thing the job does is say so.
+
+    It is a normal authenticated call with `data:write` -- the job holds an API
+    key and no database credential, and this is not an exception to that.
+    """
+    principal.require(DATA_WRITE)
+    if status not in STATUSES:
+        raise RepoError(f"unknown status {status!r}")
+    row = await pool.fetchrow(
+        "SELECT org_id FROM repo_snapshots WHERE snapshot_id = $1", snapshot_id)
+    if row is None or row["org_id"] != principal.org_id:
+        raise RepoError("unknown snapshot", status=404)
+    await mark(pool, snapshot_id, status, reason=reason, stats=stats)
+    return {"snapshot_id": snapshot_id, "status": status}
 
 
 async def get(pool: asyncpg.Pool, principal: Principal, snapshot_id: str) -> dict:

@@ -142,8 +142,25 @@ def graph(repo: Path) -> tuple[dict, str]:
     the parse is reproducible and the reading of it is not.
     """
     out = repo / "graphify-out"
+    # `--code-only` is not a limitation accepted reluctantly; it is the mode
+    # this design already claimed to be in. Without it graphify offers to read
+    # the repository's docs, papers and images through a model and **refuses to
+    # run at all without an API key** -- which is how this first failed, on a
+    # repository with fifty markdown files.
+    #
+    # Three reasons it is the right mode rather than a workaround. The parse
+    # stays deterministic, so two analyses of one commit agree, which a
+    # per-snapshot design cannot give up. It stays free, where the alternative
+    # is a model call per document before the four reports have even started.
+    # And the repository's prose is not what the graph is for: the reports read
+    # the README and the manifests directly as selected files, so sending them
+    # through an extractor here would pay twice for the same text.
+    # No `--output`. The flag names a *parent* -- `--output DIR` writes to
+    # `DIR/graphify-out/` -- so passing the graphify-out directory itself nests
+    # it one level deeper and the graph lands somewhere nothing looks. The
+    # default is the scanned path, which is where `out` already points.
     result = subprocess.run(
-        ["graphify", "extract", ".", "--output", str(out)],
+        ["graphify", "extract", ".", "--code-only"],
         cwd=repo, capture_output=True, text=True, timeout=GRAPHIFY_TIMEOUT,
     )
     graph_path = out / "graph.json"
@@ -157,9 +174,38 @@ def graph(repo: Path) -> tuple[dict, str]:
     except json.JSONDecodeError as exc:
         raise AnalysisFailed(f"graphify wrote an unreadable graph.json: {exc}") from exc
 
+    # `extract` writes the graph and stops; the human-readable report comes from
+    # a second pass. `--no-label` keeps the community names as placeholders,
+    # which is what keeps this free -- naming them is the one part of clustering
+    # that wants a model, and a report whose sections are called "Community 3"
+    # is still worth having next to a graph.
+    #
+    # Best effort: the graph is the thing the analysers actually read, so a
+    # failure here costs a nicety and must not lose the run.
+    try:
+        subprocess.run(
+            ["graphify", "cluster-only", ".", "--no-label", "--no-viz"],
+            cwd=repo, capture_output=True, text=True, timeout=GRAPHIFY_TIMEOUT,
+        )
+    except subprocess.SubprocessError as exc:
+        log.warning("cluster-only failed, continuing without a graph report: %s", exc)
+
     report_path = out / "GRAPH_REPORT.md"
     report = report_path.read_text() if report_path.exists() else ""
     return data, report
+
+
+def edges(data: dict) -> list[dict]:
+    """The graph's edges.
+
+    **`links`, not `edges`.** graphify emits NetworkX node-link JSON, where the
+    edge list is called `links`. Reading `edges` returns nothing and every
+    degree is zero -- which does not fail, it just quietly selects no files, and
+    the reports come back thin over manifests alone with nothing saying why.
+    `edges` is accepted too so a future format change degrades rather than
+    silently empties.
+    """
+    return list(data.get("links") or data.get("edges") or [])
 
 
 def degree(data: dict) -> dict[str, int]:
@@ -171,20 +217,108 @@ def degree(data: dict) -> dict[str, int]:
     to be worth reading first.
     """
     counts: dict[str, int] = {}
-    for edge in data.get("edges") or []:
-        for end in ("source", "target", "from", "to"):
+    for edge in edges(data):
+        for end in ("source", "target"):
             node = edge.get(end)
             if isinstance(node, str):
                 counts[node] = counts.get(node, 0) + 1
     return counts
 
 
+def digest(data: dict, *, top: int = 60) -> str:
+    """The graph as something a model can actually read.
+
+    **This is the compression the whole design rests on, and storing the raw
+    graph instead of this is what broke the first live run.** `graph.json` for a
+    mid-size repository is well over a megabyte of node-link JSON; handed to an
+    extractor it fills every window with punctuation and the report comes back
+    as an echo of its own input. It looks like a model failure and is a units
+    failure -- the graph was supposed to be smaller than the code, and raw it is
+    larger.
+
+    So the raw graph is kept as provenance and *this* is what the analysers
+    read: the module dependency structure, the hubs, and the shape of the
+    communities, in a few kilobytes of prose-ish text. Everything here is
+    counted from the graph rather than described, because a digest that
+    editorialises is already an analysis, and the analysis is the model's job.
+    """
+    nodes = data.get("nodes") or []
+    links = edges(data)
+    paths = node_paths(data)
+    counts = degree(data)
+
+    by_file: dict[str, int] = {}
+    for node in nodes:
+        f = node.get("source_file")
+        if isinstance(f, str):
+            by_file[f] = by_file.get(f, 0) + 1
+
+    # Module-to-module edges, which is the level design questions are asked at.
+    # Symbol-to-symbol is too fine to see structure in and too many to list.
+    between: dict[tuple[str, str], int] = {}
+    relations: dict[str, int] = {}
+    for link in links:
+        rel = link.get("relation") or "?"
+        relations[rel] = relations.get(rel, 0) + 1
+        a, b = paths.get(link.get("source", "")), paths.get(link.get("target", ""))
+        if a and b and a != b:
+            between[(a, b)] = between.get((a, b), 0) + 1
+
+    communities: dict[object, list[str]] = {}
+    for node in nodes:
+        communities.setdefault(node.get("community"), []).append(
+            str(node.get("label") or node.get("id")))
+
+    hubs = sorted(
+        ((counts.get(n.get("id", ""), 0), n) for n in nodes),
+        key=lambda pair: -pair[0])[:top]
+
+    lines = [
+        "# Code graph digest",
+        "",
+        f"{len(nodes)} symbols across {len(by_file)} files, {len(links)} edges.",
+        "Parsed from source with tree-sitter; no model was involved in building this.",
+        "",
+        "## Edge kinds",
+        *(f"- {rel}: {n}" for rel, n in sorted(relations.items(), key=lambda kv: -kv[1])),
+        "",
+        f"## Most connected symbols (top {len(hubs)})",
+        "Where a defect costs the most and where the design tends to live.",
+    ]
+    for count, node in hubs:
+        lines.append(
+            f"- {node.get('label')} ({node.get('source_file')}"
+            f":{node.get('source_location')}) — {count} edges")
+
+    lines += ["", "## Files with the most symbols"]
+    for f, n in sorted(by_file.items(), key=lambda kv: -kv[1])[:40]:
+        lines.append(f"- {f}: {n}")
+
+    lines += ["", "## Dependencies between files", "Counted both directions; a>b means a references b."]
+    for (a, b), n in sorted(between.items(), key=lambda kv: -kv[1])[:80]:
+        lines.append(f"- {a} > {b}: {n}")
+
+    lines += ["", f"## Communities ({len(communities)})",
+              "Clusters the graph fell into. Names are placeholders — they were not "
+              "labelled by a model."]
+    for name, members in sorted(communities.items(), key=lambda kv: -len(kv[1]))[:20]:
+        lines.append(f"- Community {name}: {len(members)} symbols — "
+                     f"{', '.join(members[:12])}{' …' if len(members) > 12 else ''}")
+    return "\n".join(lines)
+
+
 def node_paths(data: dict) -> dict[str, str]:
-    """Node id -> the file it came from, where graphify recorded one."""
+    """Node id -> the file it came from.
+
+    The key is `source_file`; the others are accepted only as fallbacks. Getting
+    this wrong has the same shape as getting `links` wrong -- an empty mapping
+    means no file is ever ranked, and nothing reports that it happened.
+    """
     paths: dict[str, str] = {}
     for node in data.get("nodes") or []:
-        node_id = node.get("id") or node.get("name")
-        location = node.get("file") or node.get("path") or (node.get("location") or {}).get("file")
+        node_id = node.get("id") or node.get("label")
+        location = (node.get("source_file") or node.get("file") or node.get("path")
+                    or (node.get("location") or {}).get("file"))
         if isinstance(node_id, str) and isinstance(location, str):
             paths[node_id] = location
     return paths
@@ -359,6 +493,23 @@ class Api:
             )
         return response.json()
 
+    def finish(self, snapshot_id: str, status: str, *,
+               reason: str | None = None, stats: dict | None = None) -> None:
+        """Say how it went. Best effort, and loudly logged when it fails --
+        the analysis is already done and stored by this point, so failing here
+        must not undo it, but a snapshot left at `running` reads as one still
+        in progress and somebody has to be able to find out why."""
+        try:
+            response = self._client.patch(
+                f"{self._base}/api/v1/repos/snapshots/{snapshot_id}",
+                json={"status": status, "reason": reason, "stats": stats},
+            )
+            if response.status_code >= 400:
+                log.error("could not report %s for %s: %s",
+                          status, snapshot_id, response.text[:300])
+        except Exception as exc:  # noqa: BLE001
+            log.error("could not report %s for %s: %s", status, snapshot_id, exc)
+
     def derive(self, memory_id: str, generator: str) -> dict:
         response = self._client.post(
             f"{self._base}/api/v1/memories/{memory_id}/derive",
@@ -409,8 +560,8 @@ def main() -> int:
 
         log.info("graphing")
         data, report = graph(repo)
-        nodes, edges = len(data.get("nodes") or []), len(data.get("edges") or [])
-        log.info("graph: %d nodes, %d edges", nodes, edges)
+        nodes, edge_count = len(data.get("nodes") or []), len(edges(data))
+        log.info("graph: %d nodes, %d edges", nodes, edge_count)
 
         selected, reasons = select_files(repo, data)
         deps = dependencies(repo)
@@ -418,14 +569,25 @@ def main() -> int:
         log.info("selected %d files, %d dependencies, OSV %s",
                  len(selected), len(deps), osv.get("status"))
 
+        # The digest goes in the snapshot memory; the raw graph goes in a
+        # sibling. Everything in the snapshot memory is read by all four
+        # reports, so a member that cannot be read usefully does not merely
+        # waste a window -- it *takes* windows from the material that can, and
+        # a megabyte of node-link JSON takes all of them.
+        raw_key = f"{memory_key}/graph"
         items = [
-            item(f"{repo_url}@{sha}/graph.json", json.dumps(data)[:1_800_000],
+            item(f"{repo_url}@{sha}/graph-digest.md", digest(data),
                  memory_key=memory_key, repo=case_external,
-                 data_type="code_graph", tags=["repo:graph"]),
+                 tags=["repo:graph-digest"]),
             item(f"{repo_url}@{sha}/dependencies.json",
                  json.dumps({"dependencies": deps, "vulnerabilities": osv}, indent=2),
                  memory_key=memory_key, repo=case_external,
                  data_type="dependencies", tags=["repo:dependencies"]),
+            # Provenance. Kept whole and kept out of the reports' way, so the
+            # graph can still be traversed, diffed or re-read later.
+            item(f"{repo_url}@{sha}/graph.json", json.dumps(data)[:1_800_000],
+                 memory_key=raw_key, repo=case_external,
+                 data_type="code_graph", tags=["repo:graph"]),
         ]
         if report:
             items.append(item(f"{repo_url}@{sha}/GRAPH_REPORT.md", report,
@@ -451,22 +613,24 @@ def main() -> int:
         reports = [api.derive(memory_id, g) for g in
                    ("repo_design", "repo_quality", "repo_bugs", "repo_deps")]
 
-        print(json.dumps({
-            "snapshot_id": snapshot_id, "status": "complete",
-            "stats": {
-                "nodes": nodes, "edges": edges,
+        stats = {
+                "nodes": nodes, "edges": edge_count,
                 "files_selected": len(selected), "selection": reasons,
                 "dependencies": len(deps),
                 "osv_status": osv.get("status"),
                 "osv_affected": osv.get("affected", 0),
                 "records_written": len(items),
                 "graphify_version": GRAPHIFY_VERSION,
-            },
-            "reports": [r.get("artifact_id") or r.get("error") for r in reports],
-        }))
+        }
+        api.finish(snapshot_id, "complete", stats=stats)
+        print(json.dumps({"snapshot_id": snapshot_id, "status": "complete",
+                          "stats": stats,
+                          "reports": [r.get("artifact_id") or r.get("error")
+                                      for r in reports]}))
         return 0
     except AnalysisFailed as exc:
         log.error("analysis failed: %s", exc)
+        api.finish(snapshot_id, "failed", reason=str(exc)[:500])
         print(json.dumps({"snapshot_id": snapshot_id, "status": "failed",
                           "reason": str(exc)[:500]}))
         return 1

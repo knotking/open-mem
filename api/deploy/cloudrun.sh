@@ -51,12 +51,19 @@ step "Deploying ${SERVICE}"
 # calls, and never finished. Nothing errored and nothing was logged, because the
 # task was not failing -- it was frozen. Found 2026-09-03, on a .docx that had
 # parsed and summarised perfectly and would not become searchable.
+# `REPO_ANALYSIS_JOB` belongs in the list below rather than being applied
+# afterwards. `--set-env-vars` replaces the whole set, so a value added by hand
+# with `--update-env-vars` survives exactly until the next deploy and then
+# vanishes -- and repo analysis does not break loudly when it does. Snapshots go
+# on being accepted and every one fails with "no repo analysis job is
+# configured", which reads as a misconfiguration nobody made rather than as a
+# deploy that dropped a variable. It happened once, immediately.
 gcloud run deploy "$SERVICE" \
   --project "$PROJECT" --region "$REGION" \
   --image "$IMAGE" \
   --service-account "$SA" \
   --network default --subnet default --vpc-egress private-ranges-only \
-  --set-env-vars "DB_HOST=${DB_HOST},DB_NAME=${DB_NAME},DB_USER=postgres,EMBED_DIM=768,EMBED_ENGINE=${EMBED_ENGINE:-gemini},EMBED_MODEL=${EMBED_MODEL:-gemini-embedding-001},RAW_BUCKET=${RAW_BUCKET},MEDIA_INTERPRETATION=true,MAX_TEXT_CHARS=${MAX_TEXT_CHARS:-4000000},EXTRACT_ENGINE=gemini,MULTIMODAL_MODEL=${MULTIMODAL_MODEL:-gemini-3.7-flash},TRANSCRIBE_MODEL=${TRANSCRIBE_MODEL:-gemini-3.5-transcribe},FIREBASE_PROJECT_ID=${PROJECT},OTEL_GCP_PROJECT=${PROJECT},IMAGE_TAG=${TAG},PUBLIC_PROJECT_ID=${PUBLIC_PROJECT_ID:-},PUBLIC_MEMORY_ID=${PUBLIC_MEMORY_ID:-},PUBLIC_TITLE=${PUBLIC_TITLE:-},PUBLIC_SUBTITLE=${PUBLIC_SUBTITLE:-},PUBLIC_DAILY_CAP=${PUBLIC_DAILY_CAP:-500},PUBLIC_RATE_PER_HOUR=${PUBLIC_RATE_PER_HOUR:-20}" \
+  --set-env-vars "DB_HOST=${DB_HOST},DB_NAME=${DB_NAME},DB_USER=postgres,EMBED_DIM=768,EMBED_ENGINE=${EMBED_ENGINE:-gemini},EMBED_MODEL=${EMBED_MODEL:-gemini-embedding-001},RAW_BUCKET=${RAW_BUCKET},MEDIA_INTERPRETATION=true,MAX_TEXT_CHARS=${MAX_TEXT_CHARS:-4000000},EXTRACT_ENGINE=gemini,MULTIMODAL_MODEL=${MULTIMODAL_MODEL:-gemini-3.7-flash},TRANSCRIBE_MODEL=${TRANSCRIBE_MODEL:-gemini-3.5-transcribe},FIREBASE_PROJECT_ID=${PROJECT},OTEL_GCP_PROJECT=${PROJECT},IMAGE_TAG=${TAG},PUBLIC_PROJECT_ID=${PUBLIC_PROJECT_ID:-},PUBLIC_MEMORY_ID=${PUBLIC_MEMORY_ID:-},PUBLIC_TITLE=${PUBLIC_TITLE:-},PUBLIC_SUBTITLE=${PUBLIC_SUBTITLE:-},PUBLIC_DAILY_CAP=${PUBLIC_DAILY_CAP:-500},PUBLIC_RATE_PER_HOUR=${PUBLIC_RATE_PER_HOUR:-20},REPO_ANALYSIS_JOB=${REPO_ANALYSIS_JOB:-projects/${PROJECT}/locations/${REGION}/jobs/memdog-repo-analysis}" \
   --set-secrets "DB_PASSWORD=memdog-db-password:latest,MEMDOG_MASTER_KEY=memdog-master-key:latest,GEMINI_API_KEY=gemini-api-key:latest" \
   --allow-unauthenticated \
   --min-instances 0 --max-instances 4 \

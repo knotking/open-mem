@@ -119,7 +119,6 @@ const GROUPS: { title: string; items: { key: Section; label: string; hint: strin
     items: [
       { key: "inbound", label: "Inbound", hint: "webhooks providers post to" },
       { key: "crawlers", label: "Crawlers", hint: "pull what won't push" },
-      { key: "repos", label: "Repositories", hint: "graph and analyse a repo" },
       { key: "producers", label: "Producers", hint: "freshness and status" },
     ],
   },
@@ -127,6 +126,7 @@ const GROUPS: { title: string; items: { key: Section; label: string; hint: strin
     title: "Data",
     items: [
       { key: "add", label: "Add data", hint: "paste, upload or record" },
+      { key: "repos", label: "Add a repo", hint: "analyse a GitHub repo" },
       // "Browse", not "Update": after the drill-down this screen is mostly
       // reading, and a label promising an edit makes people who want to look
       // skip it. Search finds by query; this walks by container.
