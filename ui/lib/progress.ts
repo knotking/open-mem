@@ -260,3 +260,114 @@ export function assess(
     offerEnrich,
   };
 }
+
+/**
+ * Reading a repository snapshot's climb.
+ *
+ * The sibling of `assess`, and here for the same reason: a snapshot sat at
+ * `running` for minutes with one word to describe a clone, a full AST pass,
+ * an OSV lookup, forty writes and four model calls. "Working" and "wedged"
+ * looked identical, which is the failure the staircase exists to prevent.
+ *
+ * The stages come from the job, which narrates each one as it begins. A
+ * snapshot from before the job narrated anything still reads correctly —
+ * `running` with no stage means the work is somewhere in the middle and the
+ * steps show as waiting rather than as wrong.
+ */
+export type RepoSnapshotLike = {
+  status: "pending" | "running" | "complete" | "failed";
+  reason?: string | null;
+  stats?: {
+    stage?: string;
+    nodes?: number;
+    edges?: number;
+    files_selected?: number;
+    dependencies?: number;
+    osv_status?: string;
+    osv_affected?: number;
+    records_written?: number;
+    no_code_graph?: string;
+  } | null;
+};
+
+const REPO_STAGES: { key: string; label: string; waiting: string }[] = [
+  { key: "cloning", label: "Clone the commit", waiting: "one commit, not the history" },
+  { key: "graphing", label: "Parse it into a graph", waiting: "tree-sitter, no model" },
+  { key: "dependencies", label: "Check dependencies", waiting: "manifests, then OSV" },
+  { key: "writing", label: "Store what it read", waiting: "the digest and the chosen files" },
+  { key: "deriving", label: "Write the four reports", waiting: "one model call each" },
+];
+
+export function readSnapshot(snapshot: RepoSnapshotLike): Climb {
+  const stats = snapshot.stats ?? {};
+  const done = snapshot.status === "complete";
+  const failed = snapshot.status === "failed";
+  const at = REPO_STAGES.findIndex((s) => s.key === stats.stage);
+
+  const steps = REPO_STAGES.map((s, i) => {
+    // Done reaches every step; failed stops where the stage says it stopped.
+    if (done) return step(s.key, s.label, "done", noteFor(s.key, stats));
+    if (at < 0) {
+      return step(s.key, s.label, failed ? "stopped" : "waiting",
+                  failed ? "did not get here" : s.waiting);
+    }
+    if (i < at) return step(s.key, s.label, "done", noteFor(s.key, stats));
+    if (i === at) {
+      return step(s.key, s.label, failed ? "stopped" : "running",
+                  failed ? "stopped here" : "working…");
+    }
+    return step(s.key, s.label, failed ? "stopped" : "waiting",
+                failed ? "did not get here" : s.waiting);
+  });
+
+  const percent = done ? 100
+    : failed ? Math.max(6, ((at < 0 ? 0 : at) / REPO_STAGES.length) * 100)
+    : at < 0 ? 6
+    : Math.max(6, ((at + 0.5) / REPO_STAGES.length) * 100);
+
+  const headline = done
+    ? "Analysed"
+    : failed
+      ? "Stopped"
+      : snapshot.status === "pending"
+        ? "Queued — waiting for the job to pick it up"
+        // `running` is set when the job is *started*, and Cloud Run queues an
+        // execution behind any already in flight. So running-with-no-stage is
+        // genuinely "not begun yet", and saying "Running" there would claim
+        // work that has not started -- the exact confusion the stages fix.
+        : at < 0
+          ? "Starting — the job is queued behind any analysis already running"
+          : REPO_STAGES[at].label;
+
+  return {
+    percent,
+    steps,
+    headline,
+    reason: failed ? (snapshot.reason ?? "no reason was recorded, which is itself a bug") : null,
+    // Pending and running both move on their own; the other two do not.
+    settled: done || failed,
+    offerEnrich: false,
+  };
+}
+
+/** What a finished stage actually found, rather than that it finished. */
+function noteFor(key: string, stats: NonNullable<RepoSnapshotLike["stats"]>): string {
+  if (key === "graphing") {
+    if (stats.no_code_graph) return "no code found to parse";
+    return stats.nodes ? `${stats.nodes} symbols, ${stats.edges ?? 0} edges` : "parsed";
+  }
+  if (key === "dependencies") {
+    if (stats.osv_status === "unavailable") return "OSV unreachable — advisories unchecked";
+    if (stats.osv_status === "no_dependencies_found") return "no manifests found";
+    return stats.dependencies !== undefined
+      ? `${stats.dependencies} declared, ${stats.osv_affected ?? 0} with an advisory`
+      : "checked";
+  }
+  if (key === "writing") {
+    return stats.records_written
+      ? `${stats.records_written} records, ${stats.files_selected ?? 0} files read`
+      : "stored";
+  }
+  if (key === "deriving") return "design, quality, bugs, dependencies";
+  return "done";
+}

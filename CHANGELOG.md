@@ -188,6 +188,15 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   analysed twice under two spellings.
 
 ### Fixed
+- **A failed repository snapshot can be retried.** Re-use returned the
+  existing row whatever its status, so the unique key on
+  `(project, url, sha)` made a failure permanent for that commit: a snapshot
+  that failed because the deployment had no `REPO_ANALYSIS_JOB` configured
+  stayed failed after the job was configured, asking again handed back the same
+  dead row, and the only escape was analysing a different commit. Re-use exists
+  to avoid paying twice for work that succeeded; work that failed was never
+  paid for. A failed snapshot now re-enqueues and its stale reason is cleared,
+  while a completed one is still returned as-is.
 - **A document larger than a JSON body could not be added at all.** The console
   had exactly one way to send a file — base64 inline — and the three upload
   endpoints were missing from the proxy allow-list, so a book-sized PDF had no

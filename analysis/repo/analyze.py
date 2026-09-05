@@ -541,6 +541,27 @@ class Api:
         except Exception as exc:  # noqa: BLE001
             log.error("could not report %s for %s: %s", status, snapshot_id, exc)
 
+    def stage(self, snapshot_id: str, name: str, **stats) -> None:
+        """Say which stage is running, while it is running.
+
+        The job used to report once, at the end, so a snapshot sat at `running`
+        for minutes with nothing to distinguish "cloning a large repository"
+        from "wedged". A clone, a full AST pass and four model calls are minutes
+        of work and the console had one word for all of it.
+
+        Best effort and never fatal: this is narration. Losing it costs the
+        progress bar a step, and failing the analysis because the narration
+        failed would be the tail wagging the dog.
+        """
+        try:
+            self._client.patch(
+                f"{self._base}/api/v1/repos/snapshots/{snapshot_id}",
+                json={"status": "running", "stats": {"stage": name, **stats}},
+                timeout=20.0,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("could not report stage %s: %s", name, exc)
+
     def derive(self, memory_id: str, generator: str) -> dict:
         response = self._client.post(
             f"{self._base}/api/v1/memories/{memory_id}/derive",
@@ -586,14 +607,17 @@ def main() -> int:
     api = Api(API_URL, API_KEY, PRODUCER_ID)
     workdir = Path(tempfile.mkdtemp(prefix="repo-", dir=_clone_root()))
     try:
+        api.stage(snapshot_id, "cloning")
         log.info("cloning %s@%s", repo_url, sha[:7])
         repo = clone(repo_url, sha, workdir)
 
+        api.stage(snapshot_id, "graphing")
         log.info("graphing")
         data, report = graph(repo)
         nodes, edge_count = len(data.get("nodes") or []), len(edges(data))
         log.info("graph: %d nodes, %d edges", nodes, edge_count)
 
+        api.stage(snapshot_id, "dependencies", nodes=nodes, edges=edge_count)
         selected, reasons = select_files(repo, data)
         deps = dependencies(repo)
         osv = advisories(deps)
@@ -634,12 +658,14 @@ def main() -> int:
                               memory_key=memory_key, repo=case_external,
                               tags=["repo:file"]))
 
+        api.stage(snapshot_id, "writing", files_selected=len(selected))
         log.info("writing %d records", len(items))
         # Chunked to stay inside the write endpoint's item and payload caps
         # rather than discovering them as a 413 after the expensive part.
         for start in range(0, len(items), 100):
             api.write(items[start:start + 100])
 
+        api.stage(snapshot_id, "deriving", records_written=len(items))
         log.info("deriving reports")
         reports = [api.derive(memory_id, g) for g in
                    ("repo_design", "repo_quality", "repo_bugs", "repo_deps")]

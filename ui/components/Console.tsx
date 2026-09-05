@@ -15,6 +15,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import Capture, { humanBytes, type Staged } from "./Capture";
 import ThemeToggle from "./ThemeToggle";
 import { WriteProgress, assess, useTracked } from "./Progress";
+import { readSnapshot } from "@/lib/progress";
 // The ceiling rule is mirrored from `acl.py` and tested against it there.
 // Two copies of an access rule is how they drift.
 import { LEVELS, ceilingFor } from "@/lib/acl";
@@ -3947,6 +3948,27 @@ function ReposSection({ projectId }: { projectId: string }) {
     }
   }
 
+  // Re-read while the snapshot is still moving. A clone, a full AST pass and
+  // four model calls take minutes, and a bar that only advances when somebody
+  // clicks is not a progress bar -- it is a screenshot. It stops the moment the
+  // snapshot settles, so a finished analysis costs no polling at all.
+  useEffect(() => {
+    const id = detail?.snapshot_id;
+    const moving = detail?.status === "pending" || detail?.status === "running";
+    if (!id || !moving) return;
+    let cancelled = false;
+    const timer = setInterval(() => {
+      if (cancelled) return;
+      void call<RepoSnapshot & { reports: RepoReport[] }>(
+        `api/v1/repos/snapshots/${id}`)
+        .then((fresh) => { if (!cancelled) setDetail(fresh); })
+        // A blip must not replace the reading with an error: the next tick
+        // asks again, and the bar simply does not move in between.
+        .catch(() => undefined);
+    }, 5000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [detail?.snapshot_id, detail?.status]);
+
   return (
     <div className="stack">
       <h1>Repositories</h1>
@@ -4102,11 +4124,21 @@ function SnapshotDetail({ snapshot }: { snapshot: RepoSnapshot & { reports?: Rep
         {stats.subject && <span className="hint"> — {stats.subject}</span>}
       </h2>
 
-      {snapshot.status !== "complete" && (
-        <p className={snapshot.status === "failed" ? "err" : "hint"}>
-          <SnapshotState status={snapshot.status} reason={snapshot.reason} />
-        </p>
-      )}
+      {/* The climb, always — not only when something is wrong.
+        *
+        * A status chip said "running" for the whole of a clone, a full AST
+        * pass, an OSV lookup, forty writes and four model calls, so "working"
+        * and "wedged" were the same word. This is the same reading Add data
+        * gives a write, over the stages the job narrates as it reaches them. */}
+      <WriteProgress
+        climb={readSnapshot(snapshot)}
+        watching={snapshot.status === "pending" || snapshot.status === "running"}
+        elapsed={Math.max(
+          0,
+          Math.round((Date.now() - new Date(snapshot.created_at).getTime()) / 1000),
+        )}
+        dataId={null}
+      />
 
       <div className="statgrid">
         <div className="stattile">
