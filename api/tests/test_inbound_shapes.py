@@ -67,6 +67,31 @@ def test_a_signature_this_provider_would_send_verifies(name):
 
 
 @pytest.mark.parametrize("name", SIGNED)
+def test_what_we_sign_is_what_this_provider_verifies(name):
+    """`sign` and `verify` are one rule, and a test delivery depends on it.
+
+    `test-delivery` used to hand-roll the generic scheme for every producer, so
+    the console's "send as the provider would" button answered 401 for every
+    preset -- and a wrongly-signed test is indistinguishable from a wrong
+    secret, which is the one distinction that button exists to make. Run over
+    the whole registry so a provider added later cannot reintroduce it.
+    """
+    url = "https://memdog.example/hooks/prd_test"
+    raw = body_for(name, SECRET)
+    provider = providers.get(name)
+    headers = providers.sign(
+        provider, request=_request(name, raw, {}, url=url), secret=SECRET.encode()
+    )
+    assert headers, f"{name} produced no signature headers"
+    assert providers.verify(
+        provider, request=_request(name, raw, headers, url=url), secrets=[SECRET.encode()]
+    ), f"{name} refused a signature it produced itself"
+    assert not providers.verify(
+        provider, request=_request(name, raw, headers, url=url), secrets=[b"wrong"]
+    ), f"{name} accepted its own signature under the wrong secret"
+
+
+@pytest.mark.parametrize("name", SIGNED)
 def test_the_wrong_secret_is_refused(name):
     """The check that stops the test above passing vacuously. If `verify`
     returned True regardless, both tests would look identical from the outside

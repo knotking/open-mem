@@ -69,6 +69,9 @@ class SignatureScheme:
     algorithm: str = "sha256"
     # Providers prefix their digests -- `v0=`, `sha256=`. Strip before comparing.
     strip_prefix: bool = True
+    # And send it back when *we* are the one signing, so a test delivery is
+    # shaped like the real thing rather than merely acceptable to `verify`.
+    prefix: str = ""
     # Some providers do not sign at all and use a shared secret in the body.
     shared_secret_path: str | None = None
 
@@ -192,6 +195,7 @@ PROVIDERS: dict = {
             signature_headers=("x-slack-signature",),
             timestamp_headers=("x-slack-request-timestamp",),
             base=_slack_base,
+            prefix="v0=",
         ),
         handshake=_slack_handshake,
         # Slack retries on any non-2xx and repeats event_id -- this is what
@@ -221,6 +225,7 @@ PROVIDERS: dict = {
             # No timestamp is sent, so the signature covers the body alone and
             # replay protection has to come from the delivery id.
             base=lambda ts, req: req.raw_body,
+            prefix="sha256=",
         ),
         delivery_id=lambda payload, headers: headers.get("x-github-delivery"),
         mapping={"source_type": "event", "tags": ["source:github"]},
@@ -339,6 +344,40 @@ def _digest(secret: bytes, signed: bytes, scheme: SignatureScheme) -> str:
         if scheme.encoding == "base64"
         else mac.hexdigest()
     )
+
+
+def sign(provider: Provider, *, request: Request, secret: bytes,
+         timestamp: str | None = None) -> dict:
+    """The headers this provider would send for these bytes. Mirror of `verify`.
+
+    It lives here, beside the scheme it uses, because the alternative is a
+    second copy of every provider's signing rule somewhere else -- and a test
+    delivery signed by the copy tests the copy. `test-delivery` did exactly
+    that: it hand-rolled the *generic* scheme for every producer, so the
+    console's "send as the provider would" button answered 401 for Slack,
+    Zoom, Linear, Shopify, Twilio, Stripe and Graph alike. A wrongly-signed
+    test is indistinguishable from a wrong secret, which is the one thing this
+    button exists to tell apart.
+    """
+    scheme = provider.signature
+    # Nothing is signed: the secret travels in the body, and the caller has
+    # already put it there or the delivery is not a valid one to send.
+    if scheme.shared_secret_path:
+        return {}
+
+    stamp = timestamp or str(int(time.time()))
+    carries_time = bool(scheme.timestamp_headers) or provider.name == "stripe"
+    signed = scheme.base(stamp if carries_time else None, request)
+    digest = scheme.prefix + _digest(secret, signed, scheme)
+
+    if provider.name == "stripe":
+        # One header carrying both halves, the shape `_stripe_signature` parses.
+        return {"stripe-signature": f"t={stamp},v1={digest}"}
+
+    headers = {scheme.signature_headers[0]: digest}
+    if scheme.timestamp_headers:
+        headers[scheme.timestamp_headers[0]] = stamp
+    return headers
 
 
 def verify(provider: Provider, *, request: Request, secrets: list) -> bool:

@@ -1518,11 +1518,10 @@ async def send_test_delivery(
     pass for a producer whose signing is broken, which is exactly the case worth
     catching before a provider is pointed at it.
     """
-    import hashlib
-    import hmac
     import json as jsonlib
     import time as timelib
 
+    from . import providers as providers_mod
     from .auth import CONFIG_WRITE
     from .webhooks import WebhookError, receive as receive_webhook
 
@@ -1534,7 +1533,7 @@ async def send_test_delivery(
 
     producer = await state.pool.fetchrow(
         """
-        SELECT producer_id, org_id, inbound_auth, signing_secret_ct
+        SELECT producer_id, org_id, inbound_auth, signing_secret_ct, inbound_mapping
         FROM producers WHERE producer_id = $1 AND org_id = $2 AND type = 'webhook'
         """,
         producer_id, actor.org_id,
@@ -1556,11 +1555,23 @@ async def send_test_delivery(
         secret = state.envelope.decrypt(
             bytes(producer["signing_secret_ct"]), aad=actor.org_id.encode()
         )
-        ts = str(int(timelib.time()))
-        headers["x-signature-timestamp"] = ts
-        headers["x-signature"] = hmac.new(
-            secret, f"{ts}.".encode() + raw, hashlib.sha256
-        ).hexdigest()
+        # Signed the way this producer's provider signs, not the way the
+        # generic scheme does. Hand-rolling it here meant every preset --
+        # Slack, Zoom, Linear, Shopify, Twilio, Stripe, Graph -- got a generic
+        # signature its own scheme then refused, so the button reported 401 for
+        # a perfectly good secret. `sign` is the mirror of the `verify` this
+        # request is about to run.
+        mapping = producer["inbound_mapping"] or {}
+        if isinstance(mapping, str):
+            mapping = jsonlib.loads(mapping)
+        provider = providers_mod.get(mapping.get("provider"))
+        headers.update(providers_mod.sign(
+            provider,
+            request=providers_mod.Request(
+                raw_body=raw, headers=headers, url=_public_url(request),
+            ),
+            secret=secret,
+        ))
 
     try:
         result = await receive_webhook(
