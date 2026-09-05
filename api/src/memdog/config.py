@@ -92,6 +92,20 @@ class Settings:
     repo_analysis_job: str = field(
         default_factory=lambda: _env("REPO_ANALYSIS_JOB", ""))
 
+    # Reading a page with Gemini's URL Context when the fetcher cannot get it.
+    #
+    # Off by default and deliberately so: a page that fetches normally costs an
+    # HTTP GET, and this costs a model call whose input includes the whole page.
+    # It earns that only where the alternative is a stored record with no text
+    # at all -- a bot wall, a 403, a shell that fills itself in with JavaScript.
+    url_context: bool = field(
+        default_factory=lambda: _env("URL_CONTEXT", "false").lower() == "true")
+    # Empty means "use multimodal_model". Named separately for the same reason
+    # `transcribe_model` is: reading a page and describing an image are
+    # different jobs with different cost-per-quality curves.
+    url_context_model: str = field(
+        default_factory=lambda: _env("URL_CONTEXT_MODEL", ""))
+
     raw_bucket: str = field(default_factory=lambda: _env("RAW_BUCKET", ""))
     blob_root: str = field(default_factory=lambda: _env("BLOB_ROOT", "./.blobs"))
 

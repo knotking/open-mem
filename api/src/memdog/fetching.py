@@ -233,6 +233,9 @@ class FetchWorker:
         # None when media interpretation is off, which makes a YouTube
         # reference a configuration error rather than a silent no-op.
         self._video = build_video_reader(settings)
+        from .urlcontext import build_url_reader
+
+        self._url_reader = build_url_reader(settings)
         # Only a reference that names a connection needs this. Absent, such a
         # reference fails as a configuration problem rather than being fetched
         # unauthenticated and reported as the source refusing us.
@@ -347,6 +350,40 @@ class FetchWorker:
                        mime_type="text/plain; charset=utf-8",
                        final_url=watched.url, redirects=0)
 
+    async def _read_page(self, url: str, failure: "FetchError") -> Fetched:
+        """A page the fetcher could not get, read by the model instead.
+
+        Returns `Fetched` for the same reason `_watch` does: everything after
+        this -- the blob write, classification, parsing, embedding, enrichment
+        -- runs unchanged. What is stored is an account of the page, headed with
+        the URL and marked as an account, because a record that reads like the
+        page while being a model's summary of it is the one outcome worth
+        avoiding here.
+
+        If the reading also fails, the *original* fetch error is what
+        propagates. That is deliberate: "403 from the site" is the fact somebody
+        needs, and replacing it with "the model could not read it either" hides
+        the cause behind the fallback.
+        """
+        from .urlcontext import UrlNotRead
+
+        try:
+            page = await self._url_reader.read(url)
+        except UrlNotRead as exc:
+            log.info("url_context could not read %s: %s", url, exc)
+            raise failure from exc
+
+        log.info("url_context read %s (%d tool tokens)", url, page.tool_tokens)
+        header = (
+            f"{url}\n\n"
+            "[Account of this page produced by a model with URL Context. The "
+            "page's own bytes were not retrievable by this deployment, so this "
+            "is a reading of the page rather than the page itself.]\n\n"
+        )
+        return Fetched(payload=(header + page.account + "\n").encode("utf-8"),
+                       mime_type="text/plain; charset=utf-8",
+                       final_url=url, redirects=0)
+
     async def fetch(self, data_id: str) -> None:
         from .classify import classify, sniff_mime
         from .workers import record_version
@@ -375,8 +412,18 @@ class FetchWorker:
                                              row["org_id"], provider)
 
         if provider != "youtube":
-            result = await fetch_url(target, max_bytes=self._settings.max_upload_bytes,
-                                     headers=headers)
+            try:
+                result = await fetch_url(
+                    target, max_bytes=self._settings.max_upload_bytes, headers=headers)
+            except FetchError as exc:
+                # Only a plain web URL, and only after the ordinary GET has
+                # already failed. A connector download failing is a credential
+                # or a permission problem, and handing that URL to a model
+                # would ask a third party to fetch something private -- which
+                # it cannot do and should not be asked to.
+                if provider != "url" or not self._url_reader.enabled:
+                    raise
+                result = await self._read_page(target, exc)
         # The server sniffs; the sender's Content-Type is a hint like any other.
         mime = sniff_mime(result.payload, None, result.mime_type)
         storage_ref, checksum = await self._blobs.put(
