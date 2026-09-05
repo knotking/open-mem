@@ -11,6 +11,29 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **Paste a YouTube URL into Add data.** The URL is written as a `Pending` ref
+  with `provider: "youtube"`; everything after the fetch — classification,
+  parsing, embedding, enrichment, entity resolution and edges — runs unchanged
+  and never learns a video was involved.
+
+  **What is stored is an account of the video, not a transcript.** Both
+  transcript routes are closed: YouTube's `timedtext` endpoint now answers a
+  bare request with 200 and zero bytes, and the official Data API hands
+  captions only to the account owning the video. Downloading and transcribing
+  hits the 18 MB inline ceiling — a minute of 720p exceeds it — and would need
+  ffmpeg in the runtime image, which `pyproject.toml` rules out. Gemini instead
+  takes the URL directly and watches the video, and asked for a verbatim
+  transcript it stops with `finishReason: RECITATION` and returns nothing.
+  Asked for a structured account — section by section with timestamps, terms
+  and people introduced, how they relate, short attributed quotes — it returns
+  what the graph actually needs. Measured on a 19-minute talk: 8,319 bytes,
+  10 entities, 5 edges, and questions about it answered with citations.
+
+  Needs `MEDIA_INTERPRETATION=true` and `GEMINI_API_KEY`; without them a
+  YouTube reference is refused as a configuration error rather than silently
+  doing nothing. Costs roughly **100,000 input tokens per 20 minutes** of
+  video, since the model reads frames as well as audio — stated next to the
+  field that spends it.
 - **The public demo's transcript can be cleared.** The console's chat has had a
   Clear since it was built and the demo shipped without one, so a visitor done
   with a conversation had no way back to an empty card — or to the starter
