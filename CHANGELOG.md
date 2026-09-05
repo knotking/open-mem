@@ -11,6 +11,14 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **[`docs/usage/local.md`](docs/usage/local.md) — running *and using* the whole
+  stack on one machine**, with no cloud account, no model key and no billing.
+  Records the trap that costs the time: `EMBED_DIM` must match the index in
+  *every* process, so one set for `uvicorn` and forgotten for
+  `python -m memdog seed` fires the dimension guard inside the seed and reads as
+  a broken seed rather than a mismatched environment. Also that a local `/ask`
+  quotes the closest passages instead of writing prose — still grounded, still
+  cited, because both are properties of retrieval rather than of the model.
 - **`docs/limit.md` — every ceiling on the way in, in one place.** Admission
   caps that return 413 (500 items, 32 MiB inline, 512 MiB upload, crawler
   budgets) separated from processing ceilings that store the bytes whole and
