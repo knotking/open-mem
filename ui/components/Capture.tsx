@@ -19,14 +19,40 @@ const MAX_BYTES = 18 * 1024 * 1024;
 
 type Mode = "audio" | "video";
 
+/** Base64 without holding the file twice or spreading it onto the call stack.
+ *
+ * The previous version did `String.fromCharCode(...buffer.subarray(i, i + 0x8000))`
+ * and appended to a string. Both halves fail on a real document rather than a
+ * test file: spreading 32,768 arguments is at the edge of what engines accept
+ * and throws `RangeError: Maximum call stack size exceeded` on some, and
+ * repeated `+=` over a multi-megabyte file is quadratic, so a book-sized PDF
+ * either threw or locked the tab long enough to look like it had.
+ *
+ * It failed **before the request was ever made**, which is why nothing appeared
+ * in the API logs and why every server-side reproduction passed: a small file
+ * takes this path in a millisecond, so only real documents ever hit it.
+ *
+ * `FileReader` does the encoding natively, off the main thread, in one pass. It
+ * yields a data URL, so the prefix up to the first comma is dropped.
+ */
 async function toBase64(blob: Blob): Promise<string> {
-  const buffer = new Uint8Array(await blob.arrayBuffer());
-  let binary = "";
-  const step = 0x8000;
-  for (let i = 0; i < buffer.length; i += step) {
-    binary += String.fromCharCode(...buffer.subarray(i, i + step));
-  }
-  return btoa(binary);
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () =>
+      reject(reader.error ?? new Error("the file could not be read"));
+    reader.onload = () => {
+      const result = String(reader.result ?? "");
+      const comma = result.indexOf(",");
+      // No comma means no data URL, which means no payload to send -- better a
+      // named failure here than an empty item written as if it had content.
+      if (comma < 0) {
+        reject(new Error("the file could not be encoded"));
+        return;
+      }
+      resolve(result.slice(comma + 1));
+    };
+    reader.readAsDataURL(blob);
+  });
 }
 
 export function humanBytes(n: number): string {
@@ -114,9 +140,22 @@ export default function Capture({
     const named = payload as File & { pickedName?: string };
     const extension = (payload.type.split("/")[1] ?? "bin").split(";")[0];
     const name = named.pickedName ?? `capture-${Date.now()}.${extension}`;
-    void toBase64(payload).then((base64) => {
-      if (!cancelled) onStaged({ name, mime: payload.type, base64, size: payload.size });
-    });
+    // A rejection here used to go nowhere: no catch, so the promise failed
+    // silently, `onStaged` was never called, and the screen sat with the write
+    // button disabled and nothing said. "It just fails" is what that looks
+    // like, and it is the half of this bug that made the other half invisible.
+    void toBase64(payload).then(
+      (base64) => {
+        if (!cancelled) onStaged({ name, mime: payload.type, base64, size: payload.size });
+      },
+      (reason: unknown) => {
+        if (cancelled) return;
+        setError(
+          `Could not read ${name}: ${(reason as Error)?.message ?? String(reason)}`,
+        );
+        onStaged(null);
+      },
+    );
     return () => { cancelled = true; };
   }, [preview, onStaged]);
 
@@ -133,7 +172,12 @@ export default function Capture({
     const named = payload as File & { pickedName?: string };
     const extension = (payload.type.split("/")[1] ?? "bin").split(";")[0];
     const name = named.pickedName ?? `capture-${Date.now()}.${extension}`;
-    await onSubmit(name, payload.type, await toBase64(payload), payload.size);
+    try {
+      await onSubmit(name, payload.type, await toBase64(payload), payload.size);
+    } catch (e) {
+      setError(`Could not send ${name}: ${(e as Error).message}`);
+      return;
+    }
     setPreview(null);
     blob.current = null;
   }

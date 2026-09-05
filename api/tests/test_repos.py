@@ -361,3 +361,68 @@ async def test_the_gemini_findings_schema_has_no_nullable_unions():
     # narrowing of the contract everywhere.
     other = envelope_schema(findings=True)["properties"]["findings"]
     assert isinstance(other["items"]["properties"]["symbol"]["type"], list)
+
+
+async def test_a_repository_with_no_code_is_a_result_not_a_failure():
+    """graphify refuses to write `graph.json` when extraction finds no nodes.
+
+    That is the correct outcome for a repository this can legitimately find no
+    code in — docs only, notebooks, data files, a language with no grammar, or
+    sources behind `.gitignore`. Failing the snapshot there threw away the
+    manifests and the README, which need no graph and are most of the
+    dependency and design material, and reported a tool error where the honest
+    answer is a finding about the repository.
+    """
+    import importlib.util
+    import pathlib
+
+    spec = importlib.util.spec_from_file_location(
+        "analyze", pathlib.Path(__file__).parent.parent.parent / "analysis/repo/analyze.py")
+    analyze = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(analyze)
+
+    empty = {"nodes": [], "links": [], "graph": {},
+             "_empty_reason": "graph is empty — extraction produced no nodes"}
+    digest = analyze.digest(empty)
+    # It says what happened rather than rendering a table of zeroes.
+    assert "No code graph was produced" in digest
+    assert "not a failure of the run" in digest
+    # And it warns the reader what the reports below can and cannot cover.
+    assert "cannot speak to code they never saw" in digest
+
+    # The graph helpers must not raise on it either.
+    assert analyze.edges(empty) == []
+    assert analyze.degree(empty) == {}
+    assert analyze.node_paths(empty) == {}
+
+
+async def test_an_empty_transcript_from_an_overridden_model_is_retried():
+    """A purpose-built transcriber returning nothing is ambiguous.
+
+    Found live: a 46 KB webm of somebody saying "hello, hello, hello" came back
+    empty from `gemini-3.5-transcribe` and was stored as "no interpretable
+    content found in the media" — a true-sounding sentence about something
+    untrue. The same bytes through the general model transcribed correctly.
+
+    It is the quiet mirror of a failure already recorded for video, which fails
+    *loudly* against the same model and was routed away. Quiet is worse: nothing
+    errors, and the row carries a confident explanation nobody can tell from the
+    truth. So an empty answer from an overridden model is retried against the
+    general one, and only silence from *that* is recorded as silence.
+    """
+    import inspect
+
+    from memdog.multimodal import GeminiMultimodal, NullMultimodal
+
+    # The retry needs to name a model for one call without changing assignment.
+    for engine in (GeminiMultimodal, NullMultimodal):
+        params = inspect.signature(engine.interpret).parameters
+        assert "model" in params, f"{engine.__name__} cannot be asked for a specific model"
+        assert params["model"].default is None
+
+    source = inspect.getsource(__import__("memdog.workers", fromlist=["x"]))
+    # Retried against the engine's own base model, not a hardcoded name.
+    assert 'result.model_id != base' in source
+    # And the second emptiness is still recorded, so a silent recording stays
+    # an honest empty rather than being retried forever.
+    assert source.count('"no interpretable content found in the media"') == 1

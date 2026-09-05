@@ -969,11 +969,40 @@ class ParseWorker:
             return None
 
         if not result.text.strip():
-            # An empty transcript is a *correct* answer for a recording with no
-            # speech, and it must not be dressed up as one. A general model
-            # asked to transcribe a tone will invent a plausible conversation;
-            # a purpose-built transcriber returns nothing. Recording the
-            # emptiness is what keeps the corpus free of invented content.
+            # **An empty answer from a purpose-built transcriber is ambiguous,
+            # and treating it as silence was wrong.** Found 2026-09-05: a 46 KB
+            # webm of somebody saying "hello, hello, hello" came back empty from
+            # `gemini-3.5-transcribe` and was recorded as "no interpretable
+            # content found in the media" -- a true-sounding sentence about
+            # something untrue. The same bytes, the same prompt, through
+            # `multimodal_model` transcribed it correctly on the first try.
+            #
+            # This is the mirror of a failure already recorded in
+            # `multimodal.build_multimodal`: video pointed at the transcription
+            # model failed loudly, with "Image input modality is not enabled",
+            # and was routed away. Audio pointed at the same model fails
+            # *quietly*, which is worse -- nothing errors, and the row carries a
+            # confident explanation nobody can distinguish from the truth.
+            #
+            # So an empty answer from an overridden model is retried once
+            # against the general one, and only an empty answer from *that* is
+            # recorded as silence. The distinction the original comment cared
+            # about is preserved: a general model asked to transcribe a tone
+            # still gets to say nothing, and nothing is what gets stored.
+            base = getattr(engine, "model_id", None)
+            if base and result.model_id != base:
+                log.info("%s returned nothing for %s; retrying on %s",
+                         result.model_id, data_id, base)
+                try:
+                    result = await engine.interpret(
+                        payload, mime=mime, modality=modality, model=base)
+                except (MediaTooLarge, MediaDisabled, QuotaExhausted) as exc:
+                    log.warning("retry on %s failed for %s: %s", base, data_id, exc)
+
+        if not result.text.strip():
+            # Genuinely nothing. A recording with no speech is an ordinary
+            # thing to store, and recording the emptiness is what keeps the
+            # corpus free of invented content.
             await self._record(
                 data_id, "needs_model",
                 {"capability": capability, "model_id": result.model_id,

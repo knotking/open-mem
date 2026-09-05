@@ -3991,6 +3991,14 @@ function SnapshotDetail({ snapshot }: { snapshot: RepoSnapshot & { reports?: Rep
         </div>
       </div>
 
+      {stats.no_code_graph && (
+        <p className="warntext" style={{ marginTop: 10 }}>
+          No code graph — extraction found nothing to parse in this repository.
+          That is a fact about the repo, not a failed run: the reports below are
+          built from the README, the manifests and the entry points, and cannot
+          speak to code they never saw.
+        </p>
+      )}
       {osv === "unavailable" && (
         <p className="err" style={{ marginTop: 10 }}>
           The vulnerability service could not be reached, so the dependency report contains no

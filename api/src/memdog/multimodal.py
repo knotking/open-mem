@@ -67,7 +67,8 @@ class MultimodalEngine(Protocol):
     model_id: str
     enabled: bool
 
-    async def interpret(self, payload: bytes, *, mime: str, modality: str) -> Interpreted: ...
+    async def interpret(self, payload: bytes, *, mime: str, modality: str,
+                        model: str | None = None) -> Interpreted: ...
 
 
 # One instruction per modality. They are deliberately extractive: a caption that
@@ -108,7 +109,8 @@ class NullMultimodal:
     model_id = "none"
     enabled = False
 
-    async def interpret(self, payload: bytes, *, mime: str, modality: str) -> Interpreted:
+    async def interpret(self, payload: bytes, *, mime: str, modality: str,
+                        model: str | None = None) -> Interpreted:
         raise MediaDisabled(modality)
 
 
@@ -135,14 +137,21 @@ class GeminiMultimodal:
     def model_for(self, modality: str) -> str:
         return self._per_modality.get(modality, self.model_id)
 
-    async def interpret(self, payload: bytes, *, mime: str, modality: str) -> Interpreted:
+    async def interpret(self, payload: bytes, *, mime: str, modality: str,
+                        model: str | None = None) -> Interpreted:
+        """`model` overrides the per-modality assignment for this call only.
+
+        It exists for one caller: the retry that follows an empty answer from a
+        purpose-built transcriber, which needs to ask the general model the same
+        question before concluding the recording was silent.
+        """
         if len(payload) > MAX_INLINE_BYTES:
             raise MediaTooLarge(
                 f"{len(payload)} bytes exceeds the {MAX_INLINE_BYTES} inline ceiling; "
                 "resumable upload is required"
             )
         prompt = PROMPTS.get(modality, PROMPTS["image"])
-        model = self.model_for(modality)
+        model = model or self.model_for(modality)
         # Metered here rather than at the call site: this engine is not in a
         # routing chain, so nothing above it opens a metered block, and media is
         # the most expensive per-item call the platform makes.

@@ -474,6 +474,9 @@ export type RepoSnapshot = {
     osv_affected?: number;
     records_written?: number;
     graphify_version?: string;
+    /** Set when extraction found no code to graph — a fact about the
+     *  repository, not a failed run. */
+    no_code_graph?: string;
     size_kb?: number;
     primary_language?: string;
     license?: string;

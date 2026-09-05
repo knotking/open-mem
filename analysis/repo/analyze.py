@@ -165,10 +165,27 @@ def graph(repo: Path) -> tuple[dict, str]:
     )
     graph_path = out / "graph.json"
     if not graph_path.exists():
-        raise AnalysisFailed(
-            "graphify produced no graph.json: "
-            f"{(result.stderr or result.stdout or '').strip()[:400]}"
-        )
+        said = (result.stderr or result.stdout or "").strip()
+        # **An empty graph is a result, not a crash.** graphify refuses to write
+        # `graph.json` when extraction produced no nodes, and that is the
+        # correct outcome for a repository this can legitimately find no code
+        # in: a docs-only repo, a corpus of notebooks or data files, a project
+        # written in a language tree-sitter has no grammar for, or one whose
+        # sources all sit behind `.gitignore`.
+        #
+        # Failing the whole snapshot there was wrong twice over. It threw away
+        # the manifests and the README, which need no graph and are most of the
+        # dependency and design material. And it reported a tool error where the
+        # honest answer is "there is no code here to graph" -- which reads as
+        # broken rather than as a finding about the repository.
+        #
+        # So the run continues with an empty graph, and the reason travels with
+        # it onto the snapshot. What the analysers lose is the connected-module
+        # selection; what they keep is everything chosen by name.
+        if "graph is empty" in said or "produced no nodes" in said:
+            log.warning("no code graph for this repository: %s", said[:200])
+            return {"nodes": [], "links": [], "graph": {}, "_empty_reason": said[:400]}, ""
+        raise AnalysisFailed(f"graphify produced no graph.json: {said[:400]}")
     try:
         data = json.loads(graph_path.read_text())
     except json.JSONDecodeError as exc:
@@ -244,6 +261,20 @@ def digest(data: dict, *, top: int = 60) -> str:
     """
     nodes = data.get("nodes") or []
     links = edges(data)
+    if not nodes:
+        return (
+            "# Code graph digest\n\n"
+            "**No code graph was produced for this repository.** Extraction ran "
+            "and found nothing to parse -- the repository holds no source in a "
+            "language this can read, or its sources are excluded by "
+            "`.gitignore`.\n\n"
+            "That is a fact about the repository, not a failure of the run. The "
+            "reports below are built from the files named directly -- the "
+            "README, the manifests, the entry points -- and from nothing else, "
+            "so they describe what those files say and cannot speak to code "
+            "they never saw.\n\n"
+            f"Tool output: {(data.get('_empty_reason') or 'none').strip()[:300]}\n"
+        )
     paths = node_paths(data)
     counts = degree(data)
 
@@ -621,6 +652,12 @@ def main() -> int:
                 "osv_affected": osv.get("affected", 0),
                 "records_written": len(items),
                 "graphify_version": GRAPHIFY_VERSION,
+                # Present only when there was no code to graph. The console
+                # reads it to say so, because a snapshot with 0 nodes and four
+                # reports is otherwise indistinguishable from one where the
+                # parse silently did nothing.
+                **({"no_code_graph": data["_empty_reason"]}
+                   if data.get("_empty_reason") else {}),
         }
         api.finish(snapshot_id, "complete", stats=stats)
         print(json.dumps({"snapshot_id": snapshot_id, "status": "complete",
