@@ -39,6 +39,7 @@ import {
   PageQuality,
   REPO_REPORTS,
   Repo,
+  RepoFinding,
   RepoReport,
   RepoSnapshot,
   Setting,
@@ -4038,9 +4039,12 @@ function SnapshotDetail({ snapshot }: { snapshot: RepoSnapshot & { reports?: Rep
             </div>
             <p className="empty" style={{ marginTop: 2 }}>{hint}</p>
             {report ? (
-              <p style={{ marginTop: 8, whiteSpace: "pre-wrap" }}>
-                {report.summary || report.description || "The report was produced but is empty."}
-              </p>
+              <>
+                <p style={{ marginTop: 8, whiteSpace: "pre-wrap" }}>
+                  {report.summary || report.description || "The report was produced but is empty."}
+                </p>
+                <Findings report={report} />
+              </>
             ) : (
               <p className="hint" style={{ marginTop: 8 }}>
                 {snapshot.status === "complete"
@@ -4076,6 +4080,64 @@ function SnapshotDetail({ snapshot }: { snapshot: RepoSnapshot & { reports?: Rep
         </>
       )}
     </section>
+  );
+}
+
+/**
+ * The located findings, or the reason there are none.
+ *
+ * Three states, and collapsing any two of them is the failure this exists to
+ * avoid. **Findings** are rendered as a table because every one names a file
+ * and that is a column. **An empty array** means the model read the material
+ * and found nothing locatable — a result, and said as one. **An absent array**
+ * means it never answered in that shape, which is a different thing entirely
+ * and usually means the model was not reached at all.
+ */
+function Findings({ report }: { report: RepoReport }) {
+  const fields = report.fields ?? undefined;
+  const findings = fields?.findings;
+  const degraded = (fields?.fallback_depth ?? 0) > 0;
+
+  if (degraded) {
+    return (
+      <p className="err" style={{ marginTop: 8 }}>
+        The model was not reached, so this is not analysis — it is what a
+        deterministic fallback could say about the text.
+        {fields?.fallback_reason?.length ? ` (${fields.fallback_reason[0]})` : ""}
+      </p>
+    );
+  }
+  if (!findings) return null;
+  if (findings.length === 0) {
+    return (
+      <p className="ok" style={{ marginTop: 8 }}>
+        Nothing locatable found in the files it read. That is a result, not a
+        blank — but it covers only the selection below.
+      </p>
+    );
+  }
+  return (
+    <table className="kv" style={{ marginTop: 10 }}>
+      <tbody>
+        {findings.map((f, i) => (
+          <tr key={`${f.file}-${i}`}>
+            <td style={{ width: 70 }}>
+              <span className={f.severity === "high" ? "err" : f.severity === "medium" ? "warntext" : "hint"}>
+                {f.severity}
+              </span>
+            </td>
+            <td>
+              <code>{f.file}</code>
+              {f.symbol ? <span className="hint"> · {f.symbol}</span> : null}
+              <div style={{ marginTop: 2 }}>{f.statement}</div>
+              {f.trigger ? (
+                <div className="hint" style={{ marginTop: 2 }}>Triggered when: {f.trigger}</div>
+              ) : null}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }
 

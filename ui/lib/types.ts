@@ -499,6 +499,14 @@ export type Repo = {
 };
 
 /** A saved report. The four repo generators produce these like any other. */
+export type RepoFinding = {
+  file: string;
+  symbol?: string | null;
+  severity: "high" | "medium" | "low";
+  statement: string;
+  trigger?: string | null;
+};
+
 export type RepoReport = {
   artifact_id: string;
   kind: string;
@@ -509,6 +517,14 @@ export type RepoReport = {
   model_id: string;
   generator_version: string;
   created_at: string;
+  /** `findings` when the report asked for them, `fallback_*` when the model was
+   *  not reached. An absent `findings` and an empty one are different answers:
+   *  never reviewed versus reviewed and found nothing. */
+  fields?: {
+    findings?: RepoFinding[];
+    fallback_depth?: number;
+    fallback_reason?: string[];
+  } | null;
 };
 
 /** The four reports, in the order they are read rather than alphabetically. */
