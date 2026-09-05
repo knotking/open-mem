@@ -426,3 +426,43 @@ async def test_an_empty_transcript_from_an_overridden_model_is_retried():
     # And the second emptiness is still recorded, so a silent recording stays
     # an honest empty rather than being retried forever.
     assert source.count('"no interpretable content found in the media"') == 1
+
+
+async def test_a_failed_snapshot_is_retried_rather_than_handed_back(pool, tenant):
+    """Re-use protects work that succeeded, not work that did not.
+
+    Returning the existing row whatever its status made a failure permanent for
+    that commit: the unique key meant asking again handed back the same dead
+    row, so a snapshot that failed because the deployment had no job configured
+    stayed failed after the job was configured. Nothing an operator could do
+    would clear it and the console offered no retry — the only escape was
+    analysing a different commit.
+    """
+    import inspect
+
+    from memdog import repos
+
+    source = inspect.getsource(repos.request_snapshot)
+    # Re-use is conditional on having succeeded.
+    assert 'existing["status"] != "failed"' in source
+    # A retry re-enqueues rather than merely relabelling the row, or it would
+    # sit `pending` for ever with nothing to pick it up.
+    retry = source[source.index('existing["status"] != "failed"'):]
+    assert "queue.publish(REPO_TOPIC" in retry
+    # And the stale reason goes, rather than describing a run that is no longer
+    # the current one.
+    assert "reason = NULL" in retry
+
+
+async def test_a_completed_snapshot_is_still_reused(pool, tenant, principal_for):
+    """The other half: a successful analysis must not be paid for twice."""
+    import inspect
+
+    from memdog import repos
+
+    source = inspect.getsource(repos.request_snapshot)
+    assert '"reused": True' in source
+    # The cheap path returns before anything is enqueued.
+    reuse = source.index('"reused": True')
+    publish = source.index("queue.publish(REPO_TOPIC")
+    assert reuse < publish, "a re-used snapshot must not enqueue a job"

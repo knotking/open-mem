@@ -251,8 +251,39 @@ async def request_snapshot(
             project_id, url, sha,
         )
         if existing is not None:
+            # **A failed snapshot is retried; a good one is re-used.**
+            #
+            # Returning the row whatever its status made a failure permanent for
+            # that commit: the unique key meant asking again handed back the
+            # same dead row, so a snapshot that failed because the deployment
+            # had no job configured stayed failed after the job was configured.
+            # Nothing the operator could do would clear it, and the console had
+            # no retry -- the only escape was a different commit.
+            #
+            # Re-use is about not paying twice for work that succeeded. Work
+            # that did not succeed was never paid for, so there is nothing to
+            # protect, and the reason is cleared with it rather than left to
+            # describe a run that is no longer the current one.
+            if existing["status"] != "failed":
+                return {**dict(existing), "repo_url": url, "ref": head["ref"],
+                        "reused": True}
+            await conn.execute(
+                "UPDATE repo_snapshots SET status = 'pending', reason = NULL "
+                "WHERE snapshot_id = $1", existing["snapshot_id"])
+            await queue.publish(REPO_TOPIC, {
+                "snapshot_id": existing["snapshot_id"],
+                "org_id": principal.org_id,
+                "project_id": project_id,
+                "repo_url": url,
+                "commit_sha": sha,
+                "memory_id": existing["memory_id"],
+                "case_id": existing["case_id"],
+            })
+            log.info("retrying failed snapshot %s for %s@%s",
+                     existing["snapshot_id"], url, sha[:7])
             return {**dict(existing), "repo_url": url, "ref": head["ref"],
-                    "reused": True}
+                    "status": "pending", "reason": None, "reused": False,
+                    "retried": True}
 
         await _ensure_type(conn, org_id=principal.org_id, project_id=project_id)
         case_id = await upsert_case(
