@@ -2813,6 +2813,12 @@ async def capabilities(request: Request) -> dict:
         "generators": len(GENERATORS),
         "embed_model": request.app.state.embedder.model_id,
         "media_interpretation": request.app.state.multimodal.enabled,
+        # Two capabilities that are configuration rather than code, so the page
+        # claims them only where they are switched on. Both spend a model call
+        # on a path that otherwise costs an HTTP request, and both are off by
+        # default -- claiming them everywhere would claim a bill nobody agreed to.
+        "url_context": request.app.state.settings.url_context,
+        "repo_analysis": bool(request.app.state.settings.repo_analysis_job),
         # How somebody gets an account here. Unauthenticated on purpose: the
         # sign-in page needs it *before* anyone signs in, and it discloses
         # nothing an attempt to register would not.

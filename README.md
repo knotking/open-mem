@@ -9,10 +9,10 @@ behind it, the records that were considered and dropped, the model that produced
 you can prove completed.
 
 ```
-54 file formats · 24 data types · 18 extraction prompts · 9 webhook providers
+58 file formats · 24 data types · 19 extraction prompts · 9 webhook providers
 4 crawler strategies · 37 app connectors · 12 graph predicates · 8 MCP tools
-8 alert surfaces · 2 compaction algorithms · 144 endpoints
-658 tests, against a real database, no mocks
+8 alert surfaces · 10 memory generators · 2 compaction algorithms · 175 endpoints
+968 tests, against a real database, no mocks
 ```
 
 Those counts are read from the running build, not written here. The sign-in page gets them from
@@ -194,6 +194,34 @@ No per-source code, no plugin, and a mandatory dry run before any of them can be
 
 ---
 
+## Two things that do not fit through a fetch
+
+Both are cases where the ordinary path returns a record with no text, and both
+end up as ordinary records anyway.
+
+**A repository is read as a graph, not as text.** A GitHub repo at one commit
+becomes four saved reports — design, code quality, functional bugs,
+dependencies. It has to: a repo exceeds every ingestion ceiling by orders of
+magnitude, so `graphify` reduces it to symbols and edges with tree-sitter and no
+model, and the analysers read that digest plus a bounded, named set of files.
+Vulnerabilities come from [OSV](https://osv.dev) and never from the model —
+asked whether a version is affected, a model produces fluent, plausible, wrong
+CVE numbers, and a wrong advisory is a security claim about somebody's software.
+A snapshot is `owner/repo@sha` and is compared to nothing.
+See [`docs/analysis/repos.md`](docs/analysis/repos.md).
+
+**A page behind a bot wall is read by the model, and only if it says it read
+it.** When a fetch fails, Gemini's URL Context can retrieve the page instead.
+The catch is that the model answers whether or not it reached the page — the
+first probe returned a confident paragraph about `example.com` beside
+`URL_RETRIEVAL_STATUS_ERROR` for that URL, with nothing in the prose to tell
+them apart. So the account is accepted only when the metadata confirms
+retrieval, a response with no metadata is refused, and what is stored says in
+its first lines that it is a reading of the page rather than the page.
+See [`docs/ingestion/url-context.md`](docs/ingestion/url-context.md).
+
+---
+
 ## Run it
 
 ```bash
@@ -258,7 +286,7 @@ sections of this file.
 | Path | What is in it |
 |------|---------------|
 | [`docs/usage.md`](docs/usage.md) | Six scenarios against a running system — start here after `Run it` |
-| [`api/`](api/README.md) | The service. 62 modules, 144 endpoints, 63 tables across 38 migrations |
+| [`api/`](api/README.md) | The service. 72 modules, 175 endpoints, 51 migrations |
 | [`ui/`](ui/README.md) | The console. Ingestion, search, chat, entities, graph, crawlers, alerts, governance |
 | [`docs/`](docs/README.md) | The design, in eleven parts — requirements speak in roles, products appear only in the technology documents |
 | [`docs/graph.md`](docs/graph.md) | Why the graph is not a graph database, what it costs, and what was true when |

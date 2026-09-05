@@ -25,6 +25,9 @@ type Capabilities = {
   alert_surfaces: number;
   embed_model: string;
   media_interpretation: boolean;
+  /** Configuration, not code — claimed only where switched on. */
+  url_context?: boolean;
+  repo_analysis?: boolean;
 };
 
 /**
@@ -890,6 +893,20 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
       ]
     : [];
 
+  // Booleans, so not tiles -- a tile reading "1" says less than a sentence. And
+  // claimed only when on, for the same reason every count here is read from the
+  // build rather than typed: a capability that is off should stop being claimed.
+  const alsoOn = caps
+    ? [
+        caps.repo_analysis
+          ? "A GitHub repo at one commit, read four ways — design, code quality, bugs, dependencies"
+          : null,
+        caps.url_context
+          ? "Pages behind a bot wall, read by the model — and refused unless it confirms it retrieved them"
+          : null,
+      ].filter(Boolean)
+    : [];
+
   // One definition, two homes: the top-bar panel when the demo holds the
   // hero, and the hero itself when there is no demo to put there. Never
   // both at once -- two elements carrying `id="signin"` would make the
@@ -1043,6 +1060,13 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
                 </div>
               ))}
             </div>
+          )}
+          {alsoOn.length > 0 && (
+            <ul className="counted" style={{ margin: "10px 0 0", paddingLeft: 18 }}>
+              {alsoOn.map((line) => (
+                <li key={line as string} style={{ marginTop: 4 }}>{line}</li>
+              ))}
+            </ul>
           )}
           {caps && (
             <p className="counted">
