@@ -116,8 +116,41 @@ async def in_scope(
         return {c[0]["sequence"] for c in candidates}
 
     surviving = {c[0]["sequence"] for c in candidates}
-    by_data = {c[0]["sequence"]: c[0]["data_id"] for c in candidates if c[0]["data_id"]}
-    data_ids = [d for d in by_data.values() if d]
+    # Which records each candidate stands on. A container scope is a question
+    # about records, so an event with none can never survive one.
+    records: dict[int, set[str]] = {
+        c[0]["sequence"]: {c[0]["data_id"]} for c in candidates if c[0]["data_id"]
+    }
+
+    # A fact is not an item, so `fact.*` events carry no `data_id` at all -- and
+    # scoping one to a memory therefore intersected with an empty set and
+    # matched nothing, forever, with no error and no empty state. An alert on
+    # "a reading of this book was replaced" looked exactly like a quiet week.
+    #
+    # A derived fact does stand on records: its edges carry the evidence. One
+    # query for the batch, and a fact survives if *any* of its evidence is in
+    # the container -- the same rule a person would apply reading it. An
+    # asserted fact has no evidence and correctly survives no container scope;
+    # `entity_id` is the scope that reaches it.
+    unbacked = {
+        c[0]["sequence"]: c[1].get("fact_id")
+        for c in candidates
+        if not c[0]["data_id"] and c[1].get("fact_id")
+    }
+    if unbacked:
+        evidence = await pool.fetch(
+            "SELECT fact_id, source_data_id FROM entity_edges "
+            "WHERE fact_id = ANY($1::text[])",
+            sorted(set(unbacked.values())),
+        )
+        by_fact: dict[str, set[str]] = {}
+        for row in evidence:
+            by_fact.setdefault(row["fact_id"], set()).add(row["source_data_id"])
+        for sequence, fact_id in unbacked.items():
+            if by_fact.get(fact_id):
+                records[sequence] = by_fact[fact_id]
+
+    data_ids = sorted({d for ds in records.values() for d in ds})
 
     if scope.get("entity_id"):
         # Facts carry their endpoints, so this one needs no join at all.
@@ -148,17 +181,17 @@ async def in_scope(
             "SELECT data_id FROM memory_members WHERE memory_id = ANY($1::text[]) "
             "AND data_id = ANY($2::text[])", scoped, data_ids)
         allowed = {r["data_id"] for r in rows}
-        surviving &= {s for s, d in by_data.items() if d in allowed}
+        surviving &= {s for s, ds in records.items() if ds & allowed}
     if scope.get("case_id"):
         allowed = await _allowed(
             "SELECT data_id FROM case_members WHERE case_id = $1 "
             "AND data_id = ANY($2::text[])", scope["case_id"])
-        surviving &= {s for s, d in by_data.items() if d in allowed}
+        surviving &= {s for s, ds in records.items() if ds & allowed}
     if scope.get("producer_id"):
         allowed = await _allowed(
             "SELECT data_id FROM data_items WHERE producer_id = $1 "
             "AND data_id = ANY($2::text[])", scope["producer_id"])
-        surviving &= {s for s, d in by_data.items() if d in allowed}
+        surviving &= {s for s, ds in records.items() if ds & allowed}
     return surviving
 
 
