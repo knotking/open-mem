@@ -36,6 +36,16 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   neighbours for a vector it already holds.
 
 ### Fixed
+- **"Send a test delivery as the provider would" was signed the generic way for
+  every provider.** The endpoint runs the real receive path precisely so a
+  producer whose signing is broken fails the test — and then it hand-rolled
+  `x-signature` over `{ts}.{body}` regardless of the preset. A producer on the
+  Slack preset got a signature Slack's scheme never looks for, so the console's
+  button answered 401 for a perfectly good secret; the same held for Zoom,
+  Linear, Shopify, Twilio, Stripe and Graph. `providers.sign()` is now the
+  mirror of `providers.verify()` and lives beside it, and `SignatureScheme`
+  gains a `prefix` so a signature we send carries `v0=` / `sha256=` the way the
+  provider's does. Checked across the whole registry.
 - **An alert on a fact, scoped to a memory, matched nothing forever.**
   `fact.*` events carry no `data_id` — a fact is not a record — and the scope
   filter built its candidate set from that column alone, so any container scope
