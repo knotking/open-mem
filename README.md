@@ -1,300 +1,72 @@
 # mem-dog
 
-**Most memory systems can tell you what they remember. This one can tell you what it *didn't*
-return, and why.**
+**A memory layer that shows its work.**
 
-Write anything — documents, spreadsheets, email, calendars, audio, video — and get it back by
-meaning. That part is table stakes. The part that is not: every answer arrives with the passages
-behind it, the records that were considered and dropped, the model that produced it, and a deletion
-you can prove completed.
+Put anything in — documents, spreadsheets, email, calendars, audio, video, a
+GitHub repository — and ask questions in plain language. Every answer comes back
+with the passages it rests on.
 
-```
-58 file formats · 24 data types · 19 extraction prompts · 9 webhook providers
-4 crawler strategies · 37 app connectors · 12 graph predicates · 8 MCP tools
-8 alert surfaces · 10 memory generators · 2 compaction algorithms · 175 endpoints
-968 tests, against a real database, no mocks
-```
-
-Those counts are read from the running build, not written here. The sign-in page gets them from
-`GET /api/v1/capabilities`, so a format that stops working stops being claimed.
+And with the part almost nothing else will tell you: **what it left out, and
+why.**
 
 ---
 
-## The difference, in one response
+## Why that second part matters
 
-A real query against a running deployment. Abridged, but nothing is invented:
+Ask any system a question and it gives you an answer. You cannot tell whether it
+searched everything and found little, or searched almost nothing and found all
+of it. Those look identical, and only one of them is worth trusting.
 
 ```jsonc
-POST /api/v1/retrieve   {"query": "what did we promise Acme about SSO", "match": ["vector","lexical","graph"]}
+POST /api/v1/ask   {"question": "what did we promise Acme about SSO"}
 
 {
-  "results": [
-    { "text": "Sofia raised data residency as a blocking concern…",
-      "score": 0.030, "matched_by": ["gph", "vec"], "state": "enriched" },
-    { "text": "We will deliver SAML single sign-on to Acme by 30 September 2026…",
-      "score": 0.016, "matched_by": ["vec"],        "state": "enriched" }
+  "answer": "SSO was promised for Q3 [1], later moved to Q4 [2].",
+  "citations": [
+    {"marker": 1, "text": "…we'll have SSO ready for Q3…", "data_id": "data_01J…"},
+    {"marker": 2, "text": "…slipping SSO to Q4…",          "data_id": "data_01K…"}
   ],
   "excluded": [
-    { "data_id": "data_01M189AVAH…", "reason": "threshold", "score": 0.0161, "state": "enriched" },
-    { "data_id": "data_01M189AVB9…", "reason": "threshold", "score": 0.0159, "state": "enriched" }
-  ],
-  "corpus":     { "total": 42, "stored": 0, "searchable": 0, "enriched": 42 },
-  "model_id":   "gemini-embedding-001@768",
-  "generator_version": "gen_d325cb0586ca30eabcad5539b1dc0a7c"
+    {"data_id": "data_01M…", "reason": "not_yet_enriched"},
+    {"data_id": "data_01N…", "reason": "access"}
+  ]
 }
 ```
 
-Read what that tells you that a ranked list does not.
+Two records were not considered. One had not been processed yet; one you are not
+allowed to see. Neither is a bug, and both change how much the answer is worth —
+which is why they are in the response rather than in a log.
 
-**`matched_by`** — the first hit never contains the word *SSO*. It surfaced because the graph arm
-walked from an entity the question named to a record that asserts a relationship to it. You can see
-which arm earned each result instead of trusting a blended score.
-
-**`excluded`** — the records that were *considered and dropped*, each with a reason. *"It's missing
-something I know is in there"* has several causes and they need different fixes. Below the
-threshold is a tuning problem. Not searchable yet is a pipeline problem. Not visible to you is not a
-problem at all. Without this line you cannot tell which one you have.
-
-**`corpus`** — how much of the project was eligible to match. Forty-two enriched, none merely
-stored. When that second number is large, the answer is thin for a reason you can act on.
-
-**`generator_version`** — a fingerprint of prompt + model + schema + parser + chunker. Change any of
-them and everything produced by the old one becomes detectably stale, without anyone remembering to
-bump a number.
+The same honesty runs through the rest: a deletion issues a certificate you can
+check, an answer records which model produced it, and a record that could not be
+read says so instead of arriving empty.
 
 ---
 
-## Same id, two keys
+## Try it
 
 ```bash
-GET /api/v1/data/data_01M189AVW7FG67PERE2A30WR5J
-
-  owner      → 200  {"data_id": "data_01M189AVW7…", …}
-  colleague  → 404  {"detail": "not found"}
+cd api && docker compose up -d && uv run uvicorn memdog.app:app --reload
+cd ui  && npm install && npm run dev
 ```
 
-Same project, same org, same endpoint. A record you may not read is **indistinguishable from one
-that does not exist** — because a 403 still discloses that it exists.
-
-That falls out of one decision: **the access rule is a predicate inside the query, never a filter
-over results.** Asking for ten and hiding three is a different and worse thing than returning the
-right ten, and it leaks — reporting that three were hidden is the disclosure. The same predicate
-serves search, chat and graph traversal, so there is one place for it to be wrong instead of three.
+Then open the console on `localhost:3000`, add a file, and ask it something.
+Running the whole stack locally needs no cloud account, model key or billing —
+[`docs/usage/local.md`](docs/usage/local.md) has the details, including the one
+setting that will trip you up.
 
 ---
 
-## The bet
+## Reading further
 
-```mermaid
-flowchart TB
-    subgraph PG["PostgreSQL · one database"]
-        direction LR
-        ROWS[(records · ACL · audit)]
-        VEC[(pgvector<br/>embeddings)]
-        FTS[(tsvector<br/>lexical index)]
-        GRAPH[(entities · typed edges)]
-    end
-    PG --- NOTE["the traversal and the access rule<br/>are the same query"]
-```
+| | |
+|---|---|
+| [usage](docs/usage.md) | Six scenarios against a running system |
+| [architecture](docs/architecture.md) | How it is put together, and why |
+| [limits](docs/limit.md) | Every ceiling on the way in, per kind of input |
+| [design principles](docs/design-principles.md) | The rules the code is held to |
+| [docs](docs/README.md) | Everything, in reading order |
 
-No vector database. No search cluster. No graph database. This costs real things — it will not
-outscale a dedicated store, and that is a known ceiling rather than an oversight.
-
-It buys two that a second store cannot. A path through a record you may not read is never returned
-at all, because the visibility predicate is joined into the recursive term rather than applied after
-it. And an erasure certificate can re-query **every** table that could hold a trace — a guarantee
-that stops at a database boundary is not a guarantee.
-
----
-
-## Retrieval answers a question. An alert tells you when something happened.
-
-The pull surface is only half of it. Declare what is worth knowing about — a
-person's location changing, a record becoming org-visible, a guessed case
-membership being confirmed — and it is **recorded when it happens**, then polled
-from a cursor or pushed to your endpoint.
-
-```
-POST /api/v1/alerts
-{ "surface": "acl.changed", "where": { "to_level": ["org"] } }
-```
-
-Three properties are load-bearing, and each is a refusal:
-
-**No alert runs until you have replayed it against history.** A backtest runs
-the live path with its writes withheld, so what it reports is what a live run
-would do. Editing what an alert matches drops that approval and switches it off.
-
-**Nothing evaluates per write.** N alerts by M writes would mean every write
-paying for every alert; one crawl of ten thousand items would trigger ten
-thousand rounds. A consumer wakes on a transition and then waits, evaluating
-once over the batch — and the watermark in Postgres, not the queue, is what
-records where it got to.
-
-**An event carries no access level.** Visibility is the subject's, resolved when
-someone reads and again when a delivery is sent. A copy taken at match time
-would be stale the moment the record was re-shared, and notification is the one
-side channel around every other access check.
-
-See [`docs/alerts.md`](docs/alerts.md).
-
----
-
-## A working set that stops growing, and a record that does not
-
-Memory layers keep a corpus small by overwriting: a newer memory replaces an
-older one, and the old one is gone. That is a fair trade if nobody will ever ask
-what you used to believe. Here it would make the two clocks lie.
-
-**Compaction archives what it folds.** Archived records leave the default view
-and stay readable, searchable and citable when asked for — so the working set
-shrinks and the record does not.
-
-```
-POST /api/v1/compaction/jobs      { memory_id, algorithm, schedule }
-POST /api/v1/compaction/jobs/{id}/preview    # writes nothing
-```
-
-Two algorithms, and the cheap one is first: **de-duplication needs no model**,
-and most of what a corpus accumulates is the same record written twice.
-Summarising does need one and says so before you schedule it. A job is created
-stopped, and **scheduling is refused until you have previewed it** — a
-compaction nobody has looked at is one that empties a memory quietly.
-
-See [`docs/compaction.md`](docs/compaction.md).
-
----
-
-## Everything arrives the same way
-
-Webhook, crawler, upload, SDK, MCP — all through `POST /api/v1/write`. A crawled record and a
-webhook-delivered one are indistinguishable downstream, which is what stops a managed connector
-from having powers an external client lacks.
-
-```mermaid
-flowchart LR
-    SRC["webhook · crawler · upload · SDK"] ==> W["POST /api/v1/write"]
-    W ==> S["stored"]
-    S -. "embed — opt-in" .-> R["searchable"]
-    R -. "summarise · entities · edges" .-> E["enriched"]
-```
-
-**Solid commits before the request returns; dashed does not.** Ingest latency is a database write,
-not a model call, so the pipeline being down delays enrichment without losing data.
-
-**Both dashes are optional, and off by default for crawlers.** A crawler can discover fifty thousand
-records unattended and enriching them is a model call per chunk on data nobody has asked about yet.
-The price of that default is worth saying out loud: a `stored` item is durable, correct, and
-**invisible to search** — both retrieval arms read the chunk table, and chunks are written by the
-embed step. Which is why those three states appear in every trace.
-
-Connectors are the same idea one level up. An entry for Jira or Salesforce or Workday is **a row of
-data** — endpoint, pagination shape, field mapping — that renders into an ordinary crawler config.
-No per-source code, no plugin, and a mandatory dry run before any of them can be enabled.
-
----
-
-## Two things that do not fit through a fetch
-
-Both are cases where the ordinary path returns a record with no text, and both
-end up as ordinary records anyway.
-
-**A repository is read as a graph, not as text.** A GitHub repo at one commit
-becomes four saved reports — design, code quality, functional bugs,
-dependencies. It has to: a repo exceeds every ingestion ceiling by orders of
-magnitude, so `graphify` reduces it to symbols and edges with tree-sitter and no
-model, and the analysers read that digest plus a bounded, named set of files.
-Vulnerabilities come from [OSV](https://osv.dev) and never from the model —
-asked whether a version is affected, a model produces fluent, plausible, wrong
-CVE numbers, and a wrong advisory is a security claim about somebody's software.
-A snapshot is `owner/repo@sha` and is compared to nothing.
-See [`docs/analysis/repos.md`](docs/analysis/repos.md).
-
-**A page behind a bot wall is read by the model, and only if it says it read
-it.** When a fetch fails, Gemini's URL Context can retrieve the page instead.
-The catch is that the model answers whether or not it reached the page — the
-first probe returned a confident paragraph about `example.com` beside
-`URL_RETRIEVAL_STATUS_ERROR` for that URL, with nothing in the prose to tell
-them apart. So the account is accepted only when the metadata confirms
-retrieval, a response with no metadata is refused, and what is stored says in
-its first lines that it is a reading of the page rather than the page.
-See [`docs/ingestion/url-context.md`](docs/ingestion/url-context.md).
-
----
-
-## Run it
-
-```bash
-cd api
-docker compose up -d                        # Postgres 16 + pgvector on :54329
-uv venv --python 3.12 .venv && uv pip install -e ".[dev]"
-.venv/bin/python -m pytest                  # real database, no mocks
-.venv/bin/python -m memdog bootstrap        # org, project, producer, key
-.venv/bin/python -m memdog seed --demo      # 42 records, one worked sales renewal
-.venv/bin/uvicorn memdog.app:app --port 8200
-```
-
-No cloud account required. The embedding engine, extractor and blob store all have offline
-implementations — and they are registered *models*, not mocks, so their rows carry a `model_id` and
-the day a real engine arrives the old vectors are identifiable and re-embeddable rather than quietly
-mixed in.
-
-The seed is the acceptance test. It writes through the public API with a registered producer, asks
-the corpus five questions and checks it answers them, checks a colleague cannot read the private
-record, and checks the audit log recorded the reads. **A failing seed names the step that broke.**
-
-Then → **[docs/usage.md](docs/usage.md)**: six scenarios with the sequence each actually follows —
-write and ask, pull from an app, receive a webhook, build the graph, backfill a crawl that ran cold,
-erase with proof.
-
----
-
-## What it is not
-
-A README that only lists strengths is not read as confident.
-
-- **No users.** This is a prototype. [Mem0](https://mem0.ai) processes more API calls in a quarter
-  than this has served in its life
-- **Nothing in the connector catalog has been run against a live account.** All 37 entries report
-  `verified: false`, because verifying one needs somebody's credential. The mandatory dry run is
-  where an entry stops being a researched guess
-- **No interactive OAuth**, so a source that issues a refresh token only through a consent screen
-  cannot be connected — exactly one catalog entry, Zoho CRM. It is *not* why Google and Microsoft
-  were unreachable; that claim stood here for weeks and was wrong. An organization connecting its
-  own data uses a grant with no human in it, which is a POST
-- **No deterministic foreign-key edges.** A CRM is already a graph and `Contact.AccountId` is a
-  certain fact, but the only path into the edge table is a model reading text — so an exact edge
-  gets re-derived as a probabilistic one
-- **No point-in-time facts.** Edges carry no validity interval, so *"who worked there in 2024"* is
-  unanswerable. [Zep](https://www.getzep.com) does this natively and this does not
-- **Graph retrieval walks one hop.** Neighbourhoods, not the chain connecting two named things
-- **No invoicing.** Spend is metered in cost-weighted credits, and credits are not currency
-- **Five schema columns are declared and wired to nothing.** Listed with reasons in
-  `tests/test_wiring.py`, which fails if one is quietly added to that list, quietly removed from the
-  schema, or quietly wired up
-
-**Self-hosting is not the differentiator**, despite being the obvious thing to claim. Onyx is
-MIT-licensed, air-gapped, SOC 2 Type II and ships 40+ connectors; Khoj runs entirely on local
-models. Private deployment is table stakes here, and [the competitive
-research](docs/competition/README.md) says so at length. The differentiator is the first two
-sections of this file.
-
----
-
-## Map
-
-| Path | What is in it |
-|------|---------------|
-| [`docs/usage.md`](docs/usage.md) | Six scenarios against a running system — start here after `Run it` |
-| [`api/`](api/README.md) | The service. 72 modules, 175 endpoints, 51 migrations |
-| [`ui/`](ui/README.md) | The console. Ingestion, search, chat, entities, graph, crawlers, alerts, governance |
-| [`docs/`](docs/README.md) | The design, in eleven parts — requirements speak in roles, products appear only in the technology documents |
-| [`docs/graph.md`](docs/graph.md) | Why the graph is not a graph database, what it costs, and what was true when |
-| [`docs/alerts.md`](docs/alerts.md) | Declaring an event, the backtest gate, and signed outbound delivery |
-| [`docs/compaction.md`](docs/compaction.md) | Folding a memory down without losing it — and why archiving rather than overwriting |
-| [`TBD.md`](TBD.md) | Twelve decisions designed but not decided, ordered by how expensive each becomes if made late |
-| [`CHANGELOG.md`](CHANGELOG.md) | What changed and why, one entry per commit that altered behaviour |
-
-Use it from Claude: an MCP server at `/api/v1/mcp` exposes the corpus as eight tools with an
-ordinary API key. Each calls the same function its REST endpoint calls, so a record your key cannot
-fetch over HTTP is one it cannot reach through a tool.
+The console's sign-in page reports what this build can actually do, counted from
+the running code rather than written down — so a format that stops working stops
+being claimed.

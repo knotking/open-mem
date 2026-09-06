@@ -893,19 +893,6 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
       ]
     : [];
 
-  // Booleans, so not tiles -- a tile reading "1" says less than a sentence. And
-  // claimed only when on, for the same reason every count here is read from the
-  // build rather than typed: a capability that is off should stop being claimed.
-  const alsoOn = caps
-    ? [
-        caps.repo_analysis
-          ? "A GitHub repo at one commit, read four ways — design, code quality, bugs, dependencies"
-          : null,
-        caps.url_context
-          ? "Pages behind a bot wall, read by the model — and refused unless it confirms it retrieved them"
-          : null,
-      ].filter(Boolean)
-    : [];
 
   // One definition, two homes: the top-bar panel when the demo holds the
   // hero, and the hero itself when there is no demo to put there. Never
@@ -1043,17 +1030,25 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
         <div>
           {!heroHasDemo && <p className="eyebrow">Memory layer · sandbox</p>}
           <h1>
-            No answer without its source. No silence without its <em>reason</em>.
+            A memory layer that <em>shows its work</em>.
           </h1>
           <p className="hero-lede">
-            Documents, spreadsheets, calendars, email, audio and video — found by meaning, not by
-            keyword. Every sentence points at the passage it came from. Every record the search set
-            aside says why it was set aside. Anything can show you what it found; being told what it
-            passed over is what lets you check the answer instead of believing it.
+            Put anything in — documents, email, calendars, audio, video, a codebase — and ask in
+            plain language. Every answer comes back with the passages it rests on, and with the
+            part almost nothing else will tell you: <strong>what it left out, and why</strong>.
           </p>
+          <p className="hero-lede">
+            An answer that searched everything and an answer that searched almost nothing look
+            identical. Only one is worth trusting. This one tells you which it was.
+          </p>
+          {/* Three numbers, not eight. The grid was a specification sheet in
+            * front of a pitch: nobody counts file formats before they know what
+            * the thing is for. The rest are still counted from the build and
+            * still true -- they are on the format and capability pages, where
+            * somebody who wants them is already looking. */}
           {numbers.length > 0 && (
             <div className="numbers">
-              {numbers.map((n) => (
+              {numbers.slice(0, 3).map((n) => (
                 <div key={n.label}>
                   <span className="numbers-value">{n.value}</span>
                   <span className="numbers-label">{n.label}</span>
@@ -1061,17 +1056,9 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
               ))}
             </div>
           )}
-          {alsoOn.length > 0 && (
-            <ul className="counted" style={{ margin: "10px 0 0", paddingLeft: 18 }}>
-              {alsoOn.map((line) => (
-                <li key={line as string} style={{ marginTop: 4 }}>{line}</li>
-              ))}
-            </ul>
-          )}
           {caps && (
             <p className="counted">
-              Counted from this build, not written into the copy — retrieval is running{" "}
-              <code>{caps.embed_model}</code>.
+              Counted from this build, not written into the copy.
             </p>
           )}
         </div>
