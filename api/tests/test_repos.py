@@ -514,3 +514,48 @@ async def test_the_raw_graph_is_stored_with_the_snapshot_but_never_read(
     plan = await derive(pool, principal, memory_id, generator="summary", dry_run=True)
     read = {s["external_id"] for s in plan["samples"]}
     assert read == {"digest.md"}, f"the raw graph was read into a report: {read}"
+
+
+# ------------------------------------------------------------------ removal
+
+async def test_removing_a_repository_takes_its_snapshots(pool, tenant, queue,
+                                                         principal_for):
+    """Analysis is the one thing here that creates containers from a button, and
+    it had no way back: a repository added by mistake stayed on the list for
+    good."""
+    from memdog.repos import delete_repo
+
+    _, case_id, first = await _snapshot(pool, tenant, sha="a" * 40)
+    _, _, second = await _snapshot(pool, tenant, sha="b" * 40)
+
+    principal = await principal_for(tenant.api_key)
+    result = await delete_repo(pool, queue, principal, case_id)
+
+    assert result["snapshots_deleted"] == 2
+    assert result["failed"] == []
+    assert await repos_for_project(pool, principal, tenant.project_id) == []
+    # The rows go, not merely the listing: a snapshot nothing lists but that a
+    # direct read still returns is the state this is supposed to prevent.
+    assert await pool.fetchval(
+        "SELECT count(*) FROM repo_snapshots WHERE case_id = $1", case_id) == 0
+    # Through `delete_memory`, which under this type's policy removes the row --
+    # so the records went out by the ordinary cascade, not a second erasure path.
+    for memory_id in (first, second):
+        assert await pool.fetchval(
+            "SELECT count(*) FROM memories WHERE memory_id = $1", memory_id) == 0
+
+
+async def test_a_repository_of_another_organisation_cannot_be_removed(
+    pool, tenant, other_tenant, principal_for
+):
+    """The delete must not reach further than the read does."""
+    from memdog.repos import delete_repo
+
+    _, case_id, _ = await _snapshot(pool, tenant, sha="c" * 40)
+    intruder = await principal_for(other_tenant.api_key)
+
+    with pytest.raises(RepoError) as caught:
+        await delete_repo(pool, None, intruder, case_id)
+    assert caught.value.status == 404
+    assert await pool.fetchval(
+        "SELECT count(*) FROM repo_snapshots WHERE case_id = $1", case_id) == 1

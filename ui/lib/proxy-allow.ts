@@ -86,6 +86,9 @@ export const ALLOWED = [
   /^api\/v1\/repos\/analyze$/,
   /^api\/v1\/repos\/snapshots\/[A-Za-z0-9_]+$/,
   /^api\/v1\/repos\/[A-Za-z0-9_]+\/snapshots(\?.*)?$/,
+  // Removing a repository. Bare `{case_id}` is last of the three, so the
+  // two longer forms above claim their paths first.
+  /^api\/v1\/repos\/[A-Za-z0-9_]+$/,
   // The hierarchy: `part_of` in both directions, and the link that builds it.
   /^api\/v1\/memories\/[A-Za-z0-9_]+\/tree(\?.*)?$/,
   /^api\/v1\/memories\/[A-Za-z0-9_]+\/links(\?.*)?$/,

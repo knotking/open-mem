@@ -550,3 +550,97 @@ async def snapshots_for(
         case_id, principal.org_id, limit,
     )
     return [dict(r) for r in rows]
+
+
+async def delete_repo(
+    pool: asyncpg.Pool, queue, principal: Principal, case_id: str
+) -> dict:
+    """Stop tracking a repository, and take its snapshots with it.
+
+    Analysing a repository leaves two kinds of trace. Each snapshot is a
+    *memory* -- graph, digest and reports -- and the whole repository is a
+    *case*, which is the durable "this is a thing we look at" and outlives any
+    one commit. Removing one without the other leaves a screen that is wrong in
+    a different direction each way round: orphaned snapshots nothing lists, or a
+    repository row claiming a history that is gone.
+
+    So both go, and the snapshots go **through `delete_memory`** rather than
+    through a DELETE written here. That is the whole point -- the records get
+    the same tombstone, the same blob reclamation and the same audit trail as
+    anything else deleted in this system, and there is no second erasure path to
+    keep honest.
+
+    The case is tombstoned rather than dropped: `cases.deleted_at` is what every
+    read already filters on, and a hard delete would take the audit rows that
+    reference it.
+
+    The `repo_snapshots` delete looks redundant and is not. Under the policies a
+    snapshot memory normally carries the memory row is really removed, so
+    `ON DELETE CASCADE` takes the snapshot with it. Under `archive` the memory
+    is tombstoned instead, the cascade never fires, and the rows would survive a
+    repository that no longer exists. The `on_expiry` policy is a per-project
+    setting, so which of those happens is not this function's to assume.
+    """
+    from .memories import delete_memory
+
+    principal.require(DATA_WRITE)
+    case = await pool.fetchrow(
+        """
+        SELECT case_id, project_id, external_id, title
+        FROM cases
+        WHERE case_id = $1 AND org_id = $2 AND case_type = 'repo'
+          AND deleted_at IS NULL
+        """,
+        case_id, principal.org_id,
+    )
+    if case is None:
+        raise RepoError("no such repository", status=404)
+
+    rows = await pool.fetch(
+        "SELECT snapshot_id, memory_id FROM repo_snapshots "
+        "WHERE case_id = $1 AND org_id = $2",
+        case_id, principal.org_id,
+    )
+
+    # Memories first. If this fails halfway the case is still here and the
+    # repository is still listed, which is a state somebody can retry from --
+    # the reverse order leaves snapshots nothing lists and no way back to them.
+    deleted, failed = [], []
+    for row in rows:
+        try:
+            await delete_memory(pool, principal, queue, row["memory_id"])
+            deleted.append(row["snapshot_id"])
+        except Exception as exc:  # noqa: BLE001 - reported, not swallowed
+            log.warning("repo delete: snapshot %s: %s", row["snapshot_id"], exc)
+            failed.append({"snapshot_id": row["snapshot_id"], "reason": str(exc)})
+
+    async with pool.acquire() as conn, conn.transaction():
+        await conn.execute(
+            "DELETE FROM repo_snapshots WHERE case_id = $1 AND org_id = $2",
+            case_id, principal.org_id,
+        )
+        await conn.execute(
+            "UPDATE cases SET deleted_at = now() WHERE case_id = $1 AND org_id = $2",
+            case_id, principal.org_id,
+        )
+        await record_audit(
+            conn, principal,
+            action="repo.deleted",
+            project_id=case["project_id"],
+            target_type="case",
+            target_id=case_id,
+            detail={
+                "repo": case["external_id"],
+                "snapshots": len(rows),
+                "snapshots_failed": len(failed),
+            },
+        )
+
+    return {
+        "case_id": case_id,
+        "repo": case["external_id"],
+        "snapshots_deleted": len(deleted),
+        # Named, not counted. A partial delete that reports only a number is
+        # indistinguishable from one that quietly did less.
+        "failed": failed,
+    }

@@ -2650,6 +2650,28 @@ async def update_repo_snapshot(
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
 
 
+@app.delete("/api/v1/repos/{case_id}")
+async def delete_repo_endpoint(
+    request: Request, case_id: str, actor: Principal = Depends(principal)
+) -> dict:
+    """Stop tracking a repository, taking every snapshot of it.
+
+    Analysis is the one thing in here that creates containers as a side effect
+    of a button, and until this existed it was also the one thing with no way
+    back: a repository added by mistake stayed on the list for good. The
+    snapshots go out through the ordinary memory deletion, so they get the same
+    tombstone and reclamation as anything else.
+    """
+    from .repos import RepoError, delete_repo
+
+    try:
+        return await delete_repo(
+            request.app.state.pool, request.app.state.queue, actor, case_id
+        )
+    except (RepoError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
 @app.get("/api/v1/repos/{case_id}/snapshots")
 async def list_repo_snapshots(
     request: Request, case_id: str, actor: Principal = Depends(principal)

@@ -3877,6 +3877,10 @@ function ReposSection({ projectId }: { projectId: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  // Which row is asking "are you sure". Inline rather than a browser dialog:
+  // the count of what is about to go has to be *in* the question, and a
+  // `confirm()` cannot show it.
+  const [confirming, setConfirming] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -3920,6 +3924,29 @@ function ReposSection({ projectId }: { projectId: string }) {
       await load();
       if (created.case_id) await openSnapshots({ case_id: created.case_id } as Repo);
       await openDetail(created.snapshot_id);
+    });
+  }
+
+  async function removeRepo(repo: Repo) {
+    const name = repo.repo.replace(/^github\.com\//, "");
+    await act(`Removed ${name}.`, async () => {
+      const gone = await call<{ snapshots_deleted: number; failed: unknown[] }>(
+        `api/v1/repos/${repo.case_id}`, undefined, "DELETE",
+      );
+      setConfirming(null);
+      if (openRepo?.case_id === repo.case_id) {
+        setOpenRepo(null);
+        setSnapshots([]);
+        setDetail(null);
+      }
+      await load();
+      // The count, not just the verb. "Removed" alone cannot be told apart from
+      // a delete that reached the row and none of its snapshots.
+      setNote(
+        `Removed ${name} and ${gone.snapshots_deleted} snapshot`
+        + `${gone.snapshots_deleted === 1 ? "" : "s"}.`
+        + (gone.failed.length ? ` ${gone.failed.length} could not be deleted.` : ""),
+      );
     });
   }
 
@@ -4037,6 +4064,39 @@ function ReposSection({ projectId }: { projectId: string }) {
                   </td>
                   <td>
                     <SnapshotState status={repo.last_status} reason={repo.last_reason} />
+                  </td>
+                  <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                    {confirming === repo.case_id ? (
+                      <>
+                        {/* The count is in the question. "Remove?" on a row with
+                            fourteen snapshots behind it is not the same question
+                            as one with none, and the screen is the only place
+                            that difference can be shown before the click. */}
+                        <span className="hint">
+                          Remove with {repo.snapshots} snapshot
+                          {repo.snapshots === 1 ? "" : "s"}?{" "}
+                        </span>
+                        <button
+                          className="linkish"
+                          disabled={busy}
+                          onClick={() => void removeRepo(repo)}
+                        >
+                          Remove
+                        </button>
+                        {" · "}
+                        <button className="linkish" onClick={() => setConfirming(null)}>
+                          Cancel
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        className="linkish"
+                        onClick={() => setConfirming(repo.case_id)}
+                        title="Stop tracking this repository and delete its snapshots"
+                      >
+                        Remove
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}
