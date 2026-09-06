@@ -11,6 +11,49 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **The console says where the project has got to.** Five stages above every
+  screen — make a place, get something in, watch it climb, get it back, keep it
+  — read from counts that already existed. Nearly every confusion this week was
+  one confusion: a record was somewhere in the staircase and no screen said
+  where, so "not findable" and "not enriched yet" looked identical.
+  **It never calls `stored` broken** — enrichment is opt-in, so resting there is
+  correct for most corpora, and a rail that is wrong more often than right is
+  one people learn to skip. It links rather than offering a button that spends:
+  one click in permanent chrome firing several hundred model calls is a footgun
+  wherever it sits. It goes quiet when every stage is healthy. **Memories** is
+  now its own group at the top of the sidebar, having sat under *Organize* —
+  which is where you file something you already have, not where you begin.
+- **A memory type can have its URLs read by the model rather than downloaded.**
+  `url_reader = 'context'` asks Gemini to read the page and keeps an ordinary
+  GET underneath as the backup. It exists because **a JavaScript-rendered page
+  answers 200 with an empty shell**: the download succeeds, the old fallback
+  never fired, and the record landed `stored` with no text and nothing reporting
+  a problem. Per type, because the trade runs both ways — a GET returns bytes
+  that are versioned, re-parseable and quotable. What is stored says which order
+  produced it, and never claims the bytes were unavailable when none were asked
+  for.
+- **Point at a researcher's Scholar profile and get their papers.**
+  `POST /api/v1/crawlers/from-scholar` reads the profile, resolves it to an
+  OpenAlex author, and builds a crawler for their works: open-access papers
+  arrive as downloaded PDFs, the rest as title, abstract and metadata with the
+  record saying which. **The resolution refuses rather than guessing** — two
+  researchers share a name, and the wrong author id gives a corpus that is
+  entirely coherent and about somebody else, with every record real and nothing
+  downstream able to detect it. A match is confirmed against papers the profile
+  listed and needs two of them, since one shared title is a co-authorship.
+- **A crawler listing can name a file to download**, not just a page about one.
+  `Extract.pending_path` turns a link into a `Pending` reference the fetch
+  worker resolves, so the byte cap, SSRF validation and parse pipeline are the
+  ones already in use. `Extract.content_format: "inverted_index"` reconstructs
+  an abstract from `{"word": [positions]}`, which several scholarly APIs ship
+  in place of text they may index but not redistribute.
+- **A memory type can enrich what lands in it.** `memory_types.enrich`, off by
+  default. Per-write opt-in is the right grain for an inbox and the wrong one
+  for a corpus that exists to be searched, where every record resting at
+  `stored` is not a saving but the feature not working. **Deliberately separate
+  from `url_reader`** — a memory of papers wants enrichment *and* wants its PDFs
+  downloaded, and while the two were one rule, asking for the first asked for
+  the second.
 - **A memory that answers "what changed since last time".** A memory type can be
   marked as a **checkpoint timeline**: every record added to one of its memories
   becomes a checkpoint, is described on its own, and is compared with the one
@@ -234,6 +277,11 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   to the end of said less about what this is than four lines do.
 
 ### Migrations
+- **`0055_memory_type_url_reader.sql`** — `memory_types.url_reader`
+  (`fetch` | `context`). Additive, defaulting to `fetch`, which is exactly
+  today's behaviour, so every existing type is unchanged by definition.
+- **`0056_memory_type_enrich.sql`** — `memory_types.enrich`. Additive and off by
+  default, so nothing starts spending because this shipped.
 - **`0053_memory_checkpoints.sql`** — `memory_checkpoints`, and a `checkpoints`
   boolean on `memory_types`. Additive, and **off by default**: turning it on
   puts up to two model calls behind every record written into any memory of that
@@ -257,6 +305,26 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   analysed twice under two spellings.
 
 ### Fixed
+- **A generator spent its whole output budget repeating one word.** An unnamed,
+  unbounded string field became somewhere for the model to think: 7,944 tokens,
+  `MAX_TOKENS`, 31KB of truncated JSON, arriving as an empty extraction failure
+  that named neither the model nor the budget. Naming the fields for the labels
+  the prompt already used, and requiring them, took it to 534 tokens and from
+  one change found to five.
+- **A model's prose was being parsed for facts.** Asked for an account of a
+  profile the model returned markdown, and the parser looking for `Name:` lines
+  took `### Overview` for a researcher's name. Not a regex to improve: URL
+  Context accepts a response schema, so it asks for the shape now.
+- **An author's affiliation silently vanished.** OpenAlex renamed
+  `last_known_institution` to the plural; the old key is still present as null,
+  so reading it returned None rather than raising, and everything else about the
+  resolution looked correct.
+- **A crawler default was travelling as a decision.** `CrawlerConfig.enrich` was
+  `False` and passed explicitly on every write, so the rule that protects a
+  stated "no" overrode a memory type asking for enrichment — a hundred papers
+  pulled into a corpus that exists to be searched arrived entirely at `stored`.
+  It is three-valued now (`None` = "the crawler did not say"), like
+  `WriteOptions.enrich`, whose comment documents exactly this distinction.
 - **A structured artifact stored its structure as text.** The connection pool
   sets a jsonb codec that already encodes with `json.dumps`, and the artifact
   insert called `json.dumps` as well — so `fields` was written as a jsonb string
