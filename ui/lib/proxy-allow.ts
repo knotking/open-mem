@@ -73,6 +73,12 @@ export const ALLOWED = [
   /^api\/v1\/generators$/,
   /^api\/v1\/memories\/[A-Za-z0-9_]+\/derive$/,
   /^api\/v1\/memories\/[A-Za-z0-9_]+\/artifacts$/,
+  // Checkpoint timelines: the timeline, one recheck, and the memory-wide
+  // enrich that is how a timeline written without enrichment is promoted
+  // into the graph later.
+  /^api\/v1\/memories\/[A-Za-z0-9_]+\/checkpoints$/,
+  /^api\/v1\/memories\/[A-Za-z0-9_]+\/checkpoints\/[A-Za-z0-9_]+\/recheck$/,
+  /^api\/v1\/memories\/[A-Za-z0-9_]+\/enrich$/,
   // Repository analysis. `snapshots/{id}` is listed before the `{case_id}`
   // form for the same reason the routes are declared in that order on the
   // server: the literal segment has to win, or a snapshot id is read as a case.

@@ -42,7 +42,23 @@ the previous generation and whose owning account has a dead refresh token.
 
 ```bash
 cd api && ./deploy/cloudrun.sh <tag>     # e.g. spine-13
-cd ui  && ./deploy.sh <tag>              # e.g. ui-4, only if the UI changed
+
+cd ui && MEMDOG_PROJECT_ID=<prj_...> MEMDOG_PRODUCER_ID=<key_...> \
+         API_URL=https://memdog-api-r5ifa3vgqq-uc.a.run.app \
+         ./deploy.sh <tag>               # e.g. ui-4, only if the UI changed
+```
+
+**The UI deploy has no defaults for those two and refuses without them**, by
+design — they name the org whose data the console shows, and a wrong guess is
+the "404 unknown producer for signed-in users only" failure described below.
+`API_URL` defaults to the `...-266276359448...` spelling of the same service;
+passing the `r5ifa3vgqq` one keeps it consistent with what is already set. Read
+the current values off the running service rather than remembering them:
+
+```bash
+gcloud run services describe memdog-sandbox --project memdog-dev-506718 \
+  --region us-central1 --format='value(spec.template.spec.containers[0].env)' \
+  | tr ';' '\n' | grep -E 'MEMDOG_(PROJECT|PRODUCER)_ID'
 ```
 
 **Tags are descriptive, not monotonic.** The registry holds both — `spine-1`
@@ -154,6 +170,35 @@ cause, because two of them are deliberately quiet:
 3. **A membership exists.** Auto-provisioning creates a user and an identity but
    **never a membership**, so a brand-new account authenticates cleanly and then
    gets `403 this account is not a member of any organization`.
+
+   **Deleting an account's *data* also removes its membership.** Found
+   2026-09-06. `POST /api/v1/users/{id}/deletion` is offboarding, not a data
+   wipe: `account.py` says so outright — *"revocation is immediate and
+   unconditional either way: keys, producers and connections stop working
+   before any data question is settled"* — and membership goes with them. So
+   "drop the demo account's data" and "the demo account can no longer sign in"
+   are the same operation, and the second half is not mentioned in the
+   response, which reports only counts of data deleted and retained.
+
+   The tell is that the account signs in fine and fails immediately after, with
+   the message above — identical to a brand-new account that was never added.
+   Put it back with the ordinary endpoint, which attaches to the **caller's**
+   org rather than the oldest one:
+
+   ```bash
+   curl -X POST -H "X-API-Key: $KEY" -H 'content-type: application/json' \
+     -d '{"email":"demo@memdog.dev","role":"admin"}' \
+     "$URL/api/v1/organizations/members"
+   ```
+
+   It restores the same `user_id`, so everything the account already owned is
+   still its own. Prefer this to `python -m memdog add-member`, which attaches
+   to *"the first organization"* (`ORDER BY created_at LIMIT 1`) and is the
+   cause of the wrong-org failure described below.
+
+   **To wipe an account's data without locking it out**, delete through
+   `POST /api/v1/deletions` with a selector instead, which touches records and
+   nothing else.
 4. **The bootstrap connection is `shared`, not `personal`.** Found 2026-09-04.
    A personal connection binds its producer to the user who bootstrapped it, and
    the write path refuses everyone else with *"this producer is bound to another

@@ -51,6 +51,10 @@ SURFACES: dict[str, frozenset[str]] = {
     # The from/to pair is why capture has to be synchronous: once the row reads
     # its new level the old one is gone, and no sweep afterwards recovers it.
     "acl.changed":     frozenset({"from_level", "to_level", "data_type"}),
+    # A checkpoint timeline found that a record moved. `changes` is the count,
+    # so "tell me when the vendor feed changes materially" is a selector rather
+    # than a second feature.
+    "checkpoint.changed": frozenset({"memory_type", "changes"}),
 }
 
 # Which subject a surface's visibility is asked of. An event stores no ACL, so
@@ -60,6 +64,7 @@ SUBJECT_OF: dict[str, str] = {
     "fact.asserted": "fact", "fact.superseded": "fact", "fact.retracted": "fact",
     "data.revised": "item", "acl.changed": "item", "case.member_promoted": "item",
     "memory.member_added": "memory", "memory.retyped": "memory",
+    "checkpoint.changed": "memory",
 }
 
 # Editing any of these changes what matches, so it invalidates the backtest.

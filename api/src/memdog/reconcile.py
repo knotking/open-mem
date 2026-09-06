@@ -43,10 +43,12 @@ class Swept:
     embed: int
     enrich: int
     events: int = 0
+    checkpoints: int = 0
 
     @property
     def total(self) -> int:
-        return self.parse + self.embed + self.enrich + self.events
+        return (self.parse + self.embed + self.enrich + self.events
+                + self.checkpoints)
 
 
 async def reconcile(
@@ -188,11 +190,28 @@ async def reconcile(
         pool, queue, limit=limit, redeliver_after_seconds=grace_seconds
     )
 
+    # Checkpoints that were captured and never checked.
+    #
+    # `dispatch_pending` above recovers an event that was never delivered; this
+    # recovers the other half, where the event *was* delivered and the check did
+    # not finish -- a provider outage mid-run, or an instance that went away
+    # holding a `running` row. Neither is visible as a missing artifact: the
+    # timeline simply has an entry that never says what changed, which reads as
+    # "nothing changed here" and is the one lie a change detector must not tell.
+    from .checkpoints import CHECKPOINT_TOPIC, pending
+
+    stalled = await pending(pool, grace_seconds=max(grace_seconds, 60))
+    for row in stalled:
+        await queue.publish(
+            CHECKPOINT_TOPIC, {"payload": {"checkpoint_id": row["checkpoint_id"]}})
+
     swept = Swept(parse=len(to_parse), embed=len(to_embed), enrich=len(to_enrich),
-                  events=redispatched)
+                  events=redispatched, checkpoints=len(stalled))
     if swept.total:
         log.info(
-            "reconciler re-enqueued %d parse, %d embed, %d enrich, %d events",
+            "reconciler re-enqueued %d parse, %d embed, %d enrich, %d events, "
+            "%d checkpoints",
             swept.parse, swept.embed, swept.enrich, swept.events,
+            swept.checkpoints,
         )
     return swept

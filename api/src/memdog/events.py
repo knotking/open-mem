@@ -44,8 +44,14 @@ TOPIC_FOR_EVENT: dict[str, str] = {
 # so which transition woke it is not information it needs.
 for _surface in ("fact.asserted", "fact.superseded", "fact.retracted",
                  "data.revised", "memory.member_added", "memory.retyped",
-                 "case.member_promoted", "acl.changed"):
+                 "case.member_promoted", "acl.changed", "checkpoint.changed"):
     TOPIC_FOR_EVENT[_surface] = "alerts"
+
+# A checkpoint was captured and has not been checked. Its own topic rather than
+# `alerts`, because unlike every transition above this one is *work* -- there is
+# a model call waiting behind it, and the alerts consumer coalesces on the
+# assumption that its messages are only a nudge to go and read the log.
+TOPIC_FOR_EVENT["checkpoint.captured"] = "checkpoint"
 
 # `enrichment.refused` is emitted when a sensitivity policy withholds the
 # expensive tier from a record. Nothing consumes it and nothing should -- it is

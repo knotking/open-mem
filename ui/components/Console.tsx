@@ -31,6 +31,7 @@ import {
   MemoryMember,
   MemoryTree,
   MemoryType,
+  Checkpoint,
   Algorithm,
   Backtest,
   CompactionJob,
@@ -4165,6 +4166,31 @@ function SnapshotState({
 }
 
 /**
+ * Where one checkpoint got to, and what it found — which are two questions.
+ *
+ * A change detector has one failure mode worth designing the screen around:
+ * **a check that has not run, one that failed, and one that ran and found
+ * nothing all produce a row with no changes on it.** Rendering them the same
+ * turns silence into a clean bill of health, so each says which it is, in its
+ * own words, and `unchanged` is stated rather than left as an absence.
+ */
+function CheckpointState({ checkpoint }: { checkpoint: Checkpoint }) {
+  const { status, outcome } = checkpoint;
+  if (status === "pending") return <span className="hint">queued — not checked yet</span>;
+  if (status === "running") return <span className="hint">checking…</span>;
+  if (status === "failed") return <span className="err">could not be checked</span>;
+  if (outcome === "first") return <span className="hint">first — nothing to compare</span>;
+  if (outcome === "changed") return <span className="ok">changed</span>;
+  if (outcome === "unchanged") return <span className="empty">no change</span>;
+  // Not a failure and not a finding: the description before this one was
+  // written by a different prompt or model, so comparing them would report that
+  // drift as content change. A recheck is the way out, which is why the button
+  // sits on the row.
+  if (outcome === "incomparable") return <span className="hint">not comparable</span>;
+  return <span className="empty">—</span>;
+}
+
+/**
  * One snapshot: what it read, what it cost, and the four reports.
  *
  * The stat tiles come before the reports on purpose. A report is only as good
@@ -6129,6 +6155,8 @@ function MemorySection({ projectId }: { projectId: string }) {
                                            sources: number; access_level: string;
                                            created_at: string }[]>([]);
 
+  const [checkpoints, setCheckpoints] = useState<Checkpoint[]>([]);
+
   const load = useCallback(async () => {
     try {
       const [m, t, d] = await Promise.all([
@@ -6167,6 +6195,12 @@ function MemorySection({ projectId }: { projectId: string }) {
         setTree(await call<MemoryTree>(`api/v1/memories/${memory.memory_id}/tree`));
         setDerived((await call<{ artifacts: typeof derived }>(
           `api/v1/memories/${memory.memory_id}/artifacts`)).artifacts);
+        // Empty for an ordinary memory, and the panel below renders nothing in
+        // that case — a timeline is a property of the type, not something every
+        // memory has an empty version of.
+        setCheckpoints((await call<{ checkpoints: Checkpoint[] }>(
+          `api/v1/memories/${memory.memory_id}/checkpoints`)
+          .catch(() => ({ checkpoints: [] }))).checkpoints);
       } catch (e) {
         setError((e as Error).message);
       }
@@ -6208,6 +6242,65 @@ function MemorySection({ projectId }: { projectId: string }) {
       </p>
       {error && <p className="err">{error}</p>}
       {note && <p className="empty">{note}</p>}
+
+      <section className="panel">
+        <h2>Types</h2>
+        <p className="hint">
+          A type carries the policy for every memory of it: how long its contents live, what
+          happens when they expire, and whether it is a <strong>change-tracked timeline</strong>.
+          A timeline makes every record added to one of its memories a checkpoint, described on
+          its own and compared with the one before it — so <strong>turning it on puts up to two
+          model calls behind every record</strong> written into any memory of this type. A
+          record identical to the one before it costs nothing.
+        </p>
+        <table className="kv">
+          <tbody>
+            {types.map((t) => (
+              <tr key={t.type_id}>
+                <td style={{ width: "auto" }}><strong>{t.name}</strong></td>
+                <td>
+                  <span className="chip">{describeTtl(t.ttl_seconds)}</span>{" "}
+                  <span className="chip">{t.on_expiry}</span>
+                </td>
+                <td>
+                  {t.checkpoints
+                    ? <span className="ok">tracks change</span>
+                    : <span className="empty">no timeline</span>}
+                </td>
+                <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                  <button
+                    className="linkish"
+                    disabled={busy || t.locked}
+                    title={t.locked
+                      ? "This type is locked and its policy cannot be changed here"
+                      : t.checkpoints
+                        ? "Stop tracking change. Existing checkpoints are kept; no new ones are captured."
+                        : "Track change. Every record added to a memory of this type becomes a checkpoint, at up to two model calls each."}
+                    onClick={() =>
+                      act(t.checkpoints
+                            ? `${t.name} no longer tracks change.`
+                            : `${t.name} now tracks change.`, async () => {
+                        // The whole row, not just the flag: this endpoint is an
+                        // upsert, so sending one field would reset the TTL and
+                        // the expiry policy to their defaults.
+                        await call(`api/v1/projects/${projectId}/memory-types`, {
+                          name: t.name,
+                          ttl_seconds: t.ttl_seconds,
+                          on_expiry: t.on_expiry,
+                          checkpoints: !t.checkpoints,
+                        });
+                        await load();
+                      })
+                    }
+                  >
+                    {t.checkpoints ? "Stop tracking" : "Track change"}
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
 
       <section className="panel">
         <h2>Create a memory</h2>
@@ -6480,6 +6573,41 @@ function MemorySection({ projectId }: { projectId: string }) {
               </button>
             </div>
 
+            <h3>Enrichment</h3>
+            <p className="hint">
+              Enrichment is <strong>off unless asked for</strong> — recording is cheap and
+              synchronous, and anything that spends money is opt-in. So a record can sit at
+              <code> stored </code> forever and be perfectly correct. A change-tracked timeline
+              in particular is written without it: the check reads the record&rsquo;s text and
+              needs neither embeddings nor the graph. This is how that is reversed later, for
+              every member at once.
+            </p>
+            <div className="row">
+              <button
+                disabled={busy || members.length === 0}
+                title={members.length === 0
+                  ? "Nothing in this memory to enrich."
+                  : `Embed and summarise all ${members.length} member${members.length === 1 ? "" : "s"} — one model call each, and entities and edges appear afterwards.`}
+                onClick={() =>
+                  act("Enrichment requested.", async () => {
+                    const done = await call<{ requested: number }>(
+                      `api/v1/memories/${selected.memory_id}/enrich`, {});
+                    await openMemory(selected);
+                    // The count, because a memory whose members are all archived
+                    // returns zero and that is a different outcome from work queued.
+                    setNote(`Enrichment requested for ${done.requested} record${
+                      done.requested === 1 ? "" : "s"}. They climb to enriched in the background.`);
+                  })
+                }
+              >
+                Enrich every member
+              </button>
+              <span className="empty">
+                {members.filter((m) => m.state === "enriched").length} of {members.length}{" "}
+                enriched
+              </span>
+            </div>
+
             <h3>Make something from it</h3>
             <div className="row">
               <label style={{ flex: 1 }}>
@@ -6528,6 +6656,66 @@ function MemorySection({ projectId }: { projectId: string }) {
                   </div>
                 ))}
               </div>
+            )}
+
+            {checkpoints.length > 0 && (
+              <>
+                <h3>Timeline</h3>
+                <p className="hint">
+                  Every record added here is a checkpoint, described on its own and compared
+                  with the one before it. <strong>The comparison is between the two
+                  descriptions, not the two documents</strong> — and a record identical to the
+                  one before it is settled without asking a model at all.
+                </p>
+                {checkpoints.map((c) => (
+                  <div className="hit" key={c.checkpoint_id}>
+                    <div className="meta">
+                      <span className="empty">#{c.seq}</span>
+                      <strong>{c.external_id}</strong>
+                      <CheckpointState checkpoint={c} />
+                      <span className="empty far">
+                        {new Date(c.created_at).toLocaleString()}
+                      </span>
+                      <button
+                        className="linkish"
+                        title="Describe and compare this checkpoint again, at the current generator version"
+                        onClick={() =>
+                          act("Rechecking.", async () => {
+                            await call(
+                              `api/v1/memories/${selected.memory_id}/checkpoints/${c.checkpoint_id}/recheck`,
+                              {});
+                            await openMemory(selected);
+                          })
+                        }
+                      >
+                        Recheck
+                      </button>
+                    </div>
+                    {/* The reason, whenever there is one. An `incomparable`
+                        with nothing beside it reads as a bug rather than as a
+                        refusal, and a refusal is what it is. */}
+                    {c.reason && <p className="empty">{c.reason}</p>}
+                    {(c.change_fields?.changes ?? []).map((change, i) => (
+                      <div className="meta" key={i}>
+                        <span className="chip">{change.kind}</span>
+                        <span className={`chip ${change.significance === "high" ? "on" : ""}`}>
+                          {change.significance}
+                        </span>
+                        <span>{change.statement}</span>
+                        {/* Only when there are two sides to show. An `added`
+                            carries an empty earlier value, and rendering
+                            `"" → x` says less than the statement already did. */}
+                        {change.earlier_value && change.later_value && (
+                          <span className="empty">
+                            <code>{change.earlier_value}</code> →{" "}
+                            <code>{change.later_value}</code>
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </>
             )}
 
             <h3>Members</h3>

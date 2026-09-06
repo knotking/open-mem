@@ -502,14 +502,136 @@ def _gemini_findings_schema() -> dict:
     """
     return {
         "type": "array",
+        "items": {"type": "object", "required": FINDING_REQUIRED,
+                  "properties": _plain(FINDING_PROPERTIES)},
+    }
+
+
+def _plain(properties: dict) -> dict:
+    """Drop nullable unions, leaving the property required-or-absent.
+
+    One copy, because this is a rule rather than a transformation: every schema
+    extension that reaches Gemini needs it, and a second extension reimplementing
+    it is a second chance to reintroduce the 400 above.
+    """
+    return {
+        name: ({**spec, "type": spec["type"][0]}
+               if isinstance(spec.get("type"), list) else spec)
+        for name, spec in properties.items()
+    }
+
+
+# Change detection over a checkpoint timeline, and the same argument as
+# `findings` one step further on.
+#
+# A checkpoint timeline compares each record against the one before it, and both
+# halves of that are model calls -- so the thing that decides whether the
+# feature works is not the prompt, it is the *shape*. Two free-prose summaries
+# of the same document differ in wording on every run, so a diff of them always
+# finds something, so it always looks like it is working. That is the worst
+# failure available here: a change detector that cries change is indispensable
+# and useless at the same time, and nothing in the output says which it is being.
+#
+# So a checkpoint's state is a **list of short declarative observations in a
+# fixed order** rather than a paragraph. Two runs over the same content fill the
+# same slots, and what differs between them is content rather than phrasing.
+STATE_PROPERTIES = {"type": "array", "items": {"type": "string"}}
+
+# And a change names its own direction. `kind` is closed for the reason every
+# vocabulary here is closed -- an open one degrades into unqueryable free text
+# and "what kind of changes has this feed had" stops being answerable.
+#
+# `before` and `after` are optional and carry the two values when there are two:
+# a change that cannot show what it moved from is an assertion, and the whole
+# point of the timeline is that its claims can be checked against the records
+# still sitting in it.
+# Every field carries a `description`, and that is not documentation -- it is
+# the control that stopped this generator destroying itself.
+#
+# `before` and `after` shipped as bare strings, and a schema-constrained model
+# handed an unbounded string with nothing said about it treats it as somewhere
+# to think. Asked what changed between two status reports it emitted
+# `"before": "green chemical/project status (green) / Status is green. - green
+# - green - green ..."` for 7,944 output tokens, hit MAX_TOKENS, and returned
+# 31KB of truncated JSON that would not parse. The failure surfaced as
+# `ExtractionFailed('')` -- no model error, no quota error, nothing naming the
+# real cause, which is `docs/limit.md` section 6.1 exactly.
+#
+# A length and a sentence saying "the value, not an explanation" fixes it. The
+# prose belongs in `statement`, which is the field that is allowed to be prose.
+CHANGE_PROPERTIES = {
+    "kind": {"type": "string", "enum": ["added", "removed", "changed"]},
+    "statement": {"type": "string",
+                  "description": "One sentence naming what changed. The only "
+                                 "field that may contain prose."},
+    # **Named for the labels in the prompt, and that is the whole fix.**
+    #
+    # These were `before` and `after`, optional and nullable, and a
+    # schema-constrained model treated the first of them as somewhere to think.
+    # Asked what changed between two status reports it emitted
+    # `"before": "green chemical/project status (green) / Status is green.
+    # - green - green - green ..."`, ran for 7,944 output tokens, hit
+    # MAX_TOKENS, and returned 31KB of truncated JSON that would not parse. The
+    # failure arrived as `ExtractionFailed('')`: no model error, no quota error,
+    # nothing naming the cause. `docs/limit.md` section 6.1 predicted exactly
+    # this and it still took a deploy to see.
+    #
+    # A description and a length helped and were not enough -- the field still
+    # came back as reasoning, and four of five changes went unreported because
+    # the effort went there. Renaming them to match the `EARLIER:` and `LATER:`
+    # labels the prompt already uses, and requiring both, fixed it outright:
+    # 7,944 tokens to 534, one change found to five, and the values arrive as
+    # `'green'` and `'red'`.
+    #
+    # Required with an empty string for "absent", rather than nullable. It says
+    # the same thing, and it says it in the dialect Gemini accepts -- a nullable
+    # union 400s the whole request.
+    "earlier_value": {"type": "string", "maxLength": 200,
+                      "description": "The value as it appears in EARLIER, "
+                                     "copied verbatim. Empty string if it is "
+                                     "not there at all."},
+    "later_value": {"type": "string", "maxLength": 200,
+                    "description": "The value as it appears in LATER, copied "
+                                   "verbatim. Empty string if it is not there "
+                                   "at all."},
+    # Not severity -- nothing here is a defect. This is "does a person need to
+    # know", and it exists so a footer date moving can be filtered below a
+    # threshold rather than suppressed silently somewhere in the pipeline.
+    "significance": {"type": "string", "enum": ["high", "medium", "low"]},
+}
+CHANGE_REQUIRED = ["kind", "statement", "earlier_value", "later_value",
+                   "significance"]
+# The statement is written before the values it summarises, so the values are
+# copied out of a decision already made rather than being where the decision
+# gets made.
+CHANGE_ORDER = ["kind", "statement", "earlier_value", "later_value", "significance"]
+
+# The data types that get each shape. A checkpoint's state is asked of one
+# record; a change is asked of two states, never of the records themselves.
+OBSERVED = {"checkpoint_state"}
+COMPARED = {"checkpoint_change"}
+
+
+def state_schema() -> dict:
+    return dict(STATE_PROPERTIES)
+
+
+def changes_schema() -> dict:
+    """An empty array is a first-class answer and the honest one for a record
+    that did not change -- the same rule `findings` follows. `[]` and a missing
+    key are different claims, and rendering them the same is how a comparison
+    that never ran reads as "nothing moved".
+
+    One shape for both dialects: nothing here is a nullable union, so there is
+    nothing for `_plain` to strip and no second version to keep in step.
+    """
+    return {
+        "type": "array",
         "items": {
             "type": "object",
-            "required": FINDING_REQUIRED,
-            "properties": {
-                name: ({"type": "string"} if isinstance(spec.get("type"), list)
-                       else spec)
-                for name, spec in FINDING_PROPERTIES.items()
-            },
+            "required": CHANGE_REQUIRED,
+            "propertyOrdering": CHANGE_ORDER,
+            "properties": CHANGE_PROPERTIES,
         },
     }
 
@@ -520,7 +642,8 @@ def quality_schema() -> dict:
 
 
 def envelope_schema(offered: tuple[str, ...] = RELATION_PREDICATES,
-                    *, quality: bool = False, findings: bool = False) -> dict:
+                    *, quality: bool = False, findings: bool = False,
+                    state: bool = False, changes: bool = False) -> dict:
     """Property order is load-bearing, not cosmetic.
 
     A schema-constrained model emits properties in the order the schema lists
@@ -547,6 +670,11 @@ def envelope_schema(offered: tuple[str, ...] = RELATION_PREDICATES,
         "required": ["title"],
         "properties": {
             "title": {"type": "string"},
+            # Ahead of even the graph. For a checkpoint these *are* the answer,
+            # and the ordering argument above applies to whatever is
+            # irrecoverable without paying for the call again.
+            **({"state": state_schema()} if state else {}),
+            **({"changes": changes_schema()} if changes else {}),
             "entities": ENTITY_SCHEMA,
             "relations": relation_schema(offered),
             "description": {"type": ["string", "null"]},
@@ -671,7 +799,9 @@ class OllamaExtractor:
     ) -> Envelope:
         offered = graph_templates.predicates_for(template)
         schema = envelope_schema(offered, quality=data_type in JUDGED,
-                                 findings=data_type in REVIEWED)
+                                 findings=data_type in REVIEWED,
+                                 state=data_type in OBSERVED,
+                                 changes=data_type in COMPARED)
         system, user = build_prompt(text, data_type=data_type,
                                     schema=schema, block=prompt,
                                     template=template)
@@ -703,7 +833,14 @@ class OllamaExtractor:
             raise ExtractionFailed(content[:2000]) from exc
         if not parsed.get("title"):
             raise ExtractionFailed("model returned no title")
-        return Envelope(**{k: v for k, v in parsed.items() if k in Envelope.model_fields})
+        envelope = Envelope(
+            **{k: v for k, v in parsed.items() if k in Envelope.model_fields})
+        # Not Envelope fields, so the filter above drops them; carried in
+        # `fields` for the same reason `quality` and `findings` are.
+        for key in ("state", "changes", "findings"):
+            if isinstance(parsed.get(key), list):
+                envelope.fields[key] = parsed[key]
+        return envelope
 
 
 class GeminiExtractor:
@@ -743,9 +880,12 @@ class GeminiExtractor:
         # than a book. `extract_long` does the splitting.
         judged = data_type in JUDGED
         reviewed = data_type in REVIEWED
+        observed = data_type in OBSERVED
+        compared = data_type in COMPARED
         system, user = build_prompt(
             text[:GEMINI_WINDOW], data_type=data_type,
-            schema=envelope_schema(offered, quality=judged, findings=reviewed),
+            schema=envelope_schema(offered, quality=judged, findings=reviewed,
+                                   state=observed, changes=compared),
             block=block, template=template,
         )
         try:
@@ -767,8 +907,9 @@ class GeminiExtractor:
                             # response, so there is no raw text to store on
                             # success and nothing to salvage by parsing prose.
                             "responseMimeType": "application/json",
-                            "responseSchema": _gemini_schema(offered, quality=judged,
-                                                             findings=reviewed),
+                            "responseSchema": _gemini_schema(
+                                offered, quality=judged, findings=reviewed,
+                                state=observed, changes=compared),
                         },
                     },
                 )
@@ -783,10 +924,28 @@ class GeminiExtractor:
         content = "".join(
             part.get("text", "") for part in candidates[0].get("content", {}).get("parts", [])
         )
+        # **The ceiling that does not announce itself.** `docs/limit.md` names
+        # this: the 8,192-token output cap is enforced by the provider and
+        # `finishReason` was never inspected, so running out of room arrived as
+        # `ExtractionFailed('')` or as a JSON parse error on a truncated string
+        # -- both of which read as a broken model rather than a full budget.
+        #
+        # Checked only on the failure path, because a truncated response that
+        # happens to parse is still a usable answer and refusing it would be a
+        # regression. On the failure path it is the whole diagnosis.
+        finish = candidates[0].get("finishReason")
         try:
             parsed = json.loads(content)
         except ValueError as exc:
-            raise ExtractionFailed(content[:2000]) from exc
+            if finish == "MAX_TOKENS":
+                raise ExtractionFailed(
+                    f"the model ran out of output budget: {len(content)} characters "
+                    f"of a response that never closed. Shorten what it is asked "
+                    f"to produce, or bound the fields it is filling."
+                ) from exc
+            raise ExtractionFailed(content[:2000] or f"empty response ({finish})") from exc
+        if not content:
+            raise ExtractionFailed(f"model returned no text (finishReason {finish})")
         if not parsed.get("title"):
             raise ExtractionFailed("model returned no title")
         envelope = Envelope(**{k: v for k, v in parsed.items() if k in Envelope.model_fields})
@@ -808,6 +967,13 @@ class GeminiExtractor:
         # different answers and must not both render as an absent key.
         if isinstance(parsed.get("findings"), list):
             envelope.fields["findings"] = parsed["findings"]
+        # Same home, same rule. `changes: []` is the answer for a record that
+        # did not move, and it must survive as an empty list -- dropping it
+        # makes "compared, nothing changed" indistinguishable from "never
+        # compared", which for a change detector is the whole question.
+        for key in ("state", "changes"):
+            if isinstance(parsed.get(key), list):
+                envelope.fields[key] = parsed[key]
         envelope.fields["prompt"] = prompt_name
         envelope.fields["tokens"] = meta.get("totalTokenCount", 0)
         # The build that answered, not the alias we asked for.
@@ -817,7 +983,8 @@ class GeminiExtractor:
 
 
 def _gemini_schema(offered: tuple[str, ...] = RELATION_PREDICATES,
-                   *, quality: bool = False, findings: bool = False) -> dict:
+                   *, quality: bool = False, findings: bool = False,
+                   state: bool = False, changes: bool = False) -> dict:
     """Gemini wants its own dialect: no nullable unions, so optional fields are
     simply not required. Property order matches `envelope_schema` and matters
     for the same reason -- see the note there."""
@@ -835,7 +1002,13 @@ def _gemini_schema(offered: tuple[str, ...] = RELATION_PREDICATES,
         # emitted, not because the model found nothing.
         #
         # Required forces the key; an empty array remains a correct answer.
-        "required": ["title", "entities", "relations"],
+        # `state` and `changes` join the required set for exactly the reason
+        # entities and relations did: an optional property may simply be absent,
+        # and a checkpoint whose `changes` key never arrived is indistinguishable
+        # from one that compared and found nothing.
+        "required": (["title", "entities", "relations"]
+                     + (["state"] if state else [])
+                     + (["changes"] if changes else [])),
         # Honoured by Gemini, unlike declaration order. Putting the graph ahead
         # of the summary means a runaway summary costs the summary rather than
         # the whole envelope.
@@ -843,8 +1016,10 @@ def _gemini_schema(offered: tuple[str, ...] = RELATION_PREDICATES,
         # it is what a page was fetched to find out, and `summary` remains the
         # field that pays when something runs long.
         "propertyOrdering": (
-            ["title", "entities", "relations", "description", "keywords",
-             "language"]
+            ["title"]
+            + (["state"] if state else [])
+            + (["changes"] if changes else [])
+            + ["entities", "relations", "description", "keywords", "language"]
             + (["quality"] if quality else [])
             # Findings sit ahead of `summary` for the reason everything else
             # does: `summary` is the field that pays when the budget runs out,
@@ -855,6 +1030,8 @@ def _gemini_schema(offered: tuple[str, ...] = RELATION_PREDICATES,
         ),
         "properties": {
             "title": {"type": "string"},
+            **({"state": state_schema()} if state else {}),
+            **({"changes": changes_schema()} if changes else {}),
             "entities": {
                 "type": "array",
                 "items": {

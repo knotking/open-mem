@@ -116,6 +116,34 @@ async def add_member(conn, memory_id: str, data_id: str, added_by: str) -> None:
                  "memory_type": memory["type"], "added_by": added_by},
     )
 
+    # A checkpoint timeline: this record is a point on it.
+    #
+    # Here rather than anywhere else because this is the one place that knows a
+    # membership is *new* -- the insert above returns nothing on conflict, so a
+    # record re-added to a memory it is already in never reaches this line. That
+    # is the behaviour a timeline needs and it is already load-bearing for the
+    # transition, so the checkpoint gets it for free instead of reimplementing
+    # it with a check somebody could forget.
+    #
+    # One INSERT and one event. The summarise-and-compare is a model call and
+    # goes on the queue: a bulk import must cost a row per record on the write
+    # path, not a model call per record.
+    from .checkpoints import capture, tracks_change
+
+    if not await tracks_change(conn, memory["project_id"], memory["type"]):
+        return
+    checkpoint_id = await capture(
+        conn, org_id=memory["org_id"], project_id=memory["project_id"],
+        memory_id=memory_id, data_id=data_id)
+    if checkpoint_id is None:
+        return
+    await emit_transition(
+        conn, "checkpoint.captured", org_id=memory["org_id"],
+        project_id=memory["project_id"], data_id=data_id,
+        payload={"memory_id": memory_id, "checkpoint_id": checkpoint_id,
+                 "memory_type": memory["type"]},
+    )
+
 
 async def route_write(
     conn,
@@ -783,7 +811,8 @@ async def links_for(pool: asyncpg.Pool, principal, memory_id: str) -> dict:
 async def list_types(pool: asyncpg.Pool, project_id: str) -> list[dict]:
     rows = await pool.fetch(
         """
-        SELECT type_id, name, ttl_seconds, on_expiry, locked FROM memory_types
+        SELECT type_id, name, ttl_seconds, on_expiry, locked, checkpoints
+        FROM memory_types
         WHERE project_id = $1 ORDER BY name
         """,
         project_id,
@@ -794,12 +823,22 @@ async def list_types(pool: asyncpg.Pool, project_id: str) -> list[dict]:
 async def create_type(
     pool: asyncpg.Pool, principal, *, project_id: str, name: str,
     ttl_seconds: int | None, on_expiry: str = "orphan_delete",
+    checkpoints: bool = False,
 ) -> dict:
-    """A type is a name, a TTL and an expiry policy. Deliberately three fields.
+    """A type is a name, a TTL, an expiry policy and whether it tracks change.
 
     Earlier drafts shipped ten types with semantics baked into each; nearly all
     of it turned out to be expressible as a TTL plus a policy, so the set is
     open and organisations define their own.
+
+    `checkpoints` is the fourth and is the same *kind* of thing as `on_expiry`:
+    a policy a project sets on a type it already uses, not a new type with
+    behaviour welded into its name. A `vendor_feed` becomes a change-tracking
+    timeline by turning this on, rather than by being re-typed into a `timeline`
+    -- which is the taxonomy this table exists to avoid.
+
+    It is off by default and has to be turned on deliberately, because it puts
+    a model call behind every record added to every memory of the type.
     """
     from .audit import record_audit
     from .auth import CONFIG_WRITE
@@ -812,19 +851,23 @@ async def create_type(
     async with pool.acquire() as conn, conn.transaction():
         await conn.execute(
             """
-            INSERT INTO memory_types (type_id, org_id, project_id, name, ttl_seconds, on_expiry)
-            VALUES ($1, $2, $3, $4, $5, $6)
+            INSERT INTO memory_types (type_id, org_id, project_id, name, ttl_seconds,
+                                      on_expiry, checkpoints)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             ON CONFLICT (project_id, name) DO UPDATE SET ttl_seconds = EXCLUDED.ttl_seconds,
-                on_expiry = EXCLUDED.on_expiry
+                on_expiry = EXCLUDED.on_expiry, checkpoints = EXCLUDED.checkpoints
             """,
             type_id, principal.org_id, project_id, name, ttl_seconds, on_expiry,
+            checkpoints,
         )
         await record_audit(
             conn, principal, action="memory_type.set", project_id=project_id,
             target_type="memory_type", target_id=name,
-            detail={"ttl_seconds": ttl_seconds, "on_expiry": on_expiry},
+            detail={"ttl_seconds": ttl_seconds, "on_expiry": on_expiry,
+                    "checkpoints": checkpoints},
         )
-    return {"name": name, "ttl_seconds": ttl_seconds, "on_expiry": on_expiry}
+    return {"name": name, "ttl_seconds": ttl_seconds, "on_expiry": on_expiry,
+            "checkpoints": checkpoints}
 
 
 async def delete_memory(

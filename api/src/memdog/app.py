@@ -155,6 +155,7 @@ async def lifespan(app: FastAPI):
         pool, queue,
         parse_worker=parse_worker, embed_worker=embed_worker,
         enrich_worker=enrich_worker, fetch_worker=fetch_worker,
+        extractor=extractor,
     ).register(queue)
     # Wakes on a transition and then waits. The waiting is the design: a
     # consumer that evaluated one message at a time would be per-write
@@ -707,7 +708,106 @@ async def post_memory_type(
         request.app.state.pool, actor, project_id=project_id,
         name=body.get("name", ""), ttl_seconds=body.get("ttl_seconds"),
         on_expiry=body.get("on_expiry", "orphan_delete"),
+        checkpoints=bool(body.get("checkpoints")),
     )
+
+
+@app.get("/api/v1/memories/{memory_id}/checkpoints")
+async def read_checkpoints(
+    request: Request, memory_id: str, actor: Principal = Depends(principal)
+) -> dict:
+    """One memory's timeline, newest first, with what changed at each point.
+
+    A checkpoint whose check has not finished says so rather than appearing as
+    one that found nothing -- for a change detector those are the two answers
+    that must never look alike.
+    """
+    from .checkpoints import CheckpointError, timeline
+
+    try:
+        return {"checkpoints": await timeline(request.app.state.pool, actor, memory_id)}
+    except (CheckpointError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/memories/{memory_id}/checkpoints/{checkpoint_id}/recheck")
+async def recheck_checkpoint(
+    request: Request, memory_id: str, checkpoint_id: str,
+    actor: Principal = Depends(principal),
+) -> dict:
+    """Run one checkpoint's check again.
+
+    The way out of `incomparable`: it re-describes the record at the *current*
+    generator version, which is what makes the pair comparable again after a
+    prompt or a model changed underneath a timeline.
+    """
+    from .checkpoints import CheckpointError, recheck
+
+    try:
+        return await recheck(request.app.state.pool, actor,
+                             request.app.state.queue, checkpoint_id)
+    except (CheckpointError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/memories/{memory_id}/enrich")
+async def enrich_memory(
+    request: Request, memory_id: str, body: dict | None = None,
+    actor: Principal = Depends(principal),
+) -> dict:
+    """Enrich every member of a memory, on demand.
+
+    Enrichment is opt-in and resolves off by default, which is right -- it costs
+    money per record and a default that quietly bills people is the wrong
+    default. A checkpoint timeline in particular is written without it: the
+    change check reads the record's text and needs neither embeddings nor the
+    graph.
+
+    This is how that decision is reversed later. Per-item forcing already
+    exists; a timeline with fifty entries makes doing it fifty times the reason
+    nobody does it at all.
+    """
+    from .auth import DATA_WRITE
+
+    state = request.app.state
+    body = body or {}
+    try:
+        actor.require(DATA_WRITE)
+        members = await memory_members(state.pool, actor, memory_id)
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+    # The same event `POST /data/{id}/enrich` emits, once per member, in one
+    # transaction. Emitting the event rather than calling the workers is what
+    # makes this resumable: the log is the record, so a request that outlives
+    # the instance handling it is picked up by the reconciler.
+    requested = []
+    async with state.pool.acquire() as conn, conn.transaction():
+        for member in members:
+            item = await conn.fetchrow(
+                "SELECT project_id, content_text, extracted_text FROM data_items "
+                "WHERE data_id = $1 AND deleted_at IS NULL",
+                member["data_id"])
+            if item is None:
+                continue
+            await emit_audited(
+                conn, actor,
+                event_type="enrichment.requested",
+                org_id=actor.org_id, project_id=item["project_id"],
+                data_id=member["data_id"],
+                payload={
+                    "embed": bool(body.get("embed", True)),
+                    "summarize": bool(body.get("summarize", True)),
+                    "needs_parse": (item["content_text"] is None
+                                    and item["extracted_text"] is None),
+                    "requested_after_the_fact": True,
+                },
+            )
+            requested.append(member["data_id"])
+    await dispatch_pending(state.pool, state.queue)
+    # The count, not just "requested". A memory whose members are all archived
+    # returns zero, and that is a different outcome from fifty jobs queued.
+    return {"memory_id": memory_id, "requested": len(requested)}
 
 
 @app.get("/api/v1/memories/{memory_id}/members")

@@ -242,7 +242,8 @@ async def _reconcile(grace: int) -> None:
     embed = EmbedWorker(pool, build_embedder(settings), settings, queue=queue)
     await embed.ensure_generator()
     embed.register(queue, "embed")
-    enrich = EnrichWorker(pool, build_extractor(settings), settings)
+    extractor = build_extractor(settings)
+    enrich = EnrichWorker(pool, extractor, settings)
     await enrich.ensure_generator()
     enrich.register(queue)
     # The delete tier, for the same reason the parse tier is here: expiry
@@ -254,12 +255,19 @@ async def _reconcile(grace: int) -> None:
 
     DeleteWorker(pool, _blobs(settings)).register(queue)
 
+    # The checkpoint tier, for the same reason the parse tier is above: the
+    # sweep publishes stalled checkpoints, and a topic nothing consumes turns
+    # the recovery into a no-op that reports a number.
+    EventWorker(pool, queue, embed_worker=embed, enrich_worker=enrich,
+                extractor=extractor).register(queue)
+
     swept = await reconcile(
         pool, queue, embed_generator=embed.generator_version,
         enrich_generator=enrich.generator_version, grace_seconds=grace,
     )
     print(f"re-enqueued: parse={swept.parse} embed={swept.embed} "
-          f"enrich={swept.enrich} events={swept.events}")
+          f"enrich={swept.enrich} events={swept.events} "
+          f"checkpoints={swept.checkpoints}")
 
     # Retention, on the sweep that already runs on a schedule. `purge_events`
     # existed, was tested, and was called by nothing -- so the raw table grew
@@ -314,10 +322,12 @@ async def _crawl_tick(limit: int) -> None:
     embed = EmbedWorker(pool, build_embedder(settings), settings, queue=queue)
     await embed.ensure_generator()
     embed.register(queue, "embed")
-    enrich = EnrichWorker(pool, build_extractor(settings), settings)
+    extractor = build_extractor(settings)
+    enrich = EnrichWorker(pool, extractor, settings)
     await enrich.ensure_generator()
     enrich.register(queue)
-    EventWorker(pool, queue, embed_worker=embed, enrich_worker=enrich).register(queue)
+    EventWorker(pool, queue, embed_worker=embed, enrich_worker=enrich,
+                extractor=extractor).register(queue)
 
     result = await tick(pool, CrawlWorker(pool, queue, blobs, settings), limit=limit)
     if result.get("skipped_lock"):

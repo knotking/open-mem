@@ -166,6 +166,19 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   Cloud Run injects `X-Forwarded-*`, which routes calls onto OpenClaw's
   trusted-proxy path — and its `/tools/invoke` is a full operator-access surface
   upstream says must never be public.
+- **A repository can be removed.** `DELETE /api/v1/repos/{case_id}` stops
+  tracking one and takes every snapshot of it, with a Remove control on each row
+  of the console's repository list. Analysis is the only thing in the console
+  that creates a container from a button, and it was the only one with no way
+  back — a repository added by mistake stayed on the list for good, and deleting
+  its snapshots one at a time left the row behind claiming a history that was
+  gone. Snapshots go out through the ordinary memory deletion, so they get the
+  same tombstone, blob reclamation and audit trail as anything else. The
+  confirmation carries the count, because "remove with fourteen snapshots?" is
+  not the same question as one with none; so does the result, since "Removed"
+  alone cannot be told apart from a delete that reached the row and none of its
+  snapshots. **A snapshot that could not be deleted is named, with its reason**,
+  rather than folded into a number.
 
 ### Configuration
 - **`URL_CONTEXT`** — reads a page with Gemini's URL Context when the fetcher
@@ -181,13 +194,38 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   requested without it is recorded and immediately marked failed with that as
   its reason — never left pending, which would read as still running.
 
+### Changed
+- **The README and the console's sign-in page are an elevator pitch rather than
+  a specification.** Three hundred lines of feature inventory that nobody reads
+  to the end of said less about what this is than four lines do.
+
 ### Migrations
+- **`0052_repo_memory_titles.sql`** — gives repository memories created before
+  titles existed a title, derived from `owner/repo@sha` rather than guessed. A
+  memory created implicitly by a write carries no title, so half the repository
+  entries in every picker were forty characters of hex — which is what made the
+  useful ones impossible to find among them. A key not matching that shape is
+  left alone: a wrong title is worse than none, because none at least falls back
+  to something true. A migration rather than a script, because a script is
+  something somebody has to remember to run against a database on a private
+  address.
 - **`0051_repo_snapshots.sql`** — `repo_snapshots`. Additive. The UNIQUE on
   `(project_id, repo_url, commit_sha)` is the per-snapshot rule itself, and a
   CHECK requires a full 40-character lowercase sha so one commit cannot be
   analysed twice under two spellings.
 
 ### Fixed
+- **One memory per repository snapshot, instead of two.** Every analysis wrote a
+  second, near-identical memory holding the raw code graph, so the memory list
+  read as duplicated and picking the right one of a pair was guesswork. The
+  graph now lives with the snapshot it belongs to, tagged so reports skip it —
+  visible where it should be, and still never read into a report as input.
+- **A repository's analysis can be chatted with.** The job wrote its records
+  with no `options`, so enrichment resolved off and the reports landed `stored`
+  rather than `searchable`: six of thirty-six records were findable, and asking
+  about a repository returned nothing. Nothing errored, because a write that
+  does not request enrichment stopping at `stored` is correct behaviour — which
+  is exactly why it took counting the rows to see.
 - **A failed repository snapshot can be retried.** Re-use returned the
   existing row whatever its status, so the unique key on
   `(project, url, sha)` made a failure permanent for that commit: a snapshot

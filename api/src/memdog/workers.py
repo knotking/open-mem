@@ -1086,12 +1086,18 @@ class EventWorker:
         embed_worker=None,
         enrich_worker=None,
         fetch_worker=None,
+        extractor=None,
     ) -> None:
         self._pool = pool
         self._queue = queue
         self._parse = parse_worker
         self._embed = embed_worker
         self._enrich = enrich_worker
+        # Passed explicitly rather than reached for through `enrich_worker`.
+        # A checkpoint check is a derive, not an enrichment, and borrowing
+        # another worker's private extractor would tie the two together for no
+        # reason beyond both happening to want a model.
+        self._extractor = extractor
         # W2. Absent, a Pending item simply waits -- which is the correct state,
         # not a failure.
         self._fetch = fetch_worker
@@ -1099,8 +1105,86 @@ class EventWorker:
     def register(self, queue: Queue) -> None:
         queue.subscribe("record", self.handle_recorded)
         queue.subscribe("enrich_request", self.handle_enrichment)
+        queue.subscribe("checkpoint", self.handle_checkpoint)
         if self._fetch is not None:
             self._fetch.register(queue)
+
+    async def handle_checkpoint(self, message: Message) -> None:
+        """Describe a checkpoint's record and compare it with the one before.
+
+        Two model calls at most and often none: an identical checksum settles it
+        without asking anything. The event survives a failure the same way
+        enrichment's does, so a provider outage costs latency rather than a hole
+        in the timeline -- and `reconcile` sweeps whatever is still `pending`.
+        """
+        from .auth import DATA_READ, DATA_WRITE, Principal
+        from .checkpoints import run_check
+        from .events import mark_consumed, mark_failed
+
+        # Two ways in: through the event log, which carries an `event_id` to
+        # settle, and a direct publish from `reconcile` or a recheck, which does
+        # not. Requiring one made every swept checkpoint raise a KeyError inside
+        # the recovery path -- the sweep that exists to fix stuck checkpoints
+        # getting stuck itself.
+        body = message.body
+        event_id = body.get("event_id")
+        checkpoint_id = (body.get("payload") or body).get("checkpoint_id")
+
+        async def settle() -> None:
+            if event_id is not None:
+                await mark_consumed(self._pool, event_id)
+
+        if checkpoint_id is None or self._extractor is None:
+            # No extractor configured is not a failure of this event: a
+            # deployment with no model cannot check anything, and the checkpoint
+            # is already recorded with the reason on it.
+            await settle()
+            return
+
+        # Acting as the record's own owner rather than as an administrator. The
+        # artifact takes the strictest ACL of its sources either way, so this
+        # cannot widen anything -- but reading as the owner is what lets a
+        # `private` record be described at all, and it keeps the audit row
+        # attributed to somebody real.
+        owner = await self._pool.fetchrow(
+            """
+            SELECT c.org_id, c.project_id, d.owner_id
+            FROM memory_checkpoints c
+            JOIN data_items d ON d.data_id = c.data_id
+            WHERE c.checkpoint_id = $1
+            """,
+            checkpoint_id)
+        if owner is None:
+            await settle()
+            return
+        principal = Principal(
+            user_id=owner["owner_id"] or "system", org_id=owner["org_id"],
+            capabilities=frozenset({DATA_READ, DATA_WRITE}),
+            # `platform`, because the audit vocabulary is closed and this is
+            # what it already means: work the system did on its own schedule
+            # rather than a person clicking something. An invented mode is
+            # rejected by a CHECK constraint at the *audit* insert, which is
+            # after the model has been paid.
+            project_id=owner["project_id"], mode="platform")
+
+        try:
+            with continue_trace("checkpoint", message.headers,
+                                data_id=message.body.get("data_id")):
+                await run_check(self._pool, principal, self._extractor, checkpoint_id)
+            await settle()
+        except Exception as exc:  # noqa: BLE001 -- the event survives the failure
+            from .events import mark_deferred
+
+            if _is_capacity(exc):
+                log.warning("deferring checkpoint %s: provider is busy (%s)",
+                            checkpoint_id, exc.__class__.__name__)
+                if event_id is not None:
+                    await mark_deferred(self._pool, event_id, repr(exc))
+                return
+            log.error("checkpoint %s failed: %r", checkpoint_id, exc)
+            if event_id is not None:
+                await mark_failed(self._pool, event_id, repr(exc))
+            raise
 
     async def handle_recorded(self, message: Message) -> None:
         from .events import dispatch_pending, mark_consumed

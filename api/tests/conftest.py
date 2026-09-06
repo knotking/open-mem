@@ -122,7 +122,8 @@ async def queue(pool, embedder, extractor, settings, blobs):
     # The log is the record of work; the event worker turns it into pipeline
     # calls, exactly as the deployed service does.
     EventWorker(
-        pool, queue, parse_worker=parse, embed_worker=embed, enrich_worker=enrich
+        pool, queue, parse_worker=parse, embed_worker=embed, enrich_worker=enrich,
+        extractor=extractor,
     ).register(queue)
     queue.generators = {
         "embedding": embed.generator_version,

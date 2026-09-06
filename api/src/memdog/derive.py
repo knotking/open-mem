@@ -114,6 +114,63 @@ GENERATORS: dict[str, dict] = {
         ),
         "archivable": False,
     },
+    # Change detection over a checkpoint timeline. Two generators because it is
+    # two questions, and running them as one is the version that does not work:
+    # a single call given two documents and asked what changed writes a summary
+    # of both.
+    #
+    # `checkpoint_state` reads ONE record. The fixed order in the prompt is the
+    # load-bearing part -- two runs over the same content have to fill the same
+    # slots, or the comparison below reports rephrasing as change and does it
+    # confidently.
+    "checkpoint_state": {
+        "data_type": "checkpoint_state",
+        "label": "Checkpoint state",
+        "describe": "What one record in a timeline says, as a fixed list of "
+                    "observations -- the comparable form the change check reads.",
+        "prompt": (
+            "Describe the state of the record below as a list of short, factual, "
+            "self-contained observations. Cover them in this order and omit a "
+            "heading entirely if the record says nothing about it: what this is "
+            "and what it identifies; its status or stage; quantities, amounts "
+            "and counts; dates and deadlines; the people and organisations "
+            "involved and their roles; what is unresolved or outstanding. "
+            "One fact per observation, stated the same way you would state it "
+            "about any other record of this kind. Do not summarise, do not "
+            "interpret, and do not record anything the record does not say."
+        ),
+        "archivable": False,
+    },
+    # `checkpoint_change` reads TWO STATES, never the two records. Handing a
+    # generator its raw source is what made all four repository reports an echo
+    # of their own input, and the fix there -- compress first, compare the
+    # compression -- is the shape this is built in from the start.
+    "checkpoint_change": {
+        "data_type": "checkpoint_change",
+        "label": "What changed",
+        "describe": "What moved between one checkpoint and the one before it, "
+                    "with the previous and current values.",
+        "prompt": (
+            "Below are two descriptions of the same subject at two points in "
+            "time, labelled EARLIER and LATER. Report only what differs between "
+            "them: what appeared, what disappeared, and what changed value. For "
+            "a changed value give both the earlier and the later one. "
+            "Wording is not change -- if the two descriptions state the same "
+            "fact differently, that is not a change and must not be reported. "
+            "If nothing differs, return an empty list; that is a complete and "
+            "correct answer, and inventing a change to avoid an empty one is "
+            "the worst thing you can do here. "
+            # Bounded, because this generator once spent its whole output
+            # budget repeating one word inside `before`. The schema now carries
+            # a length and a description; saying it here as well costs nothing
+            # and the failure it prevents cost a deploy.
+            "Report at most 20 changes. `before` and `after` must each be the "
+            "value itself, copied as it appears and under twenty words -- never "
+            "reasoning, never a restatement of the question, never a list. Put "
+            "the explanation in `statement`, in one sentence."
+        ),
+        "archivable": False,
+    },
     # The four repository reports. They read a snapshot's members -- the code
     # graph `graphify` produced, the manifests, the OSV result, and the bounded
     # file set the job selected -- and never the repository, which exceeds every
@@ -261,7 +318,14 @@ async def register(pool: asyncpg.Pool, generator: str, extractor) -> str:
     from .extraction import EXTRACT_PURPOSE
     from .inference import generator_version
 
+    # `data_type` is in the hash because it selects the output *schema*, and a
+    # generator whose schema changed produces incomparable artifacts just as
+    # surely as one whose prompt changed. Without it, switching a generator to a
+    # different envelope leaves every earlier artifact claiming to be current --
+    # and for the checkpoint pair, leaves a comparison silently diffing two
+    # different shapes.
     spec = {"envelope": "core-v1", "purpose": "derive", "generator": generator,
+            "data_type": GENERATORS[generator].get("data_type"),
             "prompt": GENERATORS[generator]["prompt"]}
     version = generator_version(
         purpose=EXTRACT_PURPOSE, model_id=extractor.model_id, spec=spec)
@@ -272,10 +336,67 @@ async def register(pool: asyncpg.Pool, generator: str, extractor) -> str:
     return version
 
 
+async def store_artifact(
+    conn, *, org_id: str, project_id: str, kind: str, label: str,
+    envelope, model_id: str | None, version: str,
+    members: list[dict], offsets: list[tuple[str, int, int]],
+) -> str:
+    """Write one artifact and its sources. One path, and deliberately one.
+
+    Extracted from `derive` when checkpoint comparison needed to store an
+    artifact whose input is two *other artifacts* rather than a member set. The
+    alternative was a second INSERT, and a second INSERT is a second place for
+    the ACL rule to be got wrong -- which is the one thing here that fails
+    invisibly, because an artifact with the wrong level is readable rather than
+    broken.
+    """
+    acl = strictest([Acl(m["access_level"], _shared(m["shared_with"])) for m in members])
+    artifact_id = new_id("art")
+    await conn.execute(
+        """
+        INSERT INTO artifacts (artifact_id, org_id, project_id, kind, title,
+            summary, model_id, generator_version, served_by_model,
+            access_level, shared_with, owner_id, fields)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $7, $9, $10::jsonb, $11,
+                $12::jsonb)
+        """,
+        artifact_id, org_id, project_id, kind,
+        (getattr(envelope, "title", None) or label)[:200],
+        getattr(envelope, "summary", None) or "",
+        model_id or "unknown",
+        version, acl.access_level, json.dumps(acl.shared_with),
+        # Owned by whoever owns the record whose ACL this inherited. A
+        # `private` artifact with no owner is readable by nobody -- the
+        # predicate is `owner_id = $user`, and NULL matches none -- so it
+        # would exist, be correct, and be invisible to everyone including
+        # the person who asked for it.
+        _owner_of(members, acl.access_level),
+        # Everything the envelope carried beyond the core columns --
+        # `findings` for a review, `state` and `changes` for a checkpoint,
+        # and whatever a later generator adds.
+        #
+        # **The dict, not `json.dumps` of it.** The pool sets a jsonb codec
+        # whose encoder is already `json.dumps`, so dumping first stores a jsonb
+        # *string* containing JSON rather than a JSON object. It reads back as
+        # `'{"findings": [...]}'`, every consumer that does `fields.findings`
+        # gets undefined, and nothing errors -- the artifact is there, the
+        # summary renders, and the structured half is silently text. Migration
+        # 0054 repairs the rows written before this line was right.
+        getattr(envelope, "fields", None) or {},
+    )
+    for data_id, start, end in offsets:
+        await conn.execute(
+            "INSERT INTO artifact_sources (artifact_id, data_id, span_start, span_end) "
+            "VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
+            artifact_id, data_id, start, end)
+    return artifact_id
+
+
 async def derive(
     pool: asyncpg.Pool, principal: Principal, memory_id: str, *,
     generator: str = "summary", extractor=None, archive: bool = False,
     max_members: int = 200, dry_run: bool = False,
+    only: list[str] | None = None,
 ) -> dict:
     """Make one artifact from a memory's members.
 
@@ -316,9 +437,17 @@ async def derive(
     #
     # Tagged rather than typed, so a producer can mark anything this way without
     # a schema change, and so nothing outside this filter has to know.
+    # `only` narrows to named members, for a generator whose subject is one
+    # record rather than the container. A checkpoint describes the record that
+    # created it; run over the whole memory it would describe the timeline, and
+    # every checkpoint in a ten-entry timeline would come back saying roughly
+    # the same thing. It filters rather than fetches so the ACL, the hierarchy
+    # and the skip-tag all still apply -- naming a member you cannot see gets
+    # you nothing, not a bypass.
     members = [
         m for m in await _members(pool, principal, memory_id)
         if SKIP_TAG not in (m.get("tags") or [])
+        and (only is None or m["data_id"] in set(only))
     ][:max_members]
     if not members:
         return {"memory_id": memory_id, "generator": generator, "artifacts": 0,
@@ -364,39 +493,16 @@ async def derive(
     # The strictest ACL among the sources, which is the rule everywhere a
     # derived thing spans several records: a study guide over a private and two
     # org documents is private, or deriving becomes a way to widen visibility.
-    acl = strictest([Acl(m["access_level"], _shared(m["shared_with"])) for m in members])
     version = await register(pool, generator, extractor)
-    artifact_id = new_id("art")
 
     async with pool.acquire() as conn, conn.transaction():
-        await conn.execute(
-            """
-            INSERT INTO artifacts (artifact_id, org_id, project_id, kind, title,
-                summary, model_id, generator_version, served_by_model,
-                access_level, shared_with, owner_id, fields)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $7, $9, $10::jsonb, $11,
-                    $12::jsonb)
-            """,
-            artifact_id, memory["org_id"], memory["project_id"], generator,
-            (getattr(envelope, "title", None) or GENERATORS[generator]["label"])[:200],
-            getattr(envelope, "summary", None) or "",
-            getattr(extractor, "model_id", None) or "unknown",
-            version, acl.access_level, json.dumps(acl.shared_with),
-            # Owned by whoever owns the record whose ACL this inherited. A
-            # `private` artifact with no owner is readable by nobody -- the
-            # predicate is `owner_id = $user`, and NULL matches none -- so it
-            # would exist, be correct, and be invisible to everyone including
-            # the person who asked for it.
-            _owner_of(members, acl.access_level),
-            # Everything the envelope carried beyond the core columns --
-            # `findings` for a review, and whatever a later generator adds.
-            json.dumps(getattr(envelope, "fields", None) or {}),
-        )
-        for data_id, start, end in offsets:
-            await conn.execute(
-                "INSERT INTO artifact_sources (artifact_id, data_id, span_start, span_end) "
-                "VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
-                artifact_id, data_id, start, end)
+        artifact_id = await store_artifact(
+            conn, org_id=memory["org_id"], project_id=memory["project_id"],
+            kind=generator, label=GENERATORS[generator]["label"],
+            envelope=envelope, model_id=getattr(extractor, "model_id", None),
+            version=version, members=members, offsets=offsets)
+        acl = strictest(
+            [Acl(m["access_level"], _shared(m["shared_with"])) for m in members])
         if archive:
             await conn.execute(
                 "UPDATE data_items SET archived_at = now(), archived_by = $2 "

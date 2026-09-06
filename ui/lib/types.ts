@@ -178,6 +178,38 @@ export type MemoryType = {
   ttl_seconds: number | null;
   on_expiry: string;
   locked: boolean;
+  // Whether every record added to a memory of this type becomes a checkpoint
+  // on a change-tracked timeline. Off unless turned on: it puts a model call
+  // behind every write into every memory of the type.
+  checkpoints: boolean;
+};
+
+// One point on a checkpoint timeline. `outcome` is separate from `status` for
+// the reason a change detector cannot afford to blur: "the check has not
+// finished" and "the check found nothing" are the two answers that must never
+// render the same.
+export type Checkpoint = {
+  checkpoint_id: string;
+  seq: number;
+  data_id: string;
+  external_id: string;
+  status: "pending" | "running" | "complete" | "failed";
+  outcome: "first" | "changed" | "unchanged" | "incomparable" | null;
+  reason: string | null;
+  created_at: string;
+  change_artifact_id: string | null;
+  change_summary: string | null;
+  change_fields: { changes?: Change[] } | null;
+};
+
+export type Change = {
+  kind: "added" | "removed" | "changed";
+  statement: string;
+  // Named for the EARLIER/LATER labels the prompt uses, and empty rather than
+  // null when the value is absent on that side — see CHANGE_PROPERTIES.
+  earlier_value: string;
+  later_value: string;
+  significance: "high" | "medium" | "low";
 };
 
 export function describeTtl(seconds: number | null): string {
