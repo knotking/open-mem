@@ -108,6 +108,32 @@ class Extract(BaseModel):
     title_path: str | None = None
     content_path: str | None = None
     url_path: str | None = None
+    # Where the item names a *downloadable file* rather than a page about one.
+    #
+    # `url_path` records where a thing lives and stops there: the crawler writes
+    # a metadata record with the URL sitting inertly in its fields, and the file
+    # itself is never retrieved. That is right for a listing whose links are
+    # navigation and wrong for one whose links are the content -- an open-access
+    # paper's PDF, a release artifact, an attachment.
+    #
+    # When this resolves to a URL the item becomes a `Pending` ref and the fetch
+    # worker downloads it, which is where the byte cap, the SSRF validation, the
+    # blob store and the parse pipeline already are. When it resolves to nothing
+    # the item falls through to its text unchanged -- and that is not an error
+    # case, it is the paywalled paper, recorded from what the listing knew.
+    pending_path: str | None = None
+    # How to read what `content_path` points at.
+    #
+    # `inverted_index` is `{"word": [positions]}` -- a standard IR structure,
+    # and what several scholarly APIs return in place of an abstract because
+    # they may index a text they may not redistribute. JMESPath cannot invert
+    # it, so without this the field lands as a wall of JSON, which retrieval
+    # scores against and a reader cannot use.
+    #
+    # Declared rather than sniffed: a crawler that guessed at the encoding of
+    # somebody's field would be right until the day a source returned a
+    # dictionary that meant something else.
+    content_format: Literal["text", "inverted_index"] = "text"
 
 
 class Transform(BaseModel):
@@ -188,7 +214,16 @@ class CrawlerConfig(BaseModel):
     # can discover fifty thousand records unattended, and enriching all of them
     # is a model call per chunk on data nobody has asked a question about yet.
     # Turning it on is a decision someone makes after seeing a dry run's count.
-    enrich: bool = False
+    #
+    # **Three-valued, like `WriteOptions.enrich`, and for the reason that field
+    # already documents.** `None` is "the crawler did not say" and lets the
+    # memory it writes into decide; `False` is somebody saying no. Those were
+    # one value, and a crawler that had simply never been configured sent an
+    # explicit `false` on every write -- so a memory type asking for enrichment
+    # could never get it, and a corpus of papers pulled into a type that exists
+    # to be searched arrived entirely at `stored`. A default transmitted as a
+    # decision overrides the decision it was standing in for.
+    enrich: bool | None = None
 
     memory_key: str | None = None
     memory_type: str = "default"
@@ -614,6 +649,33 @@ def _next_url(current: str, candidate: str) -> str:
     return validate_url(resolved)
 
 
+def _from_inverted_index(index: Any) -> str | None:
+    """`{"word": [positions]}` back into the sentence it was made from.
+
+    Returns None rather than an empty string when there is nothing to rebuild,
+    so the caller's existing "no content" path runs -- an empty abstract and a
+    missing one are the same fact here, and inventing a blank record for the
+    second is worse than falling back to the item's own JSON.
+
+    Positions can be sparse: a source that dropped a stopword leaves a gap, and
+    joining what is present is the honest reconstruction. Nothing is inserted to
+    paper over the hole, because a guessed word in an abstract is a claim the
+    source never made.
+    """
+    if not isinstance(index, dict) or not index:
+        return None
+    placed: dict[int, str] = {}
+    for word, positions in index.items():
+        if not isinstance(positions, list):
+            continue
+        for position in positions:
+            if isinstance(position, int):
+                placed[position] = str(word)
+    if not placed:
+        return None
+    return " ".join(placed[i] for i in sorted(placed))
+
+
 def _map_item(config: CrawlerConfig, item: Any) -> Discovered:
     extract = config.extract
     external_id = _as_text(_search(extract.id_path, item)) if extract.id_path else None
@@ -626,9 +688,45 @@ def _map_item(config: CrawlerConfig, item: Any) -> Discovered:
     fields: dict[str, Any] = {}
     for transform in config.transform:
         fields[transform.target] = _search(transform.expr, item)
-    text = _as_text(_search(extract.content_path, item)) if extract.content_path else None
+    if extract.content_path and extract.content_format == "inverted_index":
+        text = _from_inverted_index(_search(extract.content_path, item))
+    else:
+        text = _as_text(_search(extract.content_path, item)) if extract.content_path else None
+    if text is None:
+        # **Declared-but-absent is not the same as never-declared.**
+        #
+        # Dumping the raw item is the right answer for a source whose content
+        # field nobody named -- there is nothing else to store, and the JSON is
+        # at least the whole truth. It is the wrong answer when a config named a
+        # field and that field was missing: the record becomes a wall of
+        # metadata JSON that retrieval scores against and no reader can use,
+        # and it does it precisely on the items that were already thinnest.
+        #
+        # Found on real data. OpenAlex omits abstracts it may index but not
+        # redistribute, so the papers with no abstract -- including some of the
+        # most cited -- came back as their own API response.
+        text = (_as_text(_search(extract.title_path, item))
+                if extract.title_path else None) if extract.content_path else None
     if text is None:
         text = json.dumps(item, ensure_ascii=False, indent=2, default=str)
+    # A file to download, if the listing named one. Validated here rather than
+    # at fetch time as well, because a source that returns something that is not
+    # a URL should be a crawler that says so on the run rather than a queue of
+    # references that each fail separately later.
+    pending = None
+    if extract.pending_path:
+        candidate = _as_text(_search(extract.pending_path, item))
+        if candidate:
+            # `kind: file` says the listing named a *document to download*, not
+            # a page about one. The distinction matters at fetch time: a memory
+            # set to read pages with a model would otherwise hand a PDF's URL to
+            # the model and store its reading, throwing away the paper to keep a
+            # summary of it. Carried on the reference rather than sniffed from
+            # the extension, because `.pdf` is a guess and this is a fact the
+            # config already stated by naming `pending_path`.
+            pending = {"provider": "url", "resource_id": candidate,
+                       "hints": {"kind": "file"}}
+
     return Discovered(
         external_id=external_id,
         title=_as_text(_search(extract.title_path, item)),
@@ -636,6 +734,7 @@ def _map_item(config: CrawlerConfig, item: Any) -> Discovered:
         url=_as_text(_search(extract.url_path, item)),
         version=_as_text(_search(extract.version_path, item)),
         fields=fields,
+        pending=pending,
     )
 
 

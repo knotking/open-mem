@@ -811,7 +811,8 @@ async def links_for(pool: asyncpg.Pool, principal, memory_id: str) -> dict:
 async def list_types(pool: asyncpg.Pool, project_id: str) -> list[dict]:
     rows = await pool.fetch(
         """
-        SELECT type_id, name, ttl_seconds, on_expiry, locked, checkpoints
+        SELECT type_id, name, ttl_seconds, on_expiry, locked, checkpoints,
+               url_reader, enrich
         FROM memory_types
         WHERE project_id = $1 ORDER BY name
         """,
@@ -823,7 +824,8 @@ async def list_types(pool: asyncpg.Pool, project_id: str) -> list[dict]:
 async def create_type(
     pool: asyncpg.Pool, principal, *, project_id: str, name: str,
     ttl_seconds: int | None, on_expiry: str = "orphan_delete",
-    checkpoints: bool = False,
+    checkpoints: bool = False, url_reader: str = "fetch",
+    enrich: bool = False,
 ) -> dict:
     """A type is a name, a TTL, an expiry policy and whether it tracks change.
 
@@ -846,28 +848,35 @@ async def create_type(
     principal.require(CONFIG_WRITE)
     if on_expiry not in ("orphan_delete", "keep_members", "archive"):
         raise MemoryError("on_expiry must be orphan_delete, keep_members or archive")
+    # Refused here as well as by the CHECK, so an unknown value is a 400 naming
+    # the choices rather than a constraint violation naming the constraint.
+    if url_reader not in ("fetch", "context"):
+        raise MemoryError("url_reader must be fetch or context")
 
     type_id = new_id("mty")
     async with pool.acquire() as conn, conn.transaction():
         await conn.execute(
             """
             INSERT INTO memory_types (type_id, org_id, project_id, name, ttl_seconds,
-                                      on_expiry, checkpoints)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+                                      on_expiry, checkpoints, url_reader, enrich)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             ON CONFLICT (project_id, name) DO UPDATE SET ttl_seconds = EXCLUDED.ttl_seconds,
-                on_expiry = EXCLUDED.on_expiry, checkpoints = EXCLUDED.checkpoints
+                on_expiry = EXCLUDED.on_expiry, checkpoints = EXCLUDED.checkpoints,
+                url_reader = EXCLUDED.url_reader, enrich = EXCLUDED.enrich
             """,
             type_id, principal.org_id, project_id, name, ttl_seconds, on_expiry,
-            checkpoints,
+            checkpoints, url_reader, enrich,
         )
         await record_audit(
             conn, principal, action="memory_type.set", project_id=project_id,
             target_type="memory_type", target_id=name,
             detail={"ttl_seconds": ttl_seconds, "on_expiry": on_expiry,
-                    "checkpoints": checkpoints},
+                    "checkpoints": checkpoints, "url_reader": url_reader,
+                    "enrich": enrich},
         )
     return {"name": name, "ttl_seconds": ttl_seconds, "on_expiry": on_expiry,
-            "checkpoints": checkpoints}
+            "checkpoints": checkpoints, "url_reader": url_reader,
+            "enrich": enrich}
 
 
 async def delete_memory(

@@ -1519,3 +1519,65 @@ button.tab-cta { font-family: inherit; line-height: 1.35; cursor: pointer; }
 
 .hero-copy { padding: 26px 0 34px; }
 .hero-copy .hero-lede { max-width: 68ch; }
+
+/* The arc rail: where this project has got to, above every screen.
+ *
+ * Quiet by default in the literal sense -- `.arc.quiet` drops the accent and
+ * the note entirely, so a healthy project shows counts and nothing else. A rail
+ * that keeps calling for attention when nothing is wrong is one people stop
+ * reading, and then it is worse than absent: it occupies the space a real
+ * warning would have used.
+ *
+ * The stages are <button>s, so the base button rule would paint each one a
+ * solid accent pill -- the same trap `.memrow` documents above. Reset to
+ * transparent and let state colour only the marker. */
+.arc {
+  margin: 0 0 22px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 4%, transparent);
+}
+.arc.quiet { background: transparent; }
+.arcrow { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; }
+.arcstage {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 7px;
+  padding: 4px 8px;
+  background: transparent;
+  border: none;
+  border-radius: 7px;
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+}
+.arcstage:hover { background: color-mix(in srgb, var(--accent) 9%, transparent); }
+.arcstage:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.arcstage[aria-current="page"] { background: var(--accent-soft); }
+.arcn {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--muted);
+  /* The one place state shows in the rail itself. A whole stage tinted red
+   * reads as an error; a marker reads as a marker. */
+  border-bottom: 2px solid transparent;
+}
+.arcstage.behind .arcn, .arcstage.empty .arcn { border-bottom-color: var(--accent); color: var(--accent); }
+.arctitle { font-size: 13px; font-weight: 550; }
+.arccount { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.arcsep { color: var(--muted); opacity: 0.5; padding-left: 6px; }
+.arcnote {
+  margin: 8px 2px 0;
+  font-size: 12.5px;
+  color: var(--muted);
+  line-height: 1.5;
+  max-width: 78ch;
+}
+
+/* Narrow: the rail wraps rather than scrolling sideways, and the separators go
+ * -- an arrow pointing at a line break is worse than no arrow. */
+@media (max-width: 720px) {
+  .arcsep { display: none; }
+  .arcstage { padding: 3px 6px; }
+}

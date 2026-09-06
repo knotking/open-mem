@@ -26,6 +26,7 @@ page itself.
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
 
@@ -92,6 +93,10 @@ class NullUrlReader:
         raise UrlNotRead(
             "reading a page with URL Context is not enabled on this deployment")
 
+    async def read_structured(self, url: str, *, schema: dict, prompt: str) -> dict:
+        raise UrlNotRead(
+            "reading a page with URL Context is not enabled on this deployment")
+
 
 class GeminiUrlReader:
     """Hands the URL to Gemini and lets it do the fetching.
@@ -115,16 +120,59 @@ class GeminiUrlReader:
         async with usage.meter("url_context", "gemini", model_id=self.model_id):
             return await self._read(url)
 
+    async def read_structured(self, url: str, *, schema: dict, prompt: str) -> dict:
+        """Read a page into a declared shape rather than into prose.
+
+        Prose has to be parsed by whoever wanted the facts out of it, and
+        parsing a model's prose is guessing at a shape that changes -- a reader
+        expecting `Name: X` gets `### Overview` and extracts a heading as a
+        person's name. That is not a regex to improve; it is the wrong request.
+        Asking for the shape gets the shape.
+
+        The retrieval check is the same one `read` makes, because it is the
+        whole safety property: a model asked about a page it could not reach
+        answers anyway, and a schema makes that answer *better formed*, not
+        truer.
+        """
+        async with usage.meter("url_context", "gemini", model_id=self.model_id):
+            data = await self._call(url, prompt=prompt, schema=schema)
+        text = self._answer(url, data)
+        try:
+            return json.loads(text)
+        except ValueError as exc:
+            raise UrlNotRead(
+                f"the page was retrieved but the reading was not the shape "
+                f"asked for: {text[:200]}") from exc
+
     async def _read(self, url: str) -> Read:
+        data = await self._call(url, prompt=f"{PROMPT}\n\nURL: {url}")
+        account = self._answer(url, data)
+        meta = data.get("usageMetadata") or {}
+        return Read(
+            url=url, account=account, model_id=self.model_id,
+            retrieval=(data.get("candidates") or [{}])[0].get(
+                "urlContextMetadata", {}).get("urlMetadata") or [],
+            tokens=meta.get("totalTokenCount", 0),
+            # The page's own bytes, billed as input. Recorded separately because
+            # it is the part that scales with the page rather than the prompt,
+            # and it is what makes a big page expensive.
+            tool_tokens=meta.get("toolUsePromptTokenCount", 0),
+            model_version=data.get("modelVersion"),
+            response_id=data.get("responseId"),
+        )
+
+    async def _call(self, url: str, *, prompt: str, schema: dict | None = None) -> dict:
         body = {
-            "contents": [{"role": "user",
-                          "parts": [{"text": f"{PROMPT}\n\nURL: {url}"}]}],
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
             # The tool is declared empty -- the URLs come from the prompt text,
             # not from a parameter. That is the API's shape, not a shortcut.
             "tools": [{"url_context": {}}],
             "generationConfig": {"temperature": 0,
                                  "maxOutputTokens": MAX_OUTPUT_TOKENS},
         }
+        if schema is not None:
+            body["generationConfig"]["responseMimeType"] = "application/json"
+            body["generationConfig"]["responseSchema"] = schema
         try:
             async with httpx.AsyncClient(timeout=READ_TIMEOUT_SECONDS) as client:
                 response = await client.post(
@@ -149,6 +197,10 @@ class GeminiUrlReader:
         except httpx.HTTPError as exc:
             raise UrlNotRead(f"reading the page failed: {exc}", retryable=True) from exc
 
+        return data
+
+    def _answer(self, url: str, data: dict) -> str:
+        """The text of a reading that actually happened, or a refusal."""
         candidates = data.get("candidates") or []
         if not candidates:
             reason = (data.get("promptFeedback") or {}).get("blockReason", "no candidates")
@@ -179,16 +231,7 @@ class GeminiUrlReader:
             tokens_out=meta.get("candidatesTokenCount", 0),
             tokens_cached=meta.get("cachedContentTokenCount", 0),
         )
-        return Read(
-            url=url, account=account, model_id=self.model_id, retrieval=metadata,
-            tokens=meta.get("totalTokenCount", 0),
-            # The page's own bytes, billed as input. Recorded separately because
-            # it is the part that scales with the page rather than the prompt,
-            # and it is what makes a big page expensive.
-            tool_tokens=meta.get("toolUsePromptTokenCount", 0),
-            model_version=data.get("modelVersion"),
-            response_id=data.get("responseId"),
-        )
+        return account
 
 
 def _message(response) -> str:

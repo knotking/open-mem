@@ -350,8 +350,9 @@ class FetchWorker:
                        mime_type="text/plain; charset=utf-8",
                        final_url=watched.url, redirects=0)
 
-    async def _read_page(self, url: str, failure: "FetchError") -> Fetched:
-        """A page the fetcher could not get, read by the model instead.
+    async def _read_page(self, url: str,
+                         failure: "FetchError | None" = None) -> Fetched:
+        """A page read by the model rather than downloaded.
 
         Returns `Fetched` for the same reason `_watch` does: everything after
         this -- the blob write, classification, parsing, embedding, enrichment
@@ -360,10 +361,19 @@ class FetchWorker:
         page while being a model's summary of it is the one outcome worth
         avoiding here.
 
-        If the reading also fails, the *original* fetch error is what
-        propagates. That is deliberate: "403 from the site" is the fact somebody
-        needs, and replacing it with "the model could not read it either" hides
-        the cause behind the fallback.
+        Reached two ways, and **the header has to say which**, because they are
+        different claims about the same record. As a fallback, the bytes were
+        asked for and could not be had. As the chosen reader, they were never
+        requested -- and a header saying they "were not retrievable" would be a
+        plain untruth sitting inside the corpus, in the one sentence that exists
+        to keep an account from being mistaken for the page.
+
+        `failure` is the fetch error to re-raise when this is the fallback and
+        the reading fails too. "403 from the site" is the fact somebody needs,
+        and replacing it with "the model could not read it either" hides the
+        cause behind the fallback. When this *is* the primary reader there is no
+        prior failure, and `UrlNotRead` propagates so the caller can fall
+        through to an ordinary GET.
         """
         from .urlcontext import UrlNotRead
 
@@ -371,18 +381,40 @@ class FetchWorker:
             page = await self._url_reader.read(url)
         except UrlNotRead as exc:
             log.info("url_context could not read %s: %s", url, exc)
-            raise failure from exc
+            raise (failure or exc) from exc
 
         log.info("url_context read %s (%d tool tokens)", url, page.tool_tokens)
-        header = (
-            f"{url}\n\n"
-            "[Account of this page produced by a model with URL Context. The "
-            "page's own bytes were not retrievable by this deployment, so this "
-            "is a reading of the page rather than the page itself.]\n\n"
+        why = (
+            "The page's own bytes were not retrievable by this deployment, so "
+            "this is a reading of the page rather than the page itself."
+            if failure is not None else
+            "This memory reads pages with the model rather than downloading "
+            "them, so this is a reading of the page rather than the page itself."
         )
+        header = f"{url}\n\n[Account of this page produced by a model with URL Context. {why}]\n\n"
         return Fetched(payload=(header + page.account + "\n").encode("utf-8"),
                        mime_type="text/plain; charset=utf-8",
                        final_url=url, redirects=0)
+
+    async def _reads_with_model(self, data_id: str) -> bool:
+        """Whether any memory holding this record asks for the model reader.
+
+        `bool_or` rather than "the first memory's type": a record can be in
+        several memories, and if one of them says its pages are read by the
+        model then that is the answer. The alternative makes a record's
+        treatment depend on which container happens to sort first, which is a
+        difference nobody can see and nobody chose.
+        """
+        return bool(await self._pool.fetchval(
+            """
+            SELECT bool_or(t.url_reader = 'context')
+            FROM memory_members mm
+            JOIN memories m ON m.memory_id = mm.memory_id
+            JOIN memory_types t ON t.project_id = m.project_id AND t.name = m.type
+            WHERE mm.data_id = $1 AND m.deleted_at IS NULL
+            """,
+            data_id,
+        ))
 
     async def fetch(self, data_id: str) -> None:
         from .classify import classify, sniff_mime
@@ -412,18 +444,52 @@ class FetchWorker:
                                              row["org_id"], provider)
 
         if provider != "youtube":
-            try:
-                result = await fetch_url(
-                    target, max_bytes=self._settings.max_upload_bytes, headers=headers)
-            except FetchError as exc:
-                # Only a plain web URL, and only after the ordinary GET has
-                # already failed. A connector download failing is a credential
-                # or a permission problem, and handing that URL to a model
-                # would ask a third party to fetch something private -- which
-                # it cannot do and should not be asked to.
-                if provider != "url" or not self._url_reader.enabled:
-                    raise
-                result = await self._read_page(target, exc)
+            # **The model first, when the memory asks for it.**
+            #
+            # Only a plain web URL. A connector download is authenticated and
+            # private; handing that URL to a third-party model would ask it to
+            # fetch something it cannot reach and should not be asked to.
+            #
+            # The inversion exists because the fallback below cannot fire for
+            # the pages that need it most: a JavaScript-rendered page answers
+            # 200 with an empty shell, so the GET *succeeds*, and the record
+            # lands with no text and nothing reporting a problem.
+            #
+            # The GET stays underneath as the backup, so a refusal costs a
+            # slower path rather than an empty record.
+            # A file the source named for download is never read by the model,
+            # whatever the memory asks for. "Read pages with the model" is about
+            # pages: handing a PDF's URL to a model and storing its reading
+            # throws away the document to keep a summary of it, and the summary
+            # cannot be re-parsed, re-chunked or quoted from.
+            read_first = (
+                provider == "url"
+                and hints.get("kind") != "file"
+                and self._url_reader.enabled
+                and await self._reads_with_model(data_id)
+            )
+            result = None
+            if read_first:
+                from .urlcontext import UrlNotRead
+
+                try:
+                    result = await self._read_page(target)
+                except UrlNotRead as exc:
+                    log.info("falling back to a GET for %s: %s", target, exc)
+
+            if result is None:
+                try:
+                    result = await fetch_url(
+                        target, max_bytes=self._settings.max_upload_bytes,
+                        headers=headers)
+                except FetchError as exc:
+                    # The ordinary fallback, unchanged: a plain web URL whose
+                    # GET failed, read by the model instead. Skipped when the
+                    # model already tried and refused -- asking twice cannot
+                    # produce a different answer and would bill for finding out.
+                    if provider != "url" or not self._url_reader.enabled or read_first:
+                        raise
+                    result = await self._read_page(target, exc)
         # The server sniffs; the sender's Content-Type is a hint like any other.
         mime = sniff_mime(result.payload, None, result.mime_type)
         storage_ref, checksum = await self._blobs.put(

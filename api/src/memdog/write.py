@@ -568,6 +568,37 @@ async def _write_one(
         requested_key=item.memory.key if item.memory else None,
     )
 
+    # **A memory can say that what lands in it gets enriched.**
+    #
+    # Per-write opt-in is the right grain for an inbox and the wrong one for a
+    # container that exists to be searched. A memory of somebody's papers is
+    # asked questions about; every record in it sitting at `stored` is not a
+    # saving, it is the feature not working.
+    #
+    # This is `memory_types.enrich`, and it is deliberately **not**
+    # `url_reader = 'context'`. Those were one rule for a day, because the first
+    # memory that wanted the model reader also wanted enrichment. They are
+    # different decisions: a memory of papers wants enrichment and wants its
+    # PDFs downloaded, and under the coupled rule asking for the first asked for
+    # the second -- so the PDFs would have been read by a model instead of
+    # fetched, losing the document to keep a summary of it.
+    #
+    # Only when the caller did not say otherwise. An explicit `enrich: false` is
+    # the most specific level of the settings chain and it wins here as it does
+    # everywhere else -- a type that overrode a stated "no" would be a type that
+    # spends money against instruction, and the instruction is the whole point
+    # of the option existing.
+    if memories and options.enrich is None and not enrich:
+        enrich = bool(await conn.fetchval(
+            """
+            SELECT bool_or(t.enrich)
+            FROM memories m
+            JOIN memory_types t ON t.project_id = m.project_id AND t.name = m.type
+            WHERE m.memory_id = ANY($1::text[])
+            """,
+            memories,
+        ))
+
     # The write is revision 1. A later parse or interpretation appends; nothing
     # is mutated in place, so "why does this say something different than last
     # week" always has an answer.

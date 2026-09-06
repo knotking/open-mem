@@ -1,0 +1,21 @@
+-- Whether records landing in this kind of memory get enriched.
+--
+-- Enrichment is opt-in per write and resolves off, which is right: recording is
+-- cheap and synchronous, and a default that quietly bills people is the wrong
+-- default however convenient it looks in a demo. But *per write* is the wrong
+-- grain for a container whose whole purpose is to be searched. A memory of
+-- somebody's papers exists to be asked questions about; every record in it
+-- sitting at `stored` is not a saving, it is the feature not working.
+--
+-- **Separate from `url_reader`, and that separation is the point.** They were
+-- one thing for a day -- `url_reader = 'context'` also forced enrichment --
+-- because the memory that wanted the model reader also wanted enrichment. They
+-- are different decisions and coupling them broke a real case immediately: a
+-- memory of papers wants enrichment and wants its PDFs *downloaded*, and under
+-- the coupled rule asking for one asked for the other, so the PDFs would have
+-- been read by a model instead of fetched -- losing the document to keep the
+-- summary of it.
+--
+-- Off by default, so nothing starts spending because this shipped.
+ALTER TABLE memory_types
+    ADD COLUMN IF NOT EXISTS enrich boolean NOT NULL DEFAULT false;

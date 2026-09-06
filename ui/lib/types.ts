@@ -172,12 +172,43 @@ export type AuditTrail = {
   }[];
 };
 
+// Which OpenAlex author a Scholar profile resolved to, and what the match
+// rested on. `matched_on` is the load-bearing field: a name alone can resolve
+// to the wrong researcher and produce a corpus that is coherent and wrong.
+export type ResolvedAuthor = {
+  openalex_id: string;
+  name: string;
+  affiliation: string | null;
+  works: number;
+  matched_on: string[];
+};
+
+// Every screen the console has. Here rather than in `Console.tsx` so that
+// pure logic — which decides *where to send someone* — can name a destination
+// without importing a ten-thousand-line component to do it.
+export type Section =
+  | "overview"
+  | "add" | "update" | "search" | "ask" | "inbound" | "crawlers" | "repos" | "mcp"
+  | "memory" | "cases" | "entities" | "compaction" | "reprocess" | "workflows"
+  | "alerts" | "standing"
+  | "audit" | "sharing" | "deletion"
+  | "settings" | "models" | "prompts"
+  | "projects" | "keys" | "producers" | "platform";
+
 export type MemoryType = {
   type_id: string;
   name: string;
   ttl_seconds: number | null;
   on_expiry: string;
   locked: boolean;
+  // How a URL in a memory of this type is read: "fetch" downloads it, "context"
+  // asks the model to read it. The second exists because a JavaScript-rendered
+  // page answers 200 with an empty shell, so a GET succeeds and stores nothing.
+  url_reader: "fetch" | "context";
+  // Whether records landing in a memory of this type are enriched without being
+  // asked. Separate from url_reader on purpose: a memory of papers wants
+  // enrichment and wants its PDFs downloaded, not read.
+  enrich: boolean;
   // Whether every record added to a memory of this type becomes a checkpoint
   // on a change-tracked timeline. Off unless turned on: it puts a model call
   // behind every write into every memory of the type.

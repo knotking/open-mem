@@ -151,6 +151,10 @@ async def lifespan(app: FastAPI):
     # publishes to them directly when repairing a corpus.
     fetch_worker = FetchWorker(pool, app.state.blobs, settings, queue=queue,
                                envelope=Envelope.from_settings(settings))
+    # The same reader the fetch path uses, reachable by request handlers. The
+    # Scholar route needs it and building a second one would mean two places
+    # where "is URL Context configured" can be answered differently.
+    app.state.fetch_url_reader = fetch_worker._url_reader
     EventWorker(
         pool, queue,
         parse_worker=parse_worker, embed_worker=embed_worker,
@@ -709,6 +713,8 @@ async def post_memory_type(
         name=body.get("name", ""), ttl_seconds=body.get("ttl_seconds"),
         on_expiry=body.get("on_expiry", "orphan_delete"),
         checkpoints=bool(body.get("checkpoints")),
+        url_reader=body.get("url_reader", "fetch"),
+        enrich=bool(body.get("enrich")),
     )
 
 
@@ -2835,6 +2841,91 @@ async def create_crawler_endpoint(
         raise _crawler_error(exc) from exc
     except AuthError as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/crawlers/from-scholar", status_code=201)
+async def create_scholar_crawler(
+    request: Request, body: dict, actor: Principal = Depends(principal)
+) -> dict:
+    """Point at a researcher's Scholar profile; get a crawler for their papers.
+
+    Two steps, because each source is good at something the other is not. The
+    Scholar page identifies *which* researcher is meant -- affiliation, and the
+    exact titles they claim -- and is read with URL Context because it is
+    rendered by JavaScript. OpenAlex then turns that identity into the complete
+    works list with open-access PDF locations, which the rendered profile does
+    not carry.
+
+    **The resolution can refuse, and that is the feature.** Two researchers
+    share a name, the wrong author id produces a corpus that is entirely
+    coherent and about somebody else, and nothing downstream can detect it. A
+    match is confirmed against papers the profile actually listed or it is not
+    made at all.
+
+    Created **disabled**, like every crawler: a dry run comes first, and the
+    author it resolved is on the response so the choice can be checked before
+    anything is ingested.
+    """
+    from . import scholar
+    from .crawlers import CrawlerConfig
+    from .scholar import ScholarError, read_profile, resolve_author, works_crawler
+
+    state = request.app.state
+    try:
+        profile = await read_profile(
+            state.fetch_url_reader, body.get("profile_url", ""))
+        author = await resolve_author(profile)
+    except ScholarError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+    # The type the papers land in, created if it is not there. Enriching, so
+    # the corpus is searchable the moment it finishes arriving -- a memory of
+    # papers that nobody can ask questions about is the feature not working, and
+    # `default` does not enrich. `url_reader` stays `fetch`: a paper's PDF is a
+    # document to download, not a page to have read to us.
+    memory_type = body.get("memory_type") or scholar.PAPERS_TYPE
+    if memory_type == scholar.PAPERS_TYPE:
+        try:
+            await memories_mod.create_type(
+                state.pool, actor, project_id=body["project_id"],
+                name=scholar.PAPERS_TYPE, ttl_seconds=None,
+                on_expiry="keep_members", enrich=True, url_reader="fetch")
+        except (MemoryError, AuthError) as exc:
+            raise HTTPException(status_code=getattr(exc, "status", 400),
+                                detail=str(exc)) from exc
+
+    spec = works_crawler(
+        author,
+        memory_key=body.get("memory_key") or f"papers-{author.author_id}",
+        memory_type=memory_type,
+    )
+    try:
+        created = await crawling.create_crawler(
+            state.pool, actor, project_id=body["project_id"],
+            config=CrawlerConfig(**spec["config"]),
+            schedule=body.get("schedule"), overlap=body.get("overlap", "skip"),
+        )
+    except CrawlerError as exc:
+        raise _crawler_error(exc) from exc
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+    return {
+        **created,
+        # What the resolution rested on, returned rather than logged: "we
+        # matched the name" and "we matched the name and two of their papers"
+        # are different degrees of confidence, and the caller is the only one
+        # who can recognise the person.
+        "author": {
+            "openalex_id": author.author_id,
+            "name": author.display_name,
+            "affiliation": author.affiliation,
+            "works": author.works_count,
+            "matched_on": author.matched_on,
+        },
+        "profile": {"name": profile.name, "affiliation": profile.affiliation,
+                    "titles_seen": len(profile.titles)},
+    }
 
 
 @app.get("/api/v1/projects/{project_id}/crawlers")

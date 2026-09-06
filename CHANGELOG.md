@@ -11,6 +11,40 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **A memory that answers "what changed since last time".** A memory type can be
+  marked as a **checkpoint timeline**: every record added to one of its memories
+  becomes a checkpoint, is described on its own, and is compared with the one
+  before it. A corpus fed the same document repeatedly — a nightly export, a
+  weekly status report, a vendor feed — used to accumulate copies and answer
+  from all of them at once, and the question people actually have about it had
+  no way to be asked. `GET /api/v1/memories/{id}/checkpoints` reads the
+  timeline; a **Timeline** panel on the memory renders it, and each type can be
+  switched on from the console with the cost stated beside the switch.
+
+  Three things keep it from becoming a noise generator, because a change
+  detector that always finds something looks exactly like one that works.
+  **A record identical to the one before it costs no model call at all** and
+  reuses its predecessor's description. **Two descriptions written by different
+  generator versions are marked `incomparable` rather than diffed**, since a
+  prompt change would otherwise be reported as a content change in the shape a
+  real finding has. And the description is a fixed-order list of observations
+  rather than a paragraph, so two runs over the same content differ in content
+  rather than in phrasing.
+
+  **`unchanged` is stored, never inferred from an absence.** "The check has not
+  finished", "it failed" and "it ran and found nothing" all produce a row with
+  no changes on it, so `status` and `outcome` are separate throughout — for a
+  change detector, rendering those alike turns silence into a clean bill of
+  health.
+
+  Records in a timeline are **not enriched and not added to the graph**, which
+  is already the default: the check reads text and needs neither embeddings nor
+  entities. **`POST /api/v1/memories/{id}/enrich`** is how that is reversed
+  later, for every member at once — per-item forcing already existed, and doing
+  it fifty times is the reason nobody did it at all.
+- **Alerts can watch a timeline.** `checkpoint.changed` is a surface, so "tell
+  me when the vendor feed changes materially" is a selector rather than a second
+  feature.
 - **Open an item in Browse and see where it got to.** Add data watched a write
   climb the staircase and threw the reading away the moment you navigated off
   the page, so "what happened to the thing I added" had no answer anywhere. The
@@ -200,6 +234,14 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   to the end of said less about what this is than four lines do.
 
 ### Migrations
+- **`0053_memory_checkpoints.sql`** — `memory_checkpoints`, and a `checkpoints`
+  boolean on `memory_types`. Additive, and **off by default**: turning it on
+  puts up to two model calls behind every record written into any memory of that
+  type, so it is switched on deliberately rather than inherited.
+- **`0054_artifact_fields_are_objects.sql`** — repairs artifacts whose `fields`
+  was stored as a JSON *string* rather than a JSON object. Data repair rather
+  than schema: it rewrites only rows where `jsonb_typeof(fields) = 'string'` and
+  the text really is an object, and is a no-op on every correctly written one.
 - **`0052_repo_memory_titles.sql`** — gives repository memories created before
   titles existed a title, derived from `owner/repo@sha` rather than guessed. A
   memory created implicitly by a write carries no title, so half the repository
@@ -215,6 +257,20 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   analysed twice under two spellings.
 
 ### Fixed
+- **A structured artifact stored its structure as text.** The connection pool
+  sets a jsonb codec that already encodes with `json.dumps`, and the artifact
+  insert called `json.dumps` as well — so `fields` was written as a jsonb string
+  containing JSON. Nothing errored: the artifact existed, its title and summary
+  rendered normally, and only the structured half came back as text, so every
+  consumer reading `fields.findings` got nothing. **Repository review findings
+  have been unreadable since they shipped, for this reason.** Fixed at the
+  writer, with `0054` repairing what was already stored.
+- **Running out of output budget now says so.** `docs/limit.md` named this as
+  the ceiling that does not announce itself: the 8,192-token cap is enforced by
+  the provider and `finishReason` was never inspected, so a full budget arrived
+  as an empty extraction failure, or as a parse error on a truncated string —
+  both of which read as a broken model rather than a full one. It took a live
+  deploy to see, on a generator that ran to 7,944 tokens repeating one word.
 - **One memory per repository snapshot, instead of two.** Every analysis wrote a
   second, near-identical memory holding the raw code graph, so the memory list
   read as duplicated and picking the right one of a pair was guesswork. The

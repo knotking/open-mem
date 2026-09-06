@@ -12,6 +12,8 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import Arc from "./Arc";
+import { ARC_STEPS } from "@/lib/arc";
 import Capture, { humanBytes, type Staged } from "./Capture";
 import ThemeToggle from "./ThemeToggle";
 import { WriteProgress, assess, useTracked } from "./Progress";
@@ -32,6 +34,8 @@ import {
   MemoryTree,
   MemoryType,
   Checkpoint,
+  ResolvedAuthor,
+  Section,
   Algorithm,
   Backtest,
   CompactionJob,
@@ -76,14 +80,6 @@ type Group = {
 /** An organization member, as `GET /organizations/members` returns them. */
 type Member = { user_id: string; email: string | null; role: string };
 
-type Section =
-  | "overview"
-  | "add" | "update" | "search" | "ask" | "inbound" | "crawlers" | "repos" | "mcp"
-  | "memory" | "cases" | "entities" | "compaction" | "reprocess" | "workflows"
-  | "alerts" | "standing"
-  | "audit" | "sharing" | "deletion"
-  | "settings" | "models" | "prompts"
-  | "projects" | "keys" | "producers" | "platform";
 
 /**
  * Grouped by concern rather than by endpoint.
@@ -119,6 +115,16 @@ const INLINE_MAX = 8 * 1024 * 1024;
 
 const GROUPS: { title: string; items: { key: Section; label: string; hint: string }[] }[] = [
   {
+    // First, because it is the first thing to do -- and because a memory type
+    // now carries real policy: whether what lands in it is enriched, how a URL
+    // in it is read, whether it tracks change. It sat under "Organize", which
+    // is where you file something you already have rather than where you begin.
+    title: "Memories",
+    items: [
+      { key: "memory", label: "Memories", hint: "containers, and their policy" },
+    ],
+  },
+  {
     title: "Monitor",
     items: [
       { key: "overview", label: "Overview", hint: "is this working?" },
@@ -152,7 +158,6 @@ const GROUPS: { title: string; items: { key: Section; label: string; hint: strin
   {
     title: "Organize",
     items: [
-      { key: "memory", label: "Memories", hint: "lifecycle containers" },
       { key: "cases", label: "Cases", hint: "subjects and timelines" },
       { key: "workflows", label: "Workflows", hint: "where a long process is" },
       { key: "entities", label: "Entities", hint: "who and what, with evidence" },
@@ -206,28 +211,8 @@ const GROUPS: { title: string; items: { key: Section; label: string; hint: strin
  * the nav it describes, which is the usual fate of written documentation of a
  * menu.
  */
-const GUIDE_PATH = [
-  {
-    n: "01",
-    title: "Get something in",
-    body: "Add data takes a paste, a file or a recording. Producers, Inbound and Crawlers are the same write path without a person: an SDK, a webhook a provider posts to, and a puller for anything that will not push.",
-  },
-  {
-    n: "02",
-    title: "Watch it climb",
-    body: "A write commits immediately and is durable at once, but it is not findable yet. Stored becomes searchable when it is embedded, and enriched when a model has read it. Overview is where you see whether that is keeping up.",
-  },
-  {
-    n: "03",
-    title: "Get it back",
-    body: "Search returns evidence and says what it excluded and why. Chat returns prose with a citation behind every claim. Browse walks the corpus by container when you would rather look than ask.",
-  },
-  {
-    n: "04",
-    title: "Prove it",
-    body: "Audit says who read and wrote what. Sharing says what is public and takes it back. Deletion erases and issues a certificate that outlives the record.",
-  },
-];
+/** The same five steps the rail shows, from one source. */
+const GUIDE_PATH = ARC_STEPS;
 
 /**
  * How to work each screen, in the order its own panels are laid out.
@@ -406,6 +391,9 @@ export default function Console({
   const [focusEntity, setFocusEntity] = useState<string | null>(null);
   const [seededQuery, setSeededQuery] = useState<string | null>(null);
   const [stair, setStair] = useState<Stair | null>(null);
+  // Null is "not measured", which the rail renders differently from zero.
+  const [memoryCount, setMemoryCount] = useState<number | null>(null);
+  const [expiring, setExpiring] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // What the filter admits. Matched on label *and* hint, because the hint is
@@ -436,7 +424,24 @@ export default function Console({
 
   const refresh = useCallback(async () => {
     try {
-      setStair(await call<Stair>(`api/v1/projects/${projectId}/staircase`));
+      // Three counts for the rail, in one round trip. The staircase was already
+      // fetched here; the other two are calls the console already makes
+      // elsewhere, so nothing new reaches the proxy allow-list.
+      //
+      // The two extras fail on their own. A rail that vanished because a
+      // secondary count 500'd would take the staircase -- the part that matters
+      // -- with it, so each falls back to `null`, which the arc renders as
+      // "not measured" rather than as zero.
+      const [stairs, mem, due] = await Promise.all([
+        call<Stair>(`api/v1/projects/${projectId}/staircase`),
+        call<{ memories: unknown[] }>(`api/v1/projects/${projectId}/memories`)
+          .then((r) => r.memories.length).catch(() => null),
+        call<{ items?: unknown[] }>(`api/v1/projects/${projectId}/expiring?limit=200`)
+          .then((r) => (r.items ?? []).length).catch(() => null),
+      ]);
+      setStair(stairs);
+      setMemoryCount(mem);
+      setExpiring(due);
     } catch (e) {
       setError((e as Error).message);
     }
@@ -621,6 +626,23 @@ export default function Console({
       )}
 
       <main className="content">
+        {/* Above the section rather than in the sidebar: the sidebar says what
+            exists, this says where this project has got to. */}
+        {stair && (
+          <Arc
+            counts={{
+              memories: memoryCount,
+              total: stair.total,
+              stored: stair.stored,
+              searchable: stair.searchable,
+              enriched: stair.enriched,
+              awaitingFetch: stair.awaiting_fetch ?? 0,
+              expiring,
+            }}
+            section={section}
+            onGo={setSection}
+          />
+        )}
         {error && <p className="err">{error}</p>}
         {section === "overview" && <Overview projectId={projectId} me={me} />}
         {section === "add" && (
@@ -2694,7 +2716,25 @@ type RunDetail = RunResult & {
 };
 
 const PRESETS: Record<string,
-  { label: string; blurb: string; placeholder: string; build: (v: string) => object }> = {
+  {
+    label: string; blurb: string; placeholder: string;
+    build: (v: string) => object;
+    // Set when the config cannot be built in the browser because the server has
+    // to resolve something first. The researcher preset needs two lookups — read
+    // the profile, then confirm which OpenAlex author it is — and neither can
+    // happen here.
+    endpoint?: string;
+  }> = {
+  scholar: {
+    label: "Researcher",
+    placeholder: "Scholar profile — https://scholar.google.com/citations?user=…",
+    blurb:
+      "Their papers, from the profile. The page identifies which researcher is meant; "
+      + "OpenAlex supplies the complete works list and the open-access PDFs. "
+      + "Open-access papers arrive as full text, the rest as title and abstract.",
+    endpoint: "api/v1/crawlers/from-scholar",
+    build: (v) => ({ profile_url: v }),
+  },
   feed: {
     label: "Feed",
     placeholder: "Feed URL — https://example.com/rss.xml",
@@ -4434,6 +4474,11 @@ function CrawlersSection({ projectId }: { projectId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [detail, setDetail] = useState<RunDetail | null>(null);
+  // Who a researcher URL resolved to. Rendered rather than assumed: two people
+  // share a name, and the wrong author gives a corpus that is entirely coherent
+  // and about somebody else. The person who typed the URL is the only one who
+  // can recognise the mistake, so they are shown the evidence.
+  const [resolved, setResolved] = useState<ResolvedAuthor | null>(null);
   const [conns, setConns] = useState<Connection[]>([]);
   const [newConn, setNewConn] = useState({
     provider: "", credential: "", auth_style: "bearer", auth_name: "",
@@ -4486,11 +4531,24 @@ function CrawlersSection({ projectId }: { projectId: string }) {
   }
 
   async function create() {
+    const preset = PRESETS[kind];
     await act("Created, disabled. Dry-run it before enabling.", async () => {
-      await call("api/v1/crawlers", {
-        project_id: projectId,
-        config: { ...PRESETS[kind].build(seed.trim()), enrich },
-      });
+      if (preset.endpoint) {
+        // The server resolves the identity first and tells us who it landed on.
+        const made = await call<{ author?: ResolvedAuthor }>(preset.endpoint, {
+          project_id: projectId, ...preset.build(seed.trim()),
+        });
+        setResolved(made.author ?? null);
+      } else {
+        await call("api/v1/crawlers", {
+          project_id: projectId,
+          // Sent only when ticked. Omitted, the crawler has not said, and the
+          // memory it writes into decides — which is what lets a corpus that
+          // exists to be searched enrich itself. Sending `false` here would be
+          // the crawler saying no on behalf of somebody who never chose.
+          config: { ...preset.build(seed.trim()), ...(enrich ? { enrich: true } : {}) },
+        });
+      }
       await load();
     });
   }
@@ -4551,15 +4609,43 @@ function CrawlersSection({ projectId }: { projectId: string }) {
         </div>
         <label className="row" style={{ marginTop: 10, gap: 8, alignItems: "center" }}>
           <input type="checkbox" checked={enrich} onChange={(e) => setEnrich(e.target.checked)} />
-          <span>Enrich what it finds</span>
+          <span>Enrich what it finds, whatever the memory says</span>
         </label>
         <p className="empty" style={{ marginTop: 2 }}>
           Off by default. A crawler can discover fifty thousand records unattended, and enriching
           them is a model call per chunk on data nobody has asked about yet. Leave it off, see what
-          the dry run found, then decide.
+          the dry run found, then decide. <strong>Left off, the memory decides</strong> — a type
+          marked <em>enrich</em> still enriches what this writes into it.
         </p>
         {note && <p className="ok">{note}</p>}
         {error && <p className="err">{error}</p>}
+        {resolved && (
+          <div className="excluded" style={{ marginTop: 10 }}>
+            <div className="item">
+              <span className="chip on">resolved</span>
+              <strong>{resolved.name}</strong>
+              {resolved.affiliation && (
+                <span className="empty">{resolved.affiliation}</span>
+              )}
+              <span className="empty">{resolved.works} works</span>
+              <span className="empty far"><code>{resolved.openalex_id}</code></span>
+            </div>
+            {/* The evidence, not just the name. Two researchers share a name,
+                and matching on the name alone gives a corpus that is entirely
+                coherent and about the wrong person — which nothing downstream
+                can detect. These are the papers that confirmed it. */}
+            <p className="empty" style={{ marginTop: 6 }}>
+              Confirmed against {resolved.matched_on.length} paper
+              {resolved.matched_on.length === 1 ? "" : "s"} on the profile:
+            </p>
+            {resolved.matched_on.map((title) => (
+              <div className="item" key={title}><span>{title}</span></div>
+            ))}
+            <p className="empty" style={{ marginTop: 6 }}>
+              Not this person? Delete the crawler below — nothing has been ingested yet.
+            </p>
+          </div>
+        )}
         <p className="empty">
           Created disabled, always. A website crawler is refused outright unless it declares an
           allowlist — an unbounded link crawl does not stop on its own.
@@ -6247,7 +6333,10 @@ function MemorySection({ projectId }: { projectId: string }) {
         <h2>Types</h2>
         <p className="hint">
           A type carries the policy for every memory of it: how long its contents live, what
-          happens when they expire, and whether it is a <strong>change-tracked timeline</strong>.
+          happens when they expire, how a URL in it is read, whether what lands in it is
+          <strong> enriched without being asked</strong>, and whether it is a
+          <strong> change-tracked timeline</strong>. Enrichment is one model call per record —
+          right for a corpus that exists to be searched, wrong for an inbox.
           A timeline makes every record added to one of its memories a checkpoint, described on
           its own and compared with the one before it — so <strong>turning it on puts up to two
           model calls behind every record</strong> written into any memory of this type. A
@@ -6266,6 +6355,64 @@ function MemorySection({ projectId }: { projectId: string }) {
                   {t.checkpoints
                     ? <span className="ok">tracks change</span>
                     : <span className="empty">no timeline</span>}
+                </td>
+                <td style={{ whiteSpace: "nowrap" }}>
+                  <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    <input
+                      type="checkbox"
+                      checked={t.enrich}
+                      disabled={busy || t.locked}
+                      title={
+                        "Enrich what lands here without being asked — one model "
+                        + "call per record. Right for a corpus that exists to be "
+                        + "searched; wrong for an inbox."}
+                      onChange={(e) =>
+                        act(`${t.name} ${e.target.checked ? "enriches" : "no longer enriches"} what lands in it.`,
+                          async () => {
+                            await call(`api/v1/projects/${projectId}/memory-types`, {
+                              name: t.name,
+                              ttl_seconds: t.ttl_seconds,
+                              on_expiry: t.on_expiry,
+                              checkpoints: t.checkpoints,
+                              url_reader: t.url_reader,
+                              enrich: e.target.checked,
+                            });
+                            await load();
+                          })
+                      }
+                    />
+                    <span className="empty">enrich</span>
+                  </label>
+                </td>
+                <td>
+                  <select
+                    value={t.url_reader}
+                    disabled={busy || t.locked}
+                    title={
+                      "How a URL in one of these memories is read. A model reading "
+                      + "costs one call per page, and exists because a JavaScript "
+                      + "page answers 200 with an empty shell — the download "
+                      + "succeeds and stores nothing."}
+                    onChange={(e) =>
+                      act(`${t.name} reads pages by ${e.target.value === "context"
+                            ? "asking the model" : "downloading"}.`, async () => {
+                        // The whole row: this endpoint is an upsert, so sending
+                        // one field resets the rest to their defaults.
+                        await call(`api/v1/projects/${projectId}/memory-types`, {
+                          name: t.name,
+                          ttl_seconds: t.ttl_seconds,
+                          on_expiry: t.on_expiry,
+                          checkpoints: t.checkpoints,
+                          enrich: t.enrich,
+                          url_reader: e.target.value,
+                        });
+                        await load();
+                      })
+                    }
+                  >
+                    <option value="fetch">download pages</option>
+                    <option value="context">model reads pages</option>
+                  </select>
                 </td>
                 <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
                   <button
@@ -6287,6 +6434,8 @@ function MemorySection({ projectId }: { projectId: string }) {
                           name: t.name,
                           ttl_seconds: t.ttl_seconds,
                           on_expiry: t.on_expiry,
+                          url_reader: t.url_reader,
+                          enrich: t.enrich,
                           checkpoints: !t.checkpoints,
                         });
                         await load();
