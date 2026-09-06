@@ -296,20 +296,6 @@ async def request_snapshot(
             type_name=SNAPSHOT_TYPE, memory_key=f"{owner}/{repo}@{sha}",
             owner_id=principal.user_id, title=f"{owner}/{repo} @ {sha[:7]}",
         )
-        # The raw graph's memory, created here so it has a title.
-        #
-        # The job writes into it by key, and a `MemoryRef` carries only a key
-        # and a type -- so a memory created implicitly by a write has no title
-        # and renders in every picker as a 40-character sha. Half the entries in
-        # the memory list were that, which is what made the repository memories
-        # impossible to find among them: the useful one was titled and sat next
-        # to an untitled twin nobody could identify.
-        await upsert_memory(
-            conn, org_id=principal.org_id, project_id=project_id,
-            type_name=SNAPSHOT_TYPE, memory_key=f"{owner}/{repo}@{sha}/graph",
-            owner_id=principal.user_id,
-            title=f"{owner}/{repo} @ {sha[:7]} · raw code graph",
-        )
         snapshot_id = new_id("rsnap")
         await conn.execute(
             """

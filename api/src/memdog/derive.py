@@ -42,6 +42,11 @@ class DeriveError(Exception):
         self.status = status
 
 
+# A member carrying this is stored with the memory and never read into an
+# artifact. One tag, because the moment there are two the rule stops being
+# legible from the record itself.
+SKIP_TAG = "derive:skip"
+
 # What can be made from a set of records.
 #
 # A generator is a prompt and a name. Nothing else is needed, because the
@@ -298,7 +303,23 @@ async def derive(
     if memory is None or memory["org_id"] != principal.org_id:
         raise MemErr("memory not found", status=404)
 
-    members = (await _members(pool, principal, memory_id))[:max_members]
+    # **Some members are provenance, not reading material.**
+    #
+    # The raw code graph is a megabyte of node-link JSON stored so the graph can
+    # be traversed or re-read later. Handed to an extractor it fills every
+    # window with punctuation, and the reports come back as an echo of their own
+    # input -- which is what happened, and looks like a model failure while
+    # being a units failure. It used to be kept out of the way by living in a
+    # sibling memory, which cost a second, untitled, unidentifiable entry in
+    # every picker for every snapshot. Skipping it here is the same protection
+    # without that cost: one memory per snapshot, holding everything about it.
+    #
+    # Tagged rather than typed, so a producer can mark anything this way without
+    # a schema change, and so nothing outside this filter has to know.
+    members = [
+        m for m in await _members(pool, principal, memory_id)
+        if SKIP_TAG not in (m.get("tags") or [])
+    ][:max_members]
     if not members:
         return {"memory_id": memory_id, "generator": generator, "artifacts": 0,
                 "members": 0, "note": "nothing in this memory that you can see"}

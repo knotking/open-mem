@@ -641,12 +641,17 @@ def main() -> int:
         log.info("selected %d files, %d dependencies, OSV %s",
                  len(selected), len(deps), osv.get("status"))
 
-        # The digest goes in the snapshot memory; the raw graph goes in a
-        # sibling. Everything in the snapshot memory is read by all four
-        # reports, so a member that cannot be read usefully does not merely
-        # waste a window -- it *takes* windows from the material that can, and
-        # a megabyte of node-link JSON takes all of them.
-        raw_key = f"{memory_key}/graph"
+        # One memory per snapshot, holding everything about it.
+        #
+        # The raw graph used to live in a sibling so it could not crowd the
+        # analysers' extraction window -- a megabyte of node-link JSON does not
+        # merely waste a window, it takes windows from the material that can be
+        # read, which is how all four reports once came back as an echo of their
+        # own input. That worked and cost a second, untitled, unidentifiable
+        # memory in every picker for every snapshot.
+        #
+        # `derive:skip` buys the same protection without the cost: the record is
+        # stored with its snapshot and simply not read into an artifact.
         items = [
             item(f"{repo_url}@{sha}/graph-digest.md", digest(data),
                  memory_key=memory_key, repo=case_external,
@@ -658,8 +663,8 @@ def main() -> int:
             # Provenance. Kept whole and kept out of the reports' way, so the
             # graph can still be traversed, diffed or re-read later.
             item(f"{repo_url}@{sha}/graph.json", json.dumps(data)[:1_800_000],
-                 memory_key=raw_key, repo=case_external,
-                 data_type="code_graph", tags=["repo:graph"]),
+                 memory_key=memory_key, repo=case_external,
+                 data_type="code_graph", tags=["repo:graph", "derive:skip"]),
         ]
         if report:
             items.append(item(f"{repo_url}@{sha}/GRAPH_REPORT.md", report,

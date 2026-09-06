@@ -466,3 +466,51 @@ async def test_a_completed_snapshot_is_still_reused(pool, tenant, principal_for)
     reuse = source.index('"reused": True')
     publish = source.index("queue.publish(REPO_TOPIC")
     assert reuse < publish, "a re-used snapshot must not enqueue a job"
+
+
+async def test_the_raw_graph_is_stored_with_the_snapshot_but_never_read(
+    pool, queue, blobs, tenant, principal_for, settings
+):
+    """One memory per snapshot, and the graph in it is provenance not reading.
+
+    A megabyte of node-link JSON does not merely waste an extraction window —
+    it takes the windows the readable material needed, which is how all four
+    reports once came back as an echo of their own input. That was first fixed
+    by moving the graph to a sibling memory, which worked and cost a second,
+    untitled, unidentifiable entry in every picker for every snapshot.
+
+    `derive:skip` buys the same protection without the cost, so this asserts
+    both halves: the record is a member, and `derive` does not read it.
+    """
+    from memdog.contracts import Inline, WriteItem, WriteRequest
+    from memdog.derive import SKIP_TAG
+    from memdog.write import write_items
+
+    principal = await principal_for(tenant.api_key)
+    memory = {"key": "acme/widget@" + "a" * 40, "type": "default"}
+    await write_items(pool, queue, blobs, settings, principal, WriteRequest(
+        producer_id=tenant.producer_id,
+        items=[
+            WriteItem(external_id="graph.json", memory=memory,
+                      tags=["repo:graph", SKIP_TAG],
+                      content=Inline(text='{"nodes": [], "links": []}')),
+            WriteItem(external_id="digest.md", memory=memory,
+                      content=Inline(text="# Code graph digest\n\n10 symbols.")),
+        ],
+    ))
+
+    memory_id = await pool.fetchval(
+        "SELECT memory_id FROM memories WHERE project_id = $1 AND memory_key = $2",
+        tenant.project_id, memory["key"])
+
+    from memdog.compaction import _members
+    from memdog.derive import derive
+
+    # Both are members: the graph is stored with its snapshot, not hidden.
+    everything = await _members(pool, principal, memory_id)
+    assert {m["external_id"] for m in everything} == {"graph.json", "digest.md"}
+
+    # But a dry run — which reports exactly what would be read — sees only one.
+    plan = await derive(pool, principal, memory_id, generator="summary", dry_run=True)
+    read = {s["external_id"] for s in plan["samples"]}
+    assert read == {"digest.md"}, f"the raw graph was read into a report: {read}"

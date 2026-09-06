@@ -384,7 +384,7 @@ async def _members(pool, principal, memory_id: str) -> list[dict]:
         rows = await pool.fetch(
             f"""
             SELECT d.data_id, d.external_id, d.checksum, d.content_text,
-                   d.access_level, d.shared_with, d.owner_id,
+                   d.access_level, d.shared_with, d.owner_id, d.tags,
                    length(coalesce(d.content_text, '')) AS content_chars, d.created_at
               FROM memory_members mm JOIN data_items d ON d.data_id = mm.data_id
              WHERE mm.memory_id = ANY($4::text[]) AND d.archived_at IS NULL
@@ -400,7 +400,7 @@ async def _members(pool, principal, memory_id: str) -> list[dict]:
         rows = await pool.fetch(
             """
             SELECT d.data_id, d.external_id, d.checksum, d.content_text,
-                   d.access_level, d.shared_with, d.owner_id,
+                   d.access_level, d.shared_with, d.owner_id, d.tags,
                    length(coalesce(d.content_text, '')) AS content_chars, d.created_at
               FROM memory_members mm JOIN data_items d ON d.data_id = mm.data_id
              WHERE mm.memory_id = ANY($1::text[]) AND d.archived_at IS NULL
