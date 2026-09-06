@@ -514,9 +514,26 @@ class Api:
         )
 
     def write(self, items: list[dict]) -> dict:
+        """Written *and embedded*, because a snapshot nobody can ask about is
+        half a feature.
+
+        Enrichment resolves to OFF when a write does not ask, which is the right
+        default -- recording is cheap and synchronous, and anything that spends
+        money is opt-in. This write asks, and it is the one place where asking
+        is clearly correct: somebody requested an analysis of this repository,
+        the four reports are already four model calls, and a corpus of
+        `stored` records is invisible to both search and chat. A repository
+        memory that looks full and answers nothing is the worse outcome.
+
+        `summarize` is deliberately off. A per-record summary of eighty source
+        files is eighty model calls for something no one reads -- the reports
+        are the summary. Embedding is what makes the code answerable.
+        """
         response = self._client.post(
             f"{self._base}/api/v1/write",
-            json={"producer_id": self._producer, "items": items},
+            json={"producer_id": self._producer, "items": items,
+                  "options": {"enrich": True,
+                              "enrichment": {"embed": True, "summarize": False}}},
         )
         if response.status_code >= 400:
             raise AnalysisFailed(
