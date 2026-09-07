@@ -360,6 +360,18 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   Overview no longer counts them.
 
 ### Fixed
+- **Recording a video failed, and the console said `[object Object]`.** Two
+  faults, and the second hid the first. A data URL's header is stripped by
+  slicing at the first comma — but `MediaRecorder` emits
+  `data:video/webm;codecs=vp8,opus;base64,…`, so the slice landed inside the
+  codec list and the payload was sent as `opus;base64,GkXfo59…`. The API
+  refused it correctly. Audio (`codecs=opus`), photos and chosen files carry no
+  comma, which is why only video broke. Separately, `detail` on a refusal is a
+  *list of objects* when FastAPI's own validation rejects a request, and
+  `new Error(thatList)` stringifies to `[object Object]` — so the server named
+  the exact field and the exact reason, and none of it reached the screen.
+  Refusals now read as a sentence, and the encoder anchors on `;base64,`, which
+  cannot appear inside a payload.
 - **A crawl that stopped at the page cap reported itself as complete, and the
   watermark moved past everything it never read.** `max_items` and the wall
   clock both come back from a run as a stop reason, which marks it `partial` —
