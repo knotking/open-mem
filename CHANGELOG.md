@@ -360,6 +360,30 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   Overview no longer counts them.
 
 ### Fixed
+- **A crawl that stopped at the page cap reported itself as complete, and the
+  watermark moved past everything it never read.** `max_items` and the wall
+  clock both come back from a run as a stop reason, which marks it `partial` —
+  and partial is what holds the watermark still. `max_pages` was the one limit
+  wired to nothing: the loop ended, no reason came back, and the run was filed
+  as complete. Any source deeper than `max_pages × page_size` lost the
+  remainder permanently, with a plausible count and no error anywhere. The
+  same silence covered folders below `max_depth` in a Drive or SharePoint walk.
+  Both say so now, and the run is `partial` with the bound named.
+- **Four Microsoft Graph connectors read one page and stopped.** Outlook,
+  Teams, SharePoint and OneDrive declared no pagination, while Dynamics — the
+  same API — followed `@odata.nextLink` correctly: 2 of 5 records against the
+  simulator, then a watermark stored as though all five had been read. What let
+  it last is that the *mechanism* was tested and the entries that needed it were
+  not.
+- **Attio pulled the first 100 records of an object and said nothing about it.**
+  It pages from a POST body the query-string pager cannot reach — the same
+  limitation Linear and Copper carry, and those two say so where the console
+  shows it. An entry that cannot page now has to admit it in `notes`, which is
+  the part a person configuring the app actually reads.
+- **A fetch worker built without settings raised instead of switching video
+  reading off.** `build_video_reader` read the flag directly where
+  `build_url_reader`, two lines away in the same constructor, read it
+  defensively.
 - **A site URL the crawler would refuse to fetch came back as a 500.**
   `validate_url` raises `FetchError`, which no endpoint caught and pydantic does
   not convert, so a private, unresolvable or non-http URL produced an HTML error
