@@ -400,6 +400,69 @@ NO_INCREMENTAL: dict[str, str] = {
 }
 
 
+NO_PAGINATION: dict[str, str] = {
+    # Pagination lives in a POST body, and the pager templates only the query
+    # string. Each of these says so in its own `notes`, so the operator reading
+    # the entry is told before they wire it to a credential.
+    "linear": "GraphQL: the cursor is in the body",
+    "attio": "offset is in the body",
+    "copper": "page_number is in the body",
+
+    # Genuinely one response. Not a cap, and nothing is being left behind.
+    "bamboohr": "the directory endpoint returns every employee in one response",
+    "workday_report": "RaaS returns the whole report in one response",
+}
+
+
+def test_a_template_that_pages_says_so_or_says_why_it_does_not():
+    """The other half of the incremental ratchet, and the more expensive half.
+
+    An entry with no pagination reads exactly one page and stops. It is not an
+    error, nothing logs, and the run reports a plausible count -- so it looks
+    like a source with fewer records in it than it has. Four Microsoft Graph
+    entries -- Outlook, Teams, SharePoint and OneDrive -- sat like this while
+    Dynamics, the same API, followed `@odata.nextLink` correctly: 2 of 5
+    records against the simulator, with a watermark then stored as though all
+    five had been read.
+
+    Adding a key here is allowed; adding one without a reason is not.
+    """
+    unpaged = [
+        c.key for c in CATALOG
+        if c.template.get("strategy") == "http"
+        and not c.template.get("pagination")
+        and c.key not in NO_PAGINATION
+    ]
+    assert not unpaged, (
+        f"{unpaged} read one page and stop. Give them a pagination clause, or "
+        "add them to NO_PAGINATION with the reason -- and say it in `notes` "
+        "too, because the operator is the one who sees the short count."
+    )
+
+    stale = [k for k in NO_PAGINATION
+             if k not in {c.key for c in CATALOG}
+             or connectors.BY_KEY[k].template.get("pagination")]
+    assert not stale, (
+        f"{stale} are exempted from pagination and no longer need to be — "
+        "delete the entry so the list keeps meaning something"
+    )
+
+
+def test_an_entry_that_cannot_page_admits_it_where_the_operator_looks():
+    """An exemption in a test file is invisible to the person wiring the app.
+
+    The reason has to reach the console, which renders `notes` under the entry,
+    or the short count arrives with nothing to explain it.
+    """
+    silent = [k for k, reason in NO_PAGINATION.items()
+              if "one response" not in reason
+              and not connectors.BY_KEY[k].notes.strip()]
+    assert not silent, (
+        f"{silent} cannot page and say nothing about it in `notes`, which is "
+        "the only part of this a person configuring the app will read"
+    )
+
+
 def test_a_template_claiming_incremental_actually_carries_one():
     """A claim with no mechanism is worse than no claim.
 

@@ -380,6 +380,7 @@ class Budget:
         self.limits = limits
         self.started = time.monotonic()
         self.items = 0
+        self.truncated: str | None = None
 
     def exhausted(self) -> str | None:
         if self.items >= self.limits.max_items:
@@ -387,6 +388,22 @@ class Budget:
         if time.monotonic() - self.started > self.limits.wall_clock_seconds:
             return f"reached wall clock ({self.limits.wall_clock_seconds}s)"
         return None
+
+    def truncate(self, reason: str) -> None:
+        """Something was left behind. **Deliberately not part of
+        `exhausted()`**, which every strategy checks to decide whether to stop:
+        a walk that reports "there is more below max_depth" must not thereby
+        end itself. `discover` reports both.
+
+        `max_pages` is a limit like the other two, and it was the only one that
+        did not say so: the page loop simply ended, `discover` reported no stop
+        reason, and the run was marked `completed`. Completed is what advances
+        the watermark, so a source deeper than the page cap had its position
+        moved past records nobody read -- the exact failure the "hitting a limit
+        is a partial run" rule exists to prevent, going through the one limit
+        that was not wired to it.
+        """
+        self.truncated = reason
 
     def take(self) -> None:
         self.items += 1
@@ -637,6 +654,14 @@ async def discover_http(
                 url, call_query = _next_url(url, match.group(1)), {}
             elif pagination.type == "none":
                 break
+        else:
+            # `while ... else` runs only when the loop was never `break`-ed --
+            # every legitimate end (no items, `stop_when`, no cursor, no next
+            # link) breaks, so reaching here means the page cap stopped a source
+            # that had more to give.
+            budget.truncate(
+                f"reached max_pages ({config.pagination.max_pages})"
+            )
 
     return found
 
@@ -1048,6 +1073,24 @@ async def discover_tree(
                 if is_folder:
                     if depth < config.limits.max_depth:
                         queue.append((child_id, depth + 1))
+                    else:
+                        # A library deeper than the bound is the normal case
+                        # for a drive nobody has tidied. Dropping the subtree is
+                        # correct; dropping it quietly is not, because the run
+                        # then completes and the watermark moves past every file
+                        # underneath it.
+                        #
+                        # **`traverse` deliberately does not do this**, though
+                        # the line looks identical. There the depth *is* the
+                        # request -- "crawl this site two deep" is complete when
+                        # it has read two deep -- and every website crawl would
+                        # otherwise report `partial` until the word meant
+                        # nothing. Here the request was "walk this folder" and
+                        # max_depth is a safety bound cutting it short.
+                        budget.truncate(
+                            f"reached max_depth ({config.limits.max_depth}); "
+                            "folders below it were not walked"
+                        )
                     continue
                 if not _permitted(mime, tree.include_mime):
                     continue
@@ -1164,7 +1207,10 @@ async def discover(
             throttle=throttle, checkpoint=checkpoint, auth=auth,
         )
         current.set_attribute("discovered", len(found))
-    return found, budget, budget.exhausted()
+    # Two different facts, one channel: the budget stopped us, or a bound was
+    # hit and something was left unread. Either makes the run `partial`, and
+    # partial is what stops the watermark advancing past what nobody saw.
+    return found, budget, budget.exhausted() or budget.truncated
 
 
 def next_watermark(config: CrawlerConfig, found: list[Discovered],

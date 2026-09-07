@@ -261,7 +261,13 @@ def build_video_reader(settings):
     and a deployment that has turned that off has not agreed to pay for this
     either.
     """
-    if not settings.media_interpretation or not settings.gemini_api_key:
+    # `getattr` rather than an attribute read, matching `build_url_reader`
+    # two lines away in `FetchWorker.__init__`: a worker built without settings
+    # at all is the most "off" this can be, and it was the one case that raised
+    # instead of returning None.
+    if not getattr(settings, "media_interpretation", False):
+        return None
+    if not settings.gemini_api_key:
         return None
     # The multimodal model, never the transcription one. `build_multimodal`
     # makes the same distinction for the same reason: a transcription-only model

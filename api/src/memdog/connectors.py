@@ -139,6 +139,13 @@ def _http(url: str, *, items: str, id_path: str, title: str | None = None,
     return config
 
 
+# Microsoft Graph returns its continuation as `@odata.nextLink` -- the whole
+# next URL, absolute. Named once because four entries needed it and had none,
+# and an entry that omits it reads exactly one page and then stops: not an
+# error, not a warning, just a smaller number than the source holds.
+GRAPH_PAGING = {"type": "next_url", "cursor_path": "\"@odata.nextLink\""}
+
+
 def _tree(api: str, root: str, *, include_mime: list[str] | None = None) -> dict:
     """A folder recursion. The bytes of each file are fetched, not listed."""
     tree: dict[str, Any] = {"api": api, "root": root}
@@ -274,6 +281,9 @@ CATALOG: tuple[Connector, ...] = (
             items="data[*]", id_path="id.record_id",
             version="created_at",
         ),
+        notes="Attio pages by `offset` in the request body, and this "
+              "pagination templates only the query string, so this pulls the "
+              "first 100 records rather than the whole object.",
     ),
     Connector(
         key="salesforce", label="Salesforce", category="CRM",
@@ -328,7 +338,7 @@ CATALOG: tuple[Connector, ...] = (
             headers={"Accept": "application/json", "OData-Version": "4.0",
                      "OData-MaxVersion": "4.0"},
             items="value[*]", id_path="{id_field}", version="modifiedon",
-            pagination={"type": "next_url", "cursor_path": "\"@odata.nextLink\""},
+            pagination=GRAPH_PAGING,
             # OData wants an unquoted ISO datetime literal in `$filter`.
             query={"$filter": "modifiedon gt {{ watermark_or_epoch }}"},
             incremental="watermark",
@@ -780,6 +790,7 @@ CATALOG: tuple[Connector, ...] = (
             url_path="webUrl", version="lastModifiedDateTime",
             # OData wants an unquoted ISO datetime literal in `$filter`.
             query={"$filter": "lastModifiedDateTime gt {{ watermark_or_epoch }}"},
+            pagination=GRAPH_PAGING,
             incremental="watermark",
         ),
         notes="Lists the root of the library only. For the whole library and "
@@ -796,6 +807,7 @@ CATALOG: tuple[Connector, ...] = (
             url_path="webUrl", version="lastModifiedDateTime",
             # OData wants an unquoted ISO datetime literal in `$filter`.
             query={"$filter": "lastModifiedDateTime gt {{ watermark_or_epoch }}"},
+            pagination=GRAPH_PAGING,
             incremental="watermark",
         ),
         notes="Root only. For the whole drive, use OneDrive (drive tree).",
@@ -814,6 +826,7 @@ CATALOG: tuple[Connector, ...] = (
             items="value[*]", id_path="id", title="subject",
             content="bodyPreview", url_path="webLink",
             version="lastModifiedDateTime",
+            pagination=GRAPH_PAGING,
             incremental="watermark",
         ),
     ),
@@ -831,6 +844,7 @@ CATALOG: tuple[Connector, ...] = (
             url_path="webUrl", version="lastModifiedDateTime",
             # OData wants an unquoted ISO datetime literal in `$filter`.
             query={"$filter": "lastModifiedDateTime gt {{ watermark_or_epoch }}"},
+            pagination=GRAPH_PAGING,
             incremental="watermark",
         ),
         notes="Teams also arrives as a webhook today — see Inbound, which "

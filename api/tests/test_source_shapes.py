@@ -147,6 +147,43 @@ async def test_offset_paging_walks_the_whole_result_set(sources):
     assert again == [], f"re-read after the watermark: {[f.external_id for f in again]}"
 
 
+async def test_a_source_deeper_than_the_page_cap_says_so(sources):
+    """The one limit that did not report itself.
+
+    `max_items` and the wall clock both come back from `discover` as a stop
+    reason, which marks the run `partial` -- and `partial` is what stops the
+    watermark advancing. `max_pages` did not: the loop ended, no reason came
+    back, the run was marked `completed`, and completed advances the watermark
+    past every record beyond the cap. A source larger than
+    `max_pages x page_size` therefore lost the remainder permanently, reporting
+    a plausible count and no error.
+    """
+    config = CrawlerConfig(
+        name="messages", strategy="http",
+        request=HttpRequest(url=f"{sources}/graph/v1.0/messages"),
+        # Two records per page from the simulator, so one page is short of the
+        # five it holds.
+        pagination=Pagination(type="next_url", cursor_path='"@odata.nextLink"',
+                              max_pages=1),
+        extract=Extract(items_path="value[*]", id_path="id",
+                        version_path="lastModifiedDateTime"),
+        incremental="watermark",
+        limits=Limits(rate_per_sec=50, max_items=100),
+    )
+    found, _budget, stopped = await _crawl(config)
+    assert len(found) == 2, [f.external_id for f in found]
+    assert stopped and "max_pages" in stopped, (
+        "the page cap truncated the crawl and reported nothing, so the run "
+        f"would be marked completed and the watermark advanced: {stopped!r}"
+    )
+
+    # And the ordinary end of a source still reports nothing, or every crawl
+    # that simply finished would be filed as partial.
+    config.pagination.max_pages = 10
+    found, _budget, stopped = await _crawl(config)
+    assert len(found) == 5 and stopped is None, stopped
+
+
 # -------------------------------------------------- next_url, absolute form
 
 async def test_an_absolute_next_link_resolves_differently_from_a_path(sources):
@@ -171,6 +208,47 @@ async def test_an_absolute_next_link_resolves_differently_from_a_path(sources):
     # the query on top of the URL the source handed back would double it.
     later, _b, _c = await _crawl(config, watermark=MIDPOINT)
     assert sorted(f.external_id for f in later) == ["graph-4", "graph-5"]
+
+
+# The four Graph entries, built from the catalog rather than hand-written.
+# `{"scope": value}` cannot redirect them the way Salesforce's `instance` does,
+# because each hardcodes `graph.microsoft.com`, so the URL is overridden and the
+# filter dropped. That is why none of these claims `exercised_against`: what is
+# proven here is the paging and the field mapping, not the endpoint or the
+# `$filter` grammar, and the catalog's honesty is worth more than the badge.
+GRAPH_ENTRIES = [
+    ("outlook", {"user": "someone@acme.com"}),
+    ("teams", {"team": "t", "channel": "19:x@thread.tacv2"}),
+    ("sharepoint", {"site": "acme.sharepoint.com,g,g"}),
+    ("onedrive", {"user": "someone@acme.com"}),
+]
+
+
+@pytest.mark.parametrize("key,scope", GRAPH_ENTRIES)
+async def test_a_graph_entry_pages_rather_than_reading_only_the_first(
+    sources, key, scope
+):
+    """The bug this file exists to catch, found in the catalog rather than the
+    crawler.
+
+    `test_an_absolute_next_link_resolves_differently_from_a_path` above proves
+    the crawler follows `@odata.nextLink`, and it passed the whole time these
+    four entries declared no pagination at all -- so the mechanism was tested
+    and the entries that needed it were not. Each read 2 of the 5 records here
+    and then stored a watermark as though it had read all five: no error, no
+    warning, just a source that looks smaller than it is.
+    """
+    from memdog import connectors
+
+    built = connectors.build(key, scope)
+    built["request"]["url"] = f"{sources}/graph/v1.0/messages"
+    built["request"].pop("query", None)
+    config = CrawlerConfig.model_validate(built)
+
+    found, _b, _c = await _crawl(config)
+    assert len(found) == 5, (
+        f"{key} stopped after one page: {[f.external_id for f in found]}"
+    )
 
 
 # ------------------------------------------------------------ page + flag
