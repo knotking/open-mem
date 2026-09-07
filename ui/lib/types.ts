@@ -261,8 +261,42 @@ export async function call<T>(
     body: body ? JSON.stringify(body) : undefined,
   });
   const payload = await response.json();
-  if (!response.ok) throw new Error(payload?.detail ?? `request failed (${response.status})`);
+  if (!response.ok) throw new Error(describeError(payload?.detail, response.status));
   return payload as T;
+}
+
+/**
+ * A refusal, as a sentence.
+ *
+ * `detail` is a string for anything the app raises itself, and FastAPI's own
+ * request validation makes it a **list of objects** instead — one per rejected
+ * field. `new Error(thatList)` stringifies to `[object Object]`, which is what
+ * the console showed when a recorded video was refused: the server had said
+ * exactly which field was wrong and why, and none of it reached the screen.
+ */
+export function describeError(detail: unknown, status: number): string {
+  if (typeof detail === "string" && detail) return detail;
+  if (Array.isArray(detail)) {
+    const sentences = detail
+      .map((entry) => {
+        const item = entry as { loc?: unknown[]; msg?: string };
+        const msg = typeof item?.msg === "string" ? item.msg : null;
+        if (!msg) return null;
+        // `body` leads every path and says nothing; the rest is the field.
+        const where = Array.isArray(item.loc)
+          ? item.loc.filter((part) => part !== "body").join(".")
+          : "";
+        return where ? `${where}: ${msg}` : msg;
+      })
+      .filter((line): line is string => line !== null);
+    if (sentences.length > 0) return sentences.join("; ");
+  }
+  // Arrays already had their turn above; an empty one is no information at
+  // all, and `JSON.stringify([])` would put "[]" on the screen.
+  if (detail && typeof detail === "object" && !Array.isArray(detail)) {
+    return JSON.stringify(detail);
+  }
+  return `request failed (${status})`;
 }
 
 

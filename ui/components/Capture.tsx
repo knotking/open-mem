@@ -15,6 +15,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { base64FromDataUrl } from "@/lib/payload";
+
 // What an *upload session* accepts, not what fits in a JSON body. Bytes above
 // `INLINE_MAX` go through `POST /uploads` and never touch a base64 string, so
 // the old 18 MB inline ceiling is no longer the limit on what can be added --
@@ -45,15 +47,14 @@ async function toBase64(blob: Blob): Promise<string> {
     reader.onerror = () =>
       reject(reader.error ?? new Error("the file could not be read"));
     reader.onload = () => {
-      const result = String(reader.result ?? "");
-      const comma = result.indexOf(",");
-      // No comma means no data URL, which means no payload to send -- better a
+      // No payload means no data URL, which means nothing to send -- better a
       // named failure here than an empty item written as if it had content.
-      if (comma < 0) {
+      const payload = base64FromDataUrl(String(reader.result ?? ""));
+      if (payload === null) {
         reject(new Error("the file could not be encoded"));
         return;
       }
-      resolve(result.slice(comma + 1));
+      resolve(payload);
     };
     reader.readAsDataURL(blob);
   });

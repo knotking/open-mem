@@ -15,6 +15,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import Arc from "./Arc";
 import { ARC_STEPS } from "@/lib/arc";
 import Capture, { humanBytes, type Staged } from "./Capture";
+import { base64FromDataUrl } from "@/lib/payload";
 import ThemeToggle from "./ThemeToggle";
 import { WriteProgress, assess, useTracked } from "./Progress";
 import { readSnapshot } from "@/lib/progress";
@@ -1206,10 +1207,9 @@ function AddData({
       const reader = new FileReader();
       reader.onerror = () => reject(reader.error ?? new Error("could not read the file"));
       reader.onload = () => {
-        const out = String(reader.result ?? "");
-        const comma = out.indexOf(",");
-        if (comma < 0) reject(new Error("could not encode the file"));
-        else resolve(out.slice(comma + 1));
+        const payload = base64FromDataUrl(String(reader.result ?? ""));
+        if (payload === null) reject(new Error("could not encode the file"));
+        else resolve(payload);
       };
       reader.readAsDataURL(blob);
     });
