@@ -104,17 +104,19 @@ export const ARC_STEPS = [
     n: "01",
     title: "Make a place",
     body:
-      "A memory is the container, and its type is the policy for everything "
-      + "that lands in it: how long it lives, whether what arrives is enriched, "
-      + "how a URL in it is read, whether it tracks change between versions.",
+      "A memory is a place to keep things together — the incident, the trip, "
+      + "the customer. Name one and it exists; everything in it is kept. Its "
+      + "lifecycle policy, folded away at the foot of that screen, is what "
+      + "decides otherwise: how long its contents live, whether a model reads "
+      + "them on arrival, how a URL in it is fetched.",
   },
   {
     n: "02",
     title: "Get something in",
     body:
-      "Add data takes a paste, a file or a recording. Producers, Inbound and "
-      + "Crawlers are the same write path without a person: an SDK, a webhook a "
-      + "provider posts to, and a puller for anything that will not push.",
+      "Add data takes a paste, a file or a recording. Inbound and Crawlers are "
+      + "the same write path without a person: a webhook a provider posts to, "
+      + "and a puller for anything that will not push.",
   },
   {
     n: "03",
@@ -130,9 +132,11 @@ export const ARC_STEPS = [
     n: "04",
     title: "Get it back",
     body:
-      "Search returns evidence and says what it excluded and why. Chat returns "
-      + "prose with a citation behind every claim. Browse walks the corpus by "
-      + "container when you would rather look than ask.",
+      "Two ways, and they answer different questions. Deep dive walks the "
+      + "corpus by container, down to one revision, when you would rather look "
+      + "than ask. Chat returns prose with a citation behind every claim — and "
+      + "under each answer, the retrieval that produced it: what was ranked, "
+      + "and what was dropped and why.",
   },
   {
     n: "05",
@@ -156,9 +160,8 @@ export function readArc(counts: Counts): Arc {
     key: "place",
     title: "Make a place",
     body:
-      "A memory is the container, and its type is the policy for everything "
-      + "that lands in it — how long it lives, whether it is enriched, how a "
-      + "URL in it is read.",
+      "A memory is a place to keep things together. Name one and it exists; "
+      + "its lifecycle policy decides how long what lands in it lives.",
     state: counts.memories === null ? "unknown"
       : counts.memories === 0 ? "empty" : "ready",
     count: counts.memories,
@@ -176,8 +179,8 @@ export function readArc(counts: Counts): Arc {
     key: "arrive",
     title: "Get something in",
     body:
-      "Paste, upload or record it; or let a producer, a webhook or a crawler "
-      + "write it without a person.",
+      "Paste, upload or record it; or let an SDK, a webhook or a crawler write "
+      + "it without a person.",
     state: counts.total === 0 ? "empty" : "ready",
     count: counts.total,
     unit: "record",
@@ -208,7 +211,7 @@ export function readArc(counts: Counts): Arc {
           + "its own panel."
         : null,
     go: share >= BEHIND_SHARE
-      ? { section: "update", label: "Browse what is stored" } : null,
+      ? { section: "update", label: "Look at what is stored" } : null,
   };
 
   const back: Stage = {
@@ -216,8 +219,8 @@ export function readArc(counts: Counts): Arc {
     key: "back",
     title: "Get it back",
     body:
-      "Search returns evidence and says what it excluded. Chat returns prose "
-      + "with a citation behind every claim.",
+      "Chat returns prose with a citation behind every claim, and the "
+      + "retrieval behind it on request. Deep dive walks the corpus by hand.",
     state: counts.total === 0 ? "unknown"
       : searchable === 0 ? "behind" : "ready",
     count: searchable,

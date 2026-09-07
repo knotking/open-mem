@@ -26,12 +26,7 @@ export const ALLOWED = [
   /^api\/v1\/crawl-tick$/,
   /^api\/v1\/prompts$/,
   /^api\/v1\/projects\/[\w-]+\/entities(\?.*)?$/,
-  /^api\/v1\/entities\/[\w-]+$/,
-  /^api\/v1\/entities\/[\w-]+\/graph(\?.*)?$/,
-  /^api\/v1\/entities\/[\w-]+\/co-mentions(\?.*)?$/,
   /^api\/v1\/graph\/predicates$/,
-  /^api\/v1\/entities\/merge$/,
-  /^api\/v1\/entities\/merges\/[\w-]+\/undo$/,
   /^api\/v1\/projects\/[\w-]+\/crawlers$/,
   /^api\/v1\/health$/,
   /^api\/v1\/data\/[A-Za-z0-9_]+(\?.*)?$/,
@@ -113,13 +108,6 @@ export const ALLOWED = [
   /^api\/v1\/alert-events(\?.*)?$/,
   // Standing queries: the same shape as alerts, matching on the record rather
   // than on a transition.
-  // Workflows: definitions, instances, and the one verb that moves state.
-  /^api\/v1\/workflows$/,
-  /^api\/v1\/workflows\/[A-Za-z0-9_]+\/instances$/,
-  /^api\/v1\/projects\/[A-Za-z0-9_]+\/workflows$/,
-  /^api\/v1\/projects\/[A-Za-z0-9_]+\/instances(\?.*)?$/,
-  /^api\/v1\/instances\/[A-Za-z0-9_]+$/,
-  /^api\/v1\/instances\/[A-Za-z0-9_]+\/(input|history|verify)(\?.*)?$/,
 
   /^api\/v1\/standing-queries$/,
   /^api\/v1\/standing-queries\/[A-Za-z0-9_]+$/,
@@ -141,8 +129,6 @@ export const ALLOWED = [
   /^api\/v1\/events(\?.*)?$/,
   /^api\/v1\/data\/[A-Za-z0-9_]+\/enrich$/,
   /^api\/v1\/projects(\?.*)?$/,
-  /^api\/v1\/projects\/[A-Za-z0-9_]+\/cases$/,
-  /^api\/v1\/cases\/[A-Za-z0-9_]+\/timeline$/,
   /^api\/v1\/shares$/,
   /^api\/v1\/shares\/[A-Za-z0-9_]+$/,
   /^api\/v1\/deletions$/,

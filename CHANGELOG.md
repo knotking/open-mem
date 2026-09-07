@@ -272,6 +272,11 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   its reason — never left pending, which would read as still running.
 
 ### Changed
+- **`api/uv.lock` is tracked.** There is no CI in this repo, so `pytest` on a
+  laptop is the only gate there is, and a gate that resolves a different
+  dependency set each run is not much of one. Nothing about a deploy changes:
+  `api/Dockerfile` builds with `pip` from `pyproject.toml` and never copies the
+  lockfile into the image.
 - **The README and the console's sign-in page are an elevator pitch rather than
   a specification.** Three hundred lines of feature inventory that nobody reads
   to the end of said less about what this is than four lines do.

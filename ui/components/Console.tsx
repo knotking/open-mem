@@ -82,26 +82,24 @@ type Member = { user_id: string; email: string | null; role: string };
 
 
 /**
- * Grouped by concern rather than by endpoint.
+ * The story first, then everything else.
  *
- * The split that matters is Organize versus Governance: memories and cases
- * answer *how is my data arranged*; audit, sharing and deletion answer *who
- * touched it and can I prove it*. Mixing them buries the compliance surface
- * inside a browsing surface.
- */
-/**
- * Grouped by the question being asked, and ordered by when it is asked.
+ * The nav had nine headings and twenty-six destinations, each shouting at the
+ * same volume, and the thing the console is actually *for* — make a place, put
+ * something in, read it back — was spread across four of them. Somebody
+ * arriving could not tell the four screens that matter from the twenty-two that
+ * support them.
  *
- * The earlier arrangement grew rather than being designed: `Data` was doing
- * four jobs at once — is it working, put it in, find it, and configure where it
- * comes from — `Alerts` was a heading holding one item, ingestion was split
- * between `Data` and `Admin`, and Compaction sat under `Organize` two groups
- * away from Deletion despite being the other half of the same lifecycle.
+ * So `Your data` is the whole product in one group, in the order it is done,
+ * and every other heading is a supporting concern below it. Two rules still
+ * hold the rest together: **one heading, one question** — a group needing "and"
+ * to describe it is two groups — and **the order is the order somebody arrives
+ * in**.
  *
- * Two rules hold it together now. **One heading, one question** — if a group
- * needs "and" to describe it, it is two groups. And **the order is the order
- * somebody arrives in**: *is this working* is what people open the console
- * with, so it is first rather than fifth inside something collapsed.
+ * Cases, Entities and Workflows were removed rather than rehoused: three
+ * screens describing how the corpus is arranged, none of them on the path from
+ * *I have data* to *I have an answer*. Search was folded into Chat, where its
+ * trace now explains an answer instead of standing as a rival way to ask.
  */
 // Where the write path changes. Below this a file rides in the JSON body as
 // base64, which is simple and costs a third more on the wire; above it the
@@ -115,13 +113,18 @@ const INLINE_MAX = 8 * 1024 * 1024;
 
 const GROUPS: { title: string; items: { key: Section; label: string; hint: string }[] }[] = [
   {
-    // First, because it is the first thing to do -- and because a memory type
-    // now carries real policy: whether what lands in it is enriched, how a URL
-    // in it is read, whether it tracks change. It sat under "Organize", which
-    // is where you file something you already have rather than where you begin.
-    title: "Memories",
+    // The whole product, in the order it is done. Everything below this heading
+    // is a supporting concern; nothing below it is the point.
+    title: "Your data",
     items: [
-      { key: "memory", label: "Memories", hint: "containers, and their policy" },
+      { key: "memory", label: "Memories", hint: "make a place to keep things" },
+      { key: "add", label: "Add data", hint: "paste, upload or record" },
+      { key: "repos", label: "Add a repo", hint: "analyse a GitHub repo" },
+      // "Deep dive", not "Update" and no longer "Browse": this is the reading
+      // half of the story, walking the corpus by container down to one
+      // revision, and its name should say that rather than promise an edit.
+      { key: "update", label: "Deep dive", hint: "read it yourself, down to one revision" },
+      { key: "ask", label: "Chat", hint: "ask it, with citations and the trace" },
     ],
   },
   {
@@ -133,34 +136,13 @@ const GROUPS: { title: string; items: { key: Section; label: string; hint: strin
     ],
   },
   {
-    // Inbound, crawlers and producers answer one question -- is data still
-    // arriving, and from where -- and used to sit in two different groups.
+    // The write path without a person. Producers left the nav: it was a
+    // freshness table for something you cannot create here, and the lag it
+    // reported belongs where a source is configured.
     title: "Sources",
     items: [
       { key: "inbound", label: "Inbound", hint: "webhooks providers post to" },
       { key: "crawlers", label: "Crawlers", hint: "pull what won't push" },
-      { key: "producers", label: "Producers", hint: "freshness and status" },
-    ],
-  },
-  {
-    title: "Data",
-    items: [
-      { key: "add", label: "Add data", hint: "paste, upload or record" },
-      { key: "repos", label: "Add a repo", hint: "analyse a GitHub repo" },
-      // "Browse", not "Update": after the drill-down this screen is mostly
-      // reading, and a label promising an edit makes people who want to look
-      // skip it. Search finds by query; this walks by container.
-      { key: "update", label: "Browse", hint: "by memory, down to one revision" },
-      { key: "search", label: "Search", hint: "retrieve, with the trace" },
-      { key: "ask", label: "Chat", hint: "ask your data, with citations" },
-    ],
-  },
-  {
-    title: "Organize",
-    items: [
-      { key: "cases", label: "Cases", hint: "subjects and timelines" },
-      { key: "workflows", label: "Workflows", hint: "where a long process is" },
-      { key: "entities", label: "Entities", hint: "who and what, with evidence" },
     ],
   },
   {
@@ -250,9 +232,6 @@ const HOW_TO: Partial<Record<Section, string[]>> = {
     "Dry-run it first: the dry run walks the identical code and stops short of the write, so its count is what a live run would do.",
     "Enable it only once the dry run looks right. Nothing in the catalog has been exercised against a live account.",
   ],
-  producers: [
-    "“How far behind each source is” is the highest-value thing here — a source that stopped reads as a quiet week everywhere else.",
-  ],
   add: [
     "Pick what kind of thing you are adding, then give it the content.",
     "Steps 3 to 5 all have working defaults; open them only to change where it goes, what is done to it, or who may see it.",
@@ -261,30 +240,17 @@ const HOW_TO: Partial<Record<Section, string[]>> = {
   update: [
     "Choose a memory to scope by — this walks the corpus by container rather than by query.",
     "Narrow, then open one record, then one revision. Each step shows only what is needed to choose the next.",
-  ],
-  search: [
-    "Type a query and choose the arms — vector, lexical, and graph, which reaches records that never contain your words.",
-    "Read “Considered but not returned” as carefully as the results: every dropped record carries the reason it was dropped.",
-    "Provenance names the model that embedded it, which is what makes a bad result diagnosable.",
+    "This is the half of reading that does not involve a model: what is actually stored, in your own words rather than its.",
   ],
   ask: [
     "Ask a question of the corpus rather than for records.",
     "Every factual sentence carries the passage behind it. An answer reported as ungrounded means the corpus does not say — that is a result, not a failure.",
+    "Open “How it found this” under an answer for the retrieval behind it: what was retrieved and ranked, what was considered and dropped and why, and which model embedded it. Search used to be its own screen; it is this panel now.",
   ],
   memory: [
-    "A memory is a lifecycle container: it groups records and decides when they expire.",
-    "“Past its TTL” is what to act on. Changing or removing one affects everything mapped into it.",
-  ],
-  cases: [
-    "A case is a subject and its timeline, assembled from records that mention it.",
-  ],
-  entities: [
-    "Entities are the people, organisations and things the corpus mentions, each with the records that evidence it.",
-    "“Merge these two?” is where the same thing under two names gets reconciled. “Mentioned alongside” is computed at query time, not stored.",
-  ],
-  workflows: [
-    "Define a long process, then watch where each run actually is.",
-    "“How it got here” is the part worth reading when one is stuck.",
+    "Name a memory and create it. That is the whole of the ordinary case — everything is kept, nothing expires.",
+    "A memory has a *type*, which is the policy for what lands in it: how long it lives, whether a model reads it on arrival, how a URL in it is fetched, whether it keeps a change-tracked timeline. Types ship configured and most installations never touch them, which is why they sit under “Lifecycle policy” rather than in front of the name field.",
+    "“Past its TTL” is what to act on. Changing or removing a memory affects everything mapped into it.",
   ],
   reprocess: [
     "“What is behind” counts records built by a generator that is no longer current.",
@@ -334,10 +300,9 @@ const HOW_TO: Partial<Record<Section, string[]>> = {
 };
 
 const GUIDE_WHY: Record<string, string> = {
+  "Your data": "Make a place, put something in, and read it back — by hand or by asking.",
   Monitor: "Is this working, and will it tell me when it is not.",
   Sources: "Is data still arriving, and where from.",
-  Data: "Put things in, and get them back out.",
-  Organize: "How the corpus is arranged, and what it has learned is in it.",
   Lifecycle: "How a corpus stops growing, and how something leaves for good.",
   Governance: "Who touched it, and what can be proved afterwards.",
   Configuration: "What runs, on which data, and what it costs.",
@@ -382,14 +347,15 @@ export default function Console({
   // hid it. Here every heading stays visible, any number of groups can be open
   // at once, the group you are in opens itself, and the filter finds anything
   // by name. Collapsed is not the same as hidden.
+  //
+  // Two open on arrival: the group holding the landing section, and the story
+  // itself. Opening only the former would leave somebody looking at Overview
+  // with the four screens the console exists for collapsed behind a heading.
   const [openGroups, setOpenGroups] = useState<string[]>(
-    () => GROUPS.filter((g) => g.items.some((i) => i.key === "overview")).map((g) => g.title));
-  // Handoffs between Search and Entities. A search result explains itself by
-  // naming the entity it was reached through; the entity panel hands a name
-  // back. Held here because the two panels are siblings and neither owns the
-  // other.
-  const [focusEntity, setFocusEntity] = useState<string | null>(null);
-  const [seededQuery, setSeededQuery] = useState<string | null>(null);
+    () => Array.from(new Set([
+      GROUPS[0].title,
+      ...GROUPS.filter((g) => g.items.some((i) => i.key === "overview")).map((g) => g.title),
+    ])));
   const [stair, setStair] = useState<Stair | null>(null);
   // Null is "not measured", which the rail renders differently from zero.
   const [memoryCount, setMemoryCount] = useState<number | null>(null);
@@ -409,9 +375,9 @@ export default function Console({
       .map((i) => i.key);
   }, [filter]);
 
-  // Following a handoff -- a search result that jumps to Entities, say -- must
-  // open the group it landed in, or the nav says you are somewhere you cannot
-  // see.
+  // Arriving somewhere from a link rather than from the nav -- the rail's "go
+  // here about it" buttons -- must open the group it landed in, or the nav says
+  // you are somewhere you cannot see.
   useEffect(() => {
     const owner = GROUPS.find((g) => g.items.some((i) => i.key === section));
     if (owner && !openGroups.includes(owner.title)) {
@@ -563,7 +529,7 @@ export default function Console({
               <button className="secondary" onClick={() => setShowGuide(false)}>Close</button>
             </div>
             <p className="empty">
-              Four steps end to end, then every section in the sidebar. Open one for how to work
+              Five steps end to end, then every section in the sidebar. Open one for how to work
               it, or go straight there.
             </p>
 
@@ -651,40 +617,16 @@ export default function Console({
         {section === "update" && (
           <UpdateData projectId={projectId} producerId={producerId} onChange={refresh} />
         )}
-        {section === "search" && (
-          <ReadSearch
-            projectId={projectId}
-            seeded={seededQuery}
-            onOpenEntity={(entityId) => {
-              setFocusEntity(entityId);
-              setSection("entities");
-              setOpenGroups((g) => g.includes("Organize") ? g : [...g, "Organize"]);
-            }}
-          />
-        )}
         {section === "ask" && <AskSection projectId={projectId} />}
         {section === "inbound" && <InboundSection projectId={projectId} />}
         {section === "crawlers" && <CrawlersSection projectId={projectId} />}
         {section === "repos" && <ReposSection projectId={projectId} />}
         {section === "audit" && <Audit projectId={projectId} />}
         {section === "memory" && <MemorySection projectId={projectId} />}
-        {section === "cases" && <CasesSection projectId={projectId} />}
-        {section === "workflows" && <WorkflowsSection projectId={projectId} />}
         {section === "alerts" && <AlertsSection projectId={projectId} />}
         {section === "standing" && <StandingSection projectId={projectId} />}
         {section === "compaction" && <CompactionSection projectId={projectId} />}
         {section === "reprocess" && <ReprocessSection projectId={projectId} />}
-        {section === "entities" && (
-          <EntitiesSection
-            projectId={projectId}
-            focus={focusEntity}
-            onSearchFor={(name) => {
-              setSeededQuery(name);
-              setSection("search");
-              setOpenGroups((g) => g.includes("Data") ? g : [...g, "Data"]);
-            }}
-          />
-        )}
         {section === "sharing" && <SharingSection />}
         {section === "deletion" && <DeletionSection projectId={projectId} onChange={refresh} />}
         {section === "settings" && <SettingsSection projectId={projectId} />}
@@ -693,7 +635,6 @@ export default function Console({
         {section === "mcp" && <McpSection projectId={projectId} />}
         {section === "projects" && <ProjectsSection />}
         {section === "keys" && <KeysSection />}
-        {section === "producers" && <ProducersSection projectId={projectId} />}
         {section === "platform" && <PlatformSection />}
       </main>
     </div>
@@ -1811,7 +1752,7 @@ function AddData({
 /* ------------------------------------------------------------ 2. update */
 
 /**
- * Browse and update — four levels, one at a time.
+ * Deep dive — four levels, one at a time.
  *
  * It used to load fifty items with every revision expanded, which answers a
  * question nobody asked: *show me everything*. What people actually do is
@@ -2008,10 +1949,11 @@ function UpdateData({
 
   return (
     <>
-      <h1>Browse and update</h1>
+      <h1>Deep dive</h1>
       <p className="lede">
-        Narrow to a memory, open an item, then open a revision. Each step shows
-        only what you need to choose the next one.
+        Read your data yourself rather than asking a model about it. Narrow to a memory, open an
+        item, then open a revision — each step shows only what you need to choose the next one.
+        This is also where a record is corrected.
       </p>
       {error && <p className="err">{error}</p>}
       {note && <p className="note">{note}</p>}
@@ -2206,17 +2148,6 @@ type Entity = {
   visible_mentions: number;
 };
 
-type GraphNode = { entity_id: string; display_name: string; type: string; depth: number };
-type GraphEdge = {
-  subject_id: string; predicate: string; object_id: string;
-  evidence: number; source_data_ids: string[]; confidence: number;
-  // Which template drew this edge; null is open-domain extraction.
-  template: string | null;
-  // Whether the predicate is read off the page or into it. It decides how much
-  // an answer resting on this hop is worth, so it belongs beside the edge and
-  // not in a detail view nobody opens.
-  confidence_class: "structural" | "interpretive";
-};
 type MemoryContext = {
   memory: { memory_id: string; type: string; memory_key: string | null;
             title: string | null };
@@ -2233,413 +2164,6 @@ type GraphTemplate = {
   template: string; description: string; questions: string[];
   predicates: string[]; citation_unit: string; digest: string;
 };
-type GraphView = {
-  root: GraphNode; nodes: GraphNode[]; edges: GraphEdge[]; truncated: boolean;
-};
-type CoMention = {
-  entity_id: string; display_name: string; type: string; shared_records: number;
-};
-
-type EntityDetail = Entity & {
-  mentions: { data_id: string; surface: string; resolved_by: string;
-              external_id: string; state: string; data_type: string | null }[];
-  visible_mention_count: number;
-};
-
-const ENTITY_TYPES = ["person", "organization", "location", "product",
-                      "event", "topic", "other"];
-
-function EntitiesSection({
-  projectId,
-  focus,
-  onSearchFor,
-}: {
-  projectId: string;
-  // An entity the search trace linked through to. Opened on arrival, so the
-  // hop from "why is this result here?" to "what else is connected?" is one
-  // click rather than a name to remember and re-find in a list.
-  focus?: string | null;
-  onSearchFor?: (name: string) => void;
-}) {
-  const [list, setList] = useState<Entity[]>([]);
-  const [kind, setKind] = useState<string | null>(null);
-  const [detail, setDetail] = useState<EntityDetail | null>(null);
-  const [chosen, setChosen] = useState<string[]>([]);
-  const [graph, setGraph] = useState<GraphView | null>(null);
-  const [together, setTogether] = useState<CoMention[]>([]);
-  const [depth, setDepth] = useState(1);
-  const [busy, setBusy] = useState(false);
-  const [note, setNote] = useState<string | null>(null);
-  const [lastMerge, setLastMerge] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const load = useCallback(async () => {
-    try {
-      const page = await call<{ entities: Entity[] }>(
-        `api/v1/projects/${projectId}/entities${kind ? `?type=${kind}` : ""}`,
-      );
-      setList(page.entities);
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  }, [projectId, kind]);
-
-  // Which lens to walk the graph through. Empty is every edge, which is what
-  // this screen has always shown.
-  const [lens, setLens] = useState("");
-  const [lenses, setLenses] = useState<GraphTemplate[]>([]);
-  useEffect(() => {
-    void call<{ templates: GraphTemplate[] }>("api/v1/templates")
-      .then((r) => setLenses(r.templates))
-      .catch(() => setLenses([]));
-  }, []);
-
-  const inspect = useCallback(
-    async (entityId: string) => {
-      try {
-        const [d, g, c] = await Promise.all([
-          call<EntityDetail>(`api/v1/entities/${entityId}`, undefined, "GET"),
-          call<GraphView>(
-            `api/v1/entities/${entityId}/graph?depth=${depth}` +
-              (lens ? `&template=${encodeURIComponent(lens)}` : ""),
-            undefined, "GET"),
-          call<{ co_mentions: CoMention[] }>(
-            `api/v1/entities/${entityId}/co-mentions`, undefined, "GET"),
-        ]);
-        setDetail(d);
-        setGraph(g);
-        setTogether(c.co_mentions);
-      } catch (e) {
-        setError((e as Error).message);
-      }
-    },
-    [depth, lens],
-  );
-
-  useEffect(() => {
-    if (focus) void inspect(focus);
-  }, [focus, inspect]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  async function act(message: string, work: () => Promise<void>) {
-    setBusy(true);
-    setError(null);
-    setNote(null);
-    try {
-      await work();
-      setNote(message);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function toggle(id: string) {
-    setChosen((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id].slice(-2),
-    );
-  }
-
-  return (
-    <>
-      <h1>Entities</h1>
-      <p className="lede">
-        The people, organizations and things your records name. Resolution is
-        deliberately cautious: it joins on a shared email or an exact name and
-        otherwise keeps them apart, because two nodes you can merge later beat one
-        node that fused two people and cannot be separated.
-      </p>
-
-      <section className="panel">
-        <div className="row">
-          <button className={kind === null ? "" : "secondary"} onClick={() => setKind(null)}>
-            All
-          </button>
-          {ENTITY_TYPES.map((t) => (
-            <button key={t} className={kind === t ? "" : "secondary"} onClick={() => setKind(t)}>
-              {t}
-            </button>
-          ))}
-        </div>
-        {note && <p className="ok">{note}</p>}
-        {error && <p className="err">{error}</p>}
-      </section>
-
-      {chosen.length === 2 && (
-        <section className="panel">
-          <h2>Merge these two?</h2>
-          <p className="empty">
-            The second becomes the survivor. Nothing is destroyed — the merge can be undone,
-            because &ldquo;these are the same person&rdquo; is a judgement and judgements are
-            sometimes wrong.
-          </p>
-          <div className="row">
-            <button
-              disabled={busy}
-              onClick={() =>
-                act("Merged. You can undo this.", async () => {
-                  const result = await call<{ merge_id: string }>("api/v1/entities/merge", {
-                    source_id: chosen[0], target_id: chosen[1],
-                  });
-                  setLastMerge(result.merge_id);
-                  setChosen([]);
-                  setDetail(null);
-                  await load();
-                })
-              }
-            >
-              Merge
-            </button>
-            <button className="secondary" onClick={() => setChosen([])}>Cancel</button>
-          </div>
-        </section>
-      )}
-
-      {lastMerge && (
-        <section className="panel">
-          <div className="row" style={{ alignItems: "center", gap: 12 }}>
-            <button
-              className="secondary"
-              disabled={busy}
-              onClick={() =>
-                act("Merge undone.", async () => {
-                  await call(`api/v1/entities/merges/${lastMerge}/undo`, {});
-                  setLastMerge(null);
-                  await load();
-                })
-              }
-            >
-              Undo that merge
-            </button>
-          </div>
-        </section>
-      )}
-
-      <section className="panel">
-        <h2>{list.length} entities</h2>
-        {list.length === 0 ? (
-          <p className="empty">
-            Nothing yet. Entities are resolved when a record is enriched, so enrich something
-            first.
-          </p>
-        ) : (
-          list.map((entity) => (
-            <div
-              className="hit"
-              key={entity.entity_id}
-              style={{
-                cursor: "pointer",
-                borderColor: chosen.includes(entity.entity_id) ? "var(--accent)" : undefined,
-              }}
-              onClick={() => act("", () => inspect(entity.entity_id))}
-            >
-              <div className="meta">
-                <span className="chip on">{entity.type}</span>
-                <span className="chip">{entity.visible_mentions} record
-                  {entity.visible_mentions === 1 ? "" : "s"}</span>
-                {entity.identifiers?.map((id) => (
-                  <span className="chip" key={id}>{id}</span>
-                ))}
-              </div>
-              <div className="text">{entity.display_name}</div>
-              <div className="row" style={{ marginTop: 6 }}>
-                <button
-                  className="secondary"
-                  onClick={(e) => { e.stopPropagation(); toggle(entity.entity_id); }}
-                >
-                  {chosen.includes(entity.entity_id) ? "Selected" : "Select to merge"}
-                </button>
-              </div>
-            </div>
-          ))
-        )}
-      </section>
-
-      {graph && (
-        <section className="panel">
-          <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
-            <h2 style={{ margin: 0 }}>Connections</h2>
-            <div className="row">
-              {[1, 2, 3].map((d) => (
-                <button
-                  key={d}
-                  className={depth === d ? "" : "secondary"}
-                  disabled={busy}
-                  onClick={() =>
-                    act("", async () => {
-                      setDepth(d);
-                      setGraph(
-                        await call<GraphView>(
-                          `api/v1/entities/${graph.root.entity_id}/graph?depth=${d}`,
-                          undefined, "GET"),
-                      );
-                    })
-                  }
-                >
-                  {d} hop{d > 1 ? "s" : ""}
-                </button>
-              ))}
-              {lenses.length > 0 && (
-                <select
-                  value={lens}
-                  disabled={busy}
-                  title="Walk only the edges a given template drew. Applied inside the traversal, so a path is shown only when every hop of it is within the template."
-                  onChange={(e) =>
-                    act("", async () => {
-                      const next = e.target.value;
-                      setLens(next);
-                      setGraph(
-                        await call<GraphView>(
-                          `api/v1/entities/${graph.root.entity_id}/graph?depth=${depth}` +
-                            (next ? `&template=${encodeURIComponent(next)}` : ""),
-                          undefined, "GET"),
-                      );
-                    })
-                  }
-                >
-                  <option value="">every relationship</option>
-                  {lenses.map((x) => (
-                    <option key={x.template} value={x.template}>
-                      read as {x.template}
-                    </option>
-                  ))}
-                </select>
-              )}
-            </div>
-          </div>
-
-          {graph.edges.length === 0 ? (
-            <p className="empty">
-              {lens
-                ? `No relationships drawn under the ${lens} template. That is a different fact from `
-                  + "having none at all — this entity may be well connected through edges other "
-                  + "templates or an open-domain pass produced."
-                : "No asserted relationships yet. Edges come from what a document actually stated — "
-                  + "\u201cPriya works for Northwind\u201d — so they need an enrichment pass that "
-                  + "read for them. Co-mentions below need nothing and work today."}
-            </p>
-          ) : (
-            <>
-              <p className="empty" style={{ marginTop: 4 }}>
-                Each edge names the records that assert it. One document saying something is a
-                claim; several saying it independently is closer to a fact.
-              </p>
-              {graph.edges.map((edge, i) => {
-                const name = (id: string) =>
-                  graph.nodes.find((n) => n.entity_id === id)?.display_name ?? id;
-                return (
-                  <div className="hit" key={`${edge.subject_id}-${edge.predicate}-${i}`}>
-                    <div className="meta">
-                      <span className="chip on">{edge.predicate.replace(/_/g, " ")}</span>
-                      <span className="chip">
-                        {edge.evidence} record{edge.evidence === 1 ? "" : "s"} assert this
-                      </span>
-                      {/* Whether the claim was stated or interpreted. It is the
-                        * one thing on an edge that changes how much a path
-                        * through it is worth, so it is a column rather than
-                        * something you click to find. */}
-                      {edge.confidence_class === "interpretive" && (
-                        <span className="chip warnchip"
-                              title="This predicate records a reading of what the content argues, not a statement it made plainly. An answer that depends on this hop is an interpretation.">
-                          a reading, not a quote
-                        </span>
-                      )}
-                      {edge.template && (
-                        <span className="chip"
-                              title={`Drawn under the ${edge.template} template — the content was declared to be this kind of thing when it was written`}>
-                          read as {edge.template}
-                        </span>
-                      )}
-                    </div>
-                    <div className="text">
-                      {name(edge.subject_id)} <span className="edge-arrow">→</span>{" "}
-                      {name(edge.object_id)}
-                    </div>
-                    <p className="provenance">{edge.source_data_ids.join(" · ")}</p>
-                  </div>
-                );
-              })}
-            </>
-          )}
-
-          {graph.nodes.length > 1 && (
-            <>
-              <h3>Reachable within {depth} hop{depth > 1 ? "s" : ""}</h3>
-              <div className="row">
-                {graph.nodes
-                  .filter((n) => n.entity_id !== graph.root.entity_id)
-                  .map((n) => (
-                    <span className="chip" key={n.entity_id}>
-                      {n.display_name} · {n.depth}
-                    </span>
-                  ))}
-              </div>
-              {graph.truncated && (
-                <p className="empty">
-                  Truncated at the result limit — there is more here than is shown.
-                </p>
-              )}
-            </>
-          )}
-        </section>
-      )}
-
-      {together.length > 0 && (
-        <section className="panel">
-          <h2>Mentioned alongside</h2>
-          <p className="empty" style={{ marginTop: 4 }}>
-            Entities appearing in the same records. This is weak evidence — appearing together is
-            not a relationship — but it needs no extraction, so it works before any model has read
-            for relationships.
-          </p>
-          <div className="row">
-            {together.map((c) => (
-              <span className="chip" key={c.entity_id}>
-                {c.display_name} · {c.shared_records} shared
-              </span>
-            ))}
-          </div>
-        </section>
-      )}
-
-      {detail && (
-        <section className="panel">
-          <div className="row" style={{ justifyContent: "space-between" }}>
-            <h2 style={{ margin: 0 }}>{detail.display_name}</h2>
-            {onSearchFor && (
-              <button
-                className="secondary"
-                onClick={() => onSearchFor(detail.display_name)}
-                title="Search with the graph arm, seeded from this entity"
-              >
-                Search from here
-              </button>
-            )}
-          </div>
-          <p className="empty">
-            Every mention is kept with the record it came from and why it resolved here — so a
-            wrong join is something you can see rather than something you inherit.
-          </p>
-          {detail.mentions.map((m, i) => (
-            <div className="hit" key={`${m.data_id}-${i}`}>
-              <div className="meta">
-                <span className="chip">as &ldquo;{m.surface}&rdquo;</span>
-                <span className="chip on">{m.resolved_by.replace("_", " ")}</span>
-                <span className={`chip ${m.state}`}>{m.state}</span>
-                {m.data_type && <span className="chip">{m.data_type}</span>}
-              </div>
-              <p className="provenance">{m.external_id} · {m.data_id}</p>
-            </div>
-          ))}
-        </section>
-      )}
-    </>
-  );
-}
 
 /* ---------------------------------------------------------- 4. crawlers */
 
@@ -2816,8 +2340,7 @@ function AlertEditor({
   alert: Alert | null;
   surfaces: Record<string, string[]>;
   vocabulary: { predicates: string[]; single_valued: string[] };
-  scopeOptions: { memories: Memory[]; cases: { case_id: string; title: string | null;
-                  external_id: string }[]; producers: { producer_id: string;
+  scopeOptions: { memories: Memory[]; producers: { producer_id: string;
                   type: string }[] };
   busy: boolean;
   runs: AlertRun[];
@@ -2997,7 +2520,6 @@ function AlertEditor({
             }}>
               <option value="">everything in this project</option>
               <option value="memory_id">one memory</option>
-              <option value="case_id">one case</option>
               <option value="producer_id">one source</option>
               <option value="entity_id">one entity</option>
             </select>
@@ -3016,16 +2538,6 @@ function AlertEditor({
                   * so before it is saved rather than after it fires. */}
                 {scopeValue && <ScopeReach memoryId={scopeValue} />}
               </>
-            )}
-            {scopeKind === "case_id" && (
-              <select value={scopeValue} onChange={(e) => setScopeValue(e.target.value)}>
-                <option value="">choose a case…</option>
-                {scopeOptions.cases.map((c) => (
-                  <option key={c.case_id} value={c.case_id}>
-                    {c.title || c.external_id}
-                  </option>
-                ))}
-              </select>
             )}
             {scopeKind === "producer_id" && (
               <select value={scopeValue} onChange={(e) => setScopeValue(e.target.value)}>
@@ -3568,9 +3080,8 @@ function AlertsSection({ projectId }: { projectId: string }) {
   const [subUrl, setSubUrl] = useState("https://");
   const [scopeOptions, setScopeOptions] = useState<{
     memories: Memory[];
-    cases: { case_id: string; title: string | null; external_id: string }[];
     producers: { producer_id: string; type: string }[];
-  }>({ memories: [], cases: [], producers: [] });
+  }>({ memories: [], producers: [] });
 
   const load = useCallback(async () => {
     try {
@@ -3598,16 +3109,13 @@ function AlertsSection({ projectId }: { projectId: string }) {
 
       // What an alert can be scoped to. Fetched here rather than in the editor
       // so opening the form is instant and the lists are already right.
-      const [mem, cas, prod] = await Promise.all([
+      const [mem, prod] = await Promise.all([
         call<{ memories: Memory[] }>(`api/v1/projects/${projectId}/memories`)
           .catch(() => ({ memories: [] })),
-        call<{ cases: { case_id: string; title: string | null; external_id: string }[] }>(
-          `api/v1/projects/${projectId}/cases`).catch(() => ({ cases: [] })),
         call<{ producers: { producer_id: string; type: string }[] }>("api/v1/producers")
           .catch(() => ({ producers: [] })),
       ]);
-      setScopeOptions({ memories: mem.memories, cases: cas.cases,
-                        producers: prod.producers });
+      setScopeOptions({ memories: mem.memories, producers: prod.producers });
     } catch (e) {
       setError((e as Error).message);
     }
@@ -5185,6 +4693,12 @@ type Answer = {
  * Whether it was grounded stays visible, because that changes whether you
  * should believe the sentence above it.
  */
+/** Why a record the reader *can* see did not come back, said as a sentence. */
+const EXCLUDED_WHY: Record<string, string> = {
+  threshold: "retrieved, ranked below the cut",
+  not_yet_enriched: "not searchable yet — it could not have matched",
+};
+
 function AskSection({ projectId }: { projectId: string }) {
   // What to ask *of*. Empty means the whole project — "chat with everything" is
   // a reasonable default and a poor only option: "what did we decide in the
@@ -5257,6 +4771,26 @@ function AskSection({ projectId }: { projectId: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
+
+  // The retrieval behind an answer, fetched on demand and kept per question.
+  //
+  // Search was its own screen until this: a second box, a second query, and no
+  // way to tell whether what it retrieved was what the answer had read. It was
+  // always the *explanation* of an answer rather than a rival way to ask one,
+  // so it lives under the answer now — the same query, the same filter, the
+  // arms it actually ran with, and the records it dropped and why.
+  const [traces, setTraces] = useState<Record<string, Trace>>({});
+  const [tracing, setTracing] = useState<string | null>(null);
+  // Which arms a turn's trace will run with. Seeded from what the answer ran
+  // with, then changeable: "would the graph arm have found it?" is the question
+  // people actually have when an answer is thin, and it can only be answered by
+  // re-running the retrieval, never the answer.
+  const [traceArms, setTraceArms] = useState<Record<string, ArmKey[]>>({});
+  // What each question was asked *with*. A filter is assembled from five
+  // controls that keep moving, so replaying a retrieval from the current state
+  // of the screen would explain a different question from the one on screen.
+  const asked = useRef<Record<string, { question: string; filter: Record<string, unknown> }>>({});
+
   const pane = useRef<HTMLDivElement | null>(null);
   // How much of the newest answer has been revealed. The API returns the whole
   // answer at once, so this is pacing rather than streaming -- and that order
@@ -5309,43 +4843,77 @@ function AskSection({ projectId }: { projectId: string }) {
   ].filter(Boolean).join(" · ");
 
   async function send(preset?: string) {
-    const asked = (preset ?? question).trim();
-    if (!asked) return;
+    const text = (preset ?? question).trim();
+    if (!text) return;
     setBusy(true);
     setError(null);
-    setPending(asked);
+    setPending(text);
     setQuestion("");
+    const filter = {
+      project_id: projectId, memory_ids: scope, keywords: about,
+      template: lens || null, entity_ids: anchored,
+    };
+    // The graph is an arm of the same retrieval the trace below shows, not a
+    // separate mode. Adding it widens what can be found; it does not change
+    // what an answer is.
+    const match: ArmKey[] = follow
+      ? ["vector", "lexical", "graph"] : ["vector", "lexical"];
     try {
-      const answer = await call<Answer>("api/v1/ask", {
-        question: asked,
-        filter: {
-          project_id: projectId, memory_ids: scope, keywords: about,
-          template: lens || null, entity_ids: anchored,
-        },
-        // The graph is an arm of the same retrieval search uses, not a
-        // separate mode. Adding it widens what can be found; it does not
-        // change what an answer is.
-        match: follow ? ["vector", "lexical", "graph"] : ["vector", "lexical"],
-      });
+      const answer = await call<Answer>("api/v1/ask", { question: text, filter, match });
+      asked.current[answer.query_id] = { question: text, filter };
+      setTraceArms((current) => ({ ...current, [answer.query_id]: match }));
       setTurns((previous) => [...previous, answer]);
       setOpen(null);
     } catch (e) {
       setError((e as Error).message);
       // Give the question back rather than making somebody retype it.
-      setQuestion(asked);
+      setQuestion(text);
     } finally {
       setPending(null);
       setBusy(false);
     }
   }
 
+  /** Re-run the retrieval behind one answer and keep what it returned. */
+  async function retrieveFor(queryId: string) {
+    const context = asked.current[queryId];
+    if (!context) return;
+    setTracing(queryId);
+    setError(null);
+    try {
+      const trace = await call<Trace>("api/v1/retrieve", {
+        query: context.question,
+        filter: context.filter,
+        match: traceArms[queryId] ?? ["vector", "lexical"],
+      });
+      setTraces((current) => ({ ...current, [queryId]: trace }));
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setTracing(null);
+    }
+  }
+
+  function toggleArm(queryId: string, key: ArmKey) {
+    setTraceArms((current) => {
+      const armed = current[queryId] ?? ["vector", "lexical"];
+      // Never all-off: a retrieval with no arms is not a narrower retrieval, it
+      // is an error from the API.
+      const next = armed.includes(key)
+        ? (armed.length === 1 ? armed : armed.filter((a) => a !== key))
+        : [...armed, key];
+      return { ...current, [queryId]: next };
+    });
+  }
+
   return (
     <>
       <h1>Chat</h1>
       <p className="lede">
-        Ask a question and a model answers from your records — the same retrieval as search, with
-        the passages read back to you. Every claim carries the number of the passage it came from,
-        so a wrong answer is something you can check rather than something you have to believe.
+        Ask a question and a model answers from your records. Every claim carries the number of the
+        passage it came from, so a wrong answer is something you can check rather than something
+        you have to believe — and <strong>How it found this</strong>, under any answer, opens the
+        retrieval itself: what was ranked, what was dropped and why, and which model embedded it.
       </p>
 
       <div className="scopebar">
@@ -5640,15 +5208,16 @@ function AskSection({ projectId }: { projectId: string }) {
             {!turn.grounded && (
               <span className="chip warnchip">not supported by the corpus</span>
             )}
-            {turn.citations.length > 0 && (
-              <button
-                className="linkish"
-                onClick={() => setOpen(open === turn.query_id ? null : turn.query_id)}
-              >
-                {open === turn.query_id ? "▾" : "▸"} {turn.citations.length} source
-                {turn.citations.length === 1 ? "" : "s"}
-              </button>
-            )}
+            <button
+              className="linkish"
+              onClick={() => setOpen(open === turn.query_id ? null : turn.query_id)}
+              title="The passages behind this answer, and the retrieval that found them"
+            >
+              {open === turn.query_id ? "▾" : "▸"} How it found this
+              {turn.citations.length > 0 && (
+                <> · {turn.citations.length} source{turn.citations.length === 1 ? "" : "s"}</>
+              )}
+            </button>
           </div>
 
           {open === turn.query_id && (
@@ -5687,7 +5256,12 @@ function AskSection({ projectId }: { projectId: string }) {
                   ))}
                 </p>
               )}
-              {turn.citations.map((citation) => (
+              {turn.citations.length === 0 ? (
+                <p className="empty">
+                  No passage was cited, so there is nothing to read behind the answer. Retrieve
+                  below to see whether anything was eligible to be cited at all.
+                </p>
+              ) : turn.citations.map((citation) => (
                 <div className="hit" key={citation.chunk_id}>
                   <div className="meta">
                     <span className="chip on">[{citation.marker}]</span>
@@ -5698,6 +5272,142 @@ function AskSection({ projectId }: { projectId: string }) {
                   <p className="provenance">{citation.data_id}</p>
                 </div>
               ))}
+
+              {/* The retrieval itself. Citations say what the answer used; this
+                * says what the search saw — including what it dropped, which is
+                * the half that diagnoses a thin answer. */}
+              <h3 style={{ marginBottom: 4 }}>The retrieval behind it</h3>
+              <div className="row">
+                <span className="muted" style={{ fontSize: 13 }}>Match on</span>
+                <div className="arms">
+                  {ARMS.map((arm) => {
+                    const armed = (traceArms[turn.query_id] ?? ["vector", "lexical"])
+                      .includes(arm.key);
+                    return (
+                      <button
+                        key={arm.key}
+                        type="button"
+                        aria-pressed={armed}
+                        title={`${arm.label} — ${arm.hint}`}
+                        onClick={() => toggleArm(turn.query_id, arm.key)}
+                      >
+                        {arm.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <button
+                  className="secondary"
+                  disabled={tracing === turn.query_id || !asked.current[turn.query_id]}
+                  title={asked.current[turn.query_id]
+                    ? "Runs the same query with the same scope, and reports what it "
+                      + "retrieved and what it dropped. It does not ask the model again."
+                    : "This answer arrived before the page was reloaded, so the filter it "
+                      + "ran under is no longer known"}
+                  onClick={() => void retrieveFor(turn.query_id)}
+                >
+                  {tracing === turn.query_id
+                    ? "Retrieving…"
+                    : traces[turn.query_id] ? "Retrieve again" : "Show what was considered"}
+                </button>
+              </div>
+
+              {traces[turn.query_id] && (() => {
+                const trace = traces[turn.query_id];
+                const ran = traceArms[turn.query_id] ?? ["vector", "lexical"];
+                return (
+                  <>
+                    {trace.corpus && (
+                      <p className="empty">
+                        Retrieving over <strong>{trace.corpus.enriched} enriched</strong> of{" "}
+                        {trace.corpus.total} records
+                        {trace.corpus.stored > 0
+                          && ` — ${trace.corpus.stored} not searchable yet`}.
+                      </p>
+                    )}
+                    {ran.includes("graph") && (
+                      <p className="seeds">
+                        <span className="label">
+                          {trace.graph_seeds.length === 0
+                            ? "The graph arm found nothing in the question to start from —"
+                            : "Expanded from"}
+                        </span>
+                        {trace.graph_seeds.map((seed) => (
+                          <span key={seed.entity_id}>
+                            {seed.display_name} <span className="muted">({seed.type})</span>{" "}
+                          </span>
+                        ))}
+                        {trace.graph_seeds.length === 0 && (
+                          <span className="muted">
+                            it matches whole entity names against the ones you can see, so
+                            &ldquo;Acme&rdquo; will not find &ldquo;Acme Corporation&rdquo;.
+                            Name the anchor under &ldquo;change&rdquo; to say where to start.
+                          </span>
+                        )}
+                      </p>
+                    )}
+                    <p className="empty" style={{ marginBottom: 4 }}>
+                      Retrieved — ranked, with scores
+                    </p>
+                    {trace.results.length === 0 ? (
+                      <p className="empty">
+                        Nothing matched. What follows says whether anything was eligible to.
+                      </p>
+                    ) : trace.results.map((hit, index) => (
+                      <div className="hit" key={hit.chunk_id}>
+                        <div className="meta">
+                          <span className="chip">#{index + 1}</span>
+                          <span className="chip">score {hit.score.toFixed(4)}</span>
+                          {ARMS.filter((arm) => ran.includes(arm.key)).map((arm) => (
+                            <span
+                              key={arm.key}
+                              className={`chip${hit.matched_by.includes(arm.chip) ? " on" : " off"}`}
+                            >
+                              {arm.label}
+                            </span>
+                          ))}
+                          <span className={`chip ${hit.state}`}>{hit.state}</span>
+                          <span className="chip">chars {hit.span_start}–{hit.span_end}</span>
+                        </div>
+                        <div className="text">{hit.text}</div>
+                        <p className="provenance">{hit.data_id}</p>
+                      </div>
+                    ))}
+
+                    <p className="empty" style={{ marginBottom: 4 }}>Considered but not returned</p>
+                    {trace.excluded.length === 0 ? (
+                      <p className="empty">Nothing was excluded.</p>
+                    ) : (
+                      <div className="excluded">
+                        {trace.excluded.map((x) => (
+                          <div className="item" key={`${x.data_id}-${x.reason}`}>
+                            <code>{x.data_id}</code>
+                            <span className="why">{EXCLUDED_WHY[x.reason] ?? x.reason}</span>
+                            {x.score !== null && (
+                              <span className="empty">score {x.score.toFixed(4)}</span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <p className="empty">
+                      Records excluded by <strong>ACL are deliberately absent</strong>. Saying
+                      something was hidden from you discloses that it exists — the predicate runs
+                      inside the query, so the count does not exist to be shown.
+                    </p>
+                    <table className="kv">
+                      <tbody>
+                        <tr><td>query id</td><td><code>{trace.query_id}</code></td></tr>
+                        <tr><td>embedding model</td><td><code>{trace.model_id}</code></td></tr>
+                        <tr>
+                          <td>generator</td>
+                          <td><code>{trace.generator_version ?? "—"}</code></td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </>
+                );
+              })()}
             </div>
           )}
 
@@ -5766,223 +5476,6 @@ function AskSection({ projectId }: { projectId: string }) {
         </p>
         </div>
       </div>
-    </>
-  );
-}
-
-
-/* ------------------------------------------------------------ 4. search */
-
-function ReadSearch({
-  projectId,
-  seeded,
-  onOpenEntity,
-}: {
-  projectId: string;
-  // A name handed over from the Entities panel. Arriving with one turns the
-  // graph arm on, because that is the question being asked -- "what else is
-  // connected to this?" -- and leaving it off would answer a different one.
-  seeded?: string | null;
-  onOpenEntity?: (entityId: string) => void;
-}) {
-  const [query, setQuery] = useState("rollback recovered error rates");
-  const [match, setMatch] = useState<ArmKey[]>(["vector", "lexical"]);
-  const [trace, setTrace] = useState<Trace | null>(null);
-  // What the last search actually asked for, which is not what the controls say
-  // once they are changed. Chips read from this, or a result would be rendered
-  // against arms it never ran under.
-  const [ran, setRan] = useState<ArmKey[]>([]);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  function toggleArm(key: ArmKey) {
-    setMatch((current) =>
-      current.includes(key)
-        ? // Never all-off: a search with no arms is not a narrower search, it
-          // is an error from the API.
-          current.length === 1
-          ? current
-          : current.filter((arm) => arm !== key)
-        : [...current, key],
-    );
-  }
-
-  useEffect(() => {
-    if (seeded) {
-      setQuery(seeded);
-      setMatch((current) =>
-        current.includes("graph") ? current : [...current, "graph"],
-      );
-    }
-  }, [seeded]);
-
-  async function search() {
-    setBusy(true);
-    setError(null);
-    try {
-      setTrace(
-        await call<Trace>("api/v1/retrieve", {
-          query,
-          filter: { project_id: projectId },
-          match,
-        }),
-      );
-      setRan(match);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  const REASONS: Record<string, string> = {
-    threshold: "retrieved, ranked below the cut",
-    not_yet_enriched: "not searchable yet — it could not have matched",
-  };
-
-  return (
-    <>
-      <h1>Search</h1>
-      <p className="lede">
-        The trace is the output, not the answer. An answer is a lagging indicator of ingestion
-        quality, filtered through a model that is good at sounding right regardless.
-      </p>
-
-      <section className="panel">
-        <div className="row">
-          <input
-            type="text"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && void search()}
-            style={{ flex: 1 }}
-          />
-          <button onClick={search} disabled={busy || !query.trim()}>
-            {busy ? "Searching…" : "Retrieve"}
-          </button>
-        </div>
-        <div className="row" style={{ marginTop: 10 }}>
-          <span className="muted" style={{ fontSize: 13 }}>Match on</span>
-          <div className="arms">
-            {ARMS.map((arm) => (
-              <button
-                key={arm.key}
-                type="button"
-                aria-pressed={match.includes(arm.key)}
-                onClick={() => toggleArm(arm.key)}
-                title={`${arm.label} — ${arm.hint}`}
-              >
-                {arm.label}
-              </button>
-            ))}
-          </div>
-          {match.includes("graph") && (
-            <span className="muted" style={{ fontSize: 12.5 }}>
-              Records connected to what you named, even when they do not contain it.
-            </span>
-          )}
-        </div>
-        {error && <p className="err">{error}</p>}
-      </section>
-
-      {trace && (
-        <>
-          <section className="panel">
-            <h2>Retrieved — ranked, with scores</h2>
-            {trace.corpus && (
-              <p className="empty" style={{ marginTop: -4 }}>
-                Answering over <strong>{trace.corpus.enriched} enriched</strong> of{" "}
-                {trace.corpus.total} records
-                {trace.corpus.stored > 0 && ` — ${trace.corpus.stored} not searchable yet`}.
-              </p>
-            )}
-            {ran.includes("graph") && (
-              <p className="seeds">
-                <span className="label">
-                  {trace.graph_seeds.length === 0
-                    ? "The graph arm found nothing in your query to start from —"
-                    : "Expanded from"}
-                </span>
-                {trace.graph_seeds.map((seed) => (
-                  <button
-                    key={seed.entity_id}
-                    className="linkish"
-                    onClick={() => onOpenEntity?.(seed.entity_id)}
-                    title="Open in Entities"
-                  >
-                    {seed.display_name} <span className="muted">({seed.type})</span>
-                  </button>
-                ))}
-                {trace.graph_seeds.length === 0 && (
-                  <span className="muted">
-                    it matches whole entity names against the ones you can see, so
-                    &ldquo;Acme&rdquo; will not find &ldquo;Acme Corporation&rdquo;.
-                  </span>
-                )}
-              </p>
-            )}
-            {trace.results.length === 0 ? (
-              <p className="empty">
-                Nothing matched. Check the panel below for whether anything was eligible to match.
-              </p>
-            ) : (
-              trace.results.map((hit, index) => (
-                <div className="hit" key={hit.chunk_id}>
-                  <div className="meta">
-                    <span className="chip">#{index + 1}</span>
-                    <span className="chip">score {hit.score.toFixed(4)}</span>
-                    {ARMS.filter((arm) => ran.includes(arm.key)).map((arm) => (
-                      <span
-                        key={arm.key}
-                        className={`chip${hit.matched_by.includes(arm.chip) ? " on" : " off"}`}
-                      >
-                        {arm.label}
-                      </span>
-                    ))}
-                    <span className={`chip ${hit.state}`}>{hit.state}</span>
-                    <span className="chip">chars {hit.span_start}–{hit.span_end}</span>
-                  </div>
-                  <div className="text">{hit.text}</div>
-                  <p className="provenance">{hit.data_id}</p>
-                </div>
-              ))
-            )}
-          </section>
-
-          <section className="panel">
-            <h2>Considered but not returned</h2>
-            {trace.excluded.length === 0 ? (
-              <p className="empty">Nothing was excluded.</p>
-            ) : (
-              <div className="excluded">
-                {trace.excluded.map((e) => (
-                  <div className="item" key={`${e.data_id}-${e.reason}`}>
-                    <code>{e.data_id}</code>
-                    <span className="why">{REASONS[e.reason]}</span>
-                    {e.score !== null && <span className="empty">score {e.score.toFixed(4)}</span>}
-                  </div>
-                ))}
-              </div>
-            )}
-            <p className="empty">
-              Records excluded by <strong>ACL are deliberately absent</strong>. Saying something was
-              hidden from you discloses that it exists — the predicate runs inside the query, so the
-              count does not exist to be shown.
-            </p>
-          </section>
-
-          <section className="panel">
-            <h2>Provenance</h2>
-            <table className="kv">
-              <tbody>
-                <tr><td>query id</td><td><code>{trace.query_id}</code></td></tr>
-                <tr><td>embedding model</td><td><code>{trace.model_id}</code></td></tr>
-                <tr><td>generator</td><td><code>{trace.generator_version ?? "—"}</code></td></tr>
-              </tbody>
-            </table>
-          </section>
-        </>
-      )}
     </>
   );
 }
@@ -6224,9 +5717,15 @@ function MemorySection({ projectId }: { projectId: string }) {
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const [newType, setNewType] = useState("session");
+  // "default" rather than "session": somebody naming a place to keep things
+  // means to keep them, and the old default quietly archived them after a day.
+  const [newType, setNewType] = useState("default");
   const [newKey, setNewKey] = useState("");
   const [newTitle, setNewTitle] = useState("");
+  // Both shut. The policy behind a memory is real and is almost never the
+  // first thing anybody wants to decide.
+  const [pickingType, setPickingType] = useState(false);
+  const [showTypes, setShowTypes] = useState(false);
   const [due, setDue] = useState<ExpiryDue | null>(null);
   const [sweep, setSweep] = useState<SweepResult | null>(null);
   const [tree, setTree] = useState<MemoryTree | null>(null);
@@ -6254,6 +5753,11 @@ function MemorySection({ projectId }: { projectId: string }) {
         .catch(() => ({ generators: [] }))).generators);
       setMemories(m.memories);
       setTypes(t.types);
+      // A project whose policies were renamed must not leave the create button
+      // pointing at a name the API will refuse.
+      setNewType((current) => t.types.some((x) => x.name === current)
+        ? current
+        : t.types.find((x) => x.name === "default")?.name ?? t.types[0]?.name ?? current);
       setDue(d);
     } catch (e) {
       setError((e as Error).message);
@@ -6323,160 +5827,35 @@ function MemorySection({ projectId }: { projectId: string }) {
     <>
       <h1>Memories</h1>
       <p className="lede">
-        A memory is a <strong>lifecycle</strong> container — how long does this matter? A case is a
-        subject — what is this about? A conversation expires; a patient does not.
+        A memory is a place to keep things together — the incident, the trip, the customer. Make
+        one, then put data in it and ask questions of it on its own rather than of everything at
+        once. Nothing expires unless a policy says so.
       </p>
       {error && <p className="err">{error}</p>}
       {note && <p className="empty">{note}</p>}
 
       <section className="panel">
-        <h2>Types</h2>
-        <p className="hint">
-          A type carries the policy for every memory of it: how long its contents live, what
-          happens when they expire, how a URL in it is read, whether what lands in it is
-          <strong> enriched without being asked</strong>, and whether it is a
-          <strong> change-tracked timeline</strong>. Enrichment is one model call per record —
-          right for a corpus that exists to be searched, wrong for an inbox.
-          A timeline makes every record added to one of its memories a checkpoint, described on
-          its own and compared with the one before it — so <strong>turning it on puts up to two
-          model calls behind every record</strong> written into any memory of this type. A
-          record identical to the one before it costs nothing.
-        </p>
-        <table className="kv">
-          <tbody>
-            {types.map((t) => (
-              <tr key={t.type_id}>
-                <td style={{ width: "auto" }}><strong>{t.name}</strong></td>
-                <td>
-                  <span className="chip">{describeTtl(t.ttl_seconds)}</span>{" "}
-                  <span className="chip">{t.on_expiry}</span>
-                </td>
-                <td>
-                  {t.checkpoints
-                    ? <span className="ok">tracks change</span>
-                    : <span className="empty">no timeline</span>}
-                </td>
-                <td style={{ whiteSpace: "nowrap" }}>
-                  <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                    <input
-                      type="checkbox"
-                      checked={t.enrich}
-                      disabled={busy || t.locked}
-                      title={
-                        "Enrich what lands here without being asked — one model "
-                        + "call per record. Right for a corpus that exists to be "
-                        + "searched; wrong for an inbox."}
-                      onChange={(e) =>
-                        act(`${t.name} ${e.target.checked ? "enriches" : "no longer enriches"} what lands in it.`,
-                          async () => {
-                            await call(`api/v1/projects/${projectId}/memory-types`, {
-                              name: t.name,
-                              ttl_seconds: t.ttl_seconds,
-                              on_expiry: t.on_expiry,
-                              checkpoints: t.checkpoints,
-                              url_reader: t.url_reader,
-                              enrich: e.target.checked,
-                            });
-                            await load();
-                          })
-                      }
-                    />
-                    <span className="empty">enrich</span>
-                  </label>
-                </td>
-                <td>
-                  <select
-                    value={t.url_reader}
-                    disabled={busy || t.locked}
-                    title={
-                      "How a URL in one of these memories is read. A model reading "
-                      + "costs one call per page, and exists because a JavaScript "
-                      + "page answers 200 with an empty shell — the download "
-                      + "succeeds and stores nothing."}
-                    onChange={(e) =>
-                      act(`${t.name} reads pages by ${e.target.value === "context"
-                            ? "asking the model" : "downloading"}.`, async () => {
-                        // The whole row: this endpoint is an upsert, so sending
-                        // one field resets the rest to their defaults.
-                        await call(`api/v1/projects/${projectId}/memory-types`, {
-                          name: t.name,
-                          ttl_seconds: t.ttl_seconds,
-                          on_expiry: t.on_expiry,
-                          checkpoints: t.checkpoints,
-                          enrich: t.enrich,
-                          url_reader: e.target.value,
-                        });
-                        await load();
-                      })
-                    }
-                  >
-                    <option value="fetch">download pages</option>
-                    <option value="context">model reads pages</option>
-                  </select>
-                </td>
-                <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
-                  <button
-                    className="linkish"
-                    disabled={busy || t.locked}
-                    title={t.locked
-                      ? "This type is locked and its policy cannot be changed here"
-                      : t.checkpoints
-                        ? "Stop tracking change. Existing checkpoints are kept; no new ones are captured."
-                        : "Track change. Every record added to a memory of this type becomes a checkpoint, at up to two model calls each."}
-                    onClick={() =>
-                      act(t.checkpoints
-                            ? `${t.name} no longer tracks change.`
-                            : `${t.name} now tracks change.`, async () => {
-                        // The whole row, not just the flag: this endpoint is an
-                        // upsert, so sending one field would reset the TTL and
-                        // the expiry policy to their defaults.
-                        await call(`api/v1/projects/${projectId}/memory-types`, {
-                          name: t.name,
-                          ttl_seconds: t.ttl_seconds,
-                          on_expiry: t.on_expiry,
-                          url_reader: t.url_reader,
-                          enrich: t.enrich,
-                          checkpoints: !t.checkpoints,
-                        });
-                        await load();
-                      })
-                    }
-                  >
-                    {t.checkpoints ? "Stop tracking" : "Track change"}
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
-
-      <section className="panel">
         <h2>Create a memory</h2>
         <div className="row">
-          <select value={newType} onChange={(e) => setNewType(e.target.value)}>
-            {types.map((t) => (
-              <option key={t.type_id} value={t.name}>
-                {t.name} · {describeTtl(t.ttl_seconds)} · {t.on_expiry}
-              </option>
-            ))}
-          </select>
           <input
             type="text"
-            placeholder="key — e.g. incident-4471"
+            placeholder="name — e.g. incident-4471"
             value={newKey}
             onChange={(e) => setNewKey(e.target.value)}
-            style={{ flex: 1, minWidth: 150 }}
+            style={{ flex: 1, minWidth: 180 }}
           />
           <input
             type="text"
             placeholder="title (optional)"
             value={newTitle}
             onChange={(e) => setNewTitle(e.target.value)}
-            style={{ flex: 1, minWidth: 130 }}
+            style={{ flex: 1, minWidth: 150 }}
           />
           <button
             disabled={busy || !newKey.trim() || types.length === 0}
+            title={types.length === 0
+              ? "No lifecycle policy is defined for this project yet"
+              : undefined}
             onClick={() =>
               act("Memory created.", async () => {
                 await call("api/v1/memories", {
@@ -6494,9 +5873,81 @@ function MemorySection({ projectId }: { projectId: string }) {
           </button>
         </div>
         <p className="empty">
-          The type decides the lifecycle: a TTL and what happens at the end. Writing an item with a
-          memory key also creates one — this is the path for organising deliberately rather than as
-          a side effect of a write.
+          {newType === "default"
+            ? "Everything put in it is kept, and nothing expires."
+            : `It will follow the ${newType} policy — ${describeTtl(
+                types.find((t) => t.name === newType)?.ttl_seconds ?? null)}.`}{" "}
+          Writing an item with a memory key also creates one — this is the path for organising
+          deliberately rather than as a side effect of a write.
+        </p>
+        {/* The policy is a real decision and almost never a *first* decision:
+          * it ships configured, and putting it in front of the name field made
+          * naming a place look like an administrative act. Folded, not
+          * removed — it says what it currently is, so it is never a silent
+          * default. */}
+        <button
+          className="linkish"
+          aria-expanded={pickingType}
+          onClick={() => setPickingType(!pickingType)}
+        >
+          {pickingType ? "▾" : "▸"} Lifecycle policy — <strong>{newType}</strong>
+        </button>
+        {pickingType && (
+          <div className="row" style={{ marginTop: 8 }}>
+            <select value={newType} onChange={(e) => setNewType(e.target.value)}>
+              {types.map((t) => (
+                <option key={t.type_id} value={t.name}>
+                  {t.name} · {describeTtl(t.ttl_seconds)} · {t.on_expiry}
+                </option>
+              ))}
+            </select>
+            <span className="empty">
+              What the policy decides, and how to change one, is under{" "}
+              <strong>Lifecycle policy</strong> at the foot of this screen.
+            </span>
+          </div>
+        )}
+      </section>
+
+
+      <section className="panel">
+        <h2>Memories in this project</h2>
+        {memories.length === 0 ? (
+          <p className="empty">None visible.</p>
+        ) : (
+          <div className="excluded">
+            {memories.map((m) => (
+              <div
+                className={`item memrow${selected?.memory_id === m.memory_id ? " chosen" : ""}`}
+                key={m.memory_id}
+                onClick={() => void openMemory(m)}
+              >
+                {/* Only when it is not the ordinary one. A column reading
+                  * "default" down its whole length is a word, not a fact. */}
+                {m.type !== "default" && <span className="chip on">{m.type}</span>}
+                <code>{m.memory_key ?? m.memory_id}</code>
+                {m.title && <span className="empty">{m.title}</span>}
+                <span className="empty">
+                  {m.members} member{m.members === 1 ? "" : "s"}
+                </span>
+                <span className="chip">{describeTtl(m.ttl_seconds)}</span>
+                {/* A rollup nobody can tell is out of date is one people keep
+                  * quoting. It is a flag rather than a queue entry, so this is
+                  * a state to read rather than progress to watch. */}
+                {m.stale_since && (
+                  <span className="chip warnchip far"
+                        title={`${m.stale_reason ?? "a source changed"} — since `
+                               + new Date(m.stale_since).toLocaleString()}>
+                    out of date
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+        <p className="empty">
+          A memory with no members you can see is not listed — a count of zero would still disclose
+          that the container exists, and a key is often meaningful on its own.
         </p>
       </section>
 
@@ -6586,45 +6037,6 @@ function MemorySection({ projectId }: { projectId: string }) {
             )}
           </>
         )}
-      </section>
-
-      <section className="panel">
-        <h2>Memories in this project</h2>
-        {memories.length === 0 ? (
-          <p className="empty">None visible.</p>
-        ) : (
-          <div className="excluded">
-            {memories.map((m) => (
-              <div
-                className={`item memrow${selected?.memory_id === m.memory_id ? " chosen" : ""}`}
-                key={m.memory_id}
-                onClick={() => void openMemory(m)}
-              >
-                <span className="chip on">{m.type}</span>
-                <code>{m.memory_key ?? m.memory_id}</code>
-                {m.title && <span className="empty">{m.title}</span>}
-                <span className="empty">
-                  {m.members} member{m.members === 1 ? "" : "s"}
-                </span>
-                <span className="chip">{describeTtl(m.ttl_seconds)}</span>
-                {/* A rollup nobody can tell is out of date is one people keep
-                  * quoting. It is a flag rather than a queue entry, so this is
-                  * a state to read rather than progress to watch. */}
-                {m.stale_since && (
-                  <span className="chip warnchip far"
-                        title={`${m.stale_reason ?? "a source changed"} — since `
-                               + new Date(m.stale_since).toLocaleString()}>
-                    out of date
-                  </span>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-        <p className="empty">
-          A memory with no members you can see is not listed — a count of zero would still disclose
-          that the container exists, and a key is often meaningful on its own.
-        </p>
       </section>
 
       {selected && (
@@ -7003,7 +6415,7 @@ function MemorySection({ projectId }: { projectId: string }) {
               </button>
             </div>
             <p className="empty">
-              Deleting applies the type&rsquo;s expiry policy
+              Deleting applies the memory&rsquo;s lifecycle policy
               {currentType ? ` — this one is ${currentType.on_expiry}` : ""}. Under{" "}
               <code>orphan_delete</code> an item is erased only if no other memory holds it: deleting
               a member because one of its containers went away would destroy data a permanent memory
@@ -7038,79 +6450,148 @@ function MemorySection({ projectId }: { projectId: string }) {
           </p>
         </section>
       )}
-    </>
-  );
-}
 
-/* ------------------------------------------------------- 4. cases */
-
-function CasesSection({ projectId }: { projectId: string }) {
-  const [rows, setRows] = useState<Record<string, unknown>[]>([]);
-  const [timeline, setTimeline] = useState<Record<string, unknown> | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    call<{ cases: Record<string, unknown>[] }>(`api/v1/projects/${projectId}/cases`)
-      .then((d) => setRows(d.cases))
-      .catch((e) => setError((e as Error).message));
-  }, [projectId]);
-
-  return (
-    <>
-      <h1>Cases</h1>
-      <p className="lede">
-        A case is a <strong>subject</strong> — what is this about? A memory is a lifecycle — how
-        long does this matter? A conversation expires; a patient does not.
-      </p>
-      {error && <p className="err">{error}</p>}
+      {/* Last, and shut. Six shipped policies most projects never touch, in
+        * front of the one thing everybody came here to do — that ordering is
+        * what made this screen read as configuration rather than as a place to
+        * keep things. */}
       <section className="panel">
-        <h2>Cases in this project</h2>
-        {rows.length === 0 ? (
-          <p className="empty">None yet. Write an item with a <code>case</code> to create one.</p>
-        ) : (
-          <div className="excluded">
-            {rows.map((c) => (
-              <div
-                className="item memrow"
-                key={String(c.case_id)}
-                onClick={() =>
-                  call<Record<string, unknown>>(`api/v1/cases/${c.case_id}/timeline`)
-                    .then(setTimeline)
-                    .catch((e) => setError((e as Error).message))
-                }
-              >
-                <span className="chip on">{String(c.case_type)}</span>
-                <code>{String(c.external_id)}</code>
-                <span className="empty">{String(c.members)} records</span>
-              </div>
-            ))}
-          </div>
+        <h2>Lifecycle policy</h2>
+        <p className="empty" style={{ marginTop: -6 }}>
+          Every memory follows one of these, and they ship configured. A policy decides how long
+          what lands in a memory lives and what happens when it expires, whether a model reads it
+          on arrival, how a URL in it is fetched, and whether it keeps a change-tracked timeline.
+        </p>
+        <button
+          className="linkish"
+          aria-expanded={showTypes}
+          onClick={() => setShowTypes(!showTypes)}
+        >
+          {showTypes
+            ? "▾ hide them"
+            : `▸ show the ${types.length} defined for this project`}
+        </button>
+        {showTypes && (
+          <>
+            <p className="hint">
+              Enrichment is one model call per record — right for a corpus that exists to be
+              searched, wrong for an inbox. A timeline makes every record added to one of its
+              memories a checkpoint, described on its own and compared with the one before it, so
+              <strong> turning it on puts up to two model calls behind every record</strong>
+              {" "}written into any memory following this policy. A record identical to the one
+              before it costs nothing. Changing a policy affects every memory that follows it.
+            </p>
+
+            <table className="kv">
+              <tbody>
+                {types.map((t) => (
+                  <tr key={t.type_id}>
+                    <td style={{ width: "auto" }}><strong>{t.name}</strong></td>
+                    <td>
+                      <span className="chip">{describeTtl(t.ttl_seconds)}</span>{" "}
+                      <span className="chip">{t.on_expiry}</span>
+                    </td>
+                    <td>
+                      {t.checkpoints
+                        ? <span className="ok">tracks change</span>
+                        : <span className="empty">no timeline</span>}
+                    </td>
+                    <td style={{ whiteSpace: "nowrap" }}>
+                      <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                        <input
+                          type="checkbox"
+                          checked={t.enrich}
+                          disabled={busy || t.locked}
+                          title={
+                            "Enrich what lands here without being asked — one model "
+                            + "call per record. Right for a corpus that exists to be "
+                            + "searched; wrong for an inbox."}
+                          onChange={(e) =>
+                            act(`${t.name} ${e.target.checked ? "enriches" : "no longer enriches"} what lands in it.`,
+                              async () => {
+                                await call(`api/v1/projects/${projectId}/memory-types`, {
+                                  name: t.name,
+                                  ttl_seconds: t.ttl_seconds,
+                                  on_expiry: t.on_expiry,
+                                  checkpoints: t.checkpoints,
+                                  url_reader: t.url_reader,
+                                  enrich: e.target.checked,
+                                });
+                                await load();
+                              })
+                          }
+                        />
+                        <span className="empty">enrich</span>
+                      </label>
+                    </td>
+                    <td>
+                      <select
+                        value={t.url_reader}
+                        disabled={busy || t.locked}
+                        title={
+                          "How a URL in one of these memories is read. A model reading "
+                          + "costs one call per page, and exists because a JavaScript "
+                          + "page answers 200 with an empty shell — the download "
+                          + "succeeds and stores nothing."}
+                        onChange={(e) =>
+                          act(`${t.name} reads pages by ${e.target.value === "context"
+                                ? "asking the model" : "downloading"}.`, async () => {
+                            // The whole row: this endpoint is an upsert, so sending
+                            // one field resets the rest to their defaults.
+                            await call(`api/v1/projects/${projectId}/memory-types`, {
+                              name: t.name,
+                              ttl_seconds: t.ttl_seconds,
+                              on_expiry: t.on_expiry,
+                              checkpoints: t.checkpoints,
+                              enrich: t.enrich,
+                              url_reader: e.target.value,
+                            });
+                            await load();
+                          })
+                        }
+                      >
+                        <option value="fetch">download pages</option>
+                        <option value="context">model reads pages</option>
+                      </select>
+                    </td>
+                    <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                      <button
+                        className="linkish"
+                        disabled={busy || t.locked}
+                        title={t.locked
+                          ? "This type is locked and its policy cannot be changed here"
+                          : t.checkpoints
+                            ? "Stop tracking change. Existing checkpoints are kept; no new ones are captured."
+                            : "Track change. Every record added to a memory of this type becomes a checkpoint, at up to two model calls each."}
+                        onClick={() =>
+                          act(t.checkpoints
+                                ? `${t.name} no longer tracks change.`
+                                : `${t.name} now tracks change.`, async () => {
+                            // The whole row, not just the flag: this endpoint is an
+                            // upsert, so sending one field would reset the TTL and
+                            // the expiry policy to their defaults.
+                            await call(`api/v1/projects/${projectId}/memory-types`, {
+                              name: t.name,
+                              ttl_seconds: t.ttl_seconds,
+                              on_expiry: t.on_expiry,
+                              url_reader: t.url_reader,
+                              enrich: t.enrich,
+                              checkpoints: !t.checkpoints,
+                            });
+                            await load();
+                          })
+                        }
+                      >
+                        {t.checkpoints ? "Stop tracking" : "Track change"}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
         )}
       </section>
-
-      {timeline && (
-        <section className="panel">
-          <h2>Timeline · {String(timeline.external_id)}</h2>
-          <p className="empty" style={{ marginTop: -4 }}>
-            {String(timeline.asserted)} asserted, {String(timeline.inferred)} inferred. Ordered by{" "}
-            <strong>event_time</strong> — a timeline built on when we learned about something
-            renders perfectly while being wrong.
-          </p>
-          {(timeline.entries as Record<string, unknown>[]).map((e) => (
-            <div className="hit" key={String(e.data_id)}>
-              <div className="meta">
-                <span className="chip">{new Date(String(e.event_time)).toLocaleDateString()}</span>
-                <span className={`chip ${e.basis === "asserted" ? "on" : ""}`}>
-                  {String(e.basis)}
-                </span>
-                {e.matched_on ? <span className="chip">matched {String(e.matched_on)}</span> : null}
-                <code>{String(e.data_id)}</code>
-              </div>
-              {e.preview ? <div className="text">{String(e.preview)}</div> : null}
-            </div>
-          ))}
-        </section>
-      )}
     </>
   );
 }
@@ -7876,384 +7357,6 @@ function ScopeReach({ memoryId }: { memoryId: string }) {
   );
 }
 
-/* ----------------------------------------------------------- workflows */
-
-type WorkflowDefinition = {
-  definition_id: string;
-  external_id: string;
-  name: string;
-  description: string | null;
-  config: {
-    initial: string;
-    states: Record<string, { ttl_seconds?: number; on_timeout?: string; terminal?: boolean }>;
-    transitions: { from: string; on: string; to: string; requires_actor_kind?: string }[];
-  };
-  config_version: number;
-  max_transitions: number;
-  running: number;
-};
-
-type Instance = {
-  instance_id: string;
-  external_id: string;
-  current_state: string;
-  current_seq: number;
-  status: string;
-  deadline_at: string | null;
-  transition_count: number;
-  overdue: boolean;
-  definition: string;
-  definition_name: string;
-};
-
-type Transition = {
-  transition_id: string;
-  seq: number;
-  from_state: string;
-  to_state: string;
-  trigger: string;
-  actor_kind: string;
-  data_id: string | null;
-  occurred_at: string;
-};
-
-type Verification = {
-  folded_state: string | null;
-  cached_state: string;
-  agrees: boolean;
-  sequence_gaps: number[];
-  chain_breaks: number[];
-  transitions: number;
-};
-
-const SAMPLE_WORKFLOW = JSON.stringify(
-  {
-    initial: "draft",
-    states: {
-      draft: {},
-      review: { ttl_seconds: 172800, on_timeout: "escalated" },
-      escalated: {},
-      approved: { terminal: true },
-    },
-    transitions: [
-      { from: "draft", on: "submit", to: "review" },
-      { from: "review", on: "approve", to: "approved", requires_actor_kind: "human" },
-      { from: "review", on: "reject", to: "draft" },
-      { from: "escalated", on: "approve", to: "approved" },
-    ],
-  },
-  null,
-  2,
-);
-
-/**
- * Workflows — state a long-running process can be asked about.
- *
- * The engine lives outside; this is the system of record. So the screen shows
- * the two things a record owes anyone: **where each instance is**, and **how it
- * got there** — the history rather than the current state, because a graph that
- * may contain cycles can visit `blocked` four times and "when did it enter
- * blocked" then has four answers.
- *
- * Overdue is the number the dashboard exists for. With no topological order,
- * *stuck* is not derivable from position: a deadline is the only thing that can
- * say it, which is why a state with a TTL and no `on_timeout` is refused at
- * definition time rather than firing forever.
- */
-function WorkflowsSection({ projectId }: { projectId: string }) {
-  const [definitions, setDefinitions] = useState<WorkflowDefinition[] | null>(null);
-  const [instances, setInstances] = useState<Instance[]>([]);
-  const [onlyOverdue, setOnlyOverdue] = useState(false);
-  const [selected, setSelected] = useState<Instance | null>(null);
-  const [log, setLog] = useState<Transition[]>([]);
-  const [proof, setProof] = useState<Verification | null>(null);
-
-  const [config, setConfig] = useState(SAMPLE_WORKFLOW);
-  const [externalId, setExternalId] = useState("approval");
-  const [startId, setStartId] = useState("");
-  const [startFrom, setStartFrom] = useState("");
-  const [trigger, setTrigger] = useState("");
-
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [note, setNote] = useState<string | null>(null);
-
-  const load = useCallback(async () => {
-    try {
-      const [defs, live] = await Promise.all([
-        call<{ workflows: WorkflowDefinition[] }>(`api/v1/projects/${projectId}/workflows`),
-        call<{ instances: Instance[] }>(
-          `api/v1/projects/${projectId}/instances?limit=100${onlyOverdue ? "&overdue=true" : ""}`),
-      ]);
-      setDefinitions(defs.workflows);
-      setInstances(live.instances);
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  }, [projectId, onlyOverdue]);
-  useEffect(() => { void load(); }, [load]);
-
-  async function act(message: string, run: () => Promise<unknown>) {
-    setBusy(true); setError(null); setNote(null);
-    try {
-      await run();
-      setNote(message);
-      await load();
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function open(instance: Instance) {
-    setSelected(instance);
-    setProof(null);
-    setTrigger("");
-    try {
-      setLog((await call<{ transitions: Transition[] }>(
-        `api/v1/instances/${instance.instance_id}/history?limit=50`)).transitions);
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  }
-
-  // What this instance can be told next, read from its own definition rather
-  // than typed by the reader. An input the state does not accept is a 409, and
-  // offering one is offering a mistake.
-  const accepted = (() => {
-    if (!selected) return [];
-    const def = definitions?.find((d) => d.external_id === selected.definition);
-    return (def?.config.transitions ?? [])
-      .filter((t) => t.from === selected.current_state)
-      .map((t) => t.on);
-  })();
-
-  return (
-    <>
-      <h1>Workflows</h1>
-      <p className="lede">
-        A long-running process, recorded rather than run: the engine lives outside and calls in.
-        The state graph <strong>may contain cycles</strong> — <code>review → reject → draft</code>{" "}
-        is a workflow, not a bug — so progress cannot be measured as depth and a deadline is the
-        only thing that can say an instance is stuck.
-      </p>
-      {error && <p className="err">{error}</p>}
-      {note && <p className="empty">{note}</p>}
-
-      <section className="panel">
-        <h2>Define one</h2>
-        <div className="row">
-          <label>
-            Key
-            <input type="text" value={externalId} placeholder="approval"
-                   onChange={(e) => setExternalId(e.target.value)} />
-          </label>
-          <button
-            disabled={busy || !externalId.trim()}
-            title="Redefining bumps the version and leaves running instances where they are — each pinned the version it started on."
-            onClick={() =>
-              act("Saved. Running instances stay on the version they started on.", async () => {
-                await call("api/v1/workflows", {
-                  project_id: projectId, external_id: externalId.trim(),
-                  name: externalId.trim(), config: JSON.parse(config),
-                }, "PUT");
-              })
-            }
-          >
-            Save definition
-          </button>
-        </div>
-        <textarea rows={14} value={config} onChange={(e) => setConfig(e.target.value)} />
-        <p className="empty" style={{ marginBottom: 0 }}>
-          Refused at definition time, because none of it can be fixed later for an instance
-          already sitting in it: a state nothing reaches, a transition to a state that does not
-          exist, a terminal state with a way out, and <strong>a TTL with no{" "}
-          <code>on_timeout</code></strong> — a deadline with nowhere to go fires forever. Cycles
-          pass, deliberately.
-        </p>
-      </section>
-
-      {definitions !== null && definitions.length > 0 && (
-        <section className="panel">
-          <h2>Defined here</h2>
-          <div className="excluded">
-            {definitions.map((d) => (
-              <div className="item" key={d.definition_id}>
-                <span className="chip on">{d.external_id}</span>
-                <span className="empty">
-                  {Object.keys(d.config.states).length} states ·{" "}
-                  {d.config.transitions.length} transitions
-                </span>
-                <span className="chip">v{d.config_version}</span>
-                <span className="empty">{d.running} running</span>
-                <span className="empty far">budget {d.max_transitions}</span>
-              </div>
-            ))}
-          </div>
-          <div className="row" style={{ marginTop: 10 }}>
-            <select value={startFrom} onChange={(e) => setStartFrom(e.target.value)}>
-              <option value="">start an instance of…</option>
-              {definitions.map((d) => (
-                <option key={d.definition_id} value={d.definition_id}>{d.external_id}</option>
-              ))}
-            </select>
-            <input type="text" value={startId} placeholder="its id — po-4471"
-                   onChange={(e) => setStartId(e.target.value)} />
-            <button
-              disabled={busy || !startFrom || !startId.trim()}
-              title="Idempotent on the id: starting twice returns the same instance, because an engine retrying after a timeout is the ordinary case."
-              onClick={() =>
-                act("Started.", async () => {
-                  await call(`api/v1/workflows/${startFrom}/instances`,
-                             { external_id: startId.trim() });
-                  setStartId("");
-                })
-              }
-            >
-              Start
-            </button>
-          </div>
-        </section>
-      )}
-
-      <section className="panel">
-        <h2>Running</h2>
-        <div className="row">
-          <label className="check">
-            <input type="checkbox" checked={onlyOverdue}
-                   onChange={(e) => setOnlyOverdue(e.target.checked)} />
-            Only what is past its deadline
-          </label>
-        </div>
-        {instances.length === 0 ? (
-          <p className="empty" style={{ marginBottom: 0 }}>
-            {onlyOverdue
-              ? "Nothing is overdue. That is the answer this filter exists to give quickly."
-              : "No instances yet."}
-          </p>
-        ) : (
-          <div className="excluded">
-            {instances.map((i) => (
-              <button
-                className={`item memrow${selected?.instance_id === i.instance_id ? " chosen" : ""}`}
-                key={i.instance_id}
-                onClick={() => void open(i)}
-              >
-                <span className={`chip ${i.status === "running" ? "on" : ""}`}>
-                  {i.current_state}
-                </span>
-                <strong>{i.external_id}</strong>
-                <span className="empty">{i.definition}</span>
-                <span className="empty">seq {i.current_seq}</span>
-                {i.overdue && <span className="chip warnchip">overdue</span>}
-                {i.status !== "running" && <span className="chip">{i.status}</span>}
-                <span className="empty far">
-                  {i.deadline_at
-                    ? `due ${new Date(i.deadline_at).toLocaleString()}`
-                    : "no deadline in this state"}
-                </span>
-              </button>
-            ))}
-          </div>
-        )}
-      </section>
-
-      {selected && (
-        <>
-          <section className="panel">
-            <h2>{selected.external_id} · {selected.current_state}</h2>
-            <div className="row">
-              <select value={trigger} onChange={(e) => setTrigger(e.target.value)}>
-                <option value="">what happened…</option>
-                {accepted.map((t) => <option key={t} value={t}>{t}</option>)}
-              </select>
-              <button
-                disabled={busy || !trigger}
-                title={`Sends the input naming sequence ${selected.current_seq}. If somebody else moved it first this comes back 409 with where it actually is.`}
-                onClick={() =>
-                  act("Moved.", async () => {
-                    await call(
-                      `api/v1/instances/${selected.instance_id}/input`,
-                      { trigger, expected_seq: selected.current_seq });
-                    // Re-read rather than assume. Constructing the new state
-                    // client-side would be right until a deadline fired between
-                    // the two, and then the screen would be confidently wrong
-                    // about an instance somebody is acting on.
-                    const now = await call<Instance>(
-                      `api/v1/instances/${selected.instance_id}`);
-                    await open({ ...selected, ...now });
-                  })
-                }
-              >
-                Apply
-              </button>
-              <button
-                className="secondary"
-                disabled={busy}
-                title="Re-folds the transition log and compares it to the cached state."
-                onClick={() =>
-                  act("Verified.", async () => {
-                    setProof(await call<Verification>(
-                      `api/v1/instances/${selected.instance_id}/verify`));
-                  })
-                }
-              >
-                Prove the state
-              </button>
-            </div>
-            {accepted.length === 0 && (
-              <p className="empty">
-                Nothing is accepted here — a terminal state, or a state whose only way out is a
-                deadline.
-              </p>
-            )}
-            {proof && (
-              <p className={proof.agrees ? "ok" : "err"}>
-                {proof.agrees
-                  ? `Folded ${proof.transitions} transitions and got ${proof.folded_state} — the cached state agrees.`
-                  : `The log folds to ${proof.folded_state} and the cache says ${proof.cached_state}.`}
-                {proof.sequence_gaps.length > 0 &&
-                  ` Sequence gaps at ${proof.sequence_gaps.join(", ")} — a transition was lost.`}
-                {proof.chain_breaks.length > 0 &&
-                  ` Chain breaks at ${proof.chain_breaks.join(", ")} — two transitions disagree about where it was.`}
-              </p>
-            )}
-          </section>
-
-          <section className="panel">
-            <h2>How it got here</h2>
-            <div className="excluded">
-              {log.map((t) => (
-                <div className="item" key={t.transition_id}>
-                  <span className="chip">{t.seq}</span>
-                  <code>
-                    {t.from_state || "—"} → {t.to_state}
-                  </code>
-                  <span className={t.trigger.startsWith("@") ? "chip warnchip" : "chip on"}>
-                    {t.trigger}
-                  </span>
-                  <span className="empty">{t.actor_kind}</span>
-                  {t.data_id && <span className="empty">{t.data_id}</span>}
-                  <span className="empty far">
-                    {new Date(t.occurred_at).toLocaleString()}
-                  </span>
-                </div>
-              ))}
-            </div>
-            <p className="empty" style={{ marginBottom: 0 }}>
-              The history is the record and the state is a cache of it. A state can be entered
-              many times, so <em>when did this enter review</em> has as many answers as there are
-              rows — which is why the log is stored well and the column is only checked against it.
-              A <code>@</code> trigger is the clock, and it is not something a caller can send.
-            </p>
-          </section>
-        </>
-      )}
-    </>
-  );
-}
-
 /* ----------------------------------------------------- standing queries */
 
 type StandingQuery = {
@@ -9012,10 +8115,9 @@ function ReprocessSection({ projectId }: { projectId: string }) {
           )}
           <label>
             Run
-            {/* Still typed, and correctly so: a run id is copied from Crawlers
-              * or Workflows, not chosen from a set this screen can know. The
-              * placeholder says where it comes from rather than what it looks
-              * like. */}
+            {/* Still typed, and correctly so: a run id is copied from Crawlers,
+              * not chosen from a set this screen can know. The placeholder says
+              * where it comes from rather than what it looks like. */}
             <input type="text" placeholder="paste a run id from Crawlers"
                    value={runId} onChange={(e) => setRunId(e.target.value)} />
           </label>
@@ -9872,153 +8974,6 @@ function KeysSection() {
   );
 }
 
-type SourceLag = {
-  crawler_id: string;
-  name: string | null;
-  scope: string;
-  last_ok_at: string | null;
-  last_error: string | null;
-  behind_seconds: number | null;
-  cooling_until: string | null;
-  cooling_reason: string | null;
-};
-
-/**
- * Producers — freshness, and the two things that were only readable.
- *
- * `seconds_since_last_item` is one number per producer, and a crawler over
- * forty Slack channels is forty sources behind one number: `source-lag` breaks
- * it out per scope and separates *cooling* from *broken*, which is the whole
- * point — a rate-limited source is not a failed one and does not need a person.
- * It shipped with no reader.
- *
- * And a producer's status was displayed and could not be changed, so the way to
- * stop a misbehaving webhook was a curl.
- */
-function ProducersSection({ projectId }: { projectId: string }) {
-  const [rows, setRows] = useState<Record<string, unknown>[]>([]);
-  const [lag, setLag] = useState<SourceLag[] | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [note, setNote] = useState<string | null>(null);
-
-  const load = useCallback(async () => {
-    try {
-      setRows((await call<{ producers: Record<string, unknown>[] }>(
-        "api/v1/producers")).producers);
-      setLag((await call<{ sources: SourceLag[] }>(
-        `api/v1/projects/${projectId}/source-lag`)).sources);
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  }, [projectId]);
-  useEffect(() => { void load(); }, [load]);
-
-  async function setStatus(producerId: string, status: string) {
-    setBusy(true); setError(null); setNote(null);
-    try {
-      await call(`api/v1/producers/${producerId}`, { status }, "PATCH");
-      setNote(status === "enabled"
-        ? "Enabled. It writes again from the next delivery."
-        : "Disabled. Deliveries are still accepted and are dropped — a provider that "
-          + "gets a 4xx retries forever or gives up silently, and neither is what you meant.");
-      await load();
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <>
-      <h1>Producers</h1>
-      <p className="lede">
-        Nothing writes anonymously. <code>seconds_since_last_item</code> is the highest-value
-        detector in the system: it catches a stopped webhook, a crawler whose selector broke, and a
-        client that quietly died — with one query.
-      </p>
-      {error && <p className="err">{error}</p>}
-      {note && <p className="empty">{note}</p>}
-
-      <section className="panel">
-        <h2>Who writes here</h2>
-        <div className="excluded">
-          {rows.map((p) => {
-            const enabled = p.status === "enabled";
-            return (
-              <div className="item" key={String(p.producer_id)}>
-                <code>{String(p.producer_id)}</code>
-                <span className="chip on">{String(p.type)}</span>
-                <span className={`chip ${enabled ? "on" : ""}`}>{String(p.status)}</span>
-                {p.connection_scope ? <span className="chip">{String(p.connection_scope)}</span> : null}
-                <span className="empty">
-                  {p.seconds_since_last_item === null
-                    ? "never written"
-                    : `last item ${Math.round(Number(p.seconds_since_last_item))}s ago`}
-                </span>
-                <button
-                  className="linkish far"
-                  disabled={busy}
-                  title={enabled
-                    ? "Stops it writing. A webhook keeps accepting deliveries and drops them, because a 4xx makes a provider retry forever or give up silently."
-                    : "Lets it write again."}
-                  onClick={() => void setStatus(String(p.producer_id),
-                                                enabled ? "disabled" : "enabled")}
-                >
-                  {enabled ? "Disable" : "Enable"}
-                </button>
-              </div>
-            );
-          })}
-        </div>
-      </section>
-
-      <section className="panel">
-        <h2>How far behind each source is</h2>
-        <p className="empty" style={{ marginTop: 0 }}>
-          Per <strong>scope</strong>, not per crawler: one crawler over forty channels is forty
-          sources, and a single busy one keeps the producer&rsquo;s freshness looking healthy while
-          thirty quiet ones go unread. <strong>Cooling is not broken</strong> — a rate-limited
-          credential is waiting exactly as long as it was told to, and does not need a person.
-        </p>
-        {lag === null ? (
-          <p className="empty">Loading…</p>
-        ) : lag.length === 0 ? (
-          <p className="empty">
-            No crawler has recorded a position in this project yet. That is different from being
-            behind: nothing has run.
-          </p>
-        ) : (
-          <div className="excluded">
-            {lag.map((s) => {
-              const cooling = s.cooling_until !== null
-                && new Date(s.cooling_until).getTime() > Date.now();
-              const stale = staleness(s.behind_seconds);
-              return (
-                <div className="item" key={`${s.crawler_id}-${s.scope}`}>
-                  <code>{s.name || s.crawler_id}</code>
-                  <span className="chip">{s.scope || "whole source"}</span>
-                  {cooling ? (
-                    <span className="chip warnchip">
-                      cooling until {new Date(s.cooling_until as string).toLocaleTimeString()}
-                    </span>
-                  ) : s.last_error ? (
-                    <span className="why">{s.last_error}</span>
-                  ) : null}
-                  <span className={stale?.warn ? "why far" : "empty far"}>
-                    {s.last_ok_at === null ? "never succeeded" : stale?.label}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </section>
-    </>
-  );
-}
-
 type PlatformHealth = {
   queue_depth: number;
   unpurged_tombstones: number;
@@ -10175,7 +9130,10 @@ type OverviewData = {
     probe_indexed: number | null;
     searchable_here: number;
   };
-  containers: { memories: number; cases: number; live_shares: number };
+  // `cases` is still counted by the API and no longer shown: the console has
+  // no case screen, and a tile for something with nowhere to go is a number
+  // that can only raise a question it cannot answer.
+  containers: { memories: number; live_shares: number };
   activity: { writes_24h: number; reads_24h: number; queries_24h: number };
 };
 
@@ -10325,7 +9283,6 @@ function Overview({
         />
         <Tile value={derived.revisions} label="revisions kept" />
         <Tile value={containers.memories} label="memories" />
-        <Tile value={containers.cases} label="cases" />
         <Tile
           value={containers.live_shares}
           label="public shares"
@@ -10867,7 +9824,7 @@ function InboundSection({ projectId }: { projectId: string }) {
               The two halves are separately priced, which is why they are separately settable: a
               high-volume feed usually wants embedding and not a summary of every message. A change
               here applies to the <strong>next</strong> delivery; what already arrived stays as it
-              landed — interpret those from Browse.
+              landed — interpret those from Deep dive.
             </p>
           </section>
 

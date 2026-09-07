@@ -188,12 +188,12 @@ export type ResolvedAuthor = {
 // without importing a ten-thousand-line component to do it.
 export type Section =
   | "overview"
-  | "add" | "update" | "search" | "ask" | "inbound" | "crawlers" | "repos" | "mcp"
-  | "memory" | "cases" | "entities" | "compaction" | "reprocess" | "workflows"
+  | "add" | "update" | "ask" | "inbound" | "crawlers" | "repos" | "mcp"
+  | "memory" | "compaction" | "reprocess"
   | "alerts" | "standing"
   | "audit" | "sharing" | "deletion"
   | "settings" | "models" | "prompts"
-  | "projects" | "keys" | "producers" | "platform";
+  | "projects" | "keys" | "platform";
 
 export type MemoryType = {
   type_id: string;
