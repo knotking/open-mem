@@ -236,7 +236,14 @@ class CrawlerConfig(BaseModel):
         # that fails at 3am because a seed was never fetchable is a worse way
         # to learn it than a 422 at the moment of saving.
         for seed in seeds:
-            validate_url(seed)
+            # `FetchError` is not one of the exceptions pydantic converts, so
+            # left alone it escapes body validation and the endpoint answers
+            # 500 with an HTML page -- the console then reports a JSON parse
+            # error, and the reason the seed was refused reaches nobody.
+            try:
+                validate_url(seed)
+            except FetchError as exc:
+                raise ValueError(str(exc)) from exc
         return seed_list(seeds)
 
 
@@ -249,7 +256,14 @@ def validate_config(config: CrawlerConfig) -> None:
     if config.strategy == "http":
         if config.request is None:
             raise CrawlerError("an http crawler needs a request", status=422)
-        validate_url(config.request.url)
+        # A URL the fetcher will not touch is the operator's typo, not a fault
+        # in here. Uncaught it left every endpoint that stores a crawler --
+        # including `from-connector`, where the site URL is the one thing the
+        # operator supplies -- answering 500 instead of saying what was wrong.
+        try:
+            validate_url(config.request.url)
+        except FetchError as exc:
+            raise CrawlerError(str(exc), status=422) from exc
     elif config.strategy == "tree":
         if config.tree is None:
             raise CrawlerError(

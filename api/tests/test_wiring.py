@@ -346,6 +346,31 @@ UNCALLED_ENDPOINTS: dict[str, str] = {
     "GET /api/v1/event-subscriptions/{subscription_id}/deliveries":
         "delivery attempts per subscription; the alerts screen does not read them",
 
+    # Screens deliberately removed from the console, September 2026: the nav
+    # was collapsed to one story -- make a place, add data, read it back -- and
+    # Cases, Entities, Workflows and Producers were not on it. The endpoints
+    # stayed because an API client may still use them; only the screens went.
+    # Listed here rather than deleted so this test keeps saying so out loud: if
+    # one of these is ever meant to be reachable again, it needs a screen, and
+    # if it is meant to be gone it should be deleted rather than exempted.
+    "GET /api/v1/projects/{project_id}/cases": "the Cases screen was removed",
+    "GET /api/v1/cases/{case_id}/timeline": "the Cases screen was removed",
+    "GET /api/v1/entities/{entity_id}": "the Entities screen was removed",
+    "GET /api/v1/entities/{entity_id}/graph": "the Entities screen was removed",
+    "GET /api/v1/entities/{entity_id}/co-mentions": "the Entities screen was removed",
+    "POST /api/v1/entities/merge": "the Entities screen was removed",
+    "POST /api/v1/entities/merges/{merge_id}/undo": "the Entities screen was removed",
+    "GET /api/v1/projects/{project_id}/workflows": "the Workflows screen was removed",
+    "PUT /api/v1/workflows": "the Workflows screen was removed",
+    "POST /api/v1/workflows/{definition_id}/instances": "the Workflows screen was removed",
+    "GET /api/v1/projects/{project_id}/instances": "the Workflows screen was removed",
+    "GET /api/v1/instances/{instance_id}": "the Workflows screen was removed",
+    "GET /api/v1/instances/{instance_id}/history": "the Workflows screen was removed",
+    "GET /api/v1/instances/{instance_id}/verify": "the Workflows screen was removed",
+    "POST /api/v1/instances/{instance_id}/input": "the Workflows screen was removed",
+    "GET /api/v1/projects/{project_id}/source-lag": "the Producers screen was removed",
+    "PATCH /api/v1/producers/{producer_id}": "the Producers screen was removed",
+
 }
 
 

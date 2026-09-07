@@ -185,6 +185,33 @@ async def test_an_invalid_expression_is_refused_at_configuration_time(server):
     assert exc.value.status == 422
 
 
+async def test_a_refused_url_is_a_client_error_not_a_crash(server):
+    """The SSRF guard was right and unreadable.
+
+    `validate_url` raises `FetchError`, which no endpoint catches and pydantic
+    does not convert, so a private site URL came back as a 500 with an HTML
+    body -- and the console, parsing it as JSON, showed `Unexpected token 'I'`.
+    The operator typing the one field only they can supply learned nothing.
+    """
+    with pytest.raises(CrawlerError) as exc:
+        validate_config(CrawlerConfig(
+            name="internal", strategy="http",
+            # Not loopback: `_allow_loopback` above relaxes 127.0.0.1 for the
+            # whole module, so a loopback URL here would test the fixture.
+            request=HttpRequest(url="http://10.0.0.5/rest/api/3/search"),
+            extract=Extract(items_path="issues[*]", id_path="key"),
+        ))
+    assert exc.value.status == 422
+    assert "private" in str(exc.value)
+
+    # The seed list is the other way in, and it fails through pydantic rather
+    # than through validate_config.
+    with pytest.raises(ValueError) as raised:
+        CrawlerConfig(name="internal", strategy="feed",
+                      seeds=["http://169.254.169.254/latest/meta-data/"])
+    assert "cloud metadata" in str(raised.value)
+
+
 async def test_a_crawler_is_created_disabled(pool, tenant, principal_for, server):
     actor = await principal_for(tenant.api_key)
     created = await create_crawler(pool, actor, project_id=tenant.project_id,

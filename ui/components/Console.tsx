@@ -3996,6 +3996,9 @@ function CrawlersSection({ projectId }: { projectId: string }) {
   const [chosenApp, setChosenApp] = useState<Connector | null>(null);
   const [appScope, setAppScope] = useState<Record<string, string>>({});
   const [appConn, setAppConn] = useState("");
+  // Where "Register one" lands. The credential form is a panel further down;
+  // prefilling it without moving the reader there is a change they never see.
+  const credentials = useRef<HTMLElement | null>(null);
 
   // The two styles whose stored secret is traded for a token rather than sent.
   // They need somewhere to trade it, which is the only reason the form changes
@@ -4189,6 +4192,11 @@ function CrawlersSection({ projectId }: { projectId: string }) {
                   onClick={() => {
                     setChosenApp(app);
                     setAppScope({});
+                    // A credential already registered for this app is almost
+                    // certainly the one meant. Chosen into the select below
+                    // where it can be seen and changed, never applied silently.
+                    const held = conns.filter((c) => c.provider === app.key);
+                    setAppConn(held.length === 1 ? held[0].connection_id : "");
                   }}
                 >
                   {app.label}
@@ -4225,19 +4233,32 @@ function CrawlersSection({ projectId }: { projectId: string }) {
             </p>
 
             {chosenApp.scopes.map((scope) => (
-              <div className="row" style={{ marginTop: 9 }} key={scope.key}>
-                <span className="muted" style={{ fontSize: 13, minWidth: 118 }}>
-                  {scope.label}
-                </span>
-                <input
-                  type="text"
-                  value={appScope[scope.key] ?? ""}
-                  onChange={(e) =>
-                    setAppScope({ ...appScope, [scope.key]: e.target.value })
-                  }
-                  placeholder={scope.placeholder}
-                  style={{ flex: 1 }}
-                />
+              <div style={{ marginTop: 9 }} key={scope.key}>
+                <div className="row">
+                  <span className="muted" style={{ fontSize: 13, minWidth: 118 }}>
+                    {scope.label}
+                  </span>
+                  <input
+                    type="text"
+                    value={appScope[scope.key] ?? ""}
+                    onChange={(e) =>
+                      setAppScope({ ...appScope, [scope.key]: e.target.value })
+                    }
+                    placeholder={scope.placeholder}
+                    style={{ flex: 1 }}
+                  />
+                </div>
+                {/* Half the scopes in the catalog carry help and none of it was
+                    shown. It is the part of an entry that is somebody's hard-won
+                    knowledge -- which JQL clause keeps a run incremental, which
+                    object names the API will accept -- and a field with a
+                    placeholder and no help leaves the operator guessing at the
+                    one thing the entry already knew. */}
+                {scope.help && (
+                  <p className="empty" style={{ marginTop: 4, marginLeft: 128 }}>
+                    {scope.help}
+                  </p>
+                )}
               </div>
             ))}
 
@@ -4251,6 +4272,27 @@ function CrawlersSection({ projectId }: { projectId: string }) {
                   </option>
                 ))}
               </select>
+              {/* Picking the app already answers what kind of credential it
+                  wants -- Jira wants basic, GitHub wants a bearer -- and the
+                  form below was making the operator supply that answer a
+                  second time, from memory, in free text. Carrying it across is
+                  the whole difference between a catalog and a list of names. */}
+              <button
+                className="secondary"
+                disabled={busy}
+                title={`Fills the credential form below with what ${chosenApp.label} wants`}
+                onClick={() => {
+                  setNewConn({
+                    provider: chosenApp.key, credential: "",
+                    auth_style: chosenApp.auth_style,
+                    auth_name: chosenApp.auth_name ?? "",
+                    token_url: "", scope: "", subject: "",
+                  });
+                  credentials.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+                }}
+              >
+                Register one
+              </button>
               <button
                 onClick={() =>
                   act(`${chosenApp.label} crawler created — run a dry run next`, async () => {
@@ -4264,6 +4306,11 @@ function CrawlersSection({ projectId }: { projectId: string }) {
                     setChosenApp(null);
                     setAppScope({});
                     setAppConn("");
+                    // The note said a crawler was created and the list below
+                    // did not show one, because nothing reloaded it. "Run a dry
+                    // run next" is not actionable against a row that is not
+                    // there.
+                    await load();
                   })
                 }
                 disabled={
@@ -4274,6 +4321,13 @@ function CrawlersSection({ projectId }: { projectId: string }) {
                 Create
               </button>
             </div>
+            {!appConn && (
+              <p className="warntext" style={{ marginTop: 8 }}>
+                No credential chosen. {chosenApp.label} authenticates every request, so the
+                crawler will be created and its dry run will come back unauthorised. You can
+                attach one below and dry-run again.
+              </p>
+            )}
             <p className="empty" style={{ marginTop: 8 }}>
               It arrives disabled, like every crawler. A dry run walks the same code a live run
               does and tells you what it would have written before anything is.
@@ -4282,7 +4336,7 @@ function CrawlersSection({ projectId }: { projectId: string }) {
         )}
       </section>
 
-      <section className="panel">
+      <section className="panel" ref={credentials}>
         <h2>Credentials</h2>
         <p className="empty">
           A crawler reaches an authenticated source through a connection, never through its
@@ -4392,16 +4446,24 @@ function CrawlersSection({ projectId }: { projectId: string }) {
                 if (exchanged && newConn.scope.trim()) authConfig.scope = newConn.scope.trim();
                 if (newConn.auth_style === "google_service_account" && newConn.subject.trim())
                   authConfig.subject = newConn.subject.trim();
-                await call("api/v1/connections", {
-                  project_id: projectId,
-                  provider: newConn.provider,
-                  credential: newConn.credential,
-                  auth_style: newConn.auth_style,
-                  auth_name: newConn.auth_name || null,
-                  auth_config: authConfig,
-                });
+                const made = await call<{ connection_id: string }>(
+                  "api/v1/connections", {
+                    project_id: projectId,
+                    provider: newConn.provider,
+                    credential: newConn.credential,
+                    auth_style: newConn.auth_style,
+                    auth_name: newConn.auth_name || null,
+                    auth_config: authConfig,
+                  });
                 setNewConn({ provider: "", credential: "", auth_style: "bearer",
                              auth_name: "", token_url: "", scope: "", subject: "" });
+                // Without this the connection exists and appears in neither
+                // dropdown, so the app above still reads "choose a connection"
+                // for a credential that was just registered for it.
+                await load();
+                if (chosenApp && newConn.provider === chosenApp.key) {
+                  setAppConn(made.connection_id);
+                }
               })
             }
             disabled={
