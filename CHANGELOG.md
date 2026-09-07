@@ -272,6 +272,20 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   its reason — never left pending, which would read as still running.
 
 ### Changed
+- **Connecting an app no longer asks you to supply what the catalog already
+  knows.** Every connector entry carries the auth style it wants and, for 23 of
+  its 45 scopes, help explaining the one field only the operator can fill —
+  and none of that help reached the screen. For Jira it is the clause that
+  decides whether a scheduled pull is incremental: without it every run re-reads
+  the project, and sorted descending the watermark advances past issues nobody
+  read. It is rendered under the field now. **"Register one"** beside the
+  credential picker fills the form below with the app's provider key, auth style
+  and header name — choosing Jira had been followed by scrolling down, typing
+  `jira` into a free-text box and remembering to switch from bearer to basic —
+  and the connection it creates is selected back into the app above. Picking an
+  app with exactly one credential already registered for it selects that one.
+  Creating a crawler with no credential now says what will happen rather than
+  letting the dry run come back unauthorised unexplained.
 - **The console is one story with the rest arranged behind it.** The sidebar had
   nine headings and twenty-six destinations, all at the same volume, and the
   four screens the product exists for were spread across four of them.
@@ -346,6 +360,17 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   Overview no longer counts them.
 
 ### Fixed
+- **A site URL the crawler would refuse to fetch came back as a 500.**
+  `validate_url` raises `FetchError`, which no endpoint caught and pydantic does
+  not convert, so a private, unresolvable or non-http URL produced an HTML error
+  page — and the console, parsing it as JSON, reported `Unexpected token 'I'`.
+  The SSRF guard was right and unreadable. It is a 422 carrying the reason now,
+  on every path that stores a crawler, including `from-connector` where the site
+  URL is the one thing the operator supplies.
+- **Registering a credential, or creating a crawler from an app, left the screen
+  showing the state before it.** Neither reloaded, so a credential just
+  registered appeared in no dropdown and "run a dry run next" pointed at a row
+  that was not on the page.
 - **A generator spent its whole output budget repeating one word.** An unnamed,
   unbounded string field became somewhere for the model to think: 7,944 tokens,
   `MAX_TOKENS`, 31KB of truncated JSON, arriving as an empty extraction failure
