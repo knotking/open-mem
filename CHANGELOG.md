@@ -272,6 +272,33 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   its reason — never left pending, which would read as still running.
 
 ### Changed
+- **The console is one story with the rest arranged behind it.** The sidebar had
+  nine headings and twenty-six destinations, all at the same volume, and the
+  four screens the product exists for were spread across four of them.
+  `Your data` now holds the whole path — Memories, Add data, Add a repo, Deep
+  dive, Chat — and everything else is a supporting heading below it. Seven
+  groups, twenty-two destinations. **Browse is Deep dive**: after the drill-down
+  it is mostly reading, and a label promising an edit made people who wanted to
+  look skip it.
+- **Search is folded into Chat.** It was never a rival way to ask a question; it
+  was the explanation of an answer, and standing beside Chat as a second box
+  with a second query meant nothing could tell you whether what it retrieved was
+  what the answer had read. **How it found this**, under any answer, now opens
+  the cited passages and then the retrieval itself — the same question with the
+  same filter, arms changeable so "would the graph arm have found it?" can
+  actually be asked, what was retrieved and ranked, what was considered and
+  dropped and why, and which model embedded it. Re-running a retrieval never
+  re-asks the model.
+- **Creating a memory asks for a name.** The memory *type* was the first control
+  on the screen, in front of the field everybody came to fill in, and it is
+  almost never a first decision — the policies ship configured. New memories are
+  now `default`: everything kept, nothing expires. The old default was
+  `session`, which quietly archived after a day. The policy is folded under the
+  create form and always says what it currently is, so it is never a silent
+  default, and the full editable table — TTL, expiry, enrichment, URL reading,
+  change tracking — sits collapsed at the foot of the screen with its
+  explanation in the help panel. The type is no longer stamped on every row of
+  the memory list when it is the ordinary one.
 - **`api/uv.lock` is tracked.** There is no CI in this repo, so `pytest` on a
   laptop is the only gate there is, and a gate that resolves a different
   dependency set each run is not much of one. Nothing about a deploy changes:
@@ -308,6 +335,15 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   `(project_id, repo_url, commit_sha)` is the per-snapshot rule itself, and a
   CHECK requires a full 40-character lowercase sha so one commit cannot be
   analysed twice under two spellings.
+
+### Removed
+- **Cases, Entities, Workflows and the Producers screen are gone from the
+  console.** Four screens describing how a corpus is arranged or how a source is
+  doing, none of them on the path from *I have data* to *I have an answer*. The
+  endpoints behind them are untouched and still serve the API and the MCP tools;
+  what left is the navigation, the screens, and the proxy allow-list entries
+  only those screens used. An alert can no longer be scoped to a case, and the
+  Overview no longer counts them.
 
 ### Fixed
 - **A generator spent its whole output budget repeating one word.** An unnamed,
