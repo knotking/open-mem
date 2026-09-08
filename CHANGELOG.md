@@ -11,6 +11,14 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **Two more diagrams on the signed-out page: a researcher, and a repository.**
+  Both features existed only behind sign-in, so the two most distinctive things
+  you can point mem-dog at were invisible to anyone deciding whether to try it.
+  Each is drawn around what it refuses — the researcher diagram's spine is the
+  identity gate, with the refusal in a box of its own, and the repository
+  diagram says outright that each snapshot is pinned to its commit and compared
+  to nothing, because "four reports" invites the assumption that two of them can
+  be read against each other.
 - **A researcher's papers can be added from Add data.** Paste a Google Scholar
   profile URL and it resolves to an OpenAlex author, downloads the open-access
   PDFs of their works, reads and indexes them into a memory of their own keyed
