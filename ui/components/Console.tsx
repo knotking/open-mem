@@ -120,7 +120,12 @@ const GROUPS: { title: string; items: { key: Section; label: string; hint: strin
     items: [
       { key: "memory", label: "Memories", hint: "make a place to keep things" },
       { key: "add", label: "Add data", hint: "paste, upload or record" },
-      { key: "repos", label: "Add a repo", hint: "analyse a GitHub repo" },
+      // "Repositories", not "Add a repo". Two entries that both began with
+      // "Add" were two answers to "where do I put something", and a repository
+      // is not a different *kind* of action -- it is a different kind of thing,
+      // which is what step 1 of Add data is for. So the adding moved there and
+      // this is now purely the reading half: snapshots and what they found.
+      { key: "repos", label: "Repositories", hint: "read what the analysis found" },
       // "Deep dive", not "Update" and no longer "Browse": this is the reading
       // half of the story, walking the corpus by container down to one
       // revision, and its name should say that rather than promise an edit.
@@ -613,7 +618,8 @@ export default function Console({
         {error && <p className="err">{error}</p>}
         {section === "overview" && <Overview projectId={projectId} me={me} />}
         {section === "add" && (
-          <AddData projectId={projectId} producerId={producerId} onChange={refresh} stair={stair} />
+          <AddData projectId={projectId} producerId={producerId} onChange={refresh} stair={stair}
+                   onGo={setSection} />
         )}
         {section === "update" && (
           <UpdateData projectId={projectId} producerId={producerId} onChange={refresh} />
@@ -996,23 +1002,56 @@ function youtubeId(raw: string): string | null {
   return /^[A-Za-z0-9_-]{11}$/.test(id) ? id : null;
 }
 
+/** `owner/repo` from a GitHub URL, or null.
+ *
+ * The same shape and the same reasoning as `youtubeId` above: it decides
+ * whether the button is pressable and nothing else. The server clones what it
+ * is given and refuses what it disagrees with, so being generous here is a
+ * worse label, never a worse permission.
+ */
+function githubRepo(raw: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(raw.trim());
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+  if (url.hostname.toLowerCase().replace(/^www\./, "") !== "github.com") return null;
+  const parts = url.pathname.split("/").filter(Boolean);
+  if (parts.length < 2) return null;
+  return `${parts[0]}/${parts[1].replace(/\.git$/, "")}`;
+}
+
 function AddData({
   projectId,
   producerId,
   onChange,
   stair,
+  onGo,
 }: {
   projectId: string;
   producerId: string;
   onChange: () => Promise<void>;
   stair: Stair | null;
+  // A repository does not land in the write path, so the progress panel below
+  // cannot follow it. Rather than say "go and look somewhere else", the note it
+  // leaves is a control that takes you there.
+  onGo: (section: Section) => void;
 }) {
   const [text, setText] = useState(
     "The checkout service returned 502s for eleven minutes after a bad deploy.\n\nRollback completed at 14:02 UTC and error rates recovered.",
   );
-  const [source, setSource] = useState<"text" | "file" | "video" | "page">("text");
+  const [source, setSource] = useState<"text" | "file" | "video" | "page" | "repo">("text");
   const [videoUrl, setVideoUrl] = useState("");
   const [pageUrl, setPageUrl] = useState("");
+  const [repoUrl, setRepoUrl] = useState("");
+  const [repoRef, setRepoRef] = useState("");
+  // Whether the last thing this screen did was request a snapshot. It is what
+  // turns the confirmation into a route: a snapshot takes minutes and its
+  // progress is on another screen, so saying "requested" and stopping would be
+  // telling someone the job is elsewhere without taking them there.
+  const [repoDone, setRepoDone] = useState(false);
   const [staged, setStaged] = useState<Staged | null>(null);
   // Which optional steps are open. Closed by default because each has a
   // working default and the button is what people came for.
@@ -1124,6 +1163,10 @@ function AddData({
   // than left for someone to work out from a greyed-out control.
   const blocked = source === "text"
     ? (text.trim() ? null : "Nothing typed yet")
+    : source === "repo"
+      ? (githubRepo(repoUrl) ? null : repoUrl.trim()
+          ? "That is not a GitHub repository URL"
+          : "Paste a GitHub repository link first")
     : source === "page"
       ? (httpUrl(pageUrl) ? null : pageUrl.trim()
           ? "That needs to be a http:// or https:// address"
@@ -1258,6 +1301,27 @@ function AddData({
     setError(null);
     setNote(null);
     try {
+      // A repository is not a write. It clones, parses and spends four model
+      // calls to produce a *snapshot*, which is a case rather than an item — so
+      // it has its own endpoint, and none of the write-path decisions in steps
+      // 3 to 5 apply to it. Branching here rather than trying to reshape it
+      // into an item is what keeps that honest: the steps are hidden for this
+      // kind, and the summary line above the button says why.
+      if (source === "repo") {
+        const created = await call<{ snapshot_id: string; repo_url: string;
+                                     commit_sha: string; reused?: boolean }>(
+          "api/v1/repos/analyze", {
+            project_id: projectId,
+            repo_url: repoUrl.trim(),
+            ...(repoRef.trim() ? { ref: repoRef.trim() } : {}),
+          });
+        setNote(created.reused
+          ? "That commit was already analysed — the existing snapshot stands rather than being paid for twice."
+          : `Analysing ${created.repo_url} at ${created.commit_sha.slice(0, 7)}.`);
+        setRepoDone(true);
+        await onChange();
+        return;
+      }
       // The canonical watch URL is the external id, so the same video pasted
       // as a share link, a short link and a timestamped link is one record
       // rather than three. The server parses it again and refuses anything it
@@ -1342,6 +1406,24 @@ function AddData({
 
       {error && <p className="err">{error}</p>}
 
+      {/* A snapshot takes minutes and its progress lives on another screen, so
+          the confirmation is a control rather than a sentence. Telling somebody
+          the job is elsewhere without taking them there is the half-finished
+          version of this. */}
+      {repoDone && note && (
+        <section className="panel">
+          <h2>What happened to it</h2>
+          <p className="ok" style={{ marginTop: 0 }}>{note}</p>
+          <p className="empty">
+            It is analysed whole, pinned to its commit, and compared to nothing. The snapshot and
+            its four reports appear under Repositories as they land.
+          </p>
+          <div className="row end">
+            <button onClick={() => onGo("repos")}>Open Repositories</button>
+          </div>
+        </section>
+      )}
+
       {(watching || item) && (
         <section className="panel">
           <h2>What happened to it</h2>
@@ -1397,6 +1479,15 @@ function AddData({
             />
             A web page
           </label>
+          <label className="check">
+            <input
+              type="radio"
+              name="add-source"
+              checked={source === "repo"}
+              onChange={() => { setSource("repo"); setStaged(null); setRepoDone(false); }}
+            />
+            A GitHub repository
+          </label>
         </div>
       </section>
 
@@ -1405,10 +1496,36 @@ function AddData({
           source === "text" ? "The text"
             : source === "video" ? "The video"
             : source === "page" ? "The page"
+            : source === "repo" ? "The repository"
             : "The file"
         }</h2>
         {source === "text" ? (
           <textarea value={text} onChange={(e) => setText(e.target.value)} />
+        ) : source === "repo" ? (
+          <>
+            <div className="row" style={{ gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <input
+                style={{ flex: "2 1 320px" }}
+                type="url"
+                placeholder="https://github.com/owner/repo"
+                value={repoUrl}
+                onChange={(e) => { setRepoUrl(e.target.value); setRepoDone(false); }}
+              />
+              <input
+                style={{ flex: "1 1 160px" }}
+                placeholder="branch, tag or sha (optional)"
+                value={repoRef}
+                onChange={(e) => { setRepoRef(e.target.value); setRepoDone(false); }}
+              />
+            </div>
+            {/* Cost beside the control that causes it, not in a bill later. */}
+            <p className="empty" style={{ marginTop: 6 }}>
+              Costs a clone, a full parse and <strong>four model calls</strong> — charged when the
+              snapshot is requested, because a queued job cannot be un-spent. A branch is resolved
+              to the commit it points at now and the commit is what is stored: a report attributed
+              to <code>main</code> is one nobody can reproduce later. Public repositories only.
+            </p>
+          </>
         ) : source === "page" ? (
           <>
             <input
@@ -1479,6 +1596,14 @@ function AddData({
         )}
       </section>
 
+      {/* Steps 3 to 5 are the write path's decisions — which memory, what
+          enrichment, which audience — and a repository takes none of them. It
+          goes to `repos/analyze`, which produces a snapshot rather than an
+          item. Showing them greyed out would imply they could apply; showing
+          them live would imply they were honoured. So they are absent, and the
+          summary line above the button says what stands in their place. */}
+      {source !== "repo" && (
+        <>
       <Step n={3} name="memory" title="Where it goes" value={destination}>
         <p className="empty" style={{ marginTop: 0 }}>
           A memory is the container a record lives in and what decides when it expires. Nothing is
@@ -1717,24 +1842,38 @@ function AddData({
           </>
         )}
       </Step>
+        </>
+      )}
 
       {/* The whole decision, next to the thing that commits it. */}
       <section className="panel addbar">
         <div className="addsummary">
-          <span className="empty">→ {destination}</span>
-          <span className={enrich ? "empty" : "warntext"}>· {willDo}</span>
-          <span className="empty">· {audienceSummary}</span>
+          {source === "repo" ? (
+            <>
+              <span className="empty">→ a snapshot of its own, pinned to one commit</span>
+              <span className="warntext">· four model calls, charged on request</span>
+            </>
+          ) : (
+            <>
+              <span className="empty">→ {destination}</span>
+              <span className={enrich ? "empty" : "warntext"}>· {willDo}</span>
+              <span className="empty">· {audienceSummary}</span>
+            </>
+          )}
         </div>
         <div className="row end" style={{ marginTop: 10 }}>
-          {aclIncomplete && (
+          {aclIncomplete && source !== "repo" && (
             <span className="warntext">pick at least one person or group in step 5</span>
           )}
           <button
             onClick={submit}
-            disabled={busy || blocked !== null || aclIncomplete}
-            title={blocked ?? (aclIncomplete ? "Step 5 needs at least one principal" : undefined)}
+            disabled={busy || blocked !== null || (aclIncomplete && source !== "repo")}
+            title={blocked ?? (aclIncomplete && source !== "repo"
+              ? "Step 5 needs at least one principal" : undefined)}
           >
-            {busy ? "Adding…" : "Add data"}
+            {busy
+              ? (source === "repo" ? "Analysing…" : "Adding…")
+              : (source === "repo" ? "Analyse repository" : "Add data")}
           </button>
         </div>
       </section>
@@ -3421,8 +3560,6 @@ function ReposSection({ projectId }: { projectId: string }) {
   const [detail, setDetail] = useState<
     (RepoSnapshot & { reports?: RepoReport[] }) | null
   >(null);
-  const [url, setUrl] = useState("");
-  const [gitRef, setGitRef] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -3456,24 +3593,6 @@ function ReposSection({ projectId }: { projectId: string }) {
     } finally {
       setBusy(false);
     }
-  }
-
-  async function analyse() {
-    await act("Snapshot requested.", async () => {
-      const created = await call<RepoSnapshot>("api/v1/repos/analyze", {
-        project_id: projectId,
-        repo_url: url.trim(),
-        ...(gitRef.trim() ? { ref: gitRef.trim() } : {}),
-      });
-      setNote(
-        created.reused
-          ? `That commit was already analysed — showing the existing snapshot rather than paying for it twice.`
-          : `Analysing ${created.repo_url} at ${created.commit_sha.slice(0, 7)}.`,
-      );
-      await load();
-      if (created.case_id) await openSnapshots({ case_id: created.case_id } as Repo);
-      await openDetail(created.snapshot_id);
-    });
   }
 
   async function removeRepo(repo: Repo) {
@@ -3550,48 +3669,20 @@ function ReposSection({ projectId }: { projectId: string }) {
       <h1>Repositories</h1>
       <p className="hint">
         A repository at one commit, reduced to a code graph and then read four ways. Each snapshot
-        stands alone: it is analysed whole, pinned to its commit, and compared to nothing.
+        stands alone: it is analysed whole, pinned to its commit, and compared to nothing. Add one
+        from <strong>Add data</strong>, where a repository is a kind of thing alongside a file or a
+        web page.
       </p>
 
-      <section>
-        <h2>Analyse a commit</h2>
-        <div className="row" style={{ gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <input
-            style={{ flex: "2 1 320px" }}
-            placeholder="https://github.com/owner/repo"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-          />
-          <input
-            style={{ flex: "1 1 140px" }}
-            placeholder="branch, tag or sha (optional)"
-            value={gitRef}
-            onChange={(e) => setGitRef(e.target.value)}
-          />
-          <button
-            onClick={analyse}
-            disabled={busy || !url.trim()}
-            title={!url.trim() ? "Paste a GitHub repository URL first" : undefined}
-          >
-            Analyse
-          </button>
-        </div>
-        <p className="empty" style={{ marginTop: 6 }}>
-          Costs a clone, a full parse and <strong>four model calls</strong> — charged when the
-          snapshot is requested, because a queued job cannot be un-spent. A branch is resolved to
-          the commit it points at now and the commit is what is stored: a report attributed to
-          <code> main </code> is one nobody can reproduce later. Public repositories only.
-        </p>
-        {note && <p className="ok">{note}</p>}
-        {error && <p className="err">{error}</p>}
-      </section>
+      {note && <p className="ok">{note}</p>}
+      {error && <p className="err">{error}</p>}
 
       <section>
         <h2>Analysed repositories</h2>
         {repos.length === 0 ? (
           <p className="empty">
-            Nothing analysed yet. Paste a GitHub URL above — <code>https://github.com/owner/repo</code>
-            {" "}— and the first snapshot will appear here.
+            Nothing analysed yet. Choose <strong>A GitHub repository</strong> in{" "}
+            <strong>Add data</strong> and the first snapshot will appear here.
           </p>
         ) : (
           <table className="kv">

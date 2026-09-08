@@ -489,6 +489,16 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   answering overlapping questions about one thing is how they drift apart.
 
 ### Fixed
+- **Every deploy was silently wiping the public demo gallery.** `PUBLIC_DEMOS`
+  is JSON and therefore full of commas — the character `--set-env-vars` splits
+  on — so it was never in the deploy script's list, which meant it lived only on
+  the running service and `--set-env-vars` replaces the whole set. Nothing errors
+  when that happens: the landing page just has no gallery, which reads as a UI
+  regression rather than a deploy that lost a variable. `cloudrun.sh` now passes
+  the environment through `--env-vars-file` (JSON is valid YAML, so there is no
+  delimiter to collide with) and defaults `PUBLIC_DEMOS` to whatever the service
+  already has, since it is data `seed-demos` produced rather than a toggle with a
+  sensible constant. Pass `PUBLIC_DEMOS=''` to clear it deliberately.
 - **An alert on a checkpoint timeline's memory type could never fire.** The
   `checkpoint.changed` surface has declared `memory_type` selectable since it
   shipped, and the transition never carried it — so "tell me when the vendor
