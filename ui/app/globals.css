@@ -1448,7 +1448,7 @@ button.stattile:focus-visible { outline: 2px solid var(--accent); outline-offset
    a row of chips once rendered as bare numbers. */
 .demo-apps {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(176px, 1fr));
   gap: 10px;
   max-width: 760px;
   margin: 0 auto 14px;
@@ -1740,34 +1740,55 @@ button.tab-cta { font-family: inherit; line-height: 1.35; cursor: pointer; }
 
 /* ------------------------------------------------------------- flow diagram
    The one picture on the landing page. Inline SVG so it takes these tokens in
-   both themes and so the labels are real text; `fill`/`stroke` are set through
-   the same variables the rest of the page uses rather than literals, which is
-   what stops it rendering one theme's ink on the other theme's ground. */
-.flow { padding: 8px 0 52px; }
+   both themes and so the labels are real text; `fill`/`stroke` come through the
+   same variables the rest of the page uses rather than literals, which is what
+   stops it rendering one theme's ink on the other theme's ground. */
+.flow { padding: 8px 0 44px; }
 .flow-scroll { overflow-x: auto; }
 /* A minimum width so the boxes never crush on a phone -- it scrolls in its own
    container instead, and the page body does not. */
-.flow-svg { display: block; width: 100%; min-width: 760px; height: auto; }
+.flow-svg { display: block; width: 100%; min-width: 900px; height: auto; }
+
+/* The stage names. Structural rather than decorative: without them the picture
+   reads as fifteen boxes instead of a direction of travel. */
+.flow-stage {
+  fill: var(--muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+}
+
+/* The two enclosures -- the memory, and the surfaces that reach it. Drawn as
+   ground rather than as another border, so they group without competing with
+   the boxes inside them. */
+.flow-zone rect {
+  fill: var(--accent-soft);
+  stroke: none;
+  opacity: 0.5;
+}
 
 .flow-box rect {
   fill: var(--panel);
   stroke: var(--line);
   stroke-width: 1;
 }
-/* The single write path is the claim the diagram is making, so it is the one
-   thing drawn with the accent. Everything else stays quiet. */
+/* The single write path is the claim the diagram makes, so it is the one thing
+   drawn in the accent. Everything else stays quiet. */
 .flow-spine rect { stroke: var(--accent); stroke-width: 1.5; }
+/* Surfaces are the boundary between the system and the people using it, so they
+   read as a seam: accent border, ordinary ground. */
+.flow-surface rect { stroke: var(--accent); }
 .flow-app rect { fill: var(--accent-soft); stroke: var(--accent); }
 
 .flow-h {
   fill: var(--ink);
-  font-size: 15px;
+  font-size: 14.5px;
   font-weight: 600;
   letter-spacing: -0.01em;
 }
 .flow-s {
   fill: var(--muted);
-  font-size: 12.5px;
+  font-size: 12px;
   font-family: var(--mono);
 }
 
@@ -1776,8 +1797,30 @@ button.tab-cta { font-family: inherit; line-height: 1.35; cursor: pointer; }
   stroke: var(--muted);
   stroke-width: 1.2;
   marker-end: url(#flow-arrow);
-  opacity: 0.85;
+  opacity: 0.8;
 }
-/* The bus carries three indexes into three apps; it is a join, not a flow, so
-   it has no arrowhead. */
-.flow-line path.flow-bus { marker-end: none; stroke-dasharray: 3 3; }
+/* A bus carries several things into several others; it is a join, not a flow,
+   so it has no arrowhead -- and it is *solid* while the connectors drift, which
+   is the only thing keeping the two readable apart once the flow lines are
+   dashed. Dashing both, as the first version did, made every line look alike
+   and threw the distinction away. */
+.flow-line path.flow-bus {
+  marker-end: none;
+  stroke-dasharray: none;
+  stroke-width: 1;
+  opacity: 0.45;
+}
+
+/* One effect, and it earns its place: a slow drift along the connectors makes
+   the direction of travel readable without tracing arrowheads. Off for anyone
+   who has asked for less motion -- and the diagram is complete without it,
+   because the arrowheads already say the same thing. */
+@media (prefers-reduced-motion: no-preference) {
+  .flow-line path:not(.flow-bus) {
+    stroke-dasharray: 6 6;
+    animation: flow-drift 1.8s linear infinite;
+  }
+  @keyframes flow-drift {
+    to { stroke-dashoffset: -12; }
+  }
+}

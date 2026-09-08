@@ -90,14 +90,26 @@ type DemoInfo = {
  * docs now.
  */
 function Flow() {
+  const STAGES = [
+    { x: 92, label: "Sources" },
+    { x: 315, label: "One path in" },
+    { x: 559, label: "Memory" },
+    { x: 801, label: "Reached by" },
+    { x: 1054, label: "Built on it" },
+  ];
+
   return (
     <section className="flow" id="flow" aria-labelledby="flow-title">
-      <h2 className="section-title" id="flow-title">One path in, three indexes, then apps</h2>
+      <h2 className="section-title" id="flow-title">
+        From a source to something somebody uses
+      </h2>
       <div className="flow-scroll">
-        <svg viewBox="0 0 980 330" className="flow-svg" role="img"
-             aria-label="Pull and inbound sources feed one write path, which builds a
-                         retrieval index, a knowledge graph and a reverse index; those
-                         serve alerts, pattern search and state machines.">
+        <svg viewBox="0 0 1180 400" className="flow-svg" role="img"
+             aria-label="Pull and inbound sources feed one write path. That path builds a
+                         retrieval index, a knowledge graph and a reverse index, which together
+                         are the memory. The memory is reached through chat, MCP or the API,
+                         and those surfaces carry a company brain, agent memory, alerts,
+                         pattern search and workflows.">
           <defs>
             <marker id="flow-arrow" viewBox="0 0 10 10" refX="9" refY="5"
                     markerWidth="6" markerHeight="6" orient="auto-start-reverse">
@@ -105,79 +117,124 @@ function Flow() {
             </marker>
           </defs>
 
-          {/* sources */}
-          <g className="flow-box">
-            <rect x="8" y="46" width="176" height="82" rx="10" />
-            <text x="24" y="76" className="flow-h">Pull</text>
-            <text x="24" y="98" className="flow-s">crawlers · repos</text>
-            <text x="24" y="116" className="flow-s">connectors · feeds</text>
-          </g>
-          <g className="flow-box">
-            <rect x="8" y="196" width="176" height="82" rx="10" />
-            <text x="24" y="226" className="flow-h">Inbound</text>
-            <text x="24" y="248" className="flow-s">webhooks · uploads</text>
-            <text x="24" y="266" className="flow-s">email · SDK</text>
+          {/* The five stages, named. Not decoration: without them the picture
+              reads as fifteen boxes rather than as a direction of travel. */}
+          {STAGES.map((s) => (
+            <text key={s.label} x={s.x} y="20" className="flow-stage"
+                  textAnchor="middle">{s.label.toUpperCase()}</text>
+          ))}
+
+          {/* Two enclosures, because these are not five and three loose boxes.
+              The three indexes *are* the memory -- one thing with three shapes
+              -- and the three surfaces are one question, "how do you reach it". */}
+          <g className="flow-zone">
+            <rect x="452" y="44" width="214" height="300" rx="14" />
+            <rect x="726" y="44" width="150" height="300" rx="14" />
           </g>
 
-          {/* the single write path */}
+          <g className="flow-box">
+            <rect x="8" y="60" width="168" height="86" rx="10" />
+            <text x="26" y="90" className="flow-h">Pull</text>
+            <text x="26" y="112" className="flow-s">crawlers · repos</text>
+            <text x="26" y="130" className="flow-s">connectors · feeds</text>
+          </g>
+          <g className="flow-box">
+            <rect x="8" y="210" width="168" height="86" rx="10" />
+            <text x="26" y="240" className="flow-h">Inbound</text>
+            <text x="26" y="262" className="flow-s">webhooks · uploads</text>
+            <text x="26" y="280" className="flow-s">email · SDK</text>
+          </g>
+
           <g className="flow-box flow-spine">
-            <rect x="250" y="106" width="150" height="112" rx="10" />
-            <text x="266" y="140" className="flow-h">Write</text>
-            <text x="266" y="162" className="flow-s">one endpoint</text>
-            <text x="266" y="180" className="flow-s">commits, then</text>
-            <text x="266" y="198" className="flow-s">enriches</text>
+            <rect x="240" y="118" width="150" height="120" rx="10" />
+            <text x="258" y="152" className="flow-h">Write</text>
+            <text x="258" y="174" className="flow-s">one endpoint</text>
+            <text x="258" y="192" className="flow-s">commits, then</text>
+            <text x="258" y="210" className="flow-s">enriches</text>
           </g>
 
-          {/* what the write path builds */}
           <g className="flow-box">
-            <rect x="466" y="26" width="184" height="72" rx="10" />
-            <text x="482" y="54" className="flow-h">Retrieval index</text>
-            <text x="482" y="76" className="flow-s">chunks · embeddings</text>
+            <rect x="466" y="76" width="186" height="72" rx="10" />
+            <text x="482" y="104" className="flow-h">Retrieval index</text>
+            <text x="482" y="126" className="flow-s">chunks · embeddings</text>
           </g>
           <g className="flow-box">
-            <rect x="466" y="126" width="184" height="72" rx="10" />
-            <text x="482" y="154" className="flow-h">Knowledge graph</text>
-            <text x="482" y="176" className="flow-s">entities · edges</text>
+            <rect x="466" y="158" width="186" height="72" rx="10" />
+            <text x="482" y="186" className="flow-h">Knowledge graph</text>
+            <text x="482" y="208" className="flow-s">entities · edges</text>
           </g>
           <g className="flow-box">
-            <rect x="466" y="226" width="184" height="72" rx="10" />
-            <text x="482" y="254" className="flow-h">Reverse index</text>
-            <text x="482" y="276" className="flow-s">lexical · facets</text>
+            <rect x="466" y="240" width="186" height="72" rx="10" />
+            <text x="482" y="268" className="flow-h">Reverse index</text>
+            <text x="482" y="290" className="flow-s">lexical · facets</text>
           </g>
 
-          {/* what they are for */}
+          <g className="flow-box flow-surface">
+            <rect x="738" y="90" width="126" height="60" rx="10" />
+            <text x="754" y="116" className="flow-h">Chat</text>
+            <text x="754" y="136" className="flow-s">with citations</text>
+          </g>
+          <g className="flow-box flow-surface">
+            <rect x="738" y="164" width="126" height="60" rx="10" />
+            <text x="754" y="190" className="flow-h">MCP</text>
+            <text x="754" y="210" className="flow-s">for agents</text>
+          </g>
+          <g className="flow-box flow-surface">
+            <rect x="738" y="238" width="126" height="60" rx="10" />
+            <text x="754" y="264" className="flow-h">API</text>
+            <text x="754" y="284" className="flow-s">retrieve · ask</text>
+          </g>
+
           <g className="flow-box flow-app">
-            <rect x="796" y="26" width="176" height="72" rx="10" />
-            <text x="812" y="54" className="flow-h">Alerts</text>
-            <text x="812" y="76" className="flow-s">tell me when</text>
+            <rect x="936" y="34" width="236" height="58" rx="10" />
+            <text x="954" y="60" className="flow-h">Company brain</text>
+            <text x="954" y="80" className="flow-s">what the team knows</text>
           </g>
           <g className="flow-box flow-app">
-            <rect x="796" y="126" width="176" height="72" rx="10" />
-            <text x="812" y="154" className="flow-h">Pattern search</text>
-            <text x="812" y="176" className="flow-s">standing queries</text>
+            <rect x="936" y="102" width="236" height="58" rx="10" />
+            <text x="954" y="128" className="flow-h">Agent memory</text>
+            <text x="954" y="148" className="flow-s">context across sessions</text>
           </g>
           <g className="flow-box flow-app">
-            <rect x="796" y="226" width="176" height="72" rx="10" />
-            <text x="812" y="254" className="flow-h">State machines</text>
-            <text x="812" y="276" className="flow-s">workflows · cases</text>
+            <rect x="936" y="170" width="236" height="58" rx="10" />
+            <text x="954" y="196" className="flow-h">Alerts</text>
+            <text x="954" y="216" className="flow-s">tell me when</text>
+          </g>
+          <g className="flow-box flow-app">
+            <rect x="936" y="238" width="236" height="58" rx="10" />
+            <text x="954" y="264" className="flow-h">Pattern search</text>
+            <text x="954" y="284" className="flow-s">standing queries</text>
+          </g>
+          <g className="flow-box flow-app">
+            <rect x="936" y="306" width="236" height="58" rx="10" />
+            <text x="954" y="332" className="flow-h">Workflows</text>
+            <text x="954" y="352" className="flow-s">state machines · cases</text>
           </g>
 
           <g className="flow-line">
-            {/* sources into the one path */}
-            <path d="M 184 87 C 216 87 218 132 250 132" />
-            <path d="M 184 237 C 216 237 218 192 250 192" />
-            {/* the path builds each index */}
-            <path d="M 400 148 C 432 148 434 62 466 62" />
-            <path d="M 400 162 L 466 162" />
-            <path d="M 400 176 C 432 176 434 262 466 262" />
-            {/* every index serves every app, via one bus */}
-            <path d="M 650 62 L 706 62" />
-            <path d="M 650 162 L 706 162" />
-            <path d="M 650 262 L 706 262" />
-            <path d="M 706 62 L 706 262" className="flow-bus" />
-            <path d="M 706 62 L 796 62" />
-            <path d="M 706 162 L 796 162" />
-            <path d="M 706 262 L 796 262" />
+            <path d="M 176 103 C 208 103 208 150 240 150" />
+            <path d="M 176 253 C 208 253 208 206 240 206" />
+            <path d="M 390 160 C 424 160 432 112 466 112" />
+            <path d="M 390 178 L 466 194" />
+            <path d="M 390 196 C 424 196 432 276 466 276" />
+
+            <path d="M 652 112 L 692 112" />
+            <path d="M 652 194 L 692 194" />
+            <path d="M 652 276 L 692 276" />
+            <path d="M 692 112 L 692 276" className="flow-bus" />
+            <path d="M 692 120 L 738 120" />
+            <path d="M 692 194 L 738 194" />
+            <path d="M 692 268 L 738 268" />
+
+            <path d="M 864 120 L 900 120" />
+            <path d="M 864 194 L 900 194" />
+            <path d="M 864 268 L 900 268" />
+            <path d="M 900 63 L 900 335" className="flow-bus" />
+            <path d="M 900 63 L 936 63" />
+            <path d="M 900 131 L 936 131" />
+            <path d="M 900 199 L 936 199" />
+            <path d="M 900 267 L 936 267" />
+            <path d="M 900 335 L 936 335" />
           </g>
         </svg>
       </div>
