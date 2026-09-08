@@ -11,6 +11,17 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **The competitive comparison is published**, at `/docs/compare`, with `How it
+  compares` beside `Docs` in the header. Four documents: the landscape, and
+  head-to-heads with Onyx, Glean and the "company brain" category. They are
+  worth reading because they are not marketing — the landscape retires one of
+  this project's own claims ("self-hosted and air-gapped… is table stakes in
+  this category"), and says plainly that Onyx inherits each document's source
+  permissions and mem-dog does not, so if that is the requirement today then
+  Onyx is the better answer today. Each carries the month it was researched,
+  because the claims are about other people's products as those products
+  documented themselves at the time. The company-brain comparison carries a
+  section saying where its own confidence is thin.
 - **The public page carries a gallery of demo apps rather than one corpus.** Each
   is a seeded use case with its own description, its own sample questions and its
   own chat, and none of it is reachable until `PUBLIC_DEMOS` names it — a request
@@ -23,11 +34,18 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   cold-chain sensor fleet (63 raw readings that never reach a model, and the 3
   derived digests that do). `python -m memdog seed-demos` seeds them and prints
   the `PUBLIC_DEMOS` line to set; it deliberately does not write it anywhere.
-  Nothing clinical is included, and every record is marked synthetic in its own
-  text, on reserved identifiers.
-- **The documentation is readable without a checkout**, at `/docs` — 20 curated
-  documents as static routes, with reading-order navigation. Curated rather than
-  complete: most of `docs/` is internal design record. Cross-references to
+  A fourth was added afterwards and is the only one that is not invented: **a
+  real researcher's papers**, resolved from a public Google Scholar profile and
+  fetched from OpenAlex at seed time rather than copied into the repository.
+  Nothing clinical is included. The synthetic marker is applied per corpus, not
+  unconditionally — stamping "generated, not real" across a real researcher's
+  abstracts would be a false claim about work that exists.
+- **The documentation is readable without a checkout**, at `/docs` — 24 curated
+  documents as static routes, in a shell with a sticky bar and a contents column
+  that stays beside you as you read, marking the page you are on. Below the
+  width where a column stops fitting it becomes a panel that closes on
+  navigation. Curated rather than complete: most of `docs/` is internal design
+  record. Cross-references to
   documents outside the published set render as their own label instead of as
   links that 404.
 - **Audio, video and documents too large to send inline can now go through the
@@ -311,10 +329,12 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   The receipt, the pipeline figure, the nine explanatory sections and the
   six-product comparison matrix are gone — all of it is in the docs, which are
   now one click away in the header, so the argument was being made twice and
-  finished once. What replaces it is a single picture of the whole system: pull
-  and inbound sources into one write path, which builds a retrieval index, a
-  knowledge graph and a reverse index, which serve alerts, pattern search and
-  state machines. The page went from roughly 14,000 pixels of scroll to 1,339.
+  finished once. What replaces it is a single picture of the whole system, in
+  five named stages: **pull** and **push** sources into one write path, which
+  builds a retrieval index, a knowledge graph and a reverse index — together the
+  memory — reached through chat, MCP or the API, and carrying a company brain,
+  agent memory, alerts, pattern search and workflows. The page went from roughly
+  14,000 pixels of scroll to 1,339.
 - **Connecting an app no longer asks you to supply what the catalog already
   knows.** Every connector entry carries the auth style it wants and, for 23 of
   its 45 scopes, help explaining the one field only the operator can fill —
