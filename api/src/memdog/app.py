@@ -10,7 +10,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from datetime import datetime
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -746,6 +746,42 @@ async def read_checkpoints(
 
     try:
         return {"checkpoints": await timeline(request.app.state.pool, actor, memory_id)}
+    except (CheckpointError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/memories/{memory_id}/changes")
+async def read_changes(
+    request: Request, memory_id: str,
+    since: str | None = Query(None, alias="from"),
+    until: str | None = Query(None, alias="to"),
+    actor: Principal = Depends(principal),
+) -> dict:
+    """What moved across a span of one memory's timeline, not just one step of it.
+
+    `from` and `to` each take a checkpoint id, a sequence number, or an ISO
+    timestamp; `from` defaults to the start of the timeline and `to` to its head.
+    The window is exclusive of `from` and inclusive of `to`, so two ranges
+    chained together neither overlap nor skip.
+
+    **`basis` is part of the answer.** Today it is always `composed` -- the
+    deltas already stored, concatenated, which costs nothing and reports
+    *churn*: a value that went green, red, green appears as two changes because
+    two changes happened. The net reading is a different question, costs a model
+    call, and will arrive as `basis: "net"`. A consumer that does not know which
+    of the two it is holding cannot reconcile it with the other, which is why
+    this is a field rather than an assumption.
+
+    `gaps` is the other half of an honest answer: a checkpoint in the span that
+    was never checked, failed, could not be compared, or whose delta this reader
+    cannot see contributes no changes, and a range that hides that presents as
+    complete when it is not.
+    """
+    from .checkpoints import CheckpointError, changes_between
+
+    try:
+        return await changes_between(request.app.state.pool, actor, memory_id,
+                                     since=since, until=until)
     except (CheckpointError, AuthError) as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
 

@@ -574,3 +574,273 @@ async def recheck(pool: asyncpg.Pool, principal: Principal, queue,
     await queue.publish(
         CHECKPOINT_TOPIC, {"payload": {"checkpoint_id": checkpoint_id}})
     return {"checkpoint_id": checkpoint_id, "status": "pending"}
+
+
+# ------------------------------------------------- a range of the timeline
+#
+# The comparison a checkpoint does is against the one immediately before it, and
+# that is the only comparison the timeline has ever been able to answer. The
+# question people actually ask a feed is *"what has changed since Monday"* or
+# *"since the version I last synced"* -- a range, not an adjacency.
+#
+# It is derivable from the timeline endpoint by a caller willing to walk it,
+# which is precisely the argument for building it here once rather than watching
+# three callers each write a different half-correct version of the walk.
+
+# The widest span this will compose. Refused past it rather than truncated: a
+# range that quietly returns its most recent 500 entries while claiming to be
+# the range that was asked for is the silent-truncation failure this codebase
+# has met before, and for a change detector it reads as "nothing else moved".
+RANGE_LIMIT = 500
+
+# Why a checkpoint inside a range contributed no delta. Closed, for the reason
+# every vocabulary here is closed: an open one degrades into unqueryable free
+# text, and "which of my ranges have holes, and of what kind" stops being
+# answerable.
+#
+# `not_visible` is in the list because the alternative is worse. An artifact
+# takes the strictest level among its sources, so a reader can legitimately be
+# unable to see one change in a range they can otherwise read -- and reporting
+# that as no-change would be the same lie as reporting a failed check as one.
+# It leaks nothing `timeline` does not already: that function returns every
+# checkpoint row and its outcome to any reader in the org, and ACL-filters only
+# the artifact hanging off it.
+GAP_REASONS = ("not_checked", "failed", "incomparable", "not_visible")
+
+
+def _point(value) -> tuple[str, object]:
+    """How a caller named a position: by sequence, by checkpoint, or by time.
+
+    Three spellings because the three questions are genuinely different. A
+    consumer resuming a sync has the `checkpoint_id` it stopped at; a person
+    asks for "since Monday"; a script counting entries has a `seq`. Guessing
+    between them from the string is safe only because the three shapes cannot
+    collide -- a prefixed ULID, a bare integer, and a timestamp.
+    """
+    text = str(value).strip()
+    if text.startswith("cpt_"):
+        return "checkpoint_id", text
+    if text.lstrip("-").isdigit():
+        return "seq", int(text)
+    from datetime import datetime, timezone
+
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise CheckpointError(
+            f"cannot read {value!r} as a position on the timeline; use a "
+            "checkpoint id, a sequence number, or an ISO timestamp") from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return "at", parsed
+
+
+async def _locate(pool, memory_id: str, org_id: str, value) -> dict | None:
+    """Which checkpoint a position lands on. One indexed lookup, not a scan.
+
+    Resolved with a targeted query rather than by walking the timeline: the span
+    is capped at `RANGE_LIMIT`, but the *timeline* is not, and a vendor feed
+    running for two years has thousands of entries that a range over last week
+    has no business reading.
+
+    A timestamp resolves to the last checkpoint **at or before** it, which is the
+    only reading that makes "since Monday" mean what it says when nothing was
+    captured on Monday. A `seq` or an id that names nothing is an error rather
+    than a silent slide to the nearest -- a sync resuming from a checkpoint that
+    has been erased must hear about it, not quietly re-report a month.
+    """
+    kind, wanted = _point(value)
+    columns = "SELECT checkpoint_id, seq, created_at FROM memory_checkpoints "
+    if kind == "at":
+        # Before the timeline began is a real position and not an error: it
+        # means "from the start", which is what someone asking for a window
+        # wider than the feed's history means.
+        row = await pool.fetchrow(
+            columns + "WHERE memory_id = $1 AND org_id = $2 AND created_at <= $3 "
+            "ORDER BY seq DESC LIMIT 1", memory_id, org_id, wanted)
+        return dict(row) if row else None
+    row = await pool.fetchrow(
+        columns + f"WHERE memory_id = $1 AND org_id = $2 AND {kind} = $3",
+        memory_id, org_id, wanted)
+    if row is None:
+        raise CheckpointError(
+            f"this timeline has no checkpoint with {kind} {wanted!r}", status=404)
+    return dict(row)
+
+
+def _empty(memory_id: str, note: str, *, start=None, end=None) -> dict:
+    """A range with nothing in it, still shaped like a range.
+
+    Every empty answer here carries a note saying *which* empty it is. Nothing
+    captured yet, a memory that will never have a timeline, and nothing new since
+    you last asked are three different facts, and one blank response for all
+    three is what makes a screen unreadable and a sync unable to tell whether it
+    is working.
+    """
+    return {"memory_id": memory_id, "basis": "composed", "from": start, "to": end,
+            "checkpoints": 0, "changes": [], "gaps": [],
+            "counts": {"added": 0, "removed": 0, "changed": 0}, "note": note}
+
+
+def _gap(row, why: str) -> dict:
+    """A checkpoint in the range that contributed no delta, and why.
+
+    Reported rather than skipped. A range with a hole in it that presents as
+    complete is the same failure as a check that failed reading as "nothing
+    changed" -- and here it is worse, because the reader asked a question about
+    a span and got an answer about part of one.
+    """
+    return {"seq": row["seq"], "checkpoint_id": row["checkpoint_id"],
+            "external_id": row["external_id"], "why": why,
+            "detail": row["reason"]}
+
+
+async def changes_between(pool: asyncpg.Pool, principal: Principal, memory_id: str,
+                          *, since=None, until=None) -> dict:
+    """What moved across a span of one memory's timeline.
+
+    **Composed from the deltas already stored, so it costs nothing and every
+    claim in it is backed by an artifact a citation can open.** That has one
+    consequence worth saying out loud rather than leaving to be discovered:
+    composing adjacent deltas reports **churn**, not net. A value that went
+    green, then red, then green appears here as two changes, because two changes
+    is what happened. The net reading is a different question with a different
+    answer, and it costs a model call -- which is why `basis` is in the response
+    and is never defaulted silently. A consumer that does not know which of the
+    two it received cannot reconcile it with the other.
+    """
+    from .acl import visibility_params, visibility_sql
+
+    principal.require(DATA_READ)
+    org_id, user_id, principals = visibility_params(principal)
+
+    head = await pool.fetchrow(
+        "SELECT checkpoint_id, seq, created_at FROM memory_checkpoints "
+        "WHERE memory_id = $1 AND org_id = $2 ORDER BY seq DESC LIMIT 1",
+        memory_id, org_id)
+    if head is None:
+        # Two different empty states, and they are not the same fact. A memory
+        # of an ordinary type has no timeline and never will; one of a timeline
+        # type simply has nothing on it yet.
+        tracked = await pool.fetchval(
+            """
+            SELECT t.checkpoints FROM memories m
+            JOIN memory_types t ON t.project_id = m.project_id AND t.name = m.type
+            WHERE m.memory_id = $1 AND m.org_id = $2
+            """,
+            memory_id, org_id)
+        if tracked is None:
+            raise CheckpointError("no such memory", status=404)
+        return _empty(memory_id,
+                      "this memory is a checkpoint timeline with nothing on it yet"
+                      if tracked else
+                      "this memory is not a checkpoint timeline, so it has no "
+                      "changes to report")
+
+    start = await _locate(pool, memory_id, org_id, since) if since else None
+    end = await _locate(pool, memory_id, org_id, until) if until else dict(head)
+    if end is None:
+        # `until` landed before the first checkpoint: the window closes before
+        # the timeline opens, so nothing is in it.
+        return _empty(memory_id, "the window closes before this timeline begins")
+
+    # Exclusive of `from`, inclusive of `to`. A range is the deltas *since* a
+    # point, and the delta stored on the starting checkpoint describes how it
+    # differed from the one before it -- which is outside the window and would
+    # be double-counted by anyone chaining two ranges together.
+    low = start["seq"] if start else 0
+
+    # The ordinary answer for a poller, and it gets its own sentence. A consumer
+    # asking "what has changed since the checkpoint I last saw" lands here every
+    # time nothing new has arrived, and telling it the window was malformed
+    # would be both wrong and alarming.
+    if end["seq"] == low:
+        return _empty(memory_id, "nothing has been captured on this timeline "
+                      "since that point", start=start, end=end)
+
+    # An inverted window is a caller mistake and is refused. Returning an empty
+    # range for it would report "nothing changed" about a span that was never
+    # examined -- the exact lie every other guard in this file exists to prevent,
+    # arriving through the one door that looks like a valid answer.
+    if end["seq"] < low:
+        raise CheckpointError(
+            f"`to` is at position {end['seq']} and `from` at {low}: the window "
+            "ends before it starts, and an empty answer for it would read as "
+            "nothing having changed")
+
+    if end["seq"] - low > RANGE_LIMIT:
+        raise CheckpointError(
+            f"that span covers {end['seq'] - low} checkpoints and the limit is "
+            f"{RANGE_LIMIT}; ask for a narrower window rather than receiving a "
+            "truncated one")
+
+    rows = await pool.fetch(
+        f"""
+        SELECT c.checkpoint_id, c.seq, c.data_id, c.status, c.outcome, c.reason,
+               c.created_at, c.change_artifact_id,
+               d.external_id,
+               a.artifact_id AS visible_artifact_id, a.fields AS change_fields
+        FROM memory_checkpoints c
+        JOIN data_items d ON d.data_id = c.data_id
+        LEFT JOIN artifacts a
+               ON a.artifact_id = c.change_artifact_id
+              AND {visibility_sql("a", 1, 2, 3)}
+        WHERE c.memory_id = $4 AND c.org_id = $1
+          AND c.seq > $5 AND c.seq <= $6
+        ORDER BY c.seq
+        """,
+        org_id, user_id, principals, memory_id, low, end["seq"])
+
+    changes: list[dict] = []
+    gaps: list[dict] = []
+    for row in rows:
+        if row["status"] in ("pending", "running"):
+            gaps.append(_gap(row, "not_checked"))
+            continue
+        if row["status"] == "failed":
+            gaps.append(_gap(row, "failed"))
+            continue
+        if row["outcome"] == "incomparable":
+            gaps.append(_gap(row, "incomparable"))
+            continue
+        if row["change_artifact_id"] and row["visible_artifact_id"] is None:
+            gaps.append(_gap(row, "not_visible"))
+            continue
+        # `first` and `unchanged` reach here and contribute nothing, which is
+        # correct and is not a gap: the check ran and there was nothing to
+        # report. That is the distinction the outcome column exists to draw and
+        # the one this function must not blur.
+        fields = row["change_fields"]
+        if isinstance(fields, str):
+            # Rows written before migration 0054 hold a jsonb *string* rather
+            # than an object; `timeline` normalises the same way.
+            try:
+                fields = json.loads(fields)
+            except ValueError:
+                fields = None
+        for change in ((fields or {}).get("changes") or []):
+            if not isinstance(change, dict):
+                continue
+            # Provenance on every row. A composed range is an assembly of other
+            # people's answers, and each one has to say which checkpoint it came
+            # from or none of it can be checked against the record behind it.
+            changes.append({
+                "seq": row["seq"], "checkpoint_id": row["checkpoint_id"],
+                "data_id": row["data_id"], "external_id": row["external_id"],
+                "at": row["created_at"], **change,
+            })
+
+    kinds = [c.get("kind") for c in changes]
+    return {
+        "memory_id": memory_id,
+        # Required, never inferred. Phase 4 adds `net`, which answers a
+        # different question about the same two points, and a consumer holding
+        # one of them without knowing which cannot reconcile it with the other.
+        "basis": "composed",
+        "from": start, "to": end,
+        "checkpoints": len(rows),
+        "changes": changes,
+        "counts": {"added": kinds.count("added"), "removed": kinds.count("removed"),
+                   "changed": kinds.count("changed")},
+        "gaps": gaps,
+    }

@@ -91,3 +91,45 @@ async def test_a_permission_failure_is_never_a_500(client, tenant):
     )
     assert response.status_code == 403, response.text
     assert "admin" in response.json()["detail"].lower()
+
+
+async def test_the_range_endpoint_binds_its_from_and_to(client, tenant, pool):
+    """`from` is a Python keyword, so the query parameter reaches the handler
+    only through an alias — and a mis-bound alias does not raise. It silently
+    leaves the window unset, so the range answers about the whole timeline while
+    the caller believes it answered about a week. That is the one thing here the
+    service-level tests cannot catch, because they call the function directly.
+    """
+    auth = {"Authorization": f"Bearer {tenant.api_key}"}
+
+    typed = await client.post(
+        f"/api/v1/projects/{tenant.project_id}/memory-types", headers=auth,
+        json={"name": "vendor_feed", "checkpoints": True})
+    assert typed.status_code == 200, typed.text
+
+    await client.post(
+        "/api/v1/write", headers={**auth, "Idempotency-Key": "range-1"},
+        json={"producer_id": tenant.producer_id,
+              "items": [{"external_id": "feed-1",
+                         "memory": {"key": "acme-feed", "type": "vendor_feed"},
+                         "content": {"kind": "inline", "text": "Status: green"}}]})
+    memory_id = await pool.fetchval(
+        "SELECT memory_id FROM memories WHERE project_id = $1 AND memory_key = $2",
+        tenant.project_id, "acme-feed")
+    assert memory_id, "the write should have created the timeline memory"
+
+    whole = await client.get(f"/api/v1/memories/{memory_id}/changes", headers=auth)
+    assert whole.status_code == 200, whole.text
+    # Never inferred: a consumer holding a composed answer and a net one must be
+    # able to tell them apart.
+    assert whole.json()["basis"] == "composed"
+
+    # The alias bound if — and only if — the value reached the position parser.
+    refused = await client.get(
+        f"/api/v1/memories/{memory_id}/changes?from=not-a-position", headers=auth)
+    assert refused.status_code == 400, refused.text
+    assert "position" in refused.json()["detail"]
+
+    assert (await client.get(
+        f"/api/v1/memories/{memory_id}/changes?to=1", headers=auth)
+    ).status_code == 200

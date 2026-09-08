@@ -777,3 +777,352 @@ async def test_an_alert_can_watch_for_a_timeline_that_stopped_comparing(
     # and earns its own event. What matters is which of them matched.
     assert result["candidates"] >= 2, "the checks were considered"
     assert result["matches"] == 1, "and only the one that could not compare matched"
+
+
+# ------------------------------------------------------------- ranges
+#
+# The comparison a checkpoint does is against the one immediately before it.
+# The question people ask a feed is "what has changed since Monday", which is a
+# range. These tests are mostly about the two ways a range can lie: by silently
+# skipping the parts it could not read, and by presenting churn as net.
+
+
+async def _built(pool, queue, blobs, settings, principal, tenant, steps):
+    """A timeline of `(text, changes)` steps, each checked in order.
+
+    Re-checked explicitly even though the queue fixture's `EventWorker` has
+    already checked each one: the second pass rewrites every state at *this*
+    extractor's generator version, which is what keeps consecutive pairs
+    comparable. Checking them out of order would produce a run of `incomparable`
+    and look like the drift guard misfiring.
+    """
+    name = await _timeline_type(pool, tenant)
+    for n, (text, _) in enumerate(steps, start=1):
+        await _write(pool, queue, blobs, settings, principal, tenant,
+                     type_name=name, external_id=f"week-{n}.md", text=text)
+    rows = await _checkpoints(pool, tenant)
+    for row, (text, changes) in zip(rows, steps):
+        await run_check(pool, principal, Fake(state=[text], changes=changes),
+                        row["checkpoint_id"])
+    return await _checkpoints(pool, tenant)
+
+
+def _change(statement, *, kind="changed", earlier="a", later="b", significance="medium"):
+    return {"kind": kind, "statement": statement, "earlier_value": earlier,
+            "later_value": later, "significance": significance}
+
+
+async def test_a_range_composes_the_deltas_inside_it(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    from memdog.checkpoints import changes_between
+
+    principal = await principal_for(tenant.api_key)
+    rows = await _built(pool, queue, blobs, settings, principal, tenant, [
+        ("Status: green", []),
+        ("Status: amber", [_change("status went amber")]),
+        ("Status: red", [_change("status went red")]),
+    ])
+
+    result = await changes_between(pool, principal, rows[0]["memory_id"])
+    assert result["basis"] == "composed"
+    assert [c["statement"] for c in result["changes"]] == [
+        "status went amber", "status went red"]
+    # Provenance on every row, so a claim assembled from other people's answers
+    # can still be opened against the record behind it.
+    assert [c["seq"] for c in result["changes"]] == [2, 3]
+    assert all(c["external_id"] for c in result["changes"])
+    assert result["gaps"] == []
+    assert result["counts"]["changed"] == 2
+
+
+async def test_a_range_reports_churn_and_says_that_is_what_it_did(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """Green, red, green is two changes composed and none net. Both readings are
+    defensible; answering with one while the caller assumed the other is not,
+    which is why `basis` is a field rather than an assumption."""
+    from memdog.checkpoints import changes_between
+
+    principal = await principal_for(tenant.api_key)
+    rows = await _built(pool, queue, blobs, settings, principal, tenant, [
+        ("Status: green", []),
+        ("Status: red", [_change("green to red", earlier="green", later="red")]),
+        ("Status: green", [_change("red to green", earlier="red", later="green")]),
+    ])
+
+    result = await changes_between(pool, principal, rows[0]["memory_id"])
+    assert len(result["changes"]) == 2, "composed reports the churn, not the net"
+    assert result["basis"] == "composed"
+
+
+async def test_the_window_is_exclusive_of_from_and_inclusive_of_to(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """So two ranges chained together neither overlap nor skip — which is the
+    whole of "what changed since I last synced" working more than once."""
+    from memdog.checkpoints import changes_between
+
+    principal = await principal_for(tenant.api_key)
+    rows = await _built(pool, queue, blobs, settings, principal, tenant, [
+        ("v1", []),
+        ("v2", [_change("two")]),
+        ("v3", [_change("three")]),
+        ("v4", [_change("four")]),
+    ])
+    memory_id = rows[0]["memory_id"]
+
+    first = await changes_between(pool, principal, memory_id, until="2")
+    second = await changes_between(pool, principal, memory_id, since="2")
+    whole = await changes_between(pool, principal, memory_id)
+
+    assert [c["statement"] for c in first["changes"]] == ["two"]
+    assert [c["statement"] for c in second["changes"]] == ["three", "four"]
+    assert ([c["statement"] for c in first["changes"]]
+            + [c["statement"] for c in second["changes"]]
+            == [c["statement"] for c in whole["changes"]])
+
+
+async def test_a_hole_in_the_range_is_reported_rather_than_skipped(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """A range that quietly omits what it could not read presents as complete.
+    For a change detector that is the same lie as a failed check reading as
+    "nothing changed"."""
+    from memdog.checkpoints import changes_between
+
+    principal = await principal_for(tenant.api_key)
+    rows = await _built(pool, queue, blobs, settings, principal, tenant, [
+        ("v1", []),
+        ("v2", [_change("two")]),
+        ("v3", [_change("three")]),
+    ])
+    # The middle one re-described by a different generator, so its comparison
+    # against its predecessor is refused.
+    drifted = Fake(state=["v2"], changes=[_change("two")])
+    drifted.model_id = "fake-extractor-2"
+    await run_check(pool, principal, drifted, rows[1]["checkpoint_id"])
+
+    result = await changes_between(pool, principal, rows[0]["memory_id"])
+    assert [g["why"] for g in result["gaps"]] == ["incomparable"]
+    assert result["gaps"][0]["seq"] == 2
+    assert result["gaps"][0]["detail"], "a gap with no reason is unactionable"
+    # And the rest of the range still answers.
+    assert [c["statement"] for c in result["changes"]] == ["three"]
+
+
+async def test_a_checkpoint_nobody_has_checked_is_a_hole_not_a_quiet_week(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    from memdog.checkpoints import changes_between
+
+    principal = await principal_for(tenant.api_key)
+    rows = await _built(pool, queue, blobs, settings, principal, tenant, [
+        ("v1", []),
+        ("v2", [_change("two")]),
+    ])
+    await pool.execute(
+        "UPDATE memory_checkpoints SET status = 'pending', outcome = NULL, "
+        "change_artifact_id = NULL WHERE checkpoint_id = $1",
+        rows[1]["checkpoint_id"])
+
+    result = await changes_between(pool, principal, rows[0]["memory_id"])
+    assert result["changes"] == []
+    assert [g["why"] for g in result["gaps"]] == ["not_checked"]
+
+
+async def test_a_delta_the_reader_cannot_see_is_a_hole_too(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """An artifact takes the strictest level among its sources, so a reader can
+    legitimately be unable to see one change in a range they can otherwise read.
+    Reporting that as no-change would be the same lie as any other hole."""
+    from memdog.checkpoints import changes_between
+
+    principal = await principal_for(tenant.api_key)
+    rows = await _built(pool, queue, blobs, settings, principal, tenant, [
+        ("v1", []),
+        ("v2", [_change("two")]),
+    ])
+    # `restricted` shared with a principal this reader is not, rather than
+    # `private` owned by a stranger — `artifacts.owner_id` is a foreign key, so
+    # inventing a user to own it fails before the test can make its point.
+    await pool.execute(
+        """UPDATE artifacts SET access_level = 'restricted',
+                  shared_with = '["grp_nobody_here"]'::jsonb
+            WHERE artifact_id = (SELECT change_artifact_id FROM memory_checkpoints
+                                  WHERE checkpoint_id = $1)""",
+        rows[1]["checkpoint_id"])
+
+    result = await changes_between(pool, principal, rows[0]["memory_id"])
+    assert result["changes"] == []
+    assert [g["why"] for g in result["gaps"]] == ["not_visible"]
+
+
+async def test_a_span_wider_than_the_limit_is_refused_not_truncated(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """Silent truncation reads as "nothing else moved", which is the one answer
+    a change detector must never give by accident."""
+    from memdog.checkpoints import RANGE_LIMIT, changes_between
+
+    principal = await principal_for(tenant.api_key)
+    rows = await _built(pool, queue, blobs, settings, principal, tenant, [
+        ("v1", []), ("v2", [_change("two")])])
+    await pool.execute(
+        "UPDATE memory_checkpoints SET seq = $2 WHERE checkpoint_id = $1",
+        rows[1]["checkpoint_id"], RANGE_LIMIT + 5)
+
+    with pytest.raises(CheckpointError) as caught:
+        await changes_between(pool, principal, rows[0]["memory_id"])
+    assert str(RANGE_LIMIT) in str(caught.value)
+
+
+async def test_a_time_lands_on_the_last_checkpoint_at_or_before_it(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """"Since Monday" has to mean something when nothing was captured on
+    Monday."""
+    from datetime import timedelta
+
+    from memdog.checkpoints import changes_between
+
+    principal = await principal_for(tenant.api_key)
+    rows = await _built(pool, queue, blobs, settings, principal, tenant, [
+        ("v1", []),
+        ("v2", [_change("two")]),
+        ("v3", [_change("three")]),
+    ])
+    between = rows[1]["created_at"] + timedelta(microseconds=1)
+
+    result = await changes_between(pool, principal, rows[0]["memory_id"],
+                                   since=between.isoformat())
+    assert result["from"]["seq"] == 2
+    assert [c["statement"] for c in result["changes"]] == ["three"]
+
+    # Earlier than everything means "from the start", which is a real position.
+    early = (rows[0]["created_at"] - timedelta(days=1)).isoformat()
+    assert len((await changes_between(
+        pool, principal, rows[0]["memory_id"], since=early))["changes"]) == 2
+
+
+async def test_a_position_that_names_nothing_is_an_error_not_a_slide(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """A sync resuming from a checkpoint that has been erased must hear about
+    it rather than quietly re-reporting a month."""
+    from memdog.checkpoints import changes_between
+
+    principal = await principal_for(tenant.api_key)
+    rows = await _built(pool, queue, blobs, settings, principal, tenant, [
+        ("v1", []), ("v2", [_change("two")])])
+
+    with pytest.raises(CheckpointError) as caught:
+        await changes_between(pool, principal, rows[0]["memory_id"], since="cpt_nope")
+    assert caught.value.status == 404
+
+    with pytest.raises(CheckpointError):
+        await changes_between(pool, principal, rows[0]["memory_id"], since="not a date")
+
+
+async def test_a_memory_that_is_not_a_timeline_says_so(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """Three different situations — no such memory, a memory that will never
+    have a timeline, and one with nothing on it yet — must not share a
+    rendering."""
+    from memdog.checkpoints import changes_between
+
+    principal = await principal_for(tenant.api_key)
+    name = await _timeline_type(pool, tenant, name="plain", checkpoints=False)
+    await _write(pool, queue, blobs, settings, principal, tenant,
+                 type_name=name, external_id="week-1.md", text="Status: green")
+    memory_id = await pool.fetchval(
+        "SELECT memory_id FROM memories WHERE project_id = $1 AND memory_key = $2",
+        tenant.project_id, "acme-feed")
+
+    result = await changes_between(pool, principal, memory_id)
+    assert result["changes"] == []
+    assert "not a checkpoint timeline" in result["note"]
+
+    with pytest.raises(CheckpointError) as caught:
+        await changes_between(pool, principal, "mem_nope")
+    assert caught.value.status == 404
+
+
+async def test_another_organisation_cannot_read_a_range(
+    pool, queue, blobs, settings, tenant, other_tenant, principal_for
+):
+    from memdog.checkpoints import changes_between
+
+    principal = await principal_for(tenant.api_key)
+    rows = await _built(pool, queue, blobs, settings, principal, tenant, [
+        ("v1", []), ("v2", [_change("two")])])
+
+    intruder = await principal_for(other_tenant.api_key)
+    with pytest.raises(CheckpointError) as caught:
+        await changes_between(pool, intruder, rows[0]["memory_id"])
+    assert caught.value.status == 404
+
+
+async def test_nothing_new_since_that_point_is_its_own_answer(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """The ordinary result for a poller. A consumer asking "what has changed
+    since the checkpoint I last saw" lands here every time nothing new has
+    arrived, so it must not read as a malformed window."""
+    from memdog.checkpoints import changes_between
+
+    principal = await principal_for(tenant.api_key)
+    rows = await _built(pool, queue, blobs, settings, principal, tenant, [
+        ("v1", []), ("v2", [_change("two")])])
+
+    result = await changes_between(pool, principal, rows[0]["memory_id"],
+                                   since=rows[1]["checkpoint_id"])
+    assert result["changes"] == []
+    assert result["gaps"] == []
+    assert "since that point" in result["note"]
+    # The window is still reported, so a caller can see it asked about nothing
+    # rather than guessing.
+    assert result["from"]["seq"] == 2 and result["to"]["seq"] == 2
+
+
+async def test_an_inverted_window_is_refused_not_answered_empty(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """An empty answer here would report "nothing changed" about a span that was
+    never examined — the lie every other guard in this file exists to prevent,
+    arriving through the one door that looks like a valid answer."""
+    from memdog.checkpoints import changes_between
+
+    principal = await principal_for(tenant.api_key)
+    rows = await _built(pool, queue, blobs, settings, principal, tenant, [
+        ("v1", []), ("v2", [_change("two")]), ("v3", [_change("three")])])
+
+    with pytest.raises(CheckpointError) as caught:
+        await changes_between(pool, principal, rows[0]["memory_id"],
+                              since="3", until="1")
+    assert "ends before it starts" in str(caught.value)
+
+
+async def test_resolving_a_position_does_not_read_the_whole_timeline(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """The span is capped; the timeline is not. A feed running for two years has
+    thousands of entries that a range over last week has no business reading, so
+    each endpoint is one indexed lookup rather than a walk."""
+    from memdog.checkpoints import _locate
+
+    principal = await principal_for(tenant.api_key)
+    rows = await _built(pool, queue, blobs, settings, principal, tenant, [
+        ("v1", []), ("v2", [_change("two")]), ("v3", [_change("three")])])
+    memory_id, org_id = rows[0]["memory_id"], tenant.org_id
+
+    assert (await _locate(pool, memory_id, org_id, "2"))["seq"] == 2
+    assert (await _locate(pool, memory_id, org_id,
+                          rows[2]["checkpoint_id"]))["seq"] == 3
+    # A timestamp after everything lands on the head rather than running off it.
+    from datetime import timedelta
+
+    later = (rows[2]["created_at"] + timedelta(days=1)).isoformat()
+    assert (await _locate(pool, memory_id, org_id, later))["seq"] == 3

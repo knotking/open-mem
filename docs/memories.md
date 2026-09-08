@@ -439,6 +439,68 @@ both answered by the membership list, and neither is answerable from the memory 
 The write response should carry it too: an item written into a routed conversation memory should
 say so, rather than leaving the caller to discover the mapping by querying.
 
+## Checkpoint timelines — what changed since last time
+
+A memory is otherwise a bag of records with a lifetime, and nothing in it says that *this* record is
+a later version of the same thing as *that* one. A corpus fed the same document repeatedly — a
+nightly export, a weekly status report, a vendor feed, a policy that keeps being reissued —
+accumulates copies and answers from all of them at once. The question people have about such a
+memory is not "what does it say" but **"what moved"**.
+
+`checkpoints` is a flag on the memory *type*, the same kind of thing as `on_expiry`: a `vendor_feed`
+becomes a timeline without being re-typed into one. It is **off unless turned on**, because it puts
+up to two model calls behind every write into every memory of that type.
+
+Every record added to such a memory becomes a checkpoint: described on its own, then compared
+against the checkpoint before it. **The comparison is between the two descriptions, not the two
+documents** — and that design has one failure mode worth naming, because it hides. Two free-prose
+summaries of the same content differ in wording every run, so a diff of them always finds something,
+so it always looks like it is working. Three things stop that, and none of them is the prompt:
+
+- the description is a **fixed-order list of observations**, not a paragraph, so two runs over the
+  same content fill the same slots;
+- an **identical checksum settles it without asking a model** at all;
+- two descriptions written by **different generator versions are not compared** — the checkpoint is
+  marked `incomparable` and says so, rather than reporting a prompt change as a content change.
+
+An outcome is always one of `first`, `changed`, `unchanged` or `incomparable`, and it is separate
+from `status` for the reason a change detector cannot afford to blur: *the check has not finished*
+and *the check found nothing* must never render the same.
+
+### Asking about a span, not a step
+
+The comparison each checkpoint does is against the one immediately before it. The question people
+actually ask is about a range — *what has changed since Monday*, *since the version I last synced*:
+
+```
+GET /api/v1/memories/{id}/changes?from=<checkpoint_id|seq|timestamp>&to=<...>
+```
+
+`from` defaults to the start of the timeline and `to` to its head. The window is **exclusive of
+`from` and inclusive of `to`**, so two ranges chained together neither overlap nor skip — which is
+the whole of "what changed since I last synced" working more than once. A timestamp lands on the
+last checkpoint at or before it; a `seq` or an id naming nothing is an error rather than a silent
+slide to the nearest, because a sync resuming from an erased checkpoint must hear about it.
+
+Two things in the response are there to stop it lying:
+
+- **`basis`** says how the answer was reached. Today it is always `composed` — the stored deltas
+  concatenated, which costs nothing and every claim in it is backed by an artifact a citation can
+  open. Composing reports **churn**: a value that went green, red, green appears as two changes,
+  because two changes happened. The *net* reading is a different question, costs a model call, and
+  will arrive as `basis: "net"`. Both are defensible; answering with one while the caller assumed
+  the other is not, which is why this is a field and never an assumption.
+- **`gaps`** names every checkpoint in the span that contributed nothing and why —
+  `not_checked`, `failed`, `incomparable`, or `not_visible`. A range that quietly omits what it
+  could not read presents as complete, which for a change detector is the same lie as a failed check
+  reading as "nothing changed".
+
+A span wider than 500 checkpoints is **refused rather than truncated**, for the same reason.
+
+A change reaching the timeline also reaches the [event stream](alerts.md): `checkpoint.changed`
+when a record moved, and `checkpoint.checked` on every check that finished — including the ones that
+found nothing, which is what a consumer advancing a watermark needs.
+
 ## API
 
 ```
@@ -450,6 +512,9 @@ GET   /api/v1/data/{id}/memories           reverse lookup
 POST  /api/v1/memories/{id}/compress
 PATCH /api/v1/memories/{id}                ttl_hours, no_expiry
 GET   /api/v1/memories/{id}/tree           ancestors and descendants, with a cap that reports itself
+GET   /api/v1/memories/{id}/checkpoints    the timeline, newest first, with what changed at each point
+GET   /api/v1/memories/{id}/changes        what moved across a span; `basis` and `gaps` are part of the answer
+POST  /api/v1/memories/{id}/checkpoints/{cid}/recheck   the way out of `incomparable`
 CRUD  /api/v1/memories/{id}/links          relate two memories; a cycle is a 409
 GET   /api/v1/projects/{id}/expiring       what is past its TTL, and under which policy
 POST  /api/v1/expiry/sweep                 apply it; `dry_run` defaults to true

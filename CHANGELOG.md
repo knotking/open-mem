@@ -11,6 +11,16 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **`checkpoint.checked` — an alert surface for a check that ran and found
+  nothing.** Every check on a checkpoint timeline now reaches the event stream,
+  not only the ones that found movement, carrying `status`, `outcome`, `reason`
+  and the same delta digest as `checkpoint.changed`. It is deliberately the
+  noisiest surface here: a consumer advancing a watermark needs "we looked and
+  it had not moved" to be a message rather than a silence, and the checkpoint
+  row has always drawn that distinction while the stream did not. The alert it
+  exists for is `{"outcome": ["incomparable"]}` — a timeline still accepting
+  records while every comparison refuses, which was visible only by eye in the
+  console and is the failure here that looks most like health.
 - **The competitive comparison is published**, at `/docs/compare`, with `How it
   compares` beside `Docs` in the header. Four documents: the landscape, and
   head-to-heads with Onyx, Glean and the "company brain" category. They are
@@ -325,6 +335,12 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   its reason — never left pending, which would read as still running.
 
 ### Changed
+- **A checkpoint's status and the event announcing it are written together.**
+  Both `checkpoint.changed` and `checkpoint.checked` are emitted inside the
+  transaction that settles the row, so a checkpoint cannot be complete in the
+  table and absent from the stream. What the events report is what was stored,
+  not what the caller asked for — the outcome column coalesces, so a failed
+  check on a first checkpoint keeps `first` and the event says `first` too.
 - **A `checkpoint.changed` event carries the delta, not just its size.**
   Alongside the count: per-kind counts, the highest significance in the batch, a
   five-item sample of the change statements, and the `change_artifact_id` that
