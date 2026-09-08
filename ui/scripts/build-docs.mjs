@@ -65,6 +65,7 @@ const PUBLISHED = [
     ["competition/README.md", "The landscape", "compare"],
     ["competition/comparison-onyx.md", "vs Onyx", "compare/onyx"],
     ["competition/comparison-glean.md", "vs Glean", "compare/glean"],
+    ["competition/comparison-company-brain.md", "vs company brains", "compare/company-brain"],
   ]},
   { group: "Getting it back", files: [
     ["retrieval/README.md", "Retrieval"],
