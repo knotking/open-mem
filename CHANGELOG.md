@@ -377,6 +377,12 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   its reason — never left pending, which would read as still running.
 
 ### Changed
+- **The landing page's diagrams are sub-tabs rather than a column.** Four
+  stacked was a long scroll with no indication of how much was left, so the last
+  one may as well not have existed. The system diagram, the company brain, the
+  timeline memory and agent memory are now a pill row, one screen each. The
+  system diagram gave up its own section heading to become a pane like the
+  others, and its `#flow` anchor went with it — nothing linked it.
 - **A repository is added from Add data now, not from its own screen.** Two nav
   entries beginning with "Add" were two answers to "where do I put something",
   and a repository is not a different action — it is a different kind of thing.
