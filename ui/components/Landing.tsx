@@ -501,7 +501,11 @@ function Diagrams() {
 
 function PublicDemo({ app, info, setInfo }: {
   app: DemoApp;
-  info: DemoInfo; setInfo: (f: (i: DemoInfo | null) => DemoInfo | null) => void;
+  // Widened to carry the third state the gallery has: `undefined` for "not
+  // asked yet", which is what stops the page painting a screen of diagrams and
+  // then discarding them.
+  info: DemoInfo;
+  setInfo: (f: (i: DemoInfo | null | undefined) => DemoInfo | null | undefined) => void;
 }) {
   const [question, setQuestion] = useState("");
   const [turns, setTurns] = useState<{
@@ -666,7 +670,11 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [caps, setCaps] = useState<Capabilities | null>(null);
-  const [demo, setDemo] = useState<DemoInfo | null>(null);
+  // `undefined` means *not yet known*, `null` means *asked and there is none*.
+  // They were one value, and the difference is a whole screen: with the gallery
+  // unresolved the page took the no-demo branch, painted the hero and all four
+  // diagrams, and then threw them away the moment the fetch landed.
+  const [demo, setDemo] = useState<DemoInfo | null | undefined>(undefined);
   // Which app the chat is pointed at. Null until the gallery arrives; the
   // first entry once it does, so a visitor lands on something answerable
   // rather than on a chooser.
@@ -748,6 +756,11 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
   const apps = demo?.demos ?? [];
   const app = apps.find((a) => a.key === picked) ?? apps[0] ?? null;
   const heroHasDemo = Boolean(app);
+  // Optimistic while the gallery is in flight: assume there is one, because on
+  // any deployment that has published demos there is, and the cost of being
+  // wrong is a moment of "loading" on a deployment with none — against the cost
+  // of being right, which was rendering four diagrams and deleting them.
+  const demoShell = demo === undefined || heroHasDemo;
   const signInCard = authEnabled ? (
           <form className="signin-card" id="signin" onSubmit={submit}>
             <h2>Sign in</h2>
@@ -857,7 +870,7 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
           the other order asks them to take it on faith first. */}
       {/* Only when there are two things to choose between. A tab strip over a
           single panel is a control that decides nothing. */}
-      {heroHasDemo && (
+      {demoShell && (
         <nav className="landtabs" role="tablist" aria-label="What to look at">
           <button
             role="tab" id="tab-demo" aria-controls="panel-demo"
@@ -880,7 +893,7 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
         </nav>
       )}
 
-      {heroHasDemo && view === "demo" && (
+      {demoShell && view === "demo" && (
         <section className="hero-demo" id="panel-demo" role="tabpanel"
                  aria-labelledby="tab-demo">
           <p className="eyebrow">Memory layer · sandbox · no account needed</p>
@@ -908,14 +921,18 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
               ))}
             </div>
           )}
-          <PublicDemo app={app!} info={demo!} setInfo={setDemo} />
+          {app ? (
+            <PublicDemo app={app} info={demo!} setInfo={setDemo} />
+          ) : (
+            <p className="empty">Loading the sandbox…</p>
+          )}
         </section>
       )}
 
       {/* One headline, one diagram. Everything that used to be argued here --
           nine sections of prose and a comparison matrix -- is in the docs,
           where somebody who wants it is already looking. */}
-      {!heroHasDemo && (
+      {!demoShell && (
         <section className="hero-split">
           <div>
             <p className="eyebrow">Memory layer · sandbox</p>
@@ -927,7 +944,7 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
 
       {/* Without a demo there is no choice to present, so the diagrams are
           simply the page rather than one tab of it. */}
-      {heroHasDemo ? (
+      {demoShell ? (
         view === "diagrams" && (
           <div id="panel-diagrams" role="tabpanel" aria-labelledby="tab-diagrams">
             <Diagrams />

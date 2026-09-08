@@ -11,6 +11,19 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **The landing page has two tabs and three diagrams of what the thing is
+  for.** *Try it* and *How it works*, so a phone gets a screen rather than a leg
+  of a long scroll — the demo no longer sits between a visitor and the first
+  picture, nor the pictures between them and sign-in. The strip appears only
+  when there is a demo to choose between. Under *How it works*, the existing
+  system diagram is followed by three use cases, each drawn around the one
+  mechanism that carries it: **a company brain**, where the point is the
+  citation going back to the record rather than the answer; **a timeline
+  memory**, where the same report arrives weekly and the two readings of a span
+  disagree on purpose — four changes composed against nothing net, the numbers
+  the service actually returns for that span; and **agent memory**, where a
+  later session reads what an earlier one wrote instead of replaying a
+  transcript.
 - **`?net=true` answers what is different between two points, net of everything
   in between.** The composed range reports churn — green, red, green is two
   changes; the net range compares the description at each end directly and the
