@@ -513,6 +513,13 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   answering overlapping questions about one thing is how they drift apart.
 
 ### Fixed
+- **The landing page painted its hero and every diagram, then discarded them.**
+  The demo gallery loads client-side and `null` meant both "not asked yet" and
+  "there is none", so the first paint took the no-demo branch and the whole
+  screen was replaced the moment the fetch landed. The flash predates the
+  diagrams — it used to swap a small hero — but the diagrams made it a full
+  screen. Unresolved and none are now separate states, and the demo shell
+  renders optimistically while the gallery is in flight.
 - **Every deploy was silently wiping the public demo gallery.** `PUBLIC_DEMOS`
   is JSON and therefore full of commas — the character `--set-env-vars` splits
   on — so it was never in the deploy script's list, which meant it lived only on
