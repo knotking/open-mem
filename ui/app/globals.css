@@ -1923,3 +1923,88 @@ button.tab-cta { font-family: inherit; line-height: 1.35; cursor: pointer; }
   .docnav.open { display: block; }
   .docs-main .doc-shell { max-width: none; }
 }
+
+/* ---------------------------------------------------------- landing tabs */
+/* `landtab`, not `tab`: `.tabs` is the header nav on this very page, and the
+   console already learned what happens when two components share a class —
+   the later rule wins and the damage lands somewhere nobody was looking. */
+.landtabs {
+  display: flex;
+  gap: 8px;
+  margin: 6px 0 22px;
+  border-bottom: 1px solid var(--line);
+}
+.landtab {
+  appearance: none;
+  background: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  /* The bare `button` element on this page is painted as the primary action —
+     accent ground, light text. Every property that rule touches has to be
+     answered here or a tab renders as a solid pill. */
+  color: var(--muted);
+  padding: 10px 14px 12px;
+  margin-bottom: -1px;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-weight: 600;
+}
+.landtab:hover { color: var(--ink); }
+.landtab.on { color: var(--ink); border-bottom-color: var(--accent); }
+.landtab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+/* What each tab is for, so the choice is legible before it is made. Hidden on a
+   phone, where the strip has to stay one line and the labels carry it alone. */
+.landtab-sub { font-size: 11.5px; font-weight: 400; color: var(--muted); }
+@media (max-width: 640px) {
+  .landtab-sub { display: none; }
+  .landtab { padding: 10px 12px; }
+}
+
+/* -------------------------------------------------- the use-case diagrams */
+.use { padding: 4px 0 34px; }
+.use-claim {
+  color: var(--muted);
+  max-width: 62ch;
+  margin: -6px 0 16px;
+  line-height: 1.55;
+}
+/* Narrower than `.flow-svg`'s 900px floor: these are three or four boxes wide,
+   not fifteen, so they fit a phone without the container scrolling. */
+.use-svg { min-width: 520px; }
+
+/* A citation, drawn as a chip because that is what it is in the console too. */
+.use-cite rect { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1; }
+.use-cite text { fill: var(--ink); font-size: 11px; font-family: var(--mono); }
+
+/* The delta between two adjacent versions. */
+.use-delta rect { fill: var(--panel); stroke: var(--accent); stroke-width: 1; }
+.use-delta text { fill: var(--ink); font-size: 12px; font-family: var(--mono); }
+
+/* The status dot. Semantic colour, and the only place on this page that uses
+   it — a green and a red that mean green and red, in a diagram whose whole
+   subject is a value changing between them. */
+.use-dot circle { stroke: var(--panel); stroke-width: 2; }
+.use-green circle { fill: #2e9e5b; }
+.use-red circle { fill: #d1495b; }
+
+/* The two readings of one span. */
+.use-read rect { fill: var(--accent-soft); stroke: var(--accent); }
+.use-count { fill: var(--ink); font-size: 21px; font-weight: 700; letter-spacing: -0.02em; }
+
+/* Not "then this happens" but "and this can be checked" — a different kind of
+   claim from the flow lines, so it is drawn as a different kind of line. */
+.use-return path {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.2;
+  stroke-dasharray: 4 4;
+  opacity: 0.75;
+  marker-end: url(#flow-arrow);
+}
+.use-return text { fill: var(--muted); font-size: 12px; font-family: var(--mono); }
+/* Reading back out of the memory, as against writing into it. */
+.use-read-line path { opacity: 0.55; stroke-dasharray: 3 4; }

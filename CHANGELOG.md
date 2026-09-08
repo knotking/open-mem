@@ -364,6 +364,17 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   its reason — never left pending, which would read as still running.
 
 ### Changed
+- **A repository is added from Add data now, not from its own screen.** Two nav
+  entries beginning with "Add" were two answers to "where do I put something",
+  and a repository is not a different action — it is a different kind of thing.
+  It joins text, files, YouTube videos and web pages as a fifth kind in step 1.
+  Steps 3 to 5 are *absent* rather than greyed out for it, because a repository
+  goes to `repos/analyze` and produces a snapshot rather than an item, so none
+  of the memory, enrichment or audience decisions apply; the line above the
+  button says what stands in their place, and the cost sits next to the control
+  that causes it. The confirmation offers a button through to the snapshot
+  instead of announcing that the job is somewhere else. The old screen keeps its
+  own entry as **Repositories** — the reading half — with its form removed.
 - **A checkpoint's status and the event announcing it are written together.**
   Both `checkpoint.changed` and `checkpoint.checked` are emitted inside the
   transaction that settles the row, so a checkpoint cannot be complete in the

@@ -110,13 +110,6 @@ function Flow() {
                          are the memory. The memory is reached through chat, MCP or the API,
                          and those surfaces carry a company brain, agent memory, alerts,
                          pattern search and workflows.">
-          <defs>
-            <marker id="flow-arrow" viewBox="0 0 10 10" refX="9" refY="5"
-                    markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-              <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--muted)" />
-            </marker>
-          </defs>
-
           {/* The five stages, named. Not decoration: without them the picture
               reads as fifteen boxes rather than as a direction of travel. */}
           {STAGES.map((s) => (
@@ -244,6 +237,265 @@ function Flow() {
         </svg>
       </div>
     </section>
+  );
+}
+
+/**
+ * Three pictures of what the memory is *for*, under the one picture of how it
+ * works.
+ *
+ * `Flow` answers "what is this system"; nobody arrives asking that. These
+ * answer "what would I use it for", and each is drawn around the one mechanism
+ * that makes its case rather than around a row of nouns:
+ *
+ *   - the brain's claim is the **citation going back**, not the answer;
+ *   - the timeline's claim is that **two readings of one span disagree**, which
+ *     is the whole of change detection and cannot be said in a list;
+ *   - the agent's claim is that **session three reads what session one wrote**,
+ *     which is exactly what re-feeding a transcript does not do.
+ *
+ * They reuse `.flow-*` so the four read as one family. A second visual dialect
+ * on the same page would say these are a different kind of thing.
+ */
+/** The one arrowhead, for every diagram on the page.
+ *
+ * Defined once and hoisted rather than repeated per `<svg>`, because
+ * `marker-end` in the stylesheet names a single id: four diagrams with four
+ * ids meant three of them referred to a marker that was not theirs, and drew
+ * their connectors with no head at all. A shared def cannot drift from the
+ * rule that points at it, and duplicate ids in one document cannot happen.
+ */
+function ArrowDefs() {
+  return (
+    <svg width="0" height="0" aria-hidden="true" focusable="false"
+         style={{ position: "absolute" }}>
+      <defs>
+        <marker id="flow-arrow" viewBox="0 0 10 10" refX="9" refY="5"
+                markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--muted)" />
+        </marker>
+      </defs>
+    </svg>
+  );
+}
+
+function BrainDiagram() {
+  return (
+    <svg viewBox="0 0 940 284" className="flow-svg use-svg" role="img"
+         aria-label="Chat, documents and tickets all write into one memory. A question
+                     against that memory returns an answer whose every sentence carries
+                     the passage behind it, and that citation opens the original record.">
+
+      {[["Conversations", "chat · email · meetings", 24],
+        ["Documents", "drive · wiki · uploads", 94],
+        ["Tickets & records", "issues · CRM · repos", 164]].map(([h, s, y]) => (
+        <g className="flow-box" key={h as string}>
+          <rect x="8" y={y as number} width="252" height="52" rx="10" />
+          <text x="24" y={(y as number) + 24} className="flow-h">{h}</text>
+          <text x="24" y={(y as number) + 42} className="flow-s">{s}</text>
+        </g>
+      ))}
+
+      <g className="flow-box flow-spine">
+        <rect x="330" y="82" width="204" height="76" rx="10" />
+        <text x="350" y="112" className="flow-h">One memory</text>
+        <text x="350" y="132" className="flow-s">scoped, permissioned</text>
+        <text x="350" y="149" className="flow-s">and searchable</text>
+      </g>
+
+      <g className="flow-box flow-app">
+        <rect x="580" y="52" width="352" height="112" rx="10" />
+        <text x="600" y="80" className="flow-h">&ldquo;What did we promise on renewal?&rdquo;</text>
+        <text x="600" y="106" className="flow-s">Pricing was held at 400/seat through</text>
+        <text x="600" y="124" className="flow-s">March, then raised to 550.</text>
+      </g>
+      {/* The citation is the point of the picture, so it is a mark of its own
+          rather than a word inside the answer box. */}
+      <g className="use-cite">
+        <rect x="600" y="134" width="126" height="20" rx="5" />
+        <text x="610" y="148">contract-v2.pdf</text>
+      </g>
+
+      <g className="flow-line">
+        <path d="M 260 50 C 300 50 300 108 330 112" />
+        <path d="M 260 120 L 330 120" />
+        <path d="M 260 190 C 300 190 300 136 330 132" />
+        <path d="M 534 120 L 580 108" />
+      </g>
+
+      {/* Back to the record it came from. Dashed and beneath everything,
+          because it is a different kind of claim from the flow above it: not
+          "then this happens" but "and this can be checked". */}
+      <g className="use-return">
+        <path d="M 640 168 C 500 246 320 250 152 220" />
+        <text x="300" y="270" className="flow-s">every sentence opens the record behind it</text>
+      </g>
+    </svg>
+  );
+}
+
+function TimelineDiagram() {
+  const WEEKS = [
+    { x: 8, week: "Monday 1", status: "green", incidents: "0" },
+    { x: 330, week: "Monday 2", status: "red", incidents: "3" },
+    { x: 652, week: "Monday 3", status: "green", incidents: "0" },
+  ];
+  return (
+    <svg viewBox="0 0 940 316" className="flow-svg use-svg" role="img"
+         aria-label="The same status report arrives three weeks running. Each version is
+                     compared with the one before it, giving two changes. Read as a span,
+                     the composed answer reports both changes because both happened, while
+                     the net answer reports nothing, because the two ends are identical.">
+
+      <text x="8" y="16" className="flow-stage">THE SAME DOCUMENT, ARRIVING AGAIN</text>
+
+      {WEEKS.map((w) => (
+        <g key={w.week}>
+          <g className="flow-box">
+            <rect x={w.x} y="30" width="280" height="86" rx="10" />
+            <text x={w.x + 18} y="58" className="flow-h">{w.week}</text>
+            <text x={w.x + 18} y="80" className="flow-s">status: {w.status}</text>
+            <text x={w.x + 18} y="98" className="flow-s">open incidents: {w.incidents}</text>
+          </g>
+          <g className={`use-dot use-${w.status}`}>
+            <circle cx={w.x + 258} cy="52" r="7" />
+          </g>
+        </g>
+      ))}
+
+      {/* Each step compared with the one before it — the only comparison the
+          timeline actually performs. Everything below is a reading of these. */}
+      <g className="flow-line">
+        <path d="M 288 73 L 322 73" />
+        <path d="M 610 73 L 644 73" />
+      </g>
+      <g className="use-delta">
+        <rect x="222" y="126" width="184" height="26" rx="6" />
+        <text x="234" y="144">green → red · 0 → 3</text>
+        <rect x="544" y="126" width="184" height="26" rx="6" />
+        <text x="556" y="144">red → green · 3 → 0</text>
+      </g>
+      <g className="flow-line">
+        <path d="M 314 116 L 314 126" />
+        <path d="M 636 116 L 636 126" />
+      </g>
+
+      <text x="8" y="192" className="flow-stage">ASK ABOUT THE WHOLE SPAN</text>
+
+      {/* The two readings, side by side, because the number is the argument.
+          Saying "composed reports churn" in prose is a sentence somebody skims;
+          4 next to 0 is a thing they stop at. */}
+      <g className="flow-box use-read">
+        <rect x="8" y="206" width="452" height="94" rx="10" />
+        <text x="28" y="234" className="flow-h">Composed &mdash; what happened</text>
+        <text x="28" y="258" className="flow-s">the stored steps, concatenated. Free.</text>
+        <text x="28" y="284" className="use-count">4 changes</text>
+      </g>
+      <g className="flow-box use-read">
+        <rect x="480" y="206" width="452" height="94" rx="10" />
+        <text x="500" y="234" className="flow-h">Net &mdash; what is different</text>
+        <text x="500" y="258" className="flow-s">the two ends compared directly.</text>
+        <text x="500" y="284" className="use-count">nothing</text>
+      </g>
+
+      {/* No connectors down to the two readings. They crossed the stage label,
+          and they implied each reading came from the delta above it when both
+          are readings of the whole span. The heading carries the relation. */}
+    </svg>
+  );
+}
+
+function AgentDiagram() {
+  const SESSIONS = [
+    { x: 8, when: "Monday", what: "learns the deploy runbook" },
+    { x: 330, when: "Wednesday", what: "hits the same error" },
+    { x: 652, when: "Friday", what: "a different agent entirely" },
+  ];
+  return (
+    <svg viewBox="0 0 940 280" className="flow-svg use-svg" role="img"
+         aria-label="Three agent sessions on different days write to and read from one
+                     memory. Friday's session, a different agent, reads what Monday's wrote
+                     without any transcript being replayed into its context.">
+
+      <text x="8" y="16" className="flow-stage">SEPARATE SESSIONS, DIFFERENT AGENTS</text>
+
+      {SESSIONS.map((s) => (
+        <g className="flow-box flow-surface" key={s.when}>
+          <rect x={s.x} y="30" width="280" height="74" rx="10" />
+          <text x={s.x + 18} y="58" className="flow-h">{s.when}</text>
+          <text x={s.x + 18} y="80" className="flow-s">{s.what}</text>
+        </g>
+      ))}
+
+      <g className="flow-box flow-spine">
+        <rect x="180" y="176" width="580" height="76" rx="10" />
+        <text x="204" y="206" className="flow-h">One memory, outliving all of them</text>
+        <text x="204" y="228" className="flow-s">
+          facts, decisions and what was tried — not the transcripts
+        </text>
+      </g>
+
+      {/* Down is writing, up is reading. Drawn as two directions rather than
+          one double-headed line, because "it remembers" and "it recalls" are
+          the two halves and a single arrow shows neither. */}
+      <g className="flow-line">
+        <path d="M 148 104 C 148 150 240 140 260 176" />
+        <path d="M 470 104 L 470 176" />
+        <path d="M 700 104 C 700 142 680 150 660 176" />
+      </g>
+      {/* Reading, as against writing — and kept well clear of the write line
+          beside it, because the two directions are the whole claim and a
+          single smudge shows neither. */}
+      <g className="flow-line use-read-line">
+        <path d="M 744 176 C 764 150 860 142 880 104" />
+      </g>
+
+      <text x="196" y="272" className="flow-s">
+        Friday reads what Monday wrote — no transcript replayed, nothing re-summarised
+      </text>
+    </svg>
+  );
+}
+
+
+
+/**
+ * The diagrams tab: how it works, then what it is for.
+ *
+ * That order is deliberate and it is the reverse of the old page. `Flow` alone
+ * answered a question nobody arrives with — *what is this system* — and left
+ * *what would I use it for* to prose further down, which is the half people
+ * actually skim. Now the mechanism is the opening frame and three use cases
+ * follow it, each drawn around the one thing that makes its case.
+ */
+function Diagrams() {
+  const USES = [
+    { key: "brain", title: "A company brain",
+      claim: "Everything the team writes, in one place — and every sentence of an "
+           + "answer opens the record it came from.",
+      art: <BrainDiagram /> },
+    { key: "cdc", title: "A timeline memory",
+      claim: "The same report arrives every week. Ask what happened across a span and "
+           + "you get the churn; ask what is different and you get the net. They "
+           + "disagree on purpose, and the answer says which one it is.",
+      art: <TimelineDiagram /> },
+    { key: "agent", title: "Agent memory",
+      claim: "What one session learned, the next one can read — without replaying a "
+           + "transcript into a context window.",
+      art: <AgentDiagram /> },
+  ];
+  return (
+    <>
+      <ArrowDefs />
+      <Flow />
+      {USES.map((u) => (
+        <section className="use" key={u.key} aria-labelledby={`use-${u.key}`}>
+          <h2 className="section-title" id={`use-${u.key}`}>{u.title}</h2>
+          <p className="use-claim">{u.claim}</p>
+          <div className="flow-scroll">{u.art}</div>
+        </section>
+      ))}
+    </>
   );
 }
 
@@ -419,6 +671,11 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
   // first entry once it does, so a visitor lands on something answerable
   // rather than on a chooser.
   const [picked, setPicked] = useState<string | null>(null);
+  // Which half of the page is showing. The demo and the diagrams were stacked,
+  // which on a phone meant scrolling past a full sandbox to reach the first
+  // picture — and past three pictures to reach the sign-in. Two tabs make each
+  // one a whole screen rather than a leg of a long one.
+  const [view, setView] = useState<"demo" | "diagrams">("demo");
   // The sign-in form is a panel off the top bar rather than half the hero: the
   // first thing a visitor should be able to do here is ask the corpus a
   // question, and a form demanding an account they do not have is the opposite
@@ -598,8 +855,34 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
           argument for it. Somebody who has already asked the corpus a question
           reads the copy below as an explanation of something they have seen;
           the other order asks them to take it on faith first. */}
+      {/* Only when there are two things to choose between. A tab strip over a
+          single panel is a control that decides nothing. */}
       {heroHasDemo && (
-        <section className="hero-demo">
+        <nav className="landtabs" role="tablist" aria-label="What to look at">
+          <button
+            role="tab" id="tab-demo" aria-controls="panel-demo"
+            aria-selected={view === "demo"}
+            className={`landtab${view === "demo" ? " on" : ""}`}
+            onClick={() => setView("demo")}
+          >
+            Try it
+            <span className="landtab-sub">ask a real corpus, no account</span>
+          </button>
+          <button
+            role="tab" id="tab-diagrams" aria-controls="panel-diagrams"
+            aria-selected={view === "diagrams"}
+            className={`landtab${view === "diagrams" ? " on" : ""}`}
+            onClick={() => setView("diagrams")}
+          >
+            How it works
+            <span className="landtab-sub">the path in, and what it is for</span>
+          </button>
+        </nav>
+      )}
+
+      {heroHasDemo && view === "demo" && (
+        <section className="hero-demo" id="panel-demo" role="tabpanel"
+                 aria-labelledby="tab-demo">
           <p className="eyebrow">Memory layer · sandbox · no account needed</p>
           {/* Only when there is a choice to make. A row of one card is a
             * control that decides nothing, and it pushes the thing a visitor
@@ -642,8 +925,17 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
         </section>
       )}
 
-      <Flow />
-
+      {/* Without a demo there is no choice to present, so the diagrams are
+          simply the page rather than one tab of it. */}
+      {heroHasDemo ? (
+        view === "diagrams" && (
+          <div id="panel-diagrams" role="tabpanel" aria-labelledby="tab-diagrams">
+            <Diagrams />
+          </div>
+        )
+      ) : (
+        <Diagrams />
+      )}
 
       <footer className="landfoot">
         <span className="empty">
