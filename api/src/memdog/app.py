@@ -1258,32 +1258,53 @@ async def delete_share(
 # ------------------------------------------------------------- public demo
 
 
-@app.get("/api/v1/public/demo")
-async def public_demo_info(request: Request) -> dict:
-    """What the public demo is, or that there is not one.
+@app.get("/api/v1/public/demos")
+async def public_demo_gallery(request: Request) -> dict:
+    """Every corpus this deployment publishes, and what each one shows.
 
-    Served unauthenticated so the landing page can decide whether to render the
-    demo at all, rather than hardcoding a corpus that may not be deployed.
-    `available: false` is the ordinary answer on a deployment that has not
-    switched it on, and is not an error.
+    Unauthenticated for the same reason the endpoint above is: the landing page
+    has to decide what to render before anybody has signed in. It lists what was
+    published and nothing else -- no project ids, no memory ids, no counts of
+    anything the visitor cannot already ask about.
+
+    **The daily allowance is shared across the gallery, not per app.** Twelve
+    corpora each with their own budget is twelve times the bill for one feature,
+    and the number is reported here so the page can show what is left beside the
+    control that spends it rather than discovering it at zero.
     """
-    settings = request.app.state.settings
-    if not settings.public_project_id:
-        return {"available": False}
+    from .public_demo import registry
 
-    counts = await request.app.state.pool.fetchrow(
-        """
-        SELECT count(*) FILTER (WHERE answered
-                                AND asked_at > date_trunc('day', now())) AS spent
-          FROM public_asks
-        """
-    )
-    spent = int(counts["spent"] or 0)
+    settings = request.app.state.settings
+    published = registry(settings)
+    if not published:
+        return {"demos": [], "remaining_today": 0, "daily_cap": 0}
+
+    spent = await request.app.state.pool.fetchval(
+        "SELECT count(*) FROM public_asks"
+        " WHERE answered AND asked_at > date_trunc('day', now())"
+    ) or 0
+
+    # One query for every corpus rather than one per corpus: the gallery is
+    # rendered on a page nobody has signed in to, and a query per card is a
+    # query per card for every visitor.
+    counts = {
+        row["project_id"]: row["n"]
+        for row in await request.app.state.pool.fetch(
+            "SELECT project_id, count(*) AS n FROM data_items"
+            " WHERE project_id = ANY($1::text[]) AND deleted_at IS NULL"
+            " GROUP BY project_id",
+            [d.project_id for d in published.values()],
+        )
+    }
+
     return {
-        "available": True,
-        "title": settings.public_title or "Ask the corpus",
-        "subtitle": settings.public_subtitle or "",
-        "remaining_today": max(0, settings.public_daily_cap - spent),
+        "demos": [
+            {"key": d.key, "title": d.title, "blurb": d.blurb,
+             "questions": list(d.questions), "note": d.note,
+             "records": int(counts.get(d.project_id, 0))}
+            for d in published.values()
+        ],
+        "remaining_today": max(0, settings.public_daily_cap - int(spent)),
         "daily_cap": settings.public_daily_cap,
     }
 
@@ -1306,11 +1327,18 @@ async def public_ask(request: Request, body: dict) -> dict:
     """
     from .auth import DATA_READ, Principal
     from .contracts import AskRequest, RetrieveFilter
-    from .public_demo import DemoUnavailable, check_and_count, client_ip, release
+    from .public_demo import (DemoUnavailable, check_and_count, client_ip,
+                              release, resolve as resolve_demo)
 
     settings = request.app.state.settings
-    if not settings.public_project_id:
-        raise HTTPException(status_code=404, detail="no public demo on this deployment")
+    # The corpus comes from the registry, never from the body. `demo` names a
+    # key; a key the deployment did not publish resolves to nothing, which is
+    # the same guarantee the single-corpus form had and the reason this surface
+    # can be unauthenticated at all.
+    try:
+        demo = resolve_demo(settings, (body or {}).get("demo"))
+    except DemoUnavailable as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
 
     question = (body or {}).get("question") or ""
     if not question.strip():
@@ -1320,7 +1348,7 @@ async def public_ask(request: Request, body: dict) -> dict:
 
     pool = request.app.state.pool
     org_id = await pool.fetchval(
-        "SELECT org_id FROM projects WHERE project_id = $1", settings.public_project_id
+        "SELECT org_id FROM projects WHERE project_id = $1", demo.project_id
     )
     if org_id is None:
         raise HTTPException(status_code=404, detail="no public demo on this deployment")
@@ -1337,12 +1365,12 @@ async def public_ask(request: Request, body: dict) -> dict:
     # Matches no real user, so `private` records are as invisible here as they
     # are to any stranger. Only what the org made org-visible is reachable.
     visitor = Principal(
-        user_id="public", org_id=org_id, project_id=settings.public_project_id,
+        user_id="public", org_id=org_id, project_id=demo.project_id,
         capabilities=frozenset({DATA_READ}), mode="public",
     )
-    filters = RetrieveFilter(project_id=settings.public_project_id)
-    if settings.public_memory_id:
-        filters.memory_ids = [settings.public_memory_id]
+    filters = RetrieveFilter(project_id=demo.project_id)
+    if demo.memory_id:
+        filters.memory_ids = [demo.memory_id]
 
     try:
         answer = await ask(

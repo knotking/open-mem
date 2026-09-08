@@ -8,6 +8,8 @@ endpoint that makes a model call per request is an open tap on somebody's bill.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from memdog.public_demo import (
@@ -131,3 +133,98 @@ async def test_the_stored_question_is_truncated(pool):
                           rate_per_hour=10, daily_cap=10)
     stored = await pool.fetchval("SELECT question FROM public_asks LIMIT 1")
     assert len(stored) == 200
+
+
+# --------------------------------------------------------------- the registry
+#
+# The single-corpus form was safe because "a request cannot ask for a different
+# corpus". A gallery keeps that only if a key the deployment never published
+# reaches nothing -- so that is what these assert, rather than that the happy
+# path works.
+
+def _settings(**over):
+    import dataclasses
+
+    from memdog.config import Settings
+
+    return dataclasses.replace(Settings(), **over)
+
+
+def test_no_configuration_publishes_nothing():
+    """The default, and the only correct one: an unauthenticated endpoint that
+    spends money per request is never inherited."""
+    from memdog.public_demo import registry
+
+    assert registry(_settings()) == {}
+
+
+def test_the_single_corpus_configuration_still_works():
+    """A deployment set up before the gallery existed must be unaffected by it."""
+    from memdog.public_demo import registry, resolve
+
+    settings = _settings(public_project_id="prj_one", public_memory_id="mem_one",
+                         public_title="Ask the corpus")
+    published = registry(settings)
+    assert list(published) == ["default"]
+    assert resolve(settings, None).project_id == "prj_one"
+    assert resolve(settings, "default").memory_id == "mem_one"
+
+
+def test_a_key_the_deployment_never_published_reaches_nothing():
+    """The whole safety argument in one assertion.
+
+    Not "the project is empty" and not "you may not read it" -- the name does
+    not resolve, so there is nothing to escalate to.
+    """
+    from memdog.public_demo import DemoUnavailable, resolve
+
+    settings = _settings(public_demos=json.dumps([
+        {"key": "legal", "title": "A matter", "project_id": "prj_legal"},
+    ]))
+    with pytest.raises(DemoUnavailable) as exc:
+        resolve(settings, "prj_someone_elses")
+    assert exc.value.status == 404
+    with pytest.raises(DemoUnavailable):
+        resolve(settings, "sales")
+
+
+def test_an_absent_key_takes_the_first_entry():
+    """So a caller written against the single-corpus endpoint keeps working."""
+    from memdog.public_demo import resolve
+
+    settings = _settings(public_demos=json.dumps([
+        {"key": "sales", "title": "Acme", "project_id": "prj_sales"},
+        {"key": "legal", "title": "Matter", "project_id": "prj_legal"},
+    ]))
+    assert resolve(settings, None).key == "sales"
+
+
+def test_a_malformed_registry_publishes_nothing_rather_than_guessing():
+    """A typo in the configuration closes the gallery. It must not open a
+    different one, and it must not raise on a page nobody has signed in to."""
+    from memdog.public_demo import registry
+
+    assert registry(_settings(public_demos="{not json")) == {}
+    # An entry missing the project cannot answer; one missing the key cannot be
+    # asked for. Both are dropped rather than half-published.
+    assert registry(_settings(public_demos=json.dumps([
+        {"key": "broken"},
+        {"project_id": "prj_x"},
+        {"key": "good", "project_id": "prj_good"},
+    ]))) .keys() == {"good"}
+
+
+def test_the_registry_carries_what_the_gallery_needs_to_say():
+    """An entry that cannot say what it demonstrates is an entry that teaches
+    the same thing as the one beside it."""
+    from memdog.public_demo import resolve
+
+    settings = _settings(public_demos=json.dumps([{
+        "key": "sensors", "title": "A sensor fleet",
+        "blurb": "Facet ranges over 40,000 readings, with no model call at all.",
+        "project_id": "prj_iot", "memory_id": "mem_iot",
+        "questions": ["Which freezer went above -18C last week?"],
+    }]))
+    demo = resolve(settings, "sensors")
+    assert "no model call" in demo.blurb
+    assert demo.questions == ("Which freezer went above -18C last week?",)

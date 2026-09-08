@@ -665,12 +665,22 @@ function sentence(detail: unknown): string {
   return "Something went wrong. Try again in a moment.";
 }
 
-type DemoInfo = {
-  available: boolean; title: string; subtitle: string;
-  remaining_today: number; daily_cap: number;
+/** One published corpus. Everything corpus-specific lives here rather than in
+ *  the component: the starter questions, the placeholder and the attribution
+ *  were all written for one text, and a second corpus made every one of them
+ *  wrong. The server carries them so a new demo is configuration. */
+type DemoApp = {
+  key: string; title: string; blurb: string;
+  questions: string[]; note: string; records: number;
 };
 
-function PublicDemo({ info, setInfo }: {
+/** The gallery, and the allowance shared across all of it. */
+type DemoInfo = {
+  demos: DemoApp[]; remaining_today: number; daily_cap: number;
+};
+
+function PublicDemo({ app, info, setInfo }: {
+  app: DemoApp;
   info: DemoInfo; setInfo: (f: (i: DemoInfo | null) => DemoInfo | null) => void;
 }) {
   const [question, setQuestion] = useState("");
@@ -687,6 +697,16 @@ function PublicDemo({ info, setInfo }: {
     if (turns.length) foot.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [turns.length, busy]);
 
+  // Switching corpus clears the transcript. Leaving it would show one corpus's
+  // answers under another's name, with citations into records the new corpus
+  // does not contain -- which reads as the demo answering from the wrong data,
+  // because it is.
+  useEffect(() => {
+    setTurns([]);
+    setOpen(null);
+    setError(null);
+  }, [app.key]);
+
   async function send(preset?: string) {
     const asked = (preset ?? question).trim();
     if (!asked || busy) return;
@@ -697,7 +717,9 @@ function PublicDemo({ info, setInfo }: {
       const response = await fetch("/api/proxy/api/v1/public/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: asked }),
+        // The key, never a project id. The server resolves it against the
+        // published registry; a name it did not publish reaches nothing.
+        body: JSON.stringify({ question: asked, demo: app.key }),
       });
       const body = await response.json();
       if (!response.ok) {
@@ -721,7 +743,7 @@ function PublicDemo({ info, setInfo }: {
 
   return (
     <div className="demo-card" id="demo">
-      <h2>{info.title}</h2>
+      <h2>{app.title}</h2>
       <p className="empty" style={{ marginTop: 0 }}>
         Ask it anything. Every answer is drawn from the text and cites the passage it came from,
         so a wrong answer is one you can check rather than one you have to believe — and when the
@@ -732,11 +754,7 @@ function PublicDemo({ info, setInfo }: {
         <div className="demo-scroll">
         {turns.length === 0 && (
           <div className="demo-starters">
-            {[
-              "What does Krishna say about acting without attachment to results?",
-              "What is said to follow from dwelling on the objects of the senses?",
-              "Why does Arjuna refuse to fight, and how is he answered?",
-            ].map((example) => (
+            {app.questions.map((example) => (
               <button key={example} className="secondary" disabled={busy}
                       onClick={() => void send(example)}>
                 {example}
@@ -789,7 +807,7 @@ function PublicDemo({ info, setInfo }: {
         <div className="demo-composer">
           <input
             type="text" value={question} disabled={busy}
-            placeholder="Ask the Gita a question…"
+            placeholder={`Ask ${app.title} a question…`}
             onChange={(e) => setQuestion(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void send(); } }}
           />
@@ -813,10 +831,14 @@ function PublicDemo({ info, setInfo }: {
         </div>
         {error && <p className="err">{error}</p>}
         <p className="demo-note">
-          Sir Edwin Arnold, <em>The Song Celestial</em> (1885) — public domain, from Project
-          Gutenberg. Eighteen chapters, ingested exactly as your own documents would be.{" "}
-          <strong>{info.remaining_today}</strong> of {info.daily_cap} questions left today —
-          the demo runs on a fixed daily budget so it stays free.
+          {app.note && <>{app.note} </>}
+          {app.records > 0 && <>{app.records} records, ingested exactly as your own documents
+          would be. </>}
+          {/* The allowance sits beside the control that spends it rather than
+            * being discovered at zero, and it is shared across every demo here
+            * -- one budget for the gallery, not one each. */}
+          <strong>{info.remaining_today}</strong> of {info.daily_cap} questions left today,
+          across every demo — a fixed daily budget is what keeps this free.
         </p>
       </div>
     </div>
@@ -830,6 +852,10 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
   const [error, setError] = useState<string | null>(null);
   const [caps, setCaps] = useState<Capabilities | null>(null);
   const [demo, setDemo] = useState<DemoInfo | null>(null);
+  // Which app the chat is pointed at. Null until the gallery arrives; the
+  // first entry once it does, so a visitor lands on something answerable
+  // rather than on a chooser.
+  const [picked, setPicked] = useState<string | null>(null);
   // The sign-in form is a panel off the top bar rather than half the hero: the
   // first thing a visitor should be able to do here is ask the corpus a
   // question, and a form demanding an account they do not have is the opposite
@@ -839,9 +865,12 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
   const progress = useScrollProgress();
 
   useEffect(() => {
-    void fetch("/api/proxy/api/v1/public/demo")
+    void fetch("/api/proxy/api/v1/public/demos")
       .then((r) => (r.ok ? r.json() : null))
-      .then(setDemo)
+      .then((body: DemoInfo | null) => {
+        setDemo(body);
+        setPicked(body?.demos?.[0]?.key ?? null);
+      })
       .catch(() => setDemo(null));
   }, []);
 
@@ -898,7 +927,9 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
   // hero, and the hero itself when there is no demo to put there. Never
   // both at once -- two elements carrying `id="signin"` would make the
   // anchor mean whichever the browser happened to find first.
-  const heroHasDemo = Boolean(demo?.available);
+  const apps = demo?.demos ?? [];
+  const app = apps.find((a) => a.key === picked) ?? apps[0] ?? null;
+  const heroHasDemo = Boolean(app);
   const signInCard = authEnabled ? (
           <form className="signin-card" id="signin" onSubmit={submit}>
             <h2>Sign in</h2>
@@ -988,6 +1019,10 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
               {section.label}
             </a>
           ))}
+          {/* A real navigation, not an anchor: the docs are their own route.
+              Last, because the in-page sections are the reading order and this
+              leaves it. A section nobody can find is a section nobody has. */}
+          <a href="/docs">Docs</a>
         </nav>
         <div className="row">
           <ThemeToggle />
@@ -1022,7 +1057,31 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
       {heroHasDemo && (
         <section className="hero-demo">
           <p className="eyebrow">Memory layer · sandbox · no account needed</p>
-          <PublicDemo info={demo!} setInfo={setDemo} />
+          {/* Only when there is a choice to make. A row of one card is a
+            * control that decides nothing, and it pushes the thing a visitor
+            * came to do further down the page. */}
+          {apps.length > 1 && (
+            <div className="demo-apps" role="tablist" aria-label="Demo corpora">
+              {apps.map((a) => (
+                <button
+                  key={a.key}
+                  role="tab"
+                  aria-selected={a.key === app!.key}
+                  className={`demo-app${a.key === app!.key ? " on" : ""}`}
+                  onClick={() => setPicked(a.key)}
+                >
+                  <span className="demo-app-title">{a.title}</span>
+                  {/* What this one shows that the others do not. Without it the
+                    * gallery is a row of names and every card looks alike. */}
+                  {a.blurb && <span className="demo-app-blurb">{a.blurb}</span>}
+                  {a.records > 0 && (
+                    <span className="demo-app-count">{a.records} records</span>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+          <PublicDemo app={app!} info={demo!} setInfo={setDemo} />
         </section>
       )}
 

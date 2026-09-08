@@ -434,6 +434,83 @@ async def _smoke(url: str, key: str, producer_id: str, project_id: str) -> int:
     return 0
 
 
+async def _seed_demos() -> int:
+    """Seed the gallery corpora and print the registry they become.
+
+    In-process like `seed --demo`, and for the same reason: every request goes
+    through the real routing, the real credential check and the real write verb,
+    so what is proved here is what an external client would get.
+
+    It prints `PUBLIC_DEMOS` rather than writing it anywhere. The registry is
+    deployment configuration -- the one thing deciding what an unauthenticated
+    visitor can reach -- and a seeder that could edit it would be a seeder that
+    could publish a corpus nobody chose to publish.
+    """
+    import json
+
+    import httpx
+
+    from .app import app
+    from .demos import CORPORA
+    from .demos.seeding import DemoSeedError, seed_corpus
+
+    async with app.router.lifespan_context(app):
+        pool = app.state.pool
+        row = await pool.fetchrow(
+            "SELECT org_id FROM organizations ORDER BY created_at LIMIT 1")
+        if row is None:
+            print("no organization yet — run `bootstrap` or `seed --demo` first",
+                  file=sys.stderr)
+            return 2
+        org_id = row["org_id"]
+        owner = await pool.fetchval(
+            "SELECT user_id FROM memberships WHERE org_id = $1"
+            " ORDER BY created_at LIMIT 1", org_id)
+        if owner is None:
+            print(f"no member in {org_id} to act as", file=sys.stderr)
+            return 2
+
+        # The seeder speaks the public API, so it needs a credential like any
+        # other client. Minted here and revoked in the `finally` rather than
+        # reusing an existing key, which cannot be read back anyway.
+        from .auth import CONFIG_WRITE, DATA_READ, DATA_WRITE, issue_key
+
+        token = await issue_key(
+            pool, user_id=owner, org_id=org_id, project_id=None,
+            name="demo-gallery-seeder",
+            capabilities=[DATA_READ, DATA_WRITE, CONFIG_WRITE],
+        )
+
+        async def drain() -> None:
+            await app.state.queue.drain(timeout=600)
+
+        entries = []
+        try:
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(
+                transport=transport, base_url="http://seed", timeout=180.0
+            ) as client:
+                for corpus in CORPORA.values():
+                    entry = await seed_corpus(
+                        pool, client, corpus,
+                        org_id=org_id, admin_key=token, drain=drain)
+                    print(f"  {corpus.key:9} {entry.pop('_written'):4} records, "
+                          f"{entry.pop('_questions')}/{len(corpus.questions)} questions answered")
+                    entries.append(entry)
+        except DemoSeedError as exc:
+            print(f"seeding failed: {exc}", file=sys.stderr)
+            return 1
+        finally:
+            await pool.execute(
+                "UPDATE api_keys SET revoked_at = now()"
+                " WHERE org_id = $1 AND name = 'demo-gallery-seeder'", org_id)
+
+    print()
+    print("Set this on the API, and nothing is public until you do:")
+    print(f"PUBLIC_DEMOS={json.dumps(json.dumps(entries))}")
+    return 0
+
+
 async def _seed(*, reset: bool, demo: bool) -> int:
     """Create the demo tenant, through the running application.
 
@@ -504,7 +581,7 @@ async def _seed(*, reset: bool, demo: bool) -> int:
 def main() -> int:
     if len(sys.argv) < 2 or sys.argv[1] not in (
         "bootstrap", "smoke", "revoke-key", "bootstrap-to-secret", "reconcile",
-        "crawl-tick", "seed", "alert-tick",
+        "crawl-tick", "seed", "seed-demos", "alert-tick",
         "grant-key", "add-member",
     ):
         print("usage: python -m memdog bootstrap [email] [personal|shared] "
@@ -517,6 +594,9 @@ def main() -> int:
         print("       python -m memdog crawl-tick [max_crawlers]", file=sys.stderr)
         print("       python -m memdog alert-tick [max_alerts]", file=sys.stderr)
         print("       python -m memdog seed --demo [--reset]", file=sys.stderr)
+        print("       python -m memdog seed-demos"
+              "   # gallery corpora; prints the PUBLIC_DEMOS to set",
+              file=sys.stderr)
         print("       python -m memdog bootstrap-to-secret <email> <scope> "
               "<project> <secret_name>   # for jobs: stdout is Cloud Logging",
               file=sys.stderr)
@@ -526,6 +606,9 @@ def main() -> int:
         return asyncio.run(
             _seed(reset="--reset" in flags, demo="--demo" in flags)
         )
+    if sys.argv[1] == "seed-demos":
+        return asyncio.run(_seed_demos())
+
     if sys.argv[1] == "smoke":
         return asyncio.run(_smoke(*sys.argv[2:6]))
     if sys.argv[1] == "crawl-tick":

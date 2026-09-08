@@ -1441,6 +1441,47 @@ button.stattile:focus-visible { outline: 2px solid var(--accent); outline-offset
  * to size against. Sharing a class here is how the nav lost its gap once
  * already -- the later rule simply wins and the damage lands somewhere nobody
  * was looking. */
+/* The demo gallery. Each card is a `button`, and the bare `button` rule above
+   paints the primary action -- accent background, light text, 9px padding,
+   weight 550 -- so every one of those properties is answered here. A class that
+   overrode only `background` would leave the label light on light, which is how
+   a row of chips once rendered as bare numbers. */
+.demo-apps {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 10px;
+  max-width: 760px;
+  margin: 0 auto 14px;
+}
+.demo-app {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-align: left;
+  background: var(--panel);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-weight: 400;
+}
+.demo-app:hover { border-color: var(--accent); }
+/* Selected reads as selected without colour alone: the border thickens and the
+   ground tints, so it survives greyscale and forced-colors. */
+.demo-app.on {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.demo-app-title { font-weight: 600; font-size: 14px; letter-spacing: -0.005em; }
+.demo-app-blurb { font-size: 12.5px; line-height: 1.45; color: var(--muted); }
+.demo-app-count {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
 .demo-box {
   max-width: 760px;
   margin: 0 auto;
@@ -1581,3 +1622,118 @@ button.tab-cta { font-family: inherit; line-height: 1.35; cursor: pointer; }
   .arcsep { display: none; }
   .arcstage { padding: 3px 6px; }
 }
+
+/* ------------------------------------------------------------------- docs
+   The published documentation. Reuses `.eyebrow` and `.lede` rather than
+   redefining them -- those are page furniture the landing page already owns,
+   and a second definition is how two pages start fighting over one name. */
+.doc-page { padding: 40px 20px 96px; }
+.doc-shell { max-width: 860px; margin: 0 auto; }
+.doc-shell > h1 { font-size: 30px; letter-spacing: -0.02em; margin: 6px 0 10px; }
+
+.doc-group { margin-top: 30px; }
+.doc-group h2 {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin: 0 0 10px;
+}
+.doc-list { display: grid; gap: 8px; }
+.doc-link {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 14px;
+  padding: 11px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  text-decoration: none;
+  color: var(--ink);
+}
+.doc-link:hover { border-color: var(--accent); }
+.doc-link-title { font-weight: 600; font-size: 14.5px; }
+.doc-link-file { font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+
+/* The rendered document. Every rule is scoped under `.doc-body` so the
+   renderer's bare tags cannot reach the console, which shares this file. */
+.doc-body { font-size: 15.5px; line-height: 1.65; }
+.doc-body h1 { font-size: 29px; letter-spacing: -0.02em; margin: 0 0 14px; }
+.doc-body h2 {
+  font-size: 20px;
+  letter-spacing: -0.01em;
+  margin: 34px 0 10px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.doc-body h3 { font-size: 16px; margin: 24px 0 8px; }
+.doc-body h4 { font-size: 14.5px; margin: 20px 0 6px; color: var(--muted); }
+.doc-body p { margin: 0 0 13px; }
+.doc-body ul, .doc-body ol { margin: 0 0 13px; padding-left: 22px; }
+.doc-body li { margin-bottom: 5px; }
+.doc-body a { color: var(--accent); }
+.doc-body hr { border: 0; border-top: 1px solid var(--line); margin: 26px 0; }
+.doc-body blockquote {
+  margin: 0 0 14px;
+  padding: 2px 0 2px 16px;
+  border-left: 3px solid var(--accent);
+  color: var(--muted);
+}
+.doc-body blockquote p:last-child { margin-bottom: 0; }
+.doc-body code {
+  font-family: var(--mono);
+  font-size: 0.87em;
+  background: var(--accent-soft);
+  border-radius: 3px;
+  padding: 0.08em 0.32em;
+}
+.doc-body pre {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 13px 15px;
+  overflow-x: auto;
+  margin: 0 0 15px;
+}
+.doc-body pre code { background: none; padding: 0; font-size: 12.5px; line-height: 1.55; }
+
+/* These documents are mostly tables and several are wider than the column.
+   They scroll inside their own container so the page body never does. */
+.doc-scroll {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  margin: 0 0 16px;
+  background: var(--panel);
+}
+.doc-body table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+.doc-body thead th {
+  text-align: left;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+  padding: 10px 13px;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+.doc-body tbody td {
+  padding: 10px 13px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+.doc-body tbody tr:last-child td { border-bottom: none; }
+
+.doc-next {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 36px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+  font-size: 14px;
+}
+.doc-next a { color: var(--accent); text-decoration: none; }
+.doc-next a:hover { text-decoration: underline; }
+.doc-source { margin-top: 14px; font-size: 12.5px; color: var(--muted); }

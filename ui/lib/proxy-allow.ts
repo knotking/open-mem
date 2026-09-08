@@ -60,7 +60,7 @@ export const ALLOWED = [
   /^api\/v1\/projects\/[A-Za-z0-9_]+\/tags(\?.*)?$/,
   /^api\/v1\/templates$/,
   // The public demo. Unauthenticated by design -- see `public_demo.py`.
-  /^api\/v1\/public\/demo$/,
+  /^api\/v1\/public\/demos$/,
   /^api\/v1\/public\/ask$/,
   /^api\/v1\/memories\/[\w-]+\/context(\?.*)?$/,
   /^api\/v1\/memories\/[A-Za-z0-9_]+\/members$/,
@@ -208,7 +208,7 @@ export const CALLER_CREDENTIAL = [
  * that demands the caller's own key.
  */
 export const NO_CREDENTIAL = [
-  /^api\/v1\/public\/demo$/,
+  /^api\/v1\/public\/demos$/,
   /^api\/v1\/public\/ask$/,
 ];
 

@@ -31,10 +31,15 @@ better outcome than "the demo said come back tomorrow".
 from __future__ import annotations
 
 import hashlib
+import json
+import logging
+from dataclasses import dataclass
 
 import asyncpg
 
 from .ids import new_id
+
+log = logging.getLogger(__name__)
 
 
 class DemoUnavailable(Exception):
@@ -45,6 +50,109 @@ class DemoUnavailable(Exception):
         super().__init__(message)
         self.status = status
 
+
+# ------------------------------------------------------------------ registry
+
+@dataclass(frozen=True)
+class Demo:
+    """One published corpus, and what it is for.
+
+    `blurb` is the whole reason a gallery beats a single corpus: twelve
+    demonstrations of "chat over documents" teach one thing twelve times, so an
+    entry that cannot say what it shows that the others do not is an entry that
+    should not be in the list.
+    """
+
+    key: str
+    title: str
+    blurb: str
+    project_id: str
+    memory_id: str
+    questions: tuple[str, ...] = ()
+    # Where the corpus came from, and that it is synthetic where it is. Carried
+    # per demo rather than written into the page: the attribution for a public
+    # domain text is not the disclosure a generated legal matter needs, and a
+    # component that hardcodes one of them is wrong for every other corpus.
+    note: str = ""
+
+
+def registry(settings) -> dict[str, Demo]:
+    """Every corpus this deployment has published, keyed.
+
+    **A list in configuration, resolved server-side.** The narrowness that makes
+    this surface safe was originally "one project, named in an environment
+    variable, never a parameter". A gallery keeps the same property in its true
+    form: a request names a *key*, and a key that is not on this list resolves to
+    nothing. What a caller may reach is still decided entirely by whoever
+    deployed it.
+
+    The single-corpus configuration keeps working and becomes a one-entry
+    registry, so a deployment set up before this existed is unaffected.
+    """
+    entries: dict[str, Demo] = {}
+
+    raw = (settings.public_demos or "").strip()
+    if raw:
+        try:
+            parsed = json.loads(raw)
+        except ValueError as exc:
+            # Refused loudly rather than silently serving an empty gallery: a
+            # typo here is a demo section that vanishes, which reads as a
+            # deployment failure and is a configuration one.
+            log.error("PUBLIC_DEMOS is not valid JSON, so no gallery: %s", exc)
+            parsed = []
+        for entry in parsed if isinstance(parsed, list) else []:
+            if not isinstance(entry, dict):
+                continue
+            key = str(entry.get("key") or "").strip()
+            project_id = str(entry.get("project_id") or "").strip()
+            if not key or not project_id:
+                # Both are load-bearing. A key with no project cannot answer and
+                # a project with no key cannot be asked for.
+                log.error("skipping a PUBLIC_DEMOS entry with no key or project")
+                continue
+            questions = entry.get("questions") or []
+            entries[key] = Demo(
+                key=key,
+                title=str(entry.get("title") or key),
+                blurb=str(entry.get("blurb") or ""),
+                project_id=project_id,
+                memory_id=str(entry.get("memory_id") or ""),
+                questions=tuple(str(q) for q in questions if str(q).strip()),
+                note=str(entry.get("note") or ""),
+            )
+
+    if not entries and settings.public_project_id:
+        entries["default"] = Demo(
+            key="default",
+            title=settings.public_title or "Ask the corpus",
+            blurb=settings.public_subtitle or "",
+            project_id=settings.public_project_id,
+            memory_id=settings.public_memory_id or "",
+        )
+    return entries
+
+
+def resolve(settings, key: str | None) -> Demo:
+    """The corpus for this request, or a refusal.
+
+    An absent key takes the first entry, so a caller written against the
+    single-corpus endpoint keeps working. An unknown key is a 404 and not a
+    lookup against anything -- the point of the registry is that a name the
+    deployment did not publish reaches nothing at all.
+    """
+    published = registry(settings)
+    if not published:
+        raise DemoUnavailable("no public demo is configured", status=404)
+    if not key:
+        return next(iter(published.values()))
+    demo = published.get(key)
+    if demo is None:
+        raise DemoUnavailable(f"no demo named {key!r}", status=404)
+    return demo
+
+
+# ------------------------------------------------------------------- metering
 
 def hash_ip(ip: str, secret: str) -> str:
     """Salted with the deployment secret, so the table is not reversible by

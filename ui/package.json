@@ -9,8 +9,10 @@
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "check:proxy": "node scripts/check-proxy-paths.mjs",
-    "verify": "npm run check:proxy && npm run typecheck && npm test && npm run build",
-    "test": "node --test \"lib/**/*.test.mts\""
+    "verify": "npm run check:proxy && npm run check:docs && npm run typecheck && npm test && npm run build",
+    "test": "node --test \"lib/**/*.test.mts\"",
+    "docs": "node scripts/build-docs.mjs",
+    "check:docs": "node scripts/build-docs.mjs --check"
   },
   "dependencies": {
     "next": "15.1.6",

@@ -152,6 +152,17 @@ class Settings:
         default_factory=lambda: _env("PUBLIC_MEMORY_ID", ""))
     public_title: str = field(default_factory=lambda: _env("PUBLIC_TITLE", ""))
     public_subtitle: str = field(default_factory=lambda: _env("PUBLIC_SUBTITLE", ""))
+    # More than one demo corpus, as a JSON list -- see `public_demo.registry`.
+    # The pair above stays the single-corpus form and keeps working; this is
+    # the same idea with room for a gallery, and an empty value leaves a
+    # deployment exactly as it is today.
+    #
+    # **A list, never a parameter.** The reason this surface is safe is that a
+    # request cannot name a corpus of its own choosing; it names a key, and a
+    # key that is not on this list does not resolve. Widening it to accept a
+    # project id from the caller would remove the only thing holding the
+    # unauthenticated surface up.
+    public_demos: str = field(default_factory=lambda: _env("PUBLIC_DEMOS", ""))
     # Per-IP, per-hour. Low, because the thing being rationed is a model call.
     public_rate_per_hour: int = field(
         default_factory=lambda: int(_env("PUBLIC_RATE_PER_HOUR", "20")))
