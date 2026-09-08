@@ -11,6 +11,25 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **The public page carries a gallery of demo apps rather than one corpus.** Each
+  is a seeded use case with its own description, its own sample questions and its
+  own chat, and none of it is reachable until `PUBLIC_DEMOS` names it — a request
+  supplies a *key*, resolved server-side, so a corpus nobody published cannot be
+  asked for. The existing single-corpus configuration keeps working as a
+  one-entry registry. **The daily allowance is shared across the gallery**, not
+  one budget per app, and it is shown beside the ask button rather than
+  discovered at zero. Three corpora ship: a legal matter (asserted vs inferred
+  membership), a four-week meeting series (what changed since last time), and a
+  cold-chain sensor fleet (63 raw readings that never reach a model, and the 3
+  derived digests that do). `python -m memdog seed-demos` seeds them and prints
+  the `PUBLIC_DEMOS` line to set; it deliberately does not write it anywhere.
+  Nothing clinical is included, and every record is marked synthetic in its own
+  text, on reserved identifiers.
+- **The documentation is readable without a checkout**, at `/docs` — 20 curated
+  documents as static routes, with reading-order navigation. Curated rather than
+  complete: most of `docs/` is internal design record. Cross-references to
+  documents outside the published set render as their own label instead of as
+  links that 404.
 - **Audio, video and documents too large to send inline can now go through the
   provider's file upload instead of being refused.** Off by default and opt-in
   per org (`large_media`), because it exists to let much more expensive inputs
@@ -374,6 +393,11 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   what left is the navigation, the screens, and the proxy allow-list entries
   only those screens used. An alert can no longer be scoped to a case, and the
   Overview no longer counts them.
+
+### Removed
+- `GET /api/v1/public/demo` — superseded by `GET /api/v1/public/demos`, which
+  returns everything it did and the rest of the gallery besides. Two endpoints
+  answering overlapping questions about one thing is how they drift apart.
 
 ### Fixed
 - **Recording a video failed, and the console said `[object Object]`.** Two

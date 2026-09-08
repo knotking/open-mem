@@ -456,13 +456,21 @@ async def _seed_demos() -> int:
 
     async with app.router.lifespan_context(app):
         pool = app.state.pool
-        row = await pool.fetchrow(
-            "SELECT org_id FROM organizations ORDER BY created_at LIMIT 1")
-        if row is None:
-            print("no organization yet — run `bootstrap` or `seed --demo` first",
-                  file=sys.stderr)
+        # **Not the oldest organization.** `add-member` picks that way and the
+        # deploy runbook records what it costs -- the oldest org is not
+        # necessarily the one anything is configured for. Here the requirement
+        # is concrete: a corpus has to be written through a *shared* connection
+        # or its records land private and the demo answers nothing to anyone
+        # but the seeder. So the org is chosen by having one.
+        org_id = sys.argv[2] if len(sys.argv) > 2 else await pool.fetchval(
+            "SELECT org_id FROM connections WHERE scope = 'shared'"
+            " ORDER BY created_at DESC LIMIT 1")
+        if org_id is None:
+            print("no organization with a shared connection — run "
+                  "`bootstrap <email> shared` or `seed --demo` first, or name an "
+                  "org: `seed-demos <org_id>`", file=sys.stderr)
             return 2
-        org_id = row["org_id"]
+        print(f"seeding into {org_id}")
         owner = await pool.fetchval(
             "SELECT user_id FROM memberships WHERE org_id = $1"
             " ORDER BY created_at LIMIT 1", org_id)
