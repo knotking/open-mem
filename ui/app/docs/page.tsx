@@ -18,9 +18,6 @@ export default function DocsIndex() {
   return (
     <main className="doc-page">
       <div className="doc-shell">
-        <p className="eyebrow">
-          <Link href="/">mem-dog</Link> · documentation
-        </p>
         <h1>Documentation</h1>
         <p className="lede">
           How the memory layer works, what it does to a record on the way in, and how to get

@@ -31,9 +31,9 @@ export default async function DocPage({ params }: { params: Promise<{ slug: stri
   return (
     <main className="doc-page">
       <div className="doc-shell">
-        <p className="eyebrow">
-          <Link href="/">mem-dog</Link> · <Link href="/docs">documentation</Link> · {doc.group}
-        </p>
+        {/* The group, not a breadcrumb: the shell already says where you are
+            and the index beside it shows the rest. */}
+        <p className="eyebrow">{doc.group}</p>
         <article className="doc-body" dangerouslySetInnerHTML={{ __html: html }} />
 
         {/* Reading order, because these documents were written as a sequence
