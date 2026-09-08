@@ -140,7 +140,12 @@ function Flow() {
           </g>
           <g className="flow-box">
             <rect x="8" y="210" width="168" height="86" rx="10" />
-            <text x="26" y="240" className="flow-h">Inbound</text>
+            {/* "Push", not "Inbound": the pair is what carries the meaning --
+                we go and get it, or it is sent to us. `Inbound` is the console's
+                word for the screen and the API's for the auth mode, and both
+                stay as they are; this is the diagram, where the contrast with
+                Pull is the whole point. */}
+            <text x="26" y="240" className="flow-h">Push</text>
             <text x="26" y="262" className="flow-s">webhooks · uploads</text>
             <text x="26" y="280" className="flow-s">email · SDK</text>
           </g>
