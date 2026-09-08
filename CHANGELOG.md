@@ -11,6 +11,18 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **`?net=true` answers what is different between two points, net of everything
+  in between.** The composed range reports churn — green, red, green is two
+  changes; the net range compares the description at each end directly and the
+  same three values come back as nothing. Both are correct answers to different
+  questions, which is what `basis` has been there to tell you. One model call,
+  stored in `memory_change_ranges` and keyed on the **generator version** as
+  well as the two ends, so a moved prompt misses the cache rather than being
+  answered from it; the response carries `cached` so a caller can see whether
+  this particular request spent anything. A net comparison is refused without a
+  `from` — "since the beginning" has no description to compare against — and
+  refused between two ends described by different generator versions, which is
+  reported through the same `gaps` vocabulary the composed range uses.
 - **A checkpoint timeline can be asked about a span, not just a step.**
   `GET /api/v1/memories/{id}/changes?from=&to=` composes the deltas already
   stored across a window, so it costs nothing and every claim in it is backed by
@@ -431,6 +443,10 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   to the end of said less about what this is than four lines do.
 
 ### Migrations
+- **`0057_memory_change_ranges.sql`** — the stored net answer for a span of a
+  checkpoint timeline. Applies itself on the first startup of the new revision,
+  as every migration here does; nothing but `?net=true` reads the table, so the
+  composed range and both event surfaces do not depend on it.
 - **`0055_memory_type_url_reader.sql`** — `memory_types.url_reader`
   (`fetch` | `context`). Additive, defaulting to `fetch`, which is exactly
   today's behaviour, so every existing type is unchanged by definition.

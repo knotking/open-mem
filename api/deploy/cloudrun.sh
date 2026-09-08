@@ -58,12 +58,93 @@ step "Deploying ${SERVICE}"
 # on being accepted and every one fails with "no repo analysis job is
 # configured", which reads as a misconfiguration nobody made rather than as a
 # deploy that dropped a variable. It happened once, immediately.
+
+# `PUBLIC_DEMOS` is the same failure one variable over, and it could not be
+# fixed the same way. It is the gallery registry -- JSON, and therefore full of
+# commas, which is precisely the character `--set-env-vars` splits on -- so it
+# was never added to that list. It lived only on the running service, and since
+# `--set-env-vars` replaces the whole set, every deploy silently dropped it: the
+# public gallery went dark and nothing said why. Found 2026-09-08, by diffing
+# the live environment against this line before deploying.
+#
+# gcloud's `^delim^` escape would work until a blurb contains the delimiter -- an
+# email address, a percentage -- which trades a certain bug for a latent one. A
+# file has no delimiter to collide with, and JSON is valid YAML, so the whole
+# environment is written as JSON and there is nothing to quote.
+#
+# **It defaults to what the service already has, not to empty.** It is data a
+# human produced with `seed-demos`, not a toggle with a sensible constant, so
+# the only correct default is what is already true. Pass `PUBLIC_DEMOS=''` to
+# clear it deliberately.
+if [ -z "${PUBLIC_DEMOS+set}" ]; then
+  PUBLIC_DEMOS=$(gcloud run services describe "$SERVICE" --project "$PROJECT" \
+    --region "$REGION" --format=json 2>/dev/null | python3 -c '
+import json, sys
+try:
+    container = json.load(sys.stdin)["spec"]["template"]["spec"]["containers"][0]
+except Exception:
+    sys.exit(0)
+for entry in container.get("env", []):
+    if entry.get("name") == "PUBLIC_DEMOS":
+        sys.stdout.write(entry.get("value", ""))
+        break
+' || true)
+  [ -n "$PUBLIC_DEMOS" ] && echo "    carrying PUBLIC_DEMOS forward (${#PUBLIC_DEMOS} bytes)"
+fi
+
+ENV_FILE="$(mktemp -t memdog-env)"
+trap 'rm -f "$ENV_FILE"' EXIT
+DB_HOST="$DB_HOST" DB_NAME="$DB_NAME" RAW_BUCKET="$RAW_BUCKET" \
+TAG="$TAG" PROJECT="$PROJECT" REGION="$REGION" PUBLIC_DEMOS="$PUBLIC_DEMOS" \
+python3 - "$ENV_FILE" <<'ENVPY'
+import json, os, sys
+
+get = os.environ.get
+project, region = get("PROJECT"), get("REGION")
+# `or` rather than a plain get, to match bash's `${X:-default}` -- which falls
+# back when the variable is *empty* as well as when it is unset.
+env = {
+    "DB_HOST": get("DB_HOST"), "DB_NAME": get("DB_NAME"), "DB_USER": "postgres",
+    "EMBED_DIM": "768",
+    "EMBED_ENGINE": get("EMBED_ENGINE") or "gemini",
+    "EMBED_MODEL": get("EMBED_MODEL") or "gemini-embedding-001",
+    "RAW_BUCKET": get("RAW_BUCKET"),
+    "MEDIA_INTERPRETATION": "true",
+    "LARGE_MEDIA": get("LARGE_MEDIA") or "false",
+    "MAX_LARGE_MEDIA_BYTES": get("MAX_LARGE_MEDIA_BYTES") or "268435456",
+    "MAX_TEXT_CHARS": get("MAX_TEXT_CHARS") or "4000000",
+    "EXTRACT_ENGINE": "gemini",
+    "MULTIMODAL_MODEL": get("MULTIMODAL_MODEL") or "gemini-3.7-flash",
+    "TRANSCRIBE_MODEL": get("TRANSCRIBE_MODEL") or "gemini-3.5-transcribe",
+    "FIREBASE_PROJECT_ID": project,
+    "OTEL_GCP_PROJECT": project,
+    "IMAGE_TAG": get("TAG"),
+    "PUBLIC_PROJECT_ID": get("PUBLIC_PROJECT_ID") or "",
+    "PUBLIC_MEMORY_ID": get("PUBLIC_MEMORY_ID") or "",
+    "PUBLIC_TITLE": get("PUBLIC_TITLE") or "",
+    "PUBLIC_SUBTITLE": get("PUBLIC_SUBTITLE") or "",
+    "PUBLIC_DEMOS": get("PUBLIC_DEMOS") or "",
+    "PUBLIC_DAILY_CAP": get("PUBLIC_DAILY_CAP") or "500",
+    "PUBLIC_RATE_PER_HOUR": get("PUBLIC_RATE_PER_HOUR") or "20",
+    "REPO_ANALYSIS_JOB": get("REPO_ANALYSIS_JOB")
+        or f"projects/{project}/locations/{region}/jobs/memdog-repo-analysis",
+    "URL_CONTEXT": get("URL_CONTEXT") or "true",
+    "URL_CONTEXT_MODEL": get("URL_CONTEXT_MODEL") or "",
+}
+missing = [k for k, v in env.items() if v is None]
+if missing:
+    # Refuse rather than deploy a service missing DB_HOST. An env file written
+    # with a null in it is accepted by gcloud and fails at startup, which
+    # presents as a broken revision rather than a broken deploy script.
+    sys.exit(f"cloudrun.sh: no value resolved for {', '.join(missing)}")
+json.dump(env, open(sys.argv[1], "w"), indent=2, sort_keys=True)
+ENVPY
 gcloud run deploy "$SERVICE" \
   --project "$PROJECT" --region "$REGION" \
   --image "$IMAGE" \
   --service-account "$SA" \
   --network default --subnet default --vpc-egress private-ranges-only \
-  --set-env-vars "DB_HOST=${DB_HOST},DB_NAME=${DB_NAME},DB_USER=postgres,EMBED_DIM=768,EMBED_ENGINE=${EMBED_ENGINE:-gemini},EMBED_MODEL=${EMBED_MODEL:-gemini-embedding-001},RAW_BUCKET=${RAW_BUCKET},MEDIA_INTERPRETATION=true,LARGE_MEDIA=${LARGE_MEDIA:-false},MAX_LARGE_MEDIA_BYTES=${MAX_LARGE_MEDIA_BYTES:-268435456},MAX_TEXT_CHARS=${MAX_TEXT_CHARS:-4000000},EXTRACT_ENGINE=gemini,MULTIMODAL_MODEL=${MULTIMODAL_MODEL:-gemini-3.7-flash},TRANSCRIBE_MODEL=${TRANSCRIBE_MODEL:-gemini-3.5-transcribe},FIREBASE_PROJECT_ID=${PROJECT},OTEL_GCP_PROJECT=${PROJECT},IMAGE_TAG=${TAG},PUBLIC_PROJECT_ID=${PUBLIC_PROJECT_ID:-},PUBLIC_MEMORY_ID=${PUBLIC_MEMORY_ID:-},PUBLIC_TITLE=${PUBLIC_TITLE:-},PUBLIC_SUBTITLE=${PUBLIC_SUBTITLE:-},PUBLIC_DAILY_CAP=${PUBLIC_DAILY_CAP:-500},PUBLIC_RATE_PER_HOUR=${PUBLIC_RATE_PER_HOUR:-20},REPO_ANALYSIS_JOB=${REPO_ANALYSIS_JOB:-projects/${PROJECT}/locations/${REGION}/jobs/memdog-repo-analysis},URL_CONTEXT=${URL_CONTEXT:-true},URL_CONTEXT_MODEL=${URL_CONTEXT_MODEL:-}" \
+  --env-vars-file "$ENV_FILE" \
   --set-secrets "DB_PASSWORD=memdog-db-password:latest,MEMDOG_MASTER_KEY=memdog-master-key:latest,GEMINI_API_KEY=gemini-api-key:latest" \
   --allow-unauthenticated \
   --min-instances 0 --max-instances 4 \

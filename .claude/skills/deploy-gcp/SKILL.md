@@ -85,6 +85,37 @@ was stale, and quietly repaired the corpus back toward the state it was supposed
 to be leaving.** Anything that reads `current_generators` has to agree with the
 service about what "current" means. Never deploy a job by hand.
 
+- **A deploy succeeds and the public demo gallery goes dark.** Found 2026-09-08.
+  `PUBLIC_DEMOS` is the gallery registry, it is JSON, and JSON is full of
+  commas — which is exactly the character `--set-env-vars` splits on. So it was
+  never in that list, which meant it lived *only* on the running service, and
+  `--set-env-vars` replaces the whole set: **every deploy silently dropped it.**
+  This is the `REPO_ANALYSIS_JOB` trap above, one variable over, and it had been
+  happening unnoticed because nothing errors — the landing page simply has no
+  gallery, which reads as a UI regression rather than as a deploy that lost a
+  variable.
+
+  `cloudrun.sh` now writes the whole environment to a **file** (`--env-vars-file`;
+  JSON is valid YAML, so there is no delimiter to collide with and nothing to
+  quote) and defaults `PUBLIC_DEMOS` to *whatever the service already has*
+  rather than to empty — it is data a human produced with `seed-demos`, not a
+  toggle with a sensible constant, so the only correct default is what is
+  already true. `PUBLIC_DEMOS=''` clears it deliberately.
+
+  The gcloud `^delim^` escape was rejected on purpose: it works until a blurb
+  contains the delimiter — an email address, a percentage — which trades a
+  certain bug for a latent one.
+
+  **The general move is worth keeping: diff the live environment against what
+  the script sets, before deploying.** It is one command and it is how this was
+  found.
+
+  ```bash
+  gcloud run services describe memdog-api --project memdog-dev-506718 \
+    --region us-central1 --format='value(spec.template.spec.containers[0].env)' \
+    | tr ';' '\n' | grep -oE "'name': '[A-Z_]+'"
+  ```
+
 - **A deploy succeeds and one endpoint 500s with `column "…" does not exist`.**
   Found 2026-08-30. **A migration is immutable once applied.** `schema_migrations`
   records the version and the runner skips anything already there, so *editing*
