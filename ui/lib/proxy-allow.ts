@@ -22,6 +22,8 @@ export const ALLOWED = [
   /^api\/v1\/crawlers$/,
   /^api\/v1\/crawlers\/[\w-]+$/,
   /^api\/v1\/crawlers\/[\w-]+\/(dry-run|run|runs)$/,
+  // Point at a Scholar profile, get a crawler for that researcher's papers.
+  /^api\/v1\/crawlers\/from-scholar$/,
   /^api\/v1\/crawl-runs\/[\w-]+$/,
   /^api\/v1\/crawl-tick$/,
   /^api\/v1\/prompts$/,

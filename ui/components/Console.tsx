@@ -242,6 +242,12 @@ const HOW_TO: Partial<Record<Section, string[]>> = {
     "Pick what kind of thing you are adding, then give it the content.",
     "Steps 3 to 5 all have working defaults; open them only to change where it goes, what is done to it, or who may see it.",
     "Press Add data. What happened to it appears at the top — the climb from stored to searchable is watched there.",
+    "Two kinds are not writes and skip steps 3 to 5, because neither becomes an item: a GitHub repository becomes a snapshot, and a researcher becomes a crawler.",
+    // The worked example, because this one has a step people skip and a failure
+    // they cannot see afterwards.
+    "Example — a researcher's papers: paste a Scholar profile URL. The profile says which researcher is meant; OpenAlex supplies the full works list and the open-access PDFs, which are downloaded, read and indexed into a memory of their own, keyed to the author — so you can ask questions of their work with citations.",
+    "Check the name and affiliation it comes back with before going further. Two researchers share a name, and the wrong match gives a corpus that is entirely coherent and about somebody else — every record real, every citation checkable, all of it wrong.",
+    "That crawler is created switched off. Dry-run it under Crawlers, then enable it: the dry run walks the identical code and stops short of the write, so its count is what a live run would fetch.",
   ],
   update: [
     "Choose a memory to scope by — this walks the corpus by container rather than by query.",
@@ -1023,6 +1029,25 @@ function githubRepo(raw: string): string | null {
   return `${parts[0]}/${parts[1].replace(/\.git$/, "")}`;
 }
 
+/** The user id in a Google Scholar profile URL, or null.
+ *
+ * Same job as `githubRepo` and `youtubeId` above: it decides whether the button
+ * is pressable. The server reads the profile itself and refuses what it cannot
+ * confirm, so being generous here is a worse label, never a worse permission.
+ */
+function scholarProfile(raw: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(raw.trim());
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+  if (!url.hostname.toLowerCase().endsWith("scholar.google.com")) return null;
+  const user = url.searchParams.get("user");
+  return user && /^[A-Za-z0-9_-]{6,}$/.test(user) ? user : null;
+}
+
 function AddData({
   projectId,
   producerId,
@@ -1042,7 +1067,8 @@ function AddData({
   const [text, setText] = useState(
     "The checkout service returned 502s for eleven minutes after a bad deploy.\n\nRollback completed at 14:02 UTC and error rates recovered.",
   );
-  const [source, setSource] = useState<"text" | "file" | "video" | "page" | "repo">("text");
+  const [source, setSource] =
+    useState<"text" | "file" | "video" | "page" | "repo" | "scholar">("text");
   const [videoUrl, setVideoUrl] = useState("");
   const [pageUrl, setPageUrl] = useState("");
   const [repoUrl, setRepoUrl] = useState("");
@@ -1052,6 +1078,19 @@ function AddData({
   // progress is on another screen, so saying "requested" and stopping would be
   // telling someone the job is elsewhere without taking them there.
   const [repoDone, setRepoDone] = useState(false);
+  const [scholarUrl, setScholarUrl] = useState("");
+  // Who the profile resolved to. Rendered rather than assumed: two researchers
+  // share a name, and the wrong author id gives a corpus that is entirely
+  // coherent and about somebody else — every record real, every citation
+  // checkable, the whole thing wrong. The person who pasted the URL is the only
+  // one who can catch that, so they are shown what the match rested on.
+  const [scholarDone, setScholarDone] = useState<ResolvedAuthor | null>(null);
+  const [scholarKey, setScholarKey] = useState<string | null>(null);
+
+  // Kinds that do not go through the write path at all. A repository becomes a
+  // snapshot and a researcher becomes a crawler, so neither takes the memory,
+  // enrichment or audience decisions in steps 3 to 5.
+  const notAWrite = source === "repo" || source === "scholar";
   const [staged, setStaged] = useState<Staged | null>(null);
   // Which optional steps are open. Closed by default because each has a
   // working default and the button is what people came for.
@@ -1167,6 +1206,10 @@ function AddData({
       ? (githubRepo(repoUrl) ? null : repoUrl.trim()
           ? "That is not a GitHub repository URL"
           : "Paste a GitHub repository link first")
+    : source === "scholar"
+      ? (scholarProfile(scholarUrl) ? null : scholarUrl.trim()
+          ? "That is not a Google Scholar profile URL"
+          : "Paste a Scholar profile link first")
     : source === "page"
       ? (httpUrl(pageUrl) ? null : pageUrl.trim()
           ? "That needs to be a http:// or https:// address"
@@ -1307,6 +1350,24 @@ function AddData({
       // 3 to 5 apply to it. Branching here rather than trying to reshape it
       // into an item is what keeps that honest: the steps are hidden for this
       // kind, and the summary line above the button says why.
+      // A researcher is not a write either. Their profile resolves to an
+      // OpenAlex author, and their papers arrive as a *crawler* — created
+      // disabled, because the resolution can land on the wrong person and a dry
+      // run is how that gets caught before a corpus exists.
+      if (source === "scholar") {
+        const made = await call<{ crawler_id?: string; memory_key?: string;
+                                  author?: ResolvedAuthor;
+                                  config?: { memory_key?: string } }>(
+          "api/v1/crawlers/from-scholar",
+          { project_id: projectId, profile_url: scholarUrl.trim() });
+        setScholarDone(made.author ?? null);
+        setScholarKey(made.memory_key ?? made.config?.memory_key ?? null);
+        setNote(made.author
+          ? `Resolved to ${made.author.name}. The crawler is created and disabled.`
+          : "Created, disabled.");
+        await onChange();
+        return;
+      }
       if (source === "repo") {
         const created = await call<{ snapshot_id: string; repo_url: string;
                                      commit_sha: string; reused?: boolean }>(
@@ -1410,6 +1471,47 @@ function AddData({
           the confirmation is a control rather than a sentence. Telling somebody
           the job is elsewhere without taking them there is the half-finished
           version of this. */}
+      {/* Not "done". The whole risk here is a confident match on the wrong
+          person, so what comes back is evidence to be recognised: the name, the
+          affiliation, and what the match actually rested on. The crawler is off
+          until somebody agrees, and the route is to the place they can dry-run
+          it — a count of what a live run would fetch, before it fetches it. */}
+      {scholarDone && (
+        <section className="panel">
+          <h2>Is this the right researcher?</h2>
+          <table className="kv">
+            <tbody>
+              <tr><td>Name</td><td><strong>{scholarDone.name}</strong></td></tr>
+              {scholarDone.affiliation && (
+                <tr><td>Affiliation</td><td>{scholarDone.affiliation}</td></tr>
+              )}
+              <tr><td>Works</td><td>{scholarDone.works}</td></tr>
+              <tr>
+                <td>Matched on</td>
+                <td>
+                  {scholarDone.matched_on?.length
+                    ? scholarDone.matched_on.map((m) => (
+                        <span className="chip on" key={m}>{m}</span>
+                      ))
+                    : <span className="warntext">the name alone</span>}
+                </td>
+              </tr>
+              {scholarKey && (
+                <tr><td>Memory</td><td><code>{scholarKey}</code></td></tr>
+              )}
+            </tbody>
+          </table>
+          <p className="empty">
+            The crawler is created and <strong>switched off</strong>. Dry-run it first: the dry run
+            walks the identical code and stops short of the write, so its count is what a live run
+            would fetch.
+          </p>
+          <div className="row end">
+            <button onClick={() => onGo("crawlers")}>Open Crawlers</button>
+          </div>
+        </section>
+      )}
+
       {repoDone && note && (
         <section className="panel">
           <h2>What happened to it</h2>
@@ -1488,6 +1590,17 @@ function AddData({
             />
             A GitHub repository
           </label>
+          <label className="check">
+            <input
+              type="radio"
+              name="add-source"
+              checked={source === "scholar"}
+              onChange={() => {
+                setSource("scholar"); setStaged(null); setScholarDone(null);
+              }}
+            />
+            A researcher&rsquo;s papers
+          </label>
         </div>
       </section>
 
@@ -1497,10 +1610,34 @@ function AddData({
             : source === "video" ? "The video"
             : source === "page" ? "The page"
             : source === "repo" ? "The repository"
+            : source === "scholar" ? "The Scholar profile"
             : "The file"
         }</h2>
         {source === "text" ? (
           <textarea value={text} onChange={(e) => setText(e.target.value)} />
+        ) : source === "scholar" ? (
+          <>
+            <input
+              type="url"
+              value={scholarUrl}
+              placeholder="https://scholar.google.com/citations?user=..."
+              onChange={(e) => { setScholarUrl(e.target.value); setScholarDone(null); }}
+              style={{ width: "100%" }}
+            />
+            <p className="empty" style={{ marginTop: 6 }}>
+              The profile identifies <em>which</em> researcher is meant — the affiliation and the
+              exact titles they claim. OpenAlex then supplies the full works list and, where a
+              paper is open access, the PDF to download. Each one is fetched, read and indexed, so
+              the result is a corpus you can <strong>ask questions of with citations</strong>. It
+              lands in a memory of its own, keyed to the author.
+            </p>
+            <p className="warned" style={{ marginTop: 6 }}>
+              <strong>Two researchers share a name.</strong> The wrong match produces a corpus that
+              is entirely coherent and about somebody else, and nothing downstream can detect it —
+              so the author it resolved is shown here for you to recognise, and the crawler is
+              created switched off until you have.
+            </p>
+          </>
         ) : source === "repo" ? (
           <>
             <div className="row" style={{ gap: 8, alignItems: "center", flexWrap: "wrap" }}>
@@ -1602,7 +1739,7 @@ function AddData({
           item. Showing them greyed out would imply they could apply; showing
           them live would imply they were honoured. So they are absent, and the
           summary line above the button says what stands in their place. */}
-      {source !== "repo" && (
+      {!notAWrite && (
         <>
       <Step n={3} name="memory" title="Where it goes" value={destination}>
         <p className="empty" style={{ marginTop: 0 }}>
@@ -1848,7 +1985,12 @@ function AddData({
       {/* The whole decision, next to the thing that commits it. */}
       <section className="panel addbar">
         <div className="addsummary">
-          {source === "repo" ? (
+          {source === "scholar" ? (
+            <>
+              <span className="empty">→ a memory of its own, keyed to the author</span>
+              <span className="warntext">· created switched off, until you confirm the person</span>
+            </>
+          ) : source === "repo" ? (
             <>
               <span className="empty">→ a snapshot of its own, pinned to one commit</span>
               <span className="warntext">· four model calls, charged on request</span>
@@ -1862,18 +2004,20 @@ function AddData({
           )}
         </div>
         <div className="row end" style={{ marginTop: 10 }}>
-          {aclIncomplete && source !== "repo" && (
+          {aclIncomplete && !notAWrite && (
             <span className="warntext">pick at least one person or group in step 5</span>
           )}
           <button
             onClick={submit}
-            disabled={busy || blocked !== null || (aclIncomplete && source !== "repo")}
-            title={blocked ?? (aclIncomplete && source !== "repo"
+            disabled={busy || blocked !== null || (aclIncomplete && !notAWrite)}
+            title={blocked ?? (aclIncomplete && !notAWrite
               ? "Step 5 needs at least one principal" : undefined)}
           >
             {busy
-              ? (source === "repo" ? "Analysing…" : "Adding…")
-              : (source === "repo" ? "Analyse repository" : "Add data")}
+              ? (source === "repo" ? "Analysing…"
+                 : source === "scholar" ? "Resolving…" : "Adding…")
+              : (source === "repo" ? "Analyse repository"
+                 : source === "scholar" ? "Find this researcher" : "Add data")}
           </button>
         </div>
       </section>
