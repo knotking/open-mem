@@ -455,6 +455,134 @@ function AgentDiagram() {
 
 
 
+function RepoDiagram() {
+  const REPORTS = [
+    ["Design", "what it is, structurally", 34],
+    ["Code quality", "what is hard to change", 92],
+    ["Functional bugs", "what looks wrong", 150],
+    ["Dependencies", "and what OSV says about them", 208],
+  ];
+  return (
+    <svg viewBox="0 0 940 296" className="flow-svg use-svg" role="img"
+         aria-label="A public repository at one commit is cloned and parsed into a code
+                     graph, which is then read four ways: design, code quality, functional
+                     bugs and dependencies. Each snapshot is pinned to its commit and is
+                     compared to nothing.">
+      <text x="8" y="16" className="flow-stage">A REPOSITORY AT ONE COMMIT</text>
+
+      <g className="flow-box">
+        <rect x="8" y="34" width="212" height="76" rx="10" />
+        <text x="26" y="62" className="flow-h">github.com/owner/repo</text>
+        <text x="26" y="84" className="flow-s">a branch is resolved to</text>
+        <text x="26" y="100" className="flow-s">the commit it points at</text>
+      </g>
+
+      <g className="flow-box flow-spine">
+        <rect x="264" y="34" width="196" height="76" rx="10" />
+        <text x="282" y="62" className="flow-h">A code graph</text>
+        <text x="282" y="84" className="flow-s">cloned, parsed whole,</text>
+        <text x="282" y="100" className="flow-s">37 languages</text>
+      </g>
+
+      {REPORTS.map(([h, sub, y]) => (
+        <g className="flow-box flow-app" key={h as string}>
+          <rect x="560" y={y as number} width="372" height="50" rx="10" />
+          <text x="580" y={(y as number) + 22} className="flow-h">{h}</text>
+          <text x="580" y={(y as number) + 40} className="flow-s">{sub}</text>
+        </g>
+      ))}
+
+      <g className="flow-line">
+        <path d="M 220 72 L 264 72" />
+        <path d="M 460 72 L 508 72" />
+        <path d="M 508 59 L 508 233" className="flow-bus" />
+        <path d="M 508 59 L 560 59" />
+        <path d="M 508 117 L 560 117" />
+        <path d="M 508 175 L 560 175" />
+        <path d="M 508 233 L 560 233" />
+      </g>
+
+      {/* The thing the feature deliberately does not do. Said on the picture,
+          because "four reports" invites the assumption that two of them can be
+          read against each other. */}
+      <text x="8" y="150" className="flow-s">Each snapshot stands</text>
+      <text x="8" y="168" className="flow-s">alone: pinned to its</text>
+      <text x="8" y="186" className="flow-s">commit, and compared</text>
+      <text x="8" y="204" className="flow-s">to nothing.</text>
+      <text x="8" y="240" className="use-refused-note">there is no trend here</text>
+    </svg>
+  );
+}
+
+function ScholarDiagram() {
+  return (
+    <svg viewBox="0 0 940 292" className="flow-svg use-svg" role="img"
+         aria-label="A Google Scholar profile URL is resolved to one researcher. If the
+                     match cannot be confirmed against papers the profile actually listed
+                     it is refused. Confirmed, OpenAlex supplies the full works list and
+                     the open-access PDFs, which are downloaded, read and indexed into a
+                     memory of their own — answerable with citations.">
+      <text x="8" y="16" className="flow-stage">ONE URL, ONE RESEARCHER, ONE CORPUS</text>
+
+      <g className="flow-box">
+        <rect x="8" y="34" width="206" height="68" rx="10" />
+        <text x="26" y="62" className="flow-h">A profile URL</text>
+        <text x="26" y="84" className="flow-s">scholar.google.com</text>
+      </g>
+
+      {/* The gate is the spine of this picture, not the papers. */}
+      <g className="flow-box flow-spine">
+        <rect x="258" y="34" width="216" height="68" rx="10" />
+        <text x="276" y="62" className="flow-h">Which researcher?</text>
+        <text x="276" y="84" className="flow-s">checked against their</text>
+        <text x="276" y="98" className="flow-s">own listed titles</text>
+      </g>
+
+      <g className="flow-box">
+        <rect x="518" y="34" width="196" height="68" rx="10" />
+        <text x="536" y="62" className="flow-h">Their papers</text>
+        <text x="536" y="84" className="flow-s">works list · open</text>
+        <text x="536" y="98" className="flow-s">access PDFs</text>
+      </g>
+
+      <g className="flow-box flow-app">
+        <rect x="758" y="34" width="174" height="68" rx="10" />
+        <text x="776" y="62" className="flow-h">A memory</text>
+        <text x="776" y="84" className="flow-s">keyed to the</text>
+        <text x="776" y="98" className="flow-s">author</text>
+      </g>
+
+      {/* The refusal, drawn because it is the feature. A corpus about the wrong
+          person is coherent, checkable and completely wrong, and nothing
+          downstream can tell — so an unconfirmed match produces nothing. */}
+      <g className="flow-box use-refused">
+        <rect x="258" y="186" width="216" height="66" rx="10" />
+        <text x="276" y="214" className="flow-h">Not confirmed?</text>
+        <text x="276" y="236" className="flow-s">nothing is ingested</text>
+      </g>
+
+      <g className="flow-box flow-surface">
+        <rect x="600" y="186" width="332" height="66" rx="10" />
+        <text x="618" y="214" className="flow-h">Ask their work a question</text>
+        <text x="618" y="236" className="flow-s">answered from the PDFs, with citations</text>
+      </g>
+
+      <g className="flow-line">
+        <path d="M 214 68 L 258 68" />
+        <path d="M 474 68 L 518 68" />
+        <path d="M 714 68 L 758 68" />
+        <path d="M 366 102 L 366 186" />
+        <path d="M 845 102 C 845 150 800 150 780 186" />
+      </g>
+
+      {/* Only the branch is labelled. "Confirmed" on the main line had to sit
+          far from the arrow it named — the gap between two boxes is narrower
+          than the word — and left-to-right already says it. */}
+      <text x="382" y="150" className="use-refused-note">refused</text>
+    </svg>
+  );
+}
+
 /**
  * The diagrams tab: how it works, then what it is for.
  *
@@ -493,6 +621,20 @@ function Diagrams() {
       claim: "What one session learned, the next one can read — without replaying a "
            + "transcript into a context window.",
       art: <AgentDiagram /> },
+    { key: "scholar", label: "A researcher",
+      title: "One researcher, one corpus",
+      claim: "Paste a Google Scholar profile and their open-access papers are fetched, "
+           + "read and indexed into a memory of their own — answerable with citations. "
+           + "Two researchers share a name, so a match that cannot be confirmed against "
+           + "the titles the profile itself lists is refused rather than guessed.",
+      art: <ScholarDiagram /> },
+    { key: "repo", label: "A repository",
+      title: "A repository, read four ways",
+      claim: "A public repo at one commit is cloned, parsed whole into a code graph, and "
+           + "then read for design, code quality, functional bugs and dependencies. Each "
+           + "snapshot is pinned to its commit and compared to nothing — a report "
+           + "attributed to a moving branch is one nobody could reproduce later.",
+      art: <RepoDiagram /> },
   ];
   const shown = PANES.find((x) => x.key === pane) ?? PANES[0];
 

@@ -2076,3 +2076,9 @@ button.tab-cta { font-family: inherit; line-height: 1.35; cursor: pointer; }
   .landtab-out { margin-left: 0; }
   .landtabs { overflow-x: auto; }
 }
+
+/* The refusal, in the scholar diagram. Bordered in the warning colour rather
+   than the accent: it is the one box on that page describing something the
+   system declines to do, and drawing it like the others would read as a step. */
+.use-refused rect { fill: var(--panel); stroke: var(--bad); stroke-dasharray: 4 3; }
+.use-refused-note { fill: var(--bad); font-size: 12px; font-family: var(--mono); }
