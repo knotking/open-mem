@@ -505,9 +505,12 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
           <span className="dot" aria-hidden="true" />
           mem-dog
         </a>
-        {/* One destination. The tab strip tracked nine page sections that no
-            longer exist; the reading is in the docs now. */}
+        {/* Two destinations, both real routes rather than page anchors. The
+            comparison is called out on its own because it is the question
+            people arrive with, and it is the one place this says out loud
+            where a competitor is ahead. */}
         <nav className="tabs" aria-label="Sections">
+          <a href="/docs/compare">How it compares</a>
           <a href="/docs">Docs</a>
         </nav>
         <div className="row">

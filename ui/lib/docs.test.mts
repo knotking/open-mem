@@ -25,9 +25,14 @@ test("a relative link becomes a route", () => {
 });
 
 test("a link to a document this section does not publish is dropped", () => {
-  // Not rendered as a link to nothing: the docs are curated, most of `docs/`
-  // is internal design record, and every reference to it would otherwise 404.
-  assert.equal(linkFor(doc("ingestion/README.md"), "../competition/comparison-onyx.md"), null);
+  // Not rendered as a link to nothing: the docs are curated, and a reference
+  // to something outside the published set would otherwise 404.
+  //
+  // This used to point at `competition/comparison-onyx.md`, which is published
+  // now -- the assertion failed the moment the curation changed, which is the
+  // whole reason it names a specific file rather than asserting a count.
+  assert.equal(linkFor(doc("ingestion/README.md"), "../roadmap.md"), null);
+  assert.equal(linkFor(doc("architecture.md"), "operations/schema.md"), null);
 });
 
 test("anchors and absolute URLs pass through untouched", () => {
@@ -48,7 +53,8 @@ test("a fragment survives the rewrite", () => {
 test("the index groups in reading order and loses nothing", () => {
   const grouped = groups();
   assert.deepEqual(grouped.map((g) => g.group),
-    ["Start here", "How it works", "Getting data in", "Getting it back"]);
+    ["Start here", "How it works", "Getting data in", "How it compares",
+     "Getting it back"]);
   assert.equal(grouped.reduce((n, g) => n + g.docs.length, 0), DOCS.length);
 });
 

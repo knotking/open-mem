@@ -57,6 +57,15 @@ const PUBLISHED = [
     ["ingestion/formats.md", "Formats"],
     ["ingestion/uploads.md", "Uploads"],
   ]},
+  // Published deliberately. This group states, by name, where competitors are
+  // ahead -- Onyx on permissions, self-hosting as table stakes rather than a
+  // moat -- and each document carries the date it was researched, because the
+  // claims are about other people's products as they documented them then.
+  { group: "How it compares", files: [
+    ["competition/README.md", "The landscape", "compare"],
+    ["competition/comparison-onyx.md", "vs Onyx", "compare/onyx"],
+    ["competition/comparison-glean.md", "vs Glean", "compare/glean"],
+  ]},
   { group: "Getting it back", files: [
     ["retrieval/README.md", "Retrieval"],
     ["alerts.md", "Alerts"],
