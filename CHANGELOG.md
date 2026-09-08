@@ -377,6 +377,12 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   its reason — never left pending, which would read as still running.
 
 ### Changed
+- **"How it compares" moved from the landing header into the tab strip**, beside
+  the demo and the diagrams — it is one of the things a visitor came to do, not
+  a utility link. It stays an anchor rather than becoming a tab, with an arrow
+  marking that it leaves the page, because a link wearing `role="tab"` promises
+  a panel that switches in place. The strip itself now renders unconditionally
+  so a deployment without a published demo gallery cannot lose the link.
 - **The landing page's diagrams are sub-tabs rather than a column.** Four
   stacked was a long scroll with no indication of how much was left, so the last
   one may as well not have existed. The system diagram, the company brain, the
