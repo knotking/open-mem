@@ -58,6 +58,18 @@ class Refuses:
         raise AssertionError("a model was called where the answer was already known")
 
 
+class RefusesAtFakesVersion(Refuses):
+    """Refuses, and fingerprints identically to `Fake`.
+
+    `model_id` is in the generator hash, so plain `Refuses` is a *different
+    generator* -- which correctly misses the cache. Proving a cached answer was
+    served needs a refuser the cache key cannot tell apart from the extractor
+    that filled it, or the test proves the version changed instead.
+    """
+
+    model_id = Fake.model_id
+
+
 async def _timeline_type(pool, tenant, *, name="vendor_feed", checkpoints=True):
     from memdog.ids import new_id
 
@@ -1126,3 +1138,202 @@ async def test_resolving_a_position_does_not_read_the_whole_timeline(
 
     later = (rows[2]["created_at"] + timedelta(days=1)).isoformat()
     assert (await _locate(pool, memory_id, org_id, later))["seq"] == 3
+
+
+# --------------------------------------------------------- the net answer
+#
+# The two bases disagree by construction, and that is the whole reason `basis`
+# is a field. These tests pin the disagreement rather than papering over it.
+
+
+async def test_composed_and_net_disagree_and_both_say_which_they_are(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """Green, red, green is two changes composed and none net. Neither is wrong.
+    A caller handed one while assuming the other cannot tell, which is why
+    neither answer is allowed to arrive unlabelled."""
+    from memdog.checkpoints import changes_between, net_between
+
+    principal = await principal_for(tenant.api_key)
+    rows = await _built(pool, queue, blobs, settings, principal, tenant, [
+        ("Status: green", []),
+        ("Status: red", [_change("green to red", earlier="green", later="red")]),
+        ("Status: green", [_change("red to green", earlier="red", later="green")]),
+    ])
+    memory_id = rows[0]["memory_id"]
+
+    composed = await changes_between(pool, principal, memory_id)
+    assert composed["basis"] == "composed"
+    assert len(composed["changes"]) == 2
+
+    # The net comparison is asked of the two descriptions and answers nothing,
+    # because nothing is different between the ends.
+    net = await net_between(pool, principal, Fake(state=["status is green"], changes=[]),
+                            memory_id, since="1", until="3")
+    assert net["basis"] == "net"
+    assert net["changes"] == []
+    assert net["cached"] is False, "the first ask pays for the comparison"
+
+
+async def test_a_net_answer_is_paid_for_once(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """A polling consumer asks for the same range every time it wakes. Charging
+    it a model call per poll is the cost failure this table exists to prevent."""
+    from memdog.checkpoints import net_between
+
+    principal = await principal_for(tenant.api_key)
+    rows = await _built(pool, queue, blobs, settings, principal, tenant, [
+        ("v1", []), ("v2", [_change("two")]), ("v3", [_change("three")])])
+    memory_id = rows[0]["memory_id"]
+
+    fake = Fake(state=["v3"], changes=[_change("v1 became v3", earlier="v1", later="v3")])
+    first = await net_between(pool, principal, fake, memory_id, since="1", until="3")
+    assert first["cached"] is False
+    assert [c["statement"] for c in first["changes"]] == ["v1 became v3"]
+    calls = len(fake.calls)
+
+    # A refusing extractor at the *same* fingerprint proves it: the second ask
+    # cannot have asked a model, and cannot have missed the cache on a version.
+    again = await net_between(pool, principal, RefusesAtFakesVersion(), memory_id,
+                              since="1", until="3")
+    assert again["cached"] is True
+    assert [c["statement"] for c in again["changes"]] == ["v1 became v3"]
+    assert again["change_artifact_id"] == first["change_artifact_id"]
+    assert len(fake.calls) == calls
+
+
+async def test_a_moved_generator_misses_the_cache_rather_than_answering_from_it(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """The version is part of the key, not a column beside it. Serving an answer
+    made by a prompt nobody can recover is the drift the per-step comparison
+    already refuses to make."""
+    from memdog.checkpoints import net_between
+
+    principal = await principal_for(tenant.api_key)
+    rows = await _built(pool, queue, blobs, settings, principal, tenant, [
+        ("v1", []), ("v2", [_change("two")])])
+    memory_id = rows[0]["memory_id"]
+
+    await net_between(pool, principal, Fake(state=["v2"], changes=[_change("old answer")]),
+                      memory_id, since="1", until="2")
+
+    moved = Fake(state=["v2"], changes=[_change("new answer")])
+    moved.model_id = "fake-extractor-2"
+    fresh = await net_between(pool, principal, moved, memory_id, since="1", until="2")
+
+    assert fresh["cached"] is False, "a moved generator must not be served from cache"
+    assert [c["statement"] for c in fresh["changes"]] == ["new answer"]
+    # Both answers are kept, each under the version that produced it.
+    assert await pool.fetchval(
+        "SELECT count(*) FROM memory_change_ranges WHERE memory_id = $1", memory_id) == 2
+
+
+async def test_two_ends_from_different_generators_are_not_compared(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """With more force than for an adjacent pair: the further apart two points
+    are, the likelier a prompt moved between them."""
+    from memdog.checkpoints import net_between
+
+    principal = await principal_for(tenant.api_key)
+    rows = await _built(pool, queue, blobs, settings, principal, tenant, [
+        ("v1", []), ("v2", [_change("two")]), ("v3", [_change("three")])])
+    drifted = Fake(state=["v3"], changes=[])
+    drifted.model_id = "fake-extractor-2"
+    await run_check(pool, principal, drifted, rows[2]["checkpoint_id"])
+
+    result = await net_between(pool, principal, Refuses(), rows[0]["memory_id"],
+                               since="1", until="3")
+    assert result["basis"] == "net"
+    assert result["changes"] == []
+    assert [g["why"] for g in result["gaps"]] == ["incomparable"]
+    assert "prompt" in result["note"]
+
+
+async def test_an_end_with_no_description_has_no_net_answer(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    from memdog.checkpoints import net_between
+
+    principal = await principal_for(tenant.api_key)
+    rows = await _built(pool, queue, blobs, settings, principal, tenant, [
+        ("v1", []), ("v2", [_change("two")])])
+    await pool.execute(
+        "UPDATE memory_checkpoints SET status = 'pending', outcome = NULL, "
+        "state_artifact_id = NULL WHERE checkpoint_id = $1",
+        rows[1]["checkpoint_id"])
+
+    result = await net_between(pool, principal, Refuses(), rows[0]["memory_id"],
+                               since="1", until="2")
+    assert result["changes"] == []
+    assert [g["why"] for g in result["gaps"]] == ["not_checked"]
+    assert "no net answer" in result["note"]
+
+
+async def test_a_net_answer_needs_two_ends_to_compare(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """"From the beginning" has no description to compare against. Quietly
+    anchoring on the first checkpoint would answer a question nobody asked."""
+    from memdog.checkpoints import net_between
+
+    principal = await principal_for(tenant.api_key)
+    rows = await _built(pool, queue, blobs, settings, principal, tenant, [
+        ("v1", []), ("v2", [_change("two")])])
+    memory_id = rows[0]["memory_id"]
+
+    with pytest.raises(CheckpointError) as caught:
+        await net_between(pool, principal, Refuses(), memory_id)
+    assert "needs a starting point" in str(caught.value)
+
+    with pytest.raises(CheckpointError):
+        await net_between(pool, principal, Refuses(), memory_id,
+                          since="2", until="1")
+
+
+async def test_a_net_answer_stands_on_the_records_not_the_descriptions(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """Which is what makes erasing either record cascade onto the answer built
+    from it, and what a citation has to be able to open."""
+    from memdog.checkpoints import net_between
+
+    principal = await principal_for(tenant.api_key)
+    rows = await _built(pool, queue, blobs, settings, principal, tenant, [
+        ("v1", []), ("v2", [_change("two")])])
+
+    result = await net_between(
+        pool, principal, Fake(state=["v2"], changes=[_change("moved")]),
+        rows[0]["memory_id"], since="1", until="2")
+
+    sources = {r["data_id"] for r in await pool.fetch(
+        "SELECT data_id FROM artifact_sources WHERE artifact_id = $1",
+        result["change_artifact_id"])}
+    assert sources == {rows[0]["data_id"], rows[1]["data_id"]}
+
+
+async def test_an_empty_answer_still_says_which_question_it_answered(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """`basis` is the contract, and an empty response is not exempt from it. A
+    caller that asked for the net reading and got `composed` back would be right
+    to conclude it had been handed the other answer."""
+    from memdog.checkpoints import changes_between, net_between
+
+    principal = await principal_for(tenant.api_key)
+    name = await _timeline_type(pool, tenant, name="plain", checkpoints=False)
+    await _write(pool, queue, blobs, settings, principal, tenant,
+                 type_name=name, external_id="week-1.md", text="Status: green")
+    memory_id = await pool.fetchval(
+        "SELECT memory_id FROM memories WHERE project_id = $1 AND memory_key = $2",
+        tenant.project_id, "acme-feed")
+
+    composed = await changes_between(pool, principal, memory_id)
+    netted = await net_between(pool, principal, Refuses(), memory_id, since="1")
+    assert composed["basis"] == "composed"
+    assert netted["basis"] == "net"
+    # And both still distinguish "will never have a timeline" from "has one with
+    # nothing on it yet".
+    assert "not a checkpoint timeline" in composed["note"] == netted["note"]

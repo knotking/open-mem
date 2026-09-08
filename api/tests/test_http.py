@@ -133,3 +133,11 @@ async def test_the_range_endpoint_binds_its_from_and_to(client, tenant, pool):
     assert (await client.get(
         f"/api/v1/memories/{memory_id}/changes?to=1", headers=auth)
     ).status_code == 200
+
+    # `net` binds too. Asserted through the refusal that needs no model: a net
+    # comparison without a `from` has only one description and says so, which it
+    # can only do if the flag reached the handler.
+    netted = await client.get(
+        f"/api/v1/memories/{memory_id}/changes?net=true", headers=auth)
+    assert netted.status_code == 400, netted.text
+    assert "starting point" in netted.json()["detail"]

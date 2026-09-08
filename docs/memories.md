@@ -473,7 +473,7 @@ The comparison each checkpoint does is against the one immediately before it. Th
 actually ask is about a range — *what has changed since Monday*, *since the version I last synced*:
 
 ```
-GET /api/v1/memories/{id}/changes?from=<checkpoint_id|seq|timestamp>&to=<...>
+GET /api/v1/memories/{id}/changes?from=<checkpoint_id|seq|timestamp>&to=<...>&net=false
 ```
 
 `from` defaults to the start of the timeline and `to` to its head. The window is **exclusive of
@@ -484,18 +484,39 @@ slide to the nearest, because a sync resuming from an erased checkpoint must hea
 
 Two things in the response are there to stop it lying:
 
-- **`basis`** says how the answer was reached. Today it is always `composed` — the stored deltas
-  concatenated, which costs nothing and every claim in it is backed by an artifact a citation can
-  open. Composing reports **churn**: a value that went green, red, green appears as two changes,
-  because two changes happened. The *net* reading is a different question, costs a model call, and
-  will arrive as `basis: "net"`. Both are defensible; answering with one while the caller assumed
-  the other is not, which is why this is a field and never an assumption.
+- **`basis`** says how the answer was reached, and there are two. `composed` is the default and the
+  free one — the stored deltas concatenated, every claim in it backed by an artifact a citation can
+  open. It reports **churn**: a value that went green, red, green appears as two changes, because
+  two changes happened. `?net=true` asks the other question, comparing the description at each end
+  directly, and **the same three values net to nothing**. Both are correct; answering with one while
+  the caller assumed the other is not, which is why this is a field and never an assumption.
 - **`gaps`** names every checkpoint in the span that contributed nothing and why —
   `not_checked`, `failed`, `incomparable`, or `not_visible`. A range that quietly omits what it
   could not read presents as complete, which for a change detector is the same lie as a failed check
   reading as "nothing changed".
 
-A span wider than 500 checkpoints is **refused rather than truncated**, for the same reason.
+A span wider than 500 checkpoints is **refused rather than truncated**, for the same reason. So is
+an inverted window — `to` before `from` — because an empty answer for it would report "nothing
+changed" about a span that was never examined. *Nothing new since the point you last saw* is a
+different and entirely ordinary result, and it says so in its own words.
+
+### What a net answer costs, and how often
+
+One model call, over the two descriptions and never the two records — handing a generator its raw
+source is what made every repository report an echo of its own input.
+
+**Paid for once.** A polling consumer asks for the same range every time it wakes, so the answer is
+stored in `memory_change_ranges` and the response carries `cached` so the caller can see whether
+this particular request spent anything. The key includes the **generator version** as well as the
+two ends: a prompt that moved misses the cache rather than being answered from it, which is the same
+drift the per-step comparison already refuses to make.
+
+Two things a net comparison will not do. It will not run **without a `from`** — "since the
+beginning" has no description to compare against, and quietly anchoring on the first checkpoint
+would answer a question nobody asked. And it will not compare **two ends described by different
+generator versions**, with more force than for an adjacent pair: the further apart two points are,
+the likelier a prompt moved between them, and a diff of two differently-generated descriptions
+reports that drift as content change in exactly the shape a real finding has.
 
 A change reaching the timeline also reaches the [event stream](alerts.md): `checkpoint.changed`
 when a record moved, and `checkpoint.checked` on every check that finished — including the ones that
@@ -513,7 +534,7 @@ POST  /api/v1/memories/{id}/compress
 PATCH /api/v1/memories/{id}                ttl_hours, no_expiry
 GET   /api/v1/memories/{id}/tree           ancestors and descendants, with a cap that reports itself
 GET   /api/v1/memories/{id}/checkpoints    the timeline, newest first, with what changed at each point
-GET   /api/v1/memories/{id}/changes        what moved across a span; `basis` and `gaps` are part of the answer
+GET   /api/v1/memories/{id}/changes        what moved across a span; `basis`, `gaps` and `cached` are part of the answer
 POST  /api/v1/memories/{id}/checkpoints/{cid}/recheck   the way out of `incomparable`
 CRUD  /api/v1/memories/{id}/links          relate two memories; a cycle is a 409
 GET   /api/v1/projects/{id}/expiring       what is past its TTL, and under which policy

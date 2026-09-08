@@ -668,7 +668,8 @@ async def _locate(pool, memory_id: str, org_id: str, value) -> dict | None:
     return dict(row)
 
 
-def _empty(memory_id: str, note: str, *, start=None, end=None) -> dict:
+def _empty(memory_id: str, note: str, *, start=None, end=None,
+           basis: str = "composed") -> dict:
     """A range with nothing in it, still shaped like a range.
 
     Every empty answer here carries a note saying *which* empty it is. Nothing
@@ -676,10 +677,37 @@ def _empty(memory_id: str, note: str, *, start=None, end=None) -> dict:
     you last asked are three different facts, and one blank response for all
     three is what makes a screen unreadable and a sync unable to tell whether it
     is working.
+
+    `basis` is carried even here. A caller that asked for the net reading and
+    received `composed` would be right to conclude it got the other answer --
+    the field is the contract, and an empty response is not exempt from it.
     """
-    return {"memory_id": memory_id, "basis": "composed", "from": start, "to": end,
+    return {"memory_id": memory_id, "basis": basis, "from": start, "to": end,
             "checkpoints": 0, "changes": [], "gaps": [],
             "counts": {"added": 0, "removed": 0, "changed": 0}, "note": note}
+
+
+async def _no_timeline(pool, memory_id: str, org_id: str, basis: str) -> dict:
+    """The answer for a memory with no checkpoints on it, whichever basis asked.
+
+    Shared by both readings so the two empty states stay one decision. A memory
+    of an ordinary type has no timeline and never will; one of a timeline type
+    simply has nothing on it yet. Collapsing those into a single blank answer is
+    the thing that makes a screen unreadable.
+    """
+    tracked = await pool.fetchval(
+        """
+        SELECT t.checkpoints FROM memories m
+        JOIN memory_types t ON t.project_id = m.project_id AND t.name = m.type
+        WHERE m.memory_id = $1 AND m.org_id = $2
+        """,
+        memory_id, org_id)
+    if tracked is None:
+        raise CheckpointError("no such memory", status=404)
+    return _empty(memory_id, basis=basis, note=(
+        "this memory is a checkpoint timeline with nothing on it yet" if tracked
+        else "this memory is not a checkpoint timeline, so it has no changes "
+             "to report"))
 
 
 def _gap(row, why: str) -> dict:
@@ -719,23 +747,7 @@ async def changes_between(pool: asyncpg.Pool, principal: Principal, memory_id: s
         "WHERE memory_id = $1 AND org_id = $2 ORDER BY seq DESC LIMIT 1",
         memory_id, org_id)
     if head is None:
-        # Two different empty states, and they are not the same fact. A memory
-        # of an ordinary type has no timeline and never will; one of a timeline
-        # type simply has nothing on it yet.
-        tracked = await pool.fetchval(
-            """
-            SELECT t.checkpoints FROM memories m
-            JOIN memory_types t ON t.project_id = m.project_id AND t.name = m.type
-            WHERE m.memory_id = $1 AND m.org_id = $2
-            """,
-            memory_id, org_id)
-        if tracked is None:
-            raise CheckpointError("no such memory", status=404)
-        return _empty(memory_id,
-                      "this memory is a checkpoint timeline with nothing on it yet"
-                      if tracked else
-                      "this memory is not a checkpoint timeline, so it has no "
-                      "changes to report")
+        return await _no_timeline(pool, memory_id, org_id, "composed")
 
     start = await _locate(pool, memory_id, org_id, since) if since else None
     end = await _locate(pool, memory_id, org_id, until) if until else dict(head)
@@ -844,3 +856,228 @@ async def changes_between(pool: asyncpg.Pool, principal: Principal, memory_id: s
                    "changed": kinds.count("changed")},
         "gaps": gaps,
     }
+
+
+# --------------------------------------------------------- the net answer
+#
+# `changes_between` composes the stored steps, which is free and reports churn.
+# This is the other reading: what is different between the two ends, net of
+# everything in between. Green, red, green composes to two changes and nets to
+# none, and both are correct answers to different questions -- which is why
+# `basis` is in every response and is never inferred.
+
+
+async def _state_of(pool, checkpoint_id: str):
+    """The description a checkpoint settled on, with its fingerprint.
+
+    Read through the checkpoint rather than by artifact id, because the two
+    things a net comparison has to know -- was this checked at all, and by which
+    generator -- live on different rows.
+    """
+    return await pool.fetchrow(
+        """
+        SELECT c.checkpoint_id, c.seq, c.data_id, c.status, c.outcome, c.reason,
+               d.external_id,
+               a.artifact_id, a.summary, a.fields, a.generator_version,
+               a.access_level, a.shared_with, a.owner_id
+        FROM memory_checkpoints c
+        JOIN data_items d ON d.data_id = c.data_id
+        LEFT JOIN artifacts a
+               ON a.artifact_id = c.state_artifact_id AND a.deleted_at IS NULL
+        WHERE c.checkpoint_id = $1
+        """,
+        checkpoint_id)
+
+
+async def net_between(pool: asyncpg.Pool, principal: Principal, extractor,
+                      memory_id: str, *, since=None, until=None) -> dict:
+    """What is different between two points, net of everything in between.
+
+    One model call over the two descriptions -- never the two records, for the
+    reason `derive.GENERATORS` gives: handing a generator its raw source is what
+    made every repository report an echo of its own input.
+
+    **Paid for once.** A polling consumer asks for the same range repeatedly, so
+    the answer is stored in `memory_change_ranges` and keyed on the generator
+    version as well as the two ends. A prompt that moved misses the cache rather
+    than being answered from it.
+    """
+    from .derive import GENERATORS, register, store_artifact
+
+    principal.require(DATA_READ)
+    org_id = principal.org_id
+
+    head = await pool.fetchrow(
+        "SELECT checkpoint_id, seq, created_at, project_id FROM memory_checkpoints "
+        "WHERE memory_id = $1 AND org_id = $2 ORDER BY seq DESC LIMIT 1",
+        memory_id, org_id)
+    if head is None:
+        return await _no_timeline(pool, memory_id, org_id, "net")
+
+    start = await _locate(pool, memory_id, org_id, since) if since else None
+    end = await _locate(pool, memory_id, org_id, until) if until else dict(head)
+
+    # A net comparison is between two states, so it needs two. "From the
+    # beginning" has no description to compare against -- the honest answer is
+    # to say so rather than quietly anchoring on the first checkpoint, which
+    # would silently answer a question nobody asked.
+    if start is None:
+        raise CheckpointError(
+            "a net comparison needs a starting point: give `from` as a "
+            "checkpoint id, a sequence number, or a timestamp inside this "
+            "timeline. Without one, ask for the composed range instead")
+    if end is None or end["seq"] <= start["seq"]:
+        raise CheckpointError(
+            "`to` is at or before `from`, so there is nothing between them to "
+            "compare")
+
+    earlier = await _state_of(pool, start["checkpoint_id"])
+    later = await _state_of(pool, end["checkpoint_id"])
+
+    # Neither end usable is not an error and not "nothing changed". It is the
+    # same `gaps` vocabulary the composed range uses, because a caller handling
+    # one should not need a second shape to handle the other.
+    holes = [
+        _gap(row, "not_checked" if row["status"] in ("pending", "running")
+             else "failed" if row["status"] == "failed" else "incomparable")
+        for row in (earlier, later) if row["artifact_id"] is None
+    ]
+    if holes:
+        return _range_answer(memory_id, start, end, [], gaps=holes,
+                             note="one end of this window has no description to "
+                                  "compare, so there is no net answer for it")
+
+    # The same drift guard `run_check` applies to adjacent pairs, for the same
+    # reason and with more force: the further apart two checkpoints are, the
+    # more likely a prompt or a model moved between them, and a diff of two
+    # differently-generated descriptions reports that drift as content change --
+    # confidently, and in the shape a real finding has.
+    if earlier["generator_version"] != later["generator_version"]:
+        reason = ("the two ends were described by different versions of this "
+                  "generator, so a comparison would report the change of prompt "
+                  "as a change of content; recheck the earlier one first")
+        return _range_answer(
+            memory_id, start, end, [],
+            gaps=[_gap(earlier, "incomparable")], note=reason)
+
+    version = await register(pool, CHANGE_GENERATOR, extractor)
+
+    cached = await pool.fetchrow(
+        """
+        SELECT r.range_id, r.outcome, r.reason, r.change_artifact_id,
+               a.fields
+        FROM memory_change_ranges r
+        LEFT JOIN artifacts a
+               ON a.artifact_id = r.change_artifact_id AND a.deleted_at IS NULL
+        WHERE r.memory_id = $1 AND r.from_checkpoint_id = $2
+          AND r.to_checkpoint_id = $3 AND r.generator_version = $4
+        """,
+        memory_id, start["checkpoint_id"], end["checkpoint_id"], version)
+    if cached is not None:
+        return _range_answer(memory_id, start, end, _changes_of(cached["fields"]),
+                             artifact_id=cached["change_artifact_id"],
+                             cached=True)
+
+    spec = GENERATORS[CHANGE_GENERATOR]
+    text = "EARLIER:\n" + _render(earlier) + "\n\nLATER:\n" + _render(later)
+    try:
+        envelope = await extractor.extract(
+            text[:200_000], data_type=spec["data_type"], prompt=spec["prompt"])
+    except Exception as exc:  # noqa: BLE001 - recorded, not swallowed
+        await pool.execute(
+            """
+            INSERT INTO memory_change_ranges (range_id, org_id, project_id,
+                memory_id, from_checkpoint_id, to_checkpoint_id,
+                generator_version, status, reason)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, 'failed', $8)
+            ON CONFLICT DO NOTHING
+            """,
+            new_id("rng"), org_id, head["project_id"], memory_id,
+            start["checkpoint_id"], end["checkpoint_id"], version, str(exc)[:500])
+        raise
+
+    changes = (getattr(envelope, "fields", None) or {}).get("changes") or []
+
+    # Sources are the two RECORDS, not the two descriptions -- what makes
+    # erasing either one cascade onto the answer built from it, and what a
+    # citation has to be able to open. The same rule `run_check` follows.
+    members = [
+        {"data_id": row["data_id"], "access_level": row["access_level"],
+         "shared_with": row["shared_with"], "owner_id": row["owner_id"]}
+        for row in (later, earlier)
+    ]
+    async with pool.acquire() as conn, conn.transaction():
+        artifact_id = await store_artifact(
+            conn, org_id=org_id, project_id=head["project_id"],
+            kind=CHANGE_GENERATOR, label=spec["label"], envelope=envelope,
+            model_id=getattr(extractor, "model_id", None), version=version,
+            members=members,
+            offsets=[(m["data_id"], 0, 0) for m in members if m["data_id"]])
+        await conn.execute(
+            """
+            INSERT INTO memory_change_ranges (range_id, org_id, project_id,
+                memory_id, from_checkpoint_id, to_checkpoint_id,
+                generator_version, change_artifact_id, status, outcome)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'complete', $9)
+            ON CONFLICT (memory_id, from_checkpoint_id, to_checkpoint_id,
+                         generator_version) DO NOTHING
+            """,
+            new_id("rng"), org_id, head["project_id"], memory_id,
+            start["checkpoint_id"], end["checkpoint_id"], version, artifact_id,
+            # An empty list is the answer for a span that did not move, and it is
+            # stored as one. "Compared and found nothing" and "never compared"
+            # are different claims -- the whole question the timeline exists to
+            # answer, asked at range scale.
+            "changed" if changes else "unchanged")
+        await record_audit(
+            conn, principal, action="checkpoint.range_compared",
+            project_id=head["project_id"], target_type="memory",
+            target_id=memory_id,
+            detail={"from": start["checkpoint_id"], "to": end["checkpoint_id"],
+                    "changes": len(changes)})
+
+    return _range_answer(memory_id, start, end, changes, artifact_id=artifact_id)
+
+
+def _changes_of(fields) -> list:
+    if isinstance(fields, str):
+        try:
+            fields = json.loads(fields)
+        except ValueError:
+            return []
+    return [c for c in ((fields or {}).get("changes") or []) if isinstance(c, dict)]
+
+
+def _range_answer(memory_id, start, end, changes, *, gaps=None, note=None,
+                  artifact_id=None, cached=False) -> dict:
+    """A net range in the shape a composed one already has.
+
+    One shape for both readings, so a caller switching `net` on does not have to
+    parse a different response -- `basis` is what tells them which question was
+    answered, and it is the only field whose value differs by construction.
+
+    Net rows carry no per-row `seq`, and that is deliberate rather than an
+    omission: a net claim is about the span, not about a point inside it, and
+    stamping one of the two endpoints onto it would invite exactly the
+    misreading the two bases exist to prevent.
+    """
+    kinds = [c.get("kind") for c in changes]
+    answer = {
+        "memory_id": memory_id, "basis": "net",
+        "from": start, "to": end,
+        "checkpoints": (end["seq"] - start["seq"]) if (start and end) else 0,
+        "changes": changes,
+        "counts": {"added": kinds.count("added"), "removed": kinds.count("removed"),
+                   "changed": kinds.count("changed")},
+        "gaps": gaps or [],
+        # The whole answer, for a caller that wants the artifact rather than the
+        # rendering -- and the thing a citation opens.
+        "change_artifact_id": artifact_id,
+        # Whether this cost a model call. Beside the answer rather than in a
+        # bill next month, which is the rule the console already follows for
+        # anything that spends.
+        "cached": cached,
+    }
+    if note:
+        answer["note"] = note
+    return answer

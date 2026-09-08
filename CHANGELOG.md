@@ -11,6 +11,23 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **A checkpoint timeline can be asked about a span, not just a step.**
+  `GET /api/v1/memories/{id}/changes?from=&to=` composes the deltas already
+  stored across a window, so it costs nothing and every claim in it is backed by
+  an artifact a citation can open. `from` and `to` each take a checkpoint id, a
+  sequence number or an ISO timestamp; a timestamp lands on the last checkpoint
+  at or before it, and the window is exclusive of `from` and inclusive of `to`
+  so two ranges chained together neither overlap nor skip. Three fields keep the
+  answer honest: **`basis`** says how it was reached and is never inferred —
+  composing reports *churn*, so green, red, green is two changes, while the net
+  reading is a different question that costs a model call and is not built yet;
+  **`gaps`** names every checkpoint in the span that contributed nothing and why
+  (`not_checked`, `failed`, `incomparable`, `not_visible`), because a range that
+  omits what it could not read presents as complete; and an **inverted window is
+  refused** rather than answered empty, which would have reported "nothing
+  changed" about a span that was never examined. A span over 500 checkpoints is
+  refused rather than truncated. Checkpoint timelines are now documented in
+  `docs/memories.md`, which had no section on them at all.
 - **`checkpoint.checked` — an alert surface for a check that ran and found
   nothing.** Every check on a checkpoint timeline now reaches the event stream,
   not only the ones that found movement, carrying `status`, `outcome`, `reason`

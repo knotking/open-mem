@@ -755,6 +755,7 @@ async def read_changes(
     request: Request, memory_id: str,
     since: str | None = Query(None, alias="from"),
     until: str | None = Query(None, alias="to"),
+    net: bool = False,
     actor: Principal = Depends(principal),
 ) -> dict:
     """What moved across a span of one memory's timeline, not just one step of it.
@@ -764,22 +765,31 @@ async def read_changes(
     The window is exclusive of `from` and inclusive of `to`, so two ranges
     chained together neither overlap nor skip.
 
-    **`basis` is part of the answer.** Today it is always `composed` -- the
-    deltas already stored, concatenated, which costs nothing and reports
-    *churn*: a value that went green, red, green appears as two changes because
-    two changes happened. The net reading is a different question, costs a model
-    call, and will arrive as `basis: "net"`. A consumer that does not know which
-    of the two it is holding cannot reconcile it with the other, which is why
-    this is a field rather than an assumption.
+    **`basis` is part of the answer.** `composed` is the default and the free
+    one -- the deltas already stored, concatenated, which reports *churn*: a
+    value that went green, red, green appears as two changes because two changes
+    happened. `?net=true` asks the other question, comparing the description at
+    each end directly: the same three values net to nothing. Both are correct
+    and they disagree by construction, so a consumer that does not know which it
+    is holding cannot reconcile it with the other -- which is why this is a
+    field rather than an assumption.
+
+    A net answer costs one model call, is stored keyed on the generator version
+    as well as the two ends, and reports `cached` so the caller can see whether
+    this particular request spent anything.
 
     `gaps` is the other half of an honest answer: a checkpoint in the span that
     was never checked, failed, could not be compared, or whose delta this reader
     cannot see contributes no changes, and a range that hides that presents as
     complete when it is not.
     """
-    from .checkpoints import CheckpointError, changes_between
+    from .checkpoints import CheckpointError, changes_between, net_between
 
     try:
+        if net:
+            return await net_between(
+                request.app.state.pool, actor, request.app.state.extractor,
+                memory_id, since=since, until=until)
         return await changes_between(request.app.state.pool, actor, memory_id,
                                      since=since, until=until)
     except (CheckpointError, AuthError) as exc:
