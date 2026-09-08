@@ -70,6 +70,24 @@ REGISTER: dict[str, Definition] = {
         "opt-in per org, never on by platform default.",
         kind="bool",
     ),
+    "large_media": Definition(
+        "large_media", False, ("platform", "org", "project"), True,
+        "Send audio, video and documents too large to inline through the "
+        "provider's file upload instead of refusing them -- roughly 18 MB up to "
+        "the deployment's large-media limit. The most expensive thing this "
+        "platform can be asked to do: an hour of video is a large bill on "
+        "somebody's key, so it is off until an org asks for it.",
+        kind="bool",
+    ),
+    "large_media_graph": Definition(
+        "large_media_graph", False, ("platform", "org", "project"), True,
+        "Build entities and edges from large-media transcripts too. Off by "
+        "default: a multi-hour transcript yields a very large, low-precision "
+        "entity set at high cost, and speech-to-text noise in the graph is "
+        "read by every other record in the project. The transcript itself is "
+        "always summarised and searchable either way.",
+        kind="bool",
+    ),
     "answer_storage": Definition(
         "answer_storage", "metadata", ("platform", "org", "project"), True,
         "Whether stored answers keep their text. Defaults to metadata-only "

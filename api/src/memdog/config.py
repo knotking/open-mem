@@ -73,6 +73,23 @@ class Settings:
     max_media_bytes: int = field(
         default_factory=lambda: int(_env("MAX_MEDIA_BYTES", str(18 * 1024 * 1024)))
     )
+    # Media too large to send inline goes through the provider's file upload
+    # instead of being refused. Off by default and separate from
+    # `media_interpretation`, because it is a different-sized decision: the
+    # first agrees to interpret media at all, this one lifts the ceiling on how
+    # much of it, from roughly 18 MB to hundreds.
+    large_media: bool = field(
+        default_factory=lambda: _env("LARGE_MEDIA", "false").lower() == "true"
+    )
+    # Deliberately far below the provider's ~2 GB, and deliberately a separate
+    # knob. The point of a default here is that the first large video is a
+    # surprise somebody can absorb; a deployment that means to send gigabytes
+    # raises it on purpose.
+    max_large_media_bytes: int = field(
+        default_factory=lambda: int(
+            _env("MAX_LARGE_MEDIA_BYTES", str(256 * 1024 * 1024))
+        )
+    )
 
     # Set to enable identity-token sign-in alongside API keys. Absent, the API
     # is key-only -- which is the correct default for a headless deployment.

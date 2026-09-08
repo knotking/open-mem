@@ -207,6 +207,20 @@ async def lifespan(app: FastAPI):
         """,
         settings.media_interpretation,
     )
+    # The same, for the same reason. Without this the console would show
+    # `large_media` false at platform scope on a deployment that has `LARGE_MEDIA`
+    # set -- a setting reporting a value the runtime is ignoring, which is
+    # precisely what the line above exists to prevent.
+    await pool.execute(
+        """
+        INSERT INTO settings (setting_id, scope, scope_id, key, value, set_by)
+        VALUES ('set_platform_large_media', 'platform', NULL, 'large_media', $1,
+                'deployment')
+        ON CONFLICT (scope, scope_id, key) DO UPDATE
+            SET value = EXCLUDED.value, updated_at = now()
+        """,
+        settings.large_media,
+    )
     # What "current" means for staleness: the generator each purpose is
     # assigned right now.
     app.state.current_generators = {

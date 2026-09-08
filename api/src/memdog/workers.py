@@ -14,6 +14,7 @@ repairable without knowing which rows came from where.
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone
 
@@ -346,6 +347,35 @@ class EnrichWorker:
         self._restricted[key] = (narrowed, version)
         return narrowed, version, None
 
+    async def _skip_graph(self, row) -> bool:
+        """Was this text produced by the large-media path, and if so, is the
+        graph switched on for it?
+
+        The marker is written by the parse worker into `parse_detail` --
+        `{"structure": {"via": "files_api"}}` -- which is where the account of
+        how an item was interpreted already lives, so no column was added for
+        it. Anything that did not come through that path is unaffected, which
+        is the whole scope of this rule.
+        """
+        detail = row["parse_detail"]
+        if isinstance(detail, str):
+            # jsonb comes back as text on some paths; parsing beats guessing.
+            try:
+                detail = json.loads(detail)
+            except (TypeError, ValueError):
+                return False
+        if not isinstance(detail, dict):
+            return False
+        structure = detail.get("structure")
+        if not isinstance(structure, dict) or structure.get("via") != "files_api":
+            return False
+
+        from .settings_store import resolve
+
+        wanted = await resolve(self._pool, "large_media_graph",
+                               org_id=row["org_id"])
+        return not bool(wanted.value)
+
     async def _template_generator(self, generator: str | None,
                                   template: str | None, model_id: str) -> str | None:
         """Fold a template's digest into the generator version, and register it.
@@ -400,7 +430,7 @@ class EnrichWorker:
             """
             SELECT org_id, project_id, owner_id, indexable_text, data_type,
                    access_level, shared_with, deleted_at, ingested_at, run_id,
-                   template
+                   template, parse_detail
             FROM data_items WHERE data_id = $1
             """,
             data_id,
@@ -521,6 +551,33 @@ class EnrichWorker:
         # rebuild exactly those records and nothing else.
         generator = await self._template_generator(generator, row["template"],
                                                    extractor.model_id)
+
+        # **A transcript this long does not go into the graph unless it was
+        # asked for.**
+        #
+        # An hour of speech-to-text yields hundreds of candidate entities, most
+        # of them mishearings, and they do not stay in their own record: every
+        # other item in the project resolves against the same entity table, so
+        # noise here is read by everything. The cost of extracting them is real
+        # and the precision is poor, so the default is off -- and it is a
+        # *default*, per-org, not a rule.
+        #
+        # The artifact and its summary are still written and the item still
+        # reaches `enriched`. Skipping enrichment outright would lose the
+        # summary too, and would leave the item resting somewhere the staircase
+        # reports as stuck.
+        #
+        # Decided **before** the artifact is written, because `fields` is read
+        # out of the envelope at insert time -- setting it after the insert
+        # changed an object nothing looked at again, and the artifact carried no
+        # account of why its graph was empty.
+        if await self._skip_graph(row):
+            envelope.fields["graph_skipped"] = (
+                "large media: entities and edges are not built from transcripts "
+                "of this size unless large_media_graph is on"
+            )
+            envelope.entities = []
+            envelope.relations = []
 
         # One source here, but the rule is written for the general case: an
         # artifact spanning mixed-ACL sources takes the intersection.
@@ -845,7 +902,8 @@ class ParseWorker:
 
     async def _interpret(self, data_id: str, payload: bytes, mime: str, capability: str):
         """Hand the bytes to a model, or record precisely why we did not."""
-        from .multimodal import MediaDisabled, MediaTooLarge, QuotaExhausted, modality_for
+        from .multimodal import (MediaBeyondModel, MediaDisabled, MediaTooLarge,
+                                 QuotaExhausted, modality_for)
 
         engine = self._multimodal
 
@@ -861,10 +919,20 @@ class ParseWorker:
         org_id = owner["org_id"] if owner else None
         project_id = owner["project_id"] if owner else None
         owner_id = owner["owner_id"] if owner else None
+        allow_large = getattr(engine, "large_media", False)
         if org_id is not None:
             from .settings_store import resolve
 
             policy = await resolve(self._pool, "media_interpretation", org_id=org_id)
+            # The org decides whether the expensive ceiling is lifted for its
+            # own data, with the deployment's own switch as the default. An org
+            # cannot acquire the path a deployment has not configured -- there
+            # is no `files` client to use -- but it can decline one that is.
+            large = await resolve(self._pool, "large_media", org_id=org_id)
+            if large.source != "default":
+                allow_large = bool(large.value)
+            else:
+                allow_large = getattr(engine, "large_media", False)
             if policy.source != "default" and not policy.value:
                 await self._record(
                     data_id, "needs_model",
@@ -930,6 +998,14 @@ class ParseWorker:
                 )
                 return None
 
+        # Feature-detected rather than added to the `MultimodalEngine` protocol,
+        # the same way `model_for` is above. Sending media through a file upload
+        # is one provider's answer to one provider's ceiling; a local Whisper
+        # implementing the same protocol has no notion of it, and making every
+        # engine accept the argument to satisfy one of them is exactly what the
+        # seam exists to avoid.
+        large_kw = {"large_media": allow_large} if hasattr(engine, "large_media") else {}
+
         try:
             # Media is the most expensive per-item call the platform makes --
             # ten hours of uploaded video is a large bill on somebody's key --
@@ -939,7 +1015,8 @@ class ParseWorker:
                 # No owning row to charge. Should not happen -- we are parsing
                 # its bytes -- so it is interpreted unmetered rather than
                 # refused, and `usage_unattributed` counts it.
-                result = await engine.interpret(payload, mime=mime, modality=modality)
+                result = await engine.interpret(payload, mime=mime, modality=modality,
+                                                **large_kw)
             else:
                 await quota.check_budget(
                     self._pool, org_id=org_id, project_id=project_id,
@@ -950,7 +1027,7 @@ class ParseWorker:
                     data_id=data_id, run_id=owner["run_id"] if owner else None,
                 ):
                     result = await engine.interpret(
-                        payload, mime=mime, modality=modality
+                        payload, mime=mime, modality=modality, **large_kw,
                     )
         except QuotaExhausted as exc:
             # Leave the row untouched -- no parse_status -- so the reconciler
@@ -958,6 +1035,12 @@ class ParseWorker:
             # it examined, and it has not been. The item is not lost; it is
             # waiting for quota.
             log.warning("deferring %s: provider quota exhausted (%s)", data_id, exc)
+            return None
+        except MediaBeyondModel as exc:
+            # Terminal in a way turning a setting on will not fix, so the reason
+            # says so rather than pointing at a switch that would not help.
+            await self._record(data_id, "needs_model",
+                               {"capability": capability, "reason": str(exc)})
             return None
         except MediaTooLarge as exc:
             await self._record(data_id, "needs_model",
@@ -995,8 +1078,10 @@ class ParseWorker:
                          result.model_id, data_id, base)
                 try:
                     result = await engine.interpret(
-                        payload, mime=mime, modality=modality, model=base)
-                except (MediaTooLarge, MediaDisabled, QuotaExhausted) as exc:
+                        payload, mime=mime, modality=modality, model=base,
+                        **large_kw)
+                except (MediaBeyondModel, MediaTooLarge, MediaDisabled,
+                        QuotaExhausted) as exc:
                     log.warning("retry on %s failed for %s: %s", base, data_id, exc)
 
         if not result.text.strip():
