@@ -307,6 +307,14 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   its reason — never left pending, which would read as still running.
 
 ### Changed
+- **The landing page is one diagram and the demo, not nine sections of prose.**
+  The receipt, the pipeline figure, the nine explanatory sections and the
+  six-product comparison matrix are gone — all of it is in the docs, which are
+  now one click away in the header, so the argument was being made twice and
+  finished once. What replaces it is a single picture of the whole system: pull
+  and inbound sources into one write path, which builds a retrieval index, a
+  knowledge graph and a reverse index, which serve alerts, pattern search and
+  state machines. The page went from roughly 14,000 pixels of scroll to 1,339.
 - **Connecting an app no longer asks you to supply what the catalog already
   knows.** Every connector entry carries the auth style it wants and, for 23 of
   its 45 scopes, help explaining the one field only the operator can fill —

@@ -70,10 +70,17 @@ class Item:
     # Off for a corpus whose whole point is that it never reaches a model.
     enrich: bool = True
 
-    def payload(self, *, default_identifier: str) -> dict:
+    def payload(self, *, default_identifier: str, synthetic: bool = True) -> dict:
+        # **The marker is a claim, so it is only made where it is true.** Three
+        # of these corpora are inventions and say so in every record. One is a
+        # real researcher's published work, and stamping "generated, not real"
+        # across somebody's actual abstracts would be a false statement about
+        # their research -- the mirror of the failure the marker exists to
+        # prevent.
+        body = f"{MARKER}\n\n{self.text.strip()}" if synthetic else self.text.strip()
         return {
             "external_id": self.external_id,
-            "content": {"kind": "inline", "text": f"{MARKER}\n\n{self.text.strip()}"},
+            "content": {"kind": "inline", "text": body},
             "data_type": self.data_type,
             "source_type": self.source_type,
             "event_time": (REFERENCE - timedelta(days=self.days_ago)).isoformat(),
@@ -101,6 +108,19 @@ class Corpus:
     # here, it is the demonstration.
     enrich: bool = True
     scopes: dict = field(default_factory=dict)
+    # Whether the content is invented. Decides the marker, and nothing else.
+    synthetic: bool = True
+    # A corpus whose content is real and lives somewhere else fetches it at seed
+    # time instead of carrying a copy. The three synthetic corpora are written
+    # here because they are inventions; a hundred real papers are somebody's
+    # published record, and a stale copy of that in this repository would be a
+    # second source of truth nobody updates.
+    fetch: object | None = None
+
+    async def load(self) -> tuple["Item", ...]:
+        if self.fetch is None:
+            return self.items
+        return tuple(await self.fetch())
 
     def registry_entry(self, project_id: str, memory_id: str) -> dict:
         """The `PUBLIC_DEMOS` entry this corpus becomes once it is seeded."""
@@ -117,6 +137,9 @@ class Corpus:
 
 from .legal import CORPUS as LEGAL            # noqa: E402
 from .meetings import CORPUS as MEETINGS      # noqa: E402
+from .papers import CORPUS as PAPERS          # noqa: E402
 from .sensors import CORPUS as SENSORS        # noqa: E402
 
-CORPORA: dict[str, Corpus] = {c.key: c for c in (LEGAL, MEETINGS, SENSORS)}
+CORPORA: dict[str, Corpus] = {
+    c.key: c for c in (LEGAL, MEETINGS, SENSORS, PAPERS)
+}

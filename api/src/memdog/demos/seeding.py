@@ -100,15 +100,22 @@ async def seed_corpus(
     # seed: raw readings that never reach a model, and the handful of derived
     # digests that do. One flag for the whole corpus would have forced the
     # choice that made the readings unanswerable.
+    # A corpus that fetches its content does so now, so a source that is
+    # unreachable fails the seed rather than producing an empty demo.
+    loaded = await corpus.load()
+    if not loaded:
+        raise DemoSeedError(f"{corpus.key}: the corpus loaded no records at all")
+
     written = 0
     for wants_enrichment in (False, True):
-        items = [i for i in corpus.items if i.enrich is wants_enrichment]
+        items = [i for i in loaded if i.enrich is wants_enrichment]
         for start in range(0, len(items), 25):
             chunk = items[start:start + 25]
             body = await _post(client, "/api/v1/write", admin_key, {
                 "producer_id": producer["producer_id"],
                 "items": [
-                    {**item.payload(default_identifier=corpus.default_identifier),
+                    {**item.payload(default_identifier=corpus.default_identifier,
+                                    synthetic=corpus.synthetic),
                      "memory": {"key": corpus.memory_key, "type": corpus.memory_type}}
                     for item in chunk
                 ],
