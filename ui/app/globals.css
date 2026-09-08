@@ -1737,3 +1737,47 @@ button.tab-cta { font-family: inherit; line-height: 1.35; cursor: pointer; }
 .doc-next a { color: var(--accent); text-decoration: none; }
 .doc-next a:hover { text-decoration: underline; }
 .doc-source { margin-top: 14px; font-size: 12.5px; color: var(--muted); }
+
+/* ------------------------------------------------------------- flow diagram
+   The one picture on the landing page. Inline SVG so it takes these tokens in
+   both themes and so the labels are real text; `fill`/`stroke` are set through
+   the same variables the rest of the page uses rather than literals, which is
+   what stops it rendering one theme's ink on the other theme's ground. */
+.flow { padding: 8px 0 52px; }
+.flow-scroll { overflow-x: auto; }
+/* A minimum width so the boxes never crush on a phone -- it scrolls in its own
+   container instead, and the page body does not. */
+.flow-svg { display: block; width: 100%; min-width: 760px; height: auto; }
+
+.flow-box rect {
+  fill: var(--panel);
+  stroke: var(--line);
+  stroke-width: 1;
+}
+/* The single write path is the claim the diagram is making, so it is the one
+   thing drawn with the accent. Everything else stays quiet. */
+.flow-spine rect { stroke: var(--accent); stroke-width: 1.5; }
+.flow-app rect { fill: var(--accent-soft); stroke: var(--accent); }
+
+.flow-h {
+  fill: var(--ink);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.flow-s {
+  fill: var(--muted);
+  font-size: 12.5px;
+  font-family: var(--mono);
+}
+
+.flow-line path {
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1.2;
+  marker-end: url(#flow-arrow);
+  opacity: 0.85;
+}
+/* The bus carries three indexes into three apps; it is a join, not a flow, so
+   it has no arrowhead. */
+.flow-line path.flow-bus { marker-end: none; stroke-dasharray: 3 3; }
