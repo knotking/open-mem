@@ -25,6 +25,7 @@ so a console never hardcodes a second copy of it.
 | `case.member_promoted` | An inferred membership is confirmed | `case_type` |
 | `acl.changed` | A record's visibility changes | `from_level`, `to_level`, `data_type` |
 | `checkpoint.changed` | A record on a checkpoint timeline moved | `memory_type`, `changes`, `added`, `removed`, `changed`, `highest_significance`, `statements` |
+| `checkpoint.checked` | A checkpoint's check reached a terminal state — including finding nothing | `memory_type`, `status`, `outcome`, `reason`, and everything `checkpoint.changed` carries |
 
 ```jsonc
 POST /api/v1/alerts
@@ -63,6 +64,15 @@ five, so *"tell me when the price line changes"* is
 `{"statements": {"op": "contains", "value": ["price"]}}`. The whole delta is
 always in `change_artifact_id` — the digest is what a selector filters on, never
 the record of what happened.
+
+`checkpoint.checked` is the one surface here that is *meant* to be noisy. Every
+other surface exists to fire on something happening; this one fires on every
+check that finished, including the ones that compared and found nothing. That
+is what a consumer maintaining a watermark needs — the checkpoint row has always
+distinguished "compared and found nothing" from "never compared", and until this
+surface existed the event stream collapsed the two back into one silence. Watch
+`{"outcome": ["incomparable"]}` to be told when a timeline is still accepting
+records and has quietly stopped answering the question it exists for.
 
 ## Evaluation is per window, never per write
 

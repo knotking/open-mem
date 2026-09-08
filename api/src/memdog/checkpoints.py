@@ -218,22 +218,82 @@ async def _states(conn, checkpoint_id: str) -> dict | None:
     )
 
 
-async def _finish(pool, checkpoint_id: str, *, status: str,
+async def _finish(pool, checkpoint_id: str, *, row, status: str,
                   outcome: str | None = None, reason: str | None = None,
                   state_artifact_id: str | None = None,
-                  change_artifact_id: str | None = None) -> None:
-    await pool.execute(
-        """
-        UPDATE memory_checkpoints
-        SET status = $2, outcome = coalesce($3, outcome), reason = $4,
-            state_artifact_id = coalesce($5, state_artifact_id),
-            change_artifact_id = coalesce($6, change_artifact_id),
-            updated_at = now()
-        WHERE checkpoint_id = $1
-        """,
-        checkpoint_id, status, outcome, reason,
-        state_artifact_id, change_artifact_id,
-    )
+                  change_artifact_id: str | None = None,
+                  changes: list | None = None) -> None:
+    """Settle the row and announce it, in one transaction.
+
+    **The announcement is here rather than at each of the nine exits, because
+    here is the only place all nine agree on.** A surface whose entire purpose
+    is that "checked and found nothing" is distinguishable from "never checked"
+    cannot be emitted from some exits and forgotten at others -- the forgotten
+    ones would be precisely the quiet failures, since those are the paths nobody
+    watches and the reason the surface is being added at all.
+
+    One transaction with the status it describes. Two would allow a process to
+    die in between and leave a checkpoint that is complete in the table and
+    never happened in the stream, which is the lost-work shape `domain_events`
+    exists to refuse.
+
+    What `RETURNING` gives is what the event reports, never the arguments passed
+    in: `outcome` coalesces, so a failed check on a first checkpoint keeps
+    `first`, and an event announcing the argument would be announcing something
+    that was not stored.
+    """
+    from .alerts import emit_transition
+
+    async with pool.acquire() as conn, conn.transaction():
+        settled = await conn.fetchrow(
+            """
+            UPDATE memory_checkpoints
+            SET status = $2, outcome = coalesce($3, outcome), reason = $4,
+                state_artifact_id = coalesce($5, state_artifact_id),
+                change_artifact_id = coalesce($6, change_artifact_id),
+                updated_at = now()
+            WHERE checkpoint_id = $1
+            RETURNING status, outcome, reason, change_artifact_id
+            """,
+            checkpoint_id, status, outcome, reason,
+            state_artifact_id, change_artifact_id,
+        )
+        # Erased underneath the check -- a record deleted while its comparison
+        # was in flight takes its checkpoint with it. Nothing to settle and
+        # nothing to announce; announcing it would put a memory_id in the stream
+        # that no longer resolves.
+        if settled is None:
+            return
+
+        payload = {
+            "memory_id": row["memory_id"], "memory_type": row["memory_type"],
+            "checkpoint_id": checkpoint_id, "seq": row["seq"],
+            "change_artifact_id": settled["change_artifact_id"],
+            **digest(changes),
+        }
+
+        # Every exit, including the ones that did no work. This is the event a
+        # downstream sync advances a watermark on, and for that "we looked and
+        # nothing moved" has to be a message rather than a silence -- the row
+        # has always drawn that distinction and the stream did not.
+        await emit_transition(
+            conn, "checkpoint.checked", org_id=row["org_id"],
+            project_id=row["project_id"], data_id=row["data_id"],
+            payload={**payload, "status": settled["status"],
+                     "outcome": settled["outcome"], "reason": settled["reason"]},
+        )
+
+        # And, separately, real movement. Kept as its own surface rather than
+        # folded into the one above: a subscriber who wants to be told when the
+        # feed moves should not have to write a selector to avoid being told
+        # when it did not, and every alert already written against this surface
+        # keeps meaning what it meant.
+        if settled["outcome"] == "changed":
+            await emit_transition(
+                conn, "checkpoint.changed", org_id=row["org_id"],
+                project_id=row["project_id"], data_id=row["data_id"],
+                payload=payload,
+            )
 
 
 async def run_check(pool: asyncpg.Pool, principal: Principal, extractor,
@@ -273,7 +333,7 @@ async def run_check(pool: asyncpg.Pool, principal: Principal, extractor,
             and row["checksum"]
             and row["checksum"] == row["previous_checksum"]
             and row["previous_state_id"] is not None):
-        await _finish(pool, checkpoint_id, status="complete", outcome="unchanged",
+        await _finish(pool, checkpoint_id, row=row, status="complete", outcome="unchanged",
                       state_artifact_id=row["previous_state_id"],
                       reason="identical to the previous checkpoint, byte for byte")
         return {"checkpoint_id": checkpoint_id, "status": "complete",
@@ -295,7 +355,7 @@ async def run_check(pool: asyncpg.Pool, principal: Principal, extractor,
     if not readable:
         reason = ("the record has no readable text yet -- its bytes were never "
                   "parsed, so there is nothing to describe or compare")
-        await _finish(pool, checkpoint_id, status="failed", reason=reason)
+        await _finish(pool, checkpoint_id, row=row, status="failed", reason=reason)
         return {"checkpoint_id": checkpoint_id, "status": "failed",
                 "outcome": None, "reason": reason}
 
@@ -305,7 +365,7 @@ async def run_check(pool: asyncpg.Pool, principal: Principal, extractor,
             pool, principal, row["memory_id"], generator=STATE_GENERATOR,
             extractor=extractor, only=[row["data_id"]])
     except Exception as exc:  # noqa: BLE001 - recorded, not swallowed
-        await _finish(pool, checkpoint_id, status="failed", reason=str(exc)[:500])
+        await _finish(pool, checkpoint_id, row=row, status="failed", reason=str(exc)[:500])
         raise
 
     state_id = made.get("artifact_id")
@@ -314,11 +374,11 @@ async def run_check(pool: asyncpg.Pool, principal: Principal, extractor,
         # scope -- an unparsed PDF, a record the caller cannot see. Not a
         # failure of the check; a failure to have anything to check.
         reason = made.get("note") or "the record had no readable text to describe"
-        await _finish(pool, checkpoint_id, status="failed", reason=reason)
+        await _finish(pool, checkpoint_id, row=row, status="failed", reason=reason)
         return {"checkpoint_id": checkpoint_id, "status": "failed", "reason": reason}
 
     if row["previous_id"] is None:
-        await _finish(pool, checkpoint_id, status="complete", outcome="first",
+        await _finish(pool, checkpoint_id, row=row, status="complete", outcome="first",
                       state_artifact_id=state_id)
         return {"checkpoint_id": checkpoint_id, "status": "complete",
                 "outcome": "first", "state_artifact_id": state_id}
@@ -340,7 +400,7 @@ async def run_check(pool: asyncpg.Pool, principal: Principal, extractor,
     if previous is None:
         reason = ("the previous checkpoint has no state to compare against -- "
                   "it has not been checked yet, or its description was erased")
-        await _finish(pool, checkpoint_id, status="complete", outcome="incomparable",
+        await _finish(pool, checkpoint_id, row=row, status="complete", outcome="incomparable",
                       state_artifact_id=state_id, reason=reason)
         return {"checkpoint_id": checkpoint_id, "status": "complete",
                 "outcome": "incomparable", "reason": reason}
@@ -353,7 +413,7 @@ async def run_check(pool: asyncpg.Pool, principal: Principal, extractor,
         reason = ("the previous checkpoint was described by a different version "
                   "of this generator, so a comparison would report the change of "
                   "prompt as a change of content")
-        await _finish(pool, checkpoint_id, status="complete", outcome="incomparable",
+        await _finish(pool, checkpoint_id, row=row, status="complete", outcome="incomparable",
                       state_artifact_id=state_id, reason=reason)
         return {"checkpoint_id": checkpoint_id, "status": "complete",
                 "outcome": "incomparable", "reason": reason}
@@ -367,7 +427,7 @@ async def run_check(pool: asyncpg.Pool, principal: Principal, extractor,
         envelope = await extractor.extract(
             text[:200_000], data_type=spec["data_type"], prompt=spec["prompt"])
     except Exception as exc:  # noqa: BLE001
-        await _finish(pool, checkpoint_id, status="failed",
+        await _finish(pool, checkpoint_id, row=row, status="failed",
                       state_artifact_id=state_id, reason=str(exc)[:500])
         raise
 
@@ -402,26 +462,9 @@ async def run_check(pool: asyncpg.Pool, principal: Principal, extractor,
     # stored as one. "Compared and found nothing" and "never compared" are
     # different claims -- the whole question this feature exists to answer.
     outcome = "changed" if changes else "unchanged"
-    await _finish(pool, checkpoint_id, status="complete", outcome=outcome,
-                  state_artifact_id=state_id, change_artifact_id=change_id)
-
-    if outcome == "changed":
-        from .alerts import emit_transition
-
-        async with pool.acquire() as conn, conn.transaction():
-            await emit_transition(
-                conn, "checkpoint.changed", org_id=row["org_id"],
-                project_id=row["project_id"], data_id=row["data_id"],
-                payload={"memory_id": row["memory_id"],
-                         "memory_type": row["memory_type"],
-                         "checkpoint_id": checkpoint_id, "seq": row["seq"],
-                         # The whole delta, for a subscriber that wants more
-                         # than the digest. A push delivery carries the event
-                         # payload and nothing else, so without this the only
-                         # way to find out *what* moved is a second call.
-                         "change_artifact_id": change_id,
-                         **digest(changes)},
-            )
+    await _finish(pool, checkpoint_id, row=row, status="complete", outcome=outcome,
+                  state_artifact_id=state_id, change_artifact_id=change_id,
+                  changes=changes)
 
     return {"checkpoint_id": checkpoint_id, "status": "complete",
             "outcome": outcome, "state_artifact_id": state_id,

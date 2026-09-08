@@ -325,6 +325,18 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   its reason — never left pending, which would read as still running.
 
 ### Changed
+- **A `checkpoint.changed` event carries the delta, not just its size.**
+  Alongside the count: per-kind counts, the highest significance in the batch, a
+  five-item sample of the change statements, and the `change_artifact_id` that
+  reaches the whole comparison. A push delivery is the event payload and nothing
+  else, so a subscriber that saw only `changes: 5` had to make a second
+  authenticated call to find out what moved. The new fields are scalars and one
+  short list on purpose — a selector's `in` operator cannot reach into a nested
+  object, so a tidier shape would have been declared, emitted and still
+  unusable. `{"highest_significance": ["high"]}` and
+  `{"statements": {"op": "contains", "value": ["price"]}}` are now selectors.
+  The console describes these events as a sentence rather than printing every
+  key, which is what it did before the payload grew.
 - **The landing page is one diagram and the demo, not nine sections of prose.**
   The receipt, the pipeline figure, the nine explanatory sections and the
   six-product comparison matrix are gone — all of it is in the docs, which are
@@ -428,6 +440,20 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   answering overlapping questions about one thing is how they drift apart.
 
 ### Fixed
+- **An alert on a checkpoint timeline's memory type could never fire.** The
+  `checkpoint.changed` surface has declared `memory_type` selectable since it
+  shipped, and the transition never carried it — so "tell me when the vendor
+  feed changes" was accepted, backtested green against nothing, enabled, and
+  then matched nothing forever. There is no way for that to raise: a missing
+  field reads as `None`, every operator is decidable against `None`, and an
+  alert that never fires is indistinguishable from a feed that never moved.
+  The payload names the memory type now, and a test compares the declared
+  fields against the emitted ones so the two cannot drift apart again.
+- **The change generator's prompt constrained two fields that no longer
+  existed.** It still instructed the model about `before` and `after` after the
+  schema renamed them to `earlier_value` and `later_value` — the rename that
+  took this generator from 7,944 output tokens to 534 — so the length-and-
+  purpose guard read as present and applied to nothing.
 - **A seeded demo corpus answered every question for the seeder and nothing for
   anyone else.** ACL inheritance follows the connection, and the gallery seeder
   created its producer without one — so every record landed `private`, invisible

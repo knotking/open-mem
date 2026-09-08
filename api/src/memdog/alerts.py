@@ -70,6 +70,21 @@ SURFACES: dict[str, frozenset[str]] = {
         "changes", "added", "removed", "changed", "highest_significance",
         "statements",
     }),
+    # Every check that reached a terminal state, including the ones that found
+    # nothing and the ones that refused to compare. `outcome` is the field that
+    # makes this surface worth having: `changes: 0` alone cannot separate "we
+    # compared and it had not moved" from "we could not compare at all", and
+    # those are opposite facts to a consumer maintaining a watermark.
+    #
+    # `status` as well as `outcome`, because `outcome` coalesces and a failed
+    # check on a first checkpoint keeps `first` — so `status` is the field that
+    # reliably answers "did this run finish".
+    "checkpoint.checked": frozenset({
+        "memory_type", "memory_id", "checkpoint_id", "seq", "change_artifact_id",
+        "status", "outcome", "reason",
+        "changes", "added", "removed", "changed", "highest_significance",
+        "statements",
+    }),
 }
 
 # Which subject a surface's visibility is asked of. An event stores no ACL, so
@@ -79,7 +94,7 @@ SUBJECT_OF: dict[str, str] = {
     "fact.asserted": "fact", "fact.superseded": "fact", "fact.retracted": "fact",
     "data.revised": "item", "acl.changed": "item", "case.member_promoted": "item",
     "memory.member_added": "memory", "memory.retyped": "memory",
-    "checkpoint.changed": "memory",
+    "checkpoint.changed": "memory", "checkpoint.checked": "memory",
 }
 
 # Editing any of these changes what matches, so it invalidates the backtest.

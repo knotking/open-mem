@@ -614,3 +614,166 @@ async def test_an_alert_on_the_memory_type_reaches_a_real_change(
     result = await evaluate_gap(pool, alert["alert_id"], trigger="tick")
     assert result["candidates"] == 1
     assert result["matches"] == 1, "the selector was accepted at creation; it has to match"
+
+
+# ------------------------------------------- the check that found nothing
+#
+# `memory_checkpoints` went to real trouble to keep "compared and found nothing"
+# apart from "never compared" -- two columns, a constraint, and a comment saying
+# why. The event stream collapsed that back down by emitting only on `changed`,
+# so a consumer maintaining a watermark could not tell a quiet feed from a
+# broken one. These are the tests that the stream now says as much as the row.
+
+
+async def test_a_check_that_found_nothing_still_says_it_ran(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    principal = await principal_for(tenant.api_key)
+    name = await _timeline_type(pool, tenant)
+    await _write(pool, queue, blobs, settings, principal, tenant,
+                 type_name=name, external_id="week-1.md", text="Status: green")
+    await _write(pool, queue, blobs, settings, principal, tenant,
+                 type_name=name, external_id="week-2.md", text="Status:  green")
+    rows = await _checkpoints(pool, tenant)
+
+    fake = Fake(state=["status is green"], changes=[])
+    await run_check(pool, principal, fake, rows[0]["checkpoint_id"])
+    await run_check(pool, principal, fake, rows[1]["checkpoint_id"])
+
+    checked = await _transition(pool, tenant, "checkpoint.checked")
+    assert checked["outcome"] == "unchanged"
+    assert checked["status"] == "complete"
+    assert checked["changes"] == 0
+    # And nothing claimed to have moved.
+    assert await _transition(pool, tenant, "checkpoint.changed") is None
+
+
+async def test_a_check_that_could_not_compare_says_why(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """`incomparable` is the outcome an operator most needs to hear about: the
+    timeline is still accepting records and has quietly stopped answering the
+    question it exists for. It was visible only by eye in the console."""
+    principal = await principal_for(tenant.api_key)
+    name = await _timeline_type(pool, tenant)
+    await _write(pool, queue, blobs, settings, principal, tenant,
+                 type_name=name, external_id="week-1.md", text="Status: green")
+    await _write(pool, queue, blobs, settings, principal, tenant,
+                 type_name=name, external_id="week-2.md", text="Status: red")
+    rows = await _checkpoints(pool, tenant)
+
+    # Two different models is two different generator versions, which is the
+    # drift the guard refuses to diff through.
+    first = Fake(state=["status is green"])
+    first.model_id = "fake-extractor-1"
+    second = Fake(state=["status is red"])
+    second.model_id = "fake-extractor-2"
+    await run_check(pool, principal, first, rows[0]["checkpoint_id"])
+    await run_check(pool, principal, second, rows[1]["checkpoint_id"])
+
+    checked = await _transition(pool, tenant, "checkpoint.checked")
+    assert checked["outcome"] == "incomparable"
+    assert checked["reason"], "an incomparable check with no reason is unactionable"
+    assert await _transition(pool, tenant, "checkpoint.changed") is None
+
+
+async def test_a_failed_check_is_announced_rather_than_swallowed(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """A record whose bytes were never parsed cannot be described. The row said
+    `failed`; the stream said nothing at all, which is the same shape as a
+    timeline nobody had got to yet."""
+    principal = await principal_for(tenant.api_key)
+    name = await _timeline_type(pool, tenant)
+    await _write(pool, queue, blobs, settings, principal, tenant,
+                 type_name=name, external_id="week-1.md", text="Status: green")
+    row = (await _checkpoints(pool, tenant))[0]
+    # `indexable_text` is generated from the two text columns, so nulling them
+    # is what leaves it with nothing to read -- see the test above.
+    await pool.execute(
+        "UPDATE data_items SET content_text = NULL, extracted_text = NULL, "
+        "storage_ref = 'raw/never-parsed' WHERE data_id = $1", row["data_id"])
+
+    result = await run_check(pool, principal, Refuses(), row["checkpoint_id"])
+    assert result["status"] == "failed"
+
+    checked = await _transition(pool, tenant, "checkpoint.checked")
+    assert checked["status"] == "failed"
+    assert checked["reason"]
+
+
+async def test_a_change_is_announced_twice_on_purpose(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """Both surfaces fire, and they answer different questions: one is "this ran"
+    and the other is "this moved". A subscriber wanting only real movement must
+    not have to write a selector to avoid being told about quiet weeks."""
+    principal = await principal_for(tenant.api_key)
+    await _moved(pool, queue, blobs, settings, principal, tenant, changes=[
+        {"kind": "changed", "statement": "status moved from green to red",
+         "earlier_value": "green", "later_value": "red", "significance": "high"}])
+
+    changed = await _transition(pool, tenant, "checkpoint.changed")
+    checked = await _transition(pool, tenant, "checkpoint.checked")
+    assert changed is not None and checked is not None
+    assert checked["outcome"] == "changed"
+    # The same delta on both, so a consumer does not have to join them.
+    assert changed["change_artifact_id"] == checked["change_artifact_id"]
+    assert changed["statements"] == checked["statements"]
+
+    # In one transaction with the status they describe. A checkpoint that is
+    # complete in the table and absent from the stream is the lost-work shape
+    # `domain_events` exists to refuse.
+    settled = await pool.fetchrow(
+        "SELECT status, outcome FROM memory_checkpoints WHERE checkpoint_id = $1",
+        changed["checkpoint_id"])
+    assert (settled["status"], settled["outcome"]) == ("complete", "changed")
+
+
+async def test_the_checked_surface_declares_only_fields_it_emits(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    from memdog.alerts import SURFACES
+
+    principal = await principal_for(tenant.api_key)
+    await _moved(pool, queue, blobs, settings, principal, tenant, changes=[])
+
+    payload = await _transition(pool, tenant, "checkpoint.checked")
+    missing = sorted(SURFACES["checkpoint.checked"] - set(payload))
+    assert not missing, (
+        f"checkpoint.checked declares {missing} as selectable and emits none of "
+        "them; an alert on any of these would match nothing, quietly, forever")
+
+
+async def test_an_alert_can_watch_for_a_timeline_that_stopped_comparing(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """The alert this surface exists for. A feed still accepting records while
+    every comparison refuses is the failure that looks most like health."""
+    from memdog.alerts import backtest, create_alert, evaluate_gap, set_enabled
+
+    principal = await principal_for(tenant.api_key)
+    alert = await create_alert(
+        pool, principal, project_id=tenant.project_id, name="feed stopped comparing",
+        surface="checkpoint.checked",
+        where={"outcome": ["incomparable"], "memory_type": ["vendor_feed"]})
+    await backtest(pool, principal, alert["alert_id"])
+    await set_enabled(pool, principal, alert["alert_id"], True)
+
+    name = await _timeline_type(pool, tenant)
+    for n, text in ((1, "Status: green"), (2, "Status: red")):
+        await _write(pool, queue, blobs, settings, principal, tenant,
+                     type_name=name, external_id=f"week-{n}.md", text=text)
+    rows = await _checkpoints(pool, tenant)
+    first, second = Fake(state=["green"]), Fake(state=["red"])
+    second.model_id = "fake-extractor-2"
+    await run_check(pool, principal, first, rows[0]["checkpoint_id"])
+    await run_check(pool, principal, second, rows[1]["checkpoint_id"])
+
+    result = await evaluate_gap(pool, alert["alert_id"], trigger="tick")
+    # More candidates than checkpoints, and that is correct: the queue fixture
+    # registers an `EventWorker`, so every capture is also checked off the queue
+    # exactly as the deployed service does. Each of those runs is a real check
+    # and earns its own event. What matters is which of them matched.
+    assert result["candidates"] >= 2, "the checks were considered"
+    assert result["matches"] == 1, "and only the one that could not compare matched"

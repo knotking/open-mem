@@ -42,9 +42,16 @@ TOPIC_FOR_EVENT: dict[str, str] = {
 # Transitions alerts watch. All onto one topic, because the message says only
 # *something happened* -- the consumer coalesces and then reads the log itself,
 # so which transition woke it is not information it needs.
+#
+# `checkpoint.checked` is here despite mostly announcing that nothing happened.
+# That is the point of it: a downstream sync advancing a watermark needs "we
+# looked and it had not moved" to be a message rather than a silence, and the
+# checkpoint row has always drawn that distinction while the stream did not. It
+# is the one surface where a quiet feed is expected to be noisy.
 for _surface in ("fact.asserted", "fact.superseded", "fact.retracted",
                  "data.revised", "memory.member_added", "memory.retyped",
-                 "case.member_promoted", "acl.changed", "checkpoint.changed"):
+                 "case.member_promoted", "acl.changed", "checkpoint.changed",
+                 "checkpoint.checked"):
     TOPIC_FOR_EVENT[_surface] = "alerts"
 
 # A checkpoint was captured and has not been checked. Its own topic rather than

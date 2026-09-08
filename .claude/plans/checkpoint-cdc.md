@@ -242,8 +242,8 @@ cheap to add on top of the above and neither is built here.
 
 | | Work | Touches |
 |---|---|---|
-| **1** | §2 defect + §3 digest. Payload widened, `SURFACES` widened, regression test that an alert on `memory_type` matches | `checkpoints.py`, `alerts.py`, `tests/test_checkpoints.py`, `tests/test_alerts.py` |
-| **2** | §4 `checkpoint.checked` on every terminal exit | `checkpoints.py`, `events.py`, `alerts.py`, tests |
+| **1** | ✅ **shipped** (`5b8d310`) — §2 defect + §3 digest, plus a stale prompt naming two renamed fields | `checkpoints.py`, `alerts.py`, `derive.py`, `extraction.py`, `ui/lib/types.ts`, `docs/alerts.md`, tests |
+| **2** | ✅ **done** — §4 `checkpoint.checked`, emitted from `_finish` because that is the one place all nine exits agree on. `checkpoint.changed` moved there too, so it shares a transaction with the status it describes | `checkpoints.py`, `events.py`, `alerts.py`, `ui/lib/types.ts`, `docs/alerts.md`, tests |
 | **3** | §5 composed range: `from`/`to` resolution, gaps, cap, endpoint | new `checkpoints.range()`, `app.py`, tests |
 | **4** | §5 net range: migration 0057, cached artifact, drift guard, `?net=true` | migration, `checkpoints.py`, `app.py`, tests |
 | **5** | Console: a "since" control on the memory timeline; docs in `docs/memories.md` and `docs/alerts.md`; changelog | `ui/components/Console.tsx`, `ui/lib/types.ts`, docs |
@@ -269,6 +269,17 @@ commit.
   notices until the events table is the largest thing in the database.
 - **`checkpoint.checked` doubling alert volume.** Acceptable given coalescing;
   revisit if a project with a large quiet timeline sees the tick dominate.
+- **A rate limit already marks a checkpoint `failed`, and phase 2 makes that
+  visible.** `run_check` writes `status = 'failed'` before re-raising, and
+  `workers.handle_checkpoint` then classifies a capacity error as *deferred* and
+  lets the queue retry it. So the row has always said `failed` about work that
+  was merely postponed — latent while only the console showed it, and now an
+  event that reads "the check did not finish" for something that will succeed on
+  the next attempt. **Not introduced here and not fixed here**: the honest
+  repair is that a deferred check should not settle as failed at all, which
+  means a `deferred` status, a migration to widen the CHECK constraint, and a
+  `pending()` sweep that understands it. Worth doing before anyone points an
+  alert at `{"status": ["failed"]}` and learns to ignore it.
 - **The change prompt still names fields that were renamed.** `derive.py:167`
   instructs the model about `` `before` `` and `` `after` ``; the schema now
   has `earlier_value` and `later_value` (`extraction.py:576-591`), and the

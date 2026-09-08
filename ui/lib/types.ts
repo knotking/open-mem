@@ -402,6 +402,27 @@ export function describeEvent(surface: string, p: Record<string, unknown>): stri
       return `${s("memory_type")} #${s("seq")} — ${what}${
         p.highest_significance ? ` (${s("highest_significance")})` : ""}`;
     }
+    // A check reached a terminal state. Most of these say nothing moved, which
+    // is the point of the surface — so the sentence has to make "we looked and
+    // it had not moved" read differently from "we could not look", because
+    // those are the two facts the whole timeline exists to keep apart.
+    case "checkpoint.checked": {
+      const head = `${s("memory_type")} #${s("seq")}`;
+      const why = p.reason ? ` — ${s("reason")}` : "";
+      if (p.status === "failed") return `${head} — the check did not finish${why}`;
+      switch (p.outcome) {
+        case "first":
+          return `${head} — first on the timeline, nothing to compare against`;
+        case "unchanged":
+          return `${head} — checked, nothing moved`;
+        case "incomparable":
+          return `${head} — could not be compared${why}`;
+        case "changed":
+          return describeEvent("checkpoint.changed", p);
+        default:
+          return `${head} — checked`;
+      }
+    }
     default:
       return Object.entries(p).map(([k, v]) => `${k}=${v}`).join(" · ");
   }
