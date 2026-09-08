@@ -541,10 +541,11 @@ STATE_PROPERTIES = {"type": "array", "items": {"type": "string"}}
 # vocabulary here is closed -- an open one degrades into unqueryable free text
 # and "what kind of changes has this feed had" stops being answerable.
 #
-# `before` and `after` are optional and carry the two values when there are two:
-# a change that cannot show what it moved from is an assertion, and the whole
+# `earlier_value` and `later_value` are required and carry the two values: a
+# change that cannot show what it moved from is an assertion, and the whole
 # point of the timeline is that its claims can be checked against the records
-# still sitting in it.
+# still sitting in it. Absence is the empty string rather than a missing key,
+# for the dialect reason the rename note below gives.
 # Every field carries a `description`, and that is not documentation -- it is
 # the control that stopped this generator destroying itself.
 #

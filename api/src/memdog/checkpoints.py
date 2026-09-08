@@ -59,6 +59,57 @@ CHANGE_GENERATOR = "checkpoint_change"
 # becomes a single unbounded run.
 SWEEP_LIMIT = 25
 
+# How much of a delta the event carries. The whole of it is in the artifact and
+# `change_artifact_id` reaches it; what goes in the payload is only what a
+# selector has to be able to filter on without a second authenticated call.
+#
+# Bounded here as well as in the generator -- which is asked for at most twenty
+# changes -- because these are different bounds protecting different things. A
+# payload that grows with the document is a write-path regression nobody
+# notices until `domain_events` is the largest table in the database.
+DIGEST_STATEMENTS = 5
+STATEMENT_CHARS = 200
+
+# Ascending, so `max` over it is the answer. Anything a generator returns that
+# is not in this list ranks below `low` rather than raising: a change detector
+# must not lose a real finding because the model spelled its severity oddly.
+SIGNIFICANCE_ORDER = ("low", "medium", "high")
+
+
+def digest(changes: list | None) -> dict:
+    """What a subscriber can filter on without fetching the artifact.
+
+    Every field here is a **scalar or a short bounded list**, and that is chosen
+    against `alerts.OPERATORS` rather than for tidiness. `in` is `v in arg`,
+    which is false for every list-valued `v`, so a list-valued payload field is
+    only reachable through `contains` and its stringify-and-substring
+    semantics. Scalars are what make a selector precise -- `{"added": {"op":
+    "gt", "value": 0}}` and `{"highest_significance": ["high"]}` both work, and
+    neither would if these were nested inside one `changes` object.
+
+    An empty list gives counts of zero and `highest_significance` of None, which
+    is the honest shape for "compared and found nothing" -- the same claim the
+    outcome column makes, and not the same as a key that never arrived.
+    """
+    rows = [c for c in (changes or []) if isinstance(c, dict)]
+    kinds = [str(c.get("kind") or "") for c in rows]
+    ranked = [SIGNIFICANCE_ORDER.index(s) for s in
+              (str(c.get("significance") or "") for c in rows)
+              if s in SIGNIFICANCE_ORDER]
+    return {
+        "changes": len(rows),
+        "added": kinds.count("added"),
+        "removed": kinds.count("removed"),
+        "changed": kinds.count("changed"),
+        "highest_significance":
+            SIGNIFICANCE_ORDER[max(ranked)] if ranked else None,
+        # Truncated per statement rather than dropped, so a long one still
+        # matches a `contains` on a word near its start. The generator is told
+        # to keep these to one sentence; this is the guard for when it does not.
+        "statements": [str(c.get("statement") or "")[:STATEMENT_CHARS]
+                       for c in rows[:DIGEST_STATEMENTS]],
+    }
+
 
 class CheckpointError(Exception):
     def __init__(self, message: str, status: int = 400) -> None:
@@ -152,9 +203,15 @@ async def _states(conn, checkpoint_id: str) -> dict | None:
         SELECT c.checkpoint_id, c.memory_id, c.data_id, c.seq, c.checksum,
                c.previous_id, c.state_artifact_id, c.org_id, c.project_id,
                p.data_id AS previous_data_id, p.checksum AS previous_checksum,
-               p.state_artifact_id AS previous_state_id
+               p.state_artifact_id AS previous_state_id,
+               -- Carried so the transition can name it. `checkpoint.captured`
+               -- has always had it; `checkpoint.changed` had not, and the
+               -- selector field `alerts.SURFACES` declares for this surface is
+               -- exactly the one nothing populated.
+               m.type AS memory_type
         FROM memory_checkpoints c
         LEFT JOIN memory_checkpoints p ON p.checkpoint_id = c.previous_id
+        JOIN memories m ON m.memory_id = c.memory_id
         WHERE c.checkpoint_id = $1
         """,
         checkpoint_id,
@@ -356,8 +413,14 @@ async def run_check(pool: asyncpg.Pool, principal: Principal, extractor,
                 conn, "checkpoint.changed", org_id=row["org_id"],
                 project_id=row["project_id"], data_id=row["data_id"],
                 payload={"memory_id": row["memory_id"],
+                         "memory_type": row["memory_type"],
                          "checkpoint_id": checkpoint_id, "seq": row["seq"],
-                         "changes": len(changes or [])},
+                         # The whole delta, for a subscriber that wants more
+                         # than the digest. A push delivery carries the event
+                         # payload and nothing else, so without this the only
+                         # way to find out *what* moved is a second call.
+                         "change_artifact_id": change_id,
+                         **digest(changes)},
             )
 
     return {"checkpoint_id": checkpoint_id, "status": "complete",

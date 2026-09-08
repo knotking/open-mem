@@ -24,6 +24,7 @@ so a console never hardcodes a second copy of it.
 | `memory.retyped` | A memory is promoted or demoted | `from_type`, `to_type` |
 | `case.member_promoted` | An inferred membership is confirmed | `case_type` |
 | `acl.changed` | A record's visibility changes | `from_level`, `to_level`, `data_type` |
+| `checkpoint.changed` | A record on a checkpoint timeline moved | `memory_type`, `changes`, `added`, `removed`, `changed`, `highest_significance`, `statements` |
 
 ```jsonc
 POST /api/v1/alerts
@@ -52,6 +53,16 @@ An alert that fires on noise is one people learn to ignore, so:
 knowing: `write` and `reprocess` mean the upstream document changed, while
 `parse` and `interpret` mean the same bytes were read better. **Only the first
 is a change in the world**, and a selector needs to tell them apart.
+
+`checkpoint.changed` carries a **digest of the delta, not just a count**, for a
+related reason: a push delivery is the event payload and nothing else, so a
+subscriber that could only see `changes: 5` had to make a second authenticated
+call to find out what moved. The counts and `highest_significance` are scalars
+so `gt`, `in` and `eq` reach them; `statements` is a bounded sample of at most
+five, so *"tell me when the price line changes"* is
+`{"statements": {"op": "contains", "value": ["price"]}}`. The whole delta is
+always in `change_artifact_id` — the digest is what a selector filters on, never
+the record of what happened.
 
 ## Evaluation is per window, never per write
 

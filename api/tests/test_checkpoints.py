@@ -17,6 +17,8 @@ if it is called at all is the only way to prove a model was not asked.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from memdog.checkpoints import CheckpointError, run_check, timeline
@@ -459,3 +461,156 @@ async def test_an_artifact_stores_its_fields_as_an_object(
     # And it survives the read as a dict the console can index into.
     entries = await timeline(pool, principal, row["memory_id"])
     assert all(not isinstance(e["change_fields"], str) for e in entries)
+
+
+# ------------------------------------------------- the transition it emits
+#
+# The read surface and the event surface are two different products of the same
+# check, and only one of them was ever tested. That is how `memory_type` came to
+# be declared, validated and never emitted: the timeline showed the change, the
+# console showed the change, and the alert that was supposed to announce it
+# matched nothing at all.
+
+
+async def _transition(pool, tenant, event_type="checkpoint.changed"):
+    """The most recent transition of this type, as a subscriber would see it."""
+    row = await pool.fetchrow(
+        "SELECT payload FROM domain_events WHERE org_id = $1 AND event_type = $2 "
+        "ORDER BY sequence DESC LIMIT 1", tenant.org_id, event_type)
+    if row is None:
+        return None
+    payload = row["payload"]
+    return json.loads(payload) if isinstance(payload, str) else dict(payload)
+
+
+async def _moved(pool, queue, blobs, settings, principal, tenant, *, changes):
+    """Two records that differ, checked, so a `checkpoint.changed` is emitted."""
+    name = await _timeline_type(pool, tenant)
+    await _write(pool, queue, blobs, settings, principal, tenant,
+                 type_name=name, external_id="week-1.md", text="Status: green")
+    await _write(pool, queue, blobs, settings, principal, tenant,
+                 type_name=name, external_id="week-2.md", text="Status: red")
+    rows = await _checkpoints(pool, tenant)
+    fake = Fake(state=["status is green"], changes=changes)
+    await run_check(pool, principal, fake, rows[0]["checkpoint_id"])
+    return await run_check(pool, principal, fake, rows[1]["checkpoint_id"])
+
+
+async def test_the_transition_names_the_memory_type_its_selector_filters_on(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """`alerts.SURFACES` has declared `memory_type` on this surface since it
+    shipped, and nothing put it in the payload. `create_alert` accepted the
+    selector, `backtest` ran green against nothing, and the alert then matched
+    nothing forever — which is indistinguishable from a feed that never moved.
+    """
+    principal = await principal_for(tenant.api_key)
+    await _moved(pool, queue, blobs, settings, principal, tenant, changes=[
+        {"kind": "changed", "statement": "status moved from green to red",
+         "earlier_value": "green", "later_value": "red", "significance": "high"}])
+
+    payload = await _transition(pool, tenant)
+    assert payload["memory_type"] == "vendor_feed"
+
+
+async def test_every_field_the_surface_declares_is_one_the_transition_emits(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """The drift guard, and the only test here that would have caught the bug.
+
+    A declared-but-unemitted field cannot fail loudly: `dig` returns None, every
+    operator is decidable against None, and the alert simply never fires. So the
+    two lists are compared directly rather than trusted to stay in step.
+    """
+    from memdog.alerts import SURFACES
+
+    principal = await principal_for(tenant.api_key)
+    await _moved(pool, queue, blobs, settings, principal, tenant, changes=[
+        {"kind": "added", "statement": "a new line item appeared",
+         "earlier_value": "", "later_value": "freight", "significance": "low"}])
+
+    payload = await _transition(pool, tenant)
+    missing = sorted(SURFACES["checkpoint.changed"] - set(payload))
+    assert not missing, (
+        f"checkpoint.changed declares {missing} as selectable and emits none of "
+        "them; an alert on any of these would match nothing, quietly, forever")
+
+
+async def test_the_transition_carries_a_digest_a_selector_can_filter_on(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """Counts and significance as scalars, because `in` is `v in arg` and is
+    therefore false for every list-valued field. A digest that nested these
+    inside one object would be declared, emitted, and still unreachable."""
+    principal = await principal_for(tenant.api_key)
+    result = await _moved(pool, queue, blobs, settings, principal, tenant, changes=[
+        {"kind": "changed", "statement": "status moved from green to red",
+         "earlier_value": "green", "later_value": "red", "significance": "high"},
+        {"kind": "added", "statement": "freight was added",
+         "earlier_value": "", "later_value": "freight", "significance": "low"},
+    ])
+
+    payload = await _transition(pool, tenant)
+    assert payload["changes"] == 2
+    assert (payload["added"], payload["removed"], payload["changed"]) == (1, 0, 1)
+    # The highest, not the first and not the last: an alert asking for
+    # high-significance movement must see a batch that contains one.
+    assert payload["highest_significance"] == "high"
+    # And the whole delta is reachable without a second call to find out which
+    # artifact to ask for.
+    assert payload["change_artifact_id"] == result["change_artifact_id"]
+
+    from memdog.alerts import matches_selector
+
+    assert matches_selector({"memory_type": ["vendor_feed"]}, payload)
+    assert matches_selector({"highest_significance": ["high"]}, payload)
+    assert matches_selector({"added": {"op": "gt", "value": 0}}, payload)
+    assert matches_selector({"statements": {"op": "contains", "value": ["freight"]}},
+                            payload)
+    assert not matches_selector({"memory_type": ["status_report"]}, payload)
+
+
+async def test_the_digest_is_bounded_however_large_the_delta_is(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """A payload that grows with the document is a write-path regression nobody
+    notices until `domain_events` is the largest table in the database. The
+    count stays exact; only the sample is cut."""
+    from memdog.checkpoints import DIGEST_STATEMENTS, STATEMENT_CHARS
+
+    principal = await principal_for(tenant.api_key)
+    await _moved(pool, queue, blobs, settings, principal, tenant, changes=[
+        {"kind": "changed", "statement": f"line {n} moved " + "x" * 400,
+         "earlier_value": "a", "later_value": "b", "significance": "medium"}
+        for n in range(12)])
+
+    payload = await _transition(pool, tenant)
+    assert payload["changes"] == 12, "the count is of everything, not of the sample"
+    assert len(payload["statements"]) == DIGEST_STATEMENTS
+    assert all(len(s) <= STATEMENT_CHARS for s in payload["statements"])
+
+
+async def test_an_alert_on_the_memory_type_reaches_a_real_change(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """End to end, because every layer of this passed on its own while the
+    feature did not work: the check ran, the artifact stored, the event emitted,
+    the alert evaluated — and matched nothing."""
+    from memdog.alerts import backtest, create_alert, evaluate_gap, set_enabled
+
+    principal = await principal_for(tenant.api_key)
+    # Before the write. A new alert starts at the current head, so one created
+    # afterwards would report nothing for the honest reason and hide the bug.
+    alert = await create_alert(
+        pool, principal, project_id=tenant.project_id, name="vendor feed moved",
+        surface="checkpoint.changed", where={"memory_type": ["vendor_feed"]})
+    await backtest(pool, principal, alert["alert_id"])
+    await set_enabled(pool, principal, alert["alert_id"], True)
+
+    await _moved(pool, queue, blobs, settings, principal, tenant, changes=[
+        {"kind": "changed", "statement": "status moved from green to red",
+         "earlier_value": "green", "later_value": "red", "significance": "high"}])
+
+    result = await evaluate_gap(pool, alert["alert_id"], trigger="tick")
+    assert result["candidates"] == 1
+    assert result["matches"] == 1, "the selector was accepted at creation; it has to match"

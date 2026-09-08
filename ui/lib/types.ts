@@ -380,6 +380,28 @@ export function describeEvent(surface: string, p: Record<string, unknown>): stri
       return `${s("from_type")} → ${s("to_type")}`;
     case "case.member_promoted":
       return `confirmed on a ${s("case_type")} case`;
+    // A timeline moved. This surface had no case at all, so it fell to the
+    // default and printed every key it carried — which was tolerable while the
+    // payload was a count and became a dump the moment it carried a digest.
+    //
+    // One change is *named*, because "status moved from green to red" is the
+    // thing a person came to read and it is already in the payload. Several are
+    // counted by direction, because "3 changes" alone does not say whether the
+    // feed grew, shrank or moved.
+    case "checkpoint.changed": {
+      const n = Number(p.changes ?? 0);
+      const first = Array.isArray(p.statements) ? String(p.statements[0] ?? "") : "";
+      const breakdown = (["added", "removed", "changed"] as const)
+        .map((k) => [k, Number(p[k] ?? 0)] as const)
+        .filter(([, count]) => count > 0)
+        .map(([k, count]) => `${count} ${k}`)
+        .join(", ");
+      const what = n === 1 && first
+        ? first
+        : `${n} change${n === 1 ? "" : "s"}${breakdown ? ` — ${breakdown}` : ""}`;
+      return `${s("memory_type")} #${s("seq")} — ${what}${
+        p.highest_significance ? ` (${s("highest_significance")})` : ""}`;
+    }
     default:
       return Object.entries(p).map(([k, v]) => `${k}=${v}`).join(" · ");
   }

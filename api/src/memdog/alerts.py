@@ -51,10 +51,25 @@ SURFACES: dict[str, frozenset[str]] = {
     # The from/to pair is why capture has to be synchronous: once the row reads
     # its new level the old one is gone, and no sweep afterwards recovers it.
     "acl.changed":     frozenset({"from_level", "to_level", "data_type"}),
-    # A checkpoint timeline found that a record moved. `changes` is the count,
-    # so "tell me when the vendor feed changes materially" is a selector rather
-    # than a second feature.
-    "checkpoint.changed": frozenset({"memory_type", "changes"}),
+    # A checkpoint timeline found that a record moved.
+    #
+    # Every field here is one `checkpoints.digest` actually puts in the payload,
+    # and that sentence is the whole point of this entry. `memory_type` was
+    # declared and validated here for two releases while nothing emitted it, so
+    # "tell me when the vendor feed changes" saved, enabled, backtested against
+    # nothing and matched nothing -- forever, and looking exactly like a quiet
+    # week. `test_every_declared_field_is_one_the_surface_emits` is what keeps
+    # this list and the payload from drifting apart again.
+    #
+    # The counts are scalars so `gt` reaches them, `highest_significance` is a
+    # scalar so `in` reaches it, and `statements` is the one list -- reachable
+    # through `contains`, which is how "tell me when the price changes" is
+    # written without adding a field per subject.
+    "checkpoint.changed": frozenset({
+        "memory_type", "memory_id", "checkpoint_id", "seq", "change_artifact_id",
+        "changes", "added", "removed", "changed", "highest_significance",
+        "statements",
+    }),
 }
 
 # Which subject a surface's visibility is asked of. An event stores no ACL, so

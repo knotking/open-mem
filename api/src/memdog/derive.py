@@ -161,13 +161,21 @@ GENERATORS: dict[str, dict] = {
             "correct answer, and inventing a change to avoid an empty one is "
             "the worst thing you can do here. "
             # Bounded, because this generator once spent its whole output
-            # budget repeating one word inside `before`. The schema now carries
-            # a length and a description; saying it here as well costs nothing
-            # and the failure it prevents cost a deploy.
-            "Report at most 20 changes. `before` and `after` must each be the "
-            "value itself, copied as it appears and under twenty words -- never "
-            "reasoning, never a restatement of the question, never a list. Put "
-            "the explanation in `statement`, in one sentence."
+            # budget repeating one word inside the earlier value. The schema now
+            # carries a length and a description; saying it here as well costs
+            # nothing and the failure it prevents cost a deploy.
+            #
+            # **Named for the schema, which is named for the labels above.**
+            # These said `before` and `after` long after the fields were renamed
+            # to `earlier_value` and `later_value` -- and that rename is
+            # documented in `extraction.py` as the fix that took this generator
+            # from 7,944 output tokens to 534. So the prompt was constraining
+            # two fields that no longer exist while the two that do went
+            # unmentioned: the guard read as present and applied to nothing.
+            "Report at most 20 changes. `earlier_value` and `later_value` must "
+            "each be the value itself, copied as it appears and under twenty "
+            "words -- never reasoning, never a restatement of the question, "
+            "never a list. Put the explanation in `statement`, in one sentence."
         ),
         "archivable": False,
     },
