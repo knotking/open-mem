@@ -46,6 +46,7 @@ is the same material as one continuous page.
 | [ui-design.md](ui-design.md) | Information architecture, the six tensions that decide it, and screens by area |
 | [ui-sandbox.md](ui-sandbox.md) | Upload a dataset, watch it enrich, chat against it — and see what the chat actually retrieved |
 | [use-cases-catalog.md](use-cases-catalog.md) | All twelve published use cases with their implementation paths and honest status |
+| [use-cases/](use-cases/README.md) | The memory shape each of the twelve needs — what nests, what correlates, and the three relations nothing reads |
 | [design-principles.md](design-principles.md) | The central bet, cross-cutting invariants, capability ownership |
 | [alerts.md](alerts.md) | Declare an event, be told when it happens — surfaces, the backtest gate, polling and signed delivery |
 | [compaction.md](compaction.md) | Folding a memory down without losing it — algorithms, the preview gate, and what a run frees |
