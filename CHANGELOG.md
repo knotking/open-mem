@@ -11,6 +11,17 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **A researcher's papers can be added from Add data.** Paste a Google Scholar
+  profile URL and it resolves to an OpenAlex author, downloads the open-access
+  PDFs of their works, reads and indexes them into a memory of their own keyed
+  to the author — a corpus you can ask questions of with citations. The API
+  could already do this; the only route to it was the Crawlers screen, which you
+  had to know about. The result is not a success message but the name,
+  affiliation, works count and what the match rested on, because two researchers
+  share a name and the wrong one yields a corpus that is coherent and about
+  somebody else with nothing downstream able to detect it. The crawler is
+  created switched off, and `How to use this` carries the whole flow as a worked
+  example.
 - **The landing page has two tabs and three diagrams of what the thing is
   for.** *Try it* and *How it works*, so a phone gets a screen rather than a leg
   of a long scroll — the demo no longer sits between a visitor and the first
