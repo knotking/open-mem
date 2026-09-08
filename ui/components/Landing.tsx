@@ -866,12 +866,11 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
           <span className="dot" aria-hidden="true" />
           mem-dog
         </a>
-        {/* Two destinations, both real routes rather than page anchors. The
-            comparison is called out on its own because it is the question
-            people arrive with, and it is the one place this says out loud
-            where a competitor is ahead. */}
+        {/* Docs only. The comparison moved down into the tab strip, where it
+            sits beside the demo and the diagrams — it is one of the three
+            things a visitor came to do, not a utility link, and a header is
+            where things go to be ignored. */}
         <nav className="tabs" aria-label="Sections">
-          <a href="/docs/compare">How it compares</a>
           <a href="/docs">Docs</a>
         </nav>
         <div className="row">
@@ -897,30 +896,42 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
           argument for it. Somebody who has already asked the corpus a question
           reads the copy below as an explanation of something they have seen;
           the other order asks them to take it on faith first. */}
-      {/* Only when there are two things to choose between. A tab strip over a
-          single panel is a control that decides nothing. */}
-      {demoShell && (
-        <nav className="landtabs" role="tablist" aria-label="What to look at">
-          <button
-            role="tab" id="tab-demo" aria-controls="panel-demo"
-            aria-selected={view === "demo"}
-            className={`landtab${view === "demo" ? " on" : ""}`}
-            onClick={() => setView("demo")}
-          >
-            Try it
-            <span className="landtab-sub">ask a real corpus, no account</span>
-          </button>
-          <button
-            role="tab" id="tab-diagrams" aria-controls="panel-diagrams"
-            aria-selected={view === "diagrams"}
-            className={`landtab${view === "diagrams" ? " on" : ""}`}
-            onClick={() => setView("diagrams")}
-          >
-            How it works
-            <span className="landtab-sub">the path in, and what it is for</span>
-          </button>
-        </nav>
-      )}
+      {/* The row is always here, because the comparison lives in it now and a
+          deployment with no demo must not lose the link. The *tablist* inside
+          it is conditional: a tab strip over a single panel is a control that
+          decides nothing. */}
+      <div className="landtabs">
+        {demoShell && (
+          <div className="landtabgroup" role="tablist" aria-label="What to look at">
+            <button
+              role="tab" id="tab-demo" aria-controls="panel-demo"
+              aria-selected={view === "demo"}
+              className={`landtab${view === "demo" ? " on" : ""}`}
+              onClick={() => setView("demo")}
+            >
+              Try it
+              <span className="landtab-sub">ask a real corpus, no account</span>
+            </button>
+            <button
+              role="tab" id="tab-diagrams" aria-controls="panel-diagrams"
+              aria-selected={view === "diagrams"}
+              className={`landtab${view === "diagrams" ? " on" : ""}`}
+              onClick={() => setView("diagrams")}
+            >
+              How it works
+              <span className="landtab-sub">the path in, and what it is for</span>
+            </button>
+          </div>
+        )}
+        {/* Beside the tabs and deliberately not one of them. It leaves the
+            page, and `role="tab"` promises a panel that switches in place —
+            a link wearing that role is a promise the click breaks. The arrow
+            is what says so before the click rather than after. */}
+        <a className="landtab landtab-out" href="/docs/compare">
+          How it compares <span aria-hidden="true">↗</span>
+          <span className="landtab-sub">against Onyx, Glean and the rest</span>
+        </a>
+      </div>
 
       {demoShell && view === "demo" && (
         <section className="hero-demo" id="panel-demo" role="tabpanel"

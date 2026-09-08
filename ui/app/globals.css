@@ -2054,3 +2054,25 @@ button.tab-cta { font-family: inherit; line-height: 1.35; cursor: pointer; }
   }
   .landsub { font-size: 12.5px; padding: 6px 12px; }
 }
+
+/* The tabs now share their row with a link that leaves the page, so the group
+   is its own element and the row is the bordered container. */
+.landtabgroup { display: flex; gap: 8px; }
+/* Styled as a peer of the tabs because it is one of the three things a visitor
+   came to do — but it is an anchor, never a tab, so it carries no selected
+   state and never wins the accent underline. The arrow is the tell. */
+.landtab-out {
+  text-decoration: none;
+  /* `.tabs a` on this same page sets a colour and a bottom border on anchors;
+     this class has to answer both or the link inherits the header's nav look
+     in the middle of a tab strip. */
+  border-bottom: 2px solid transparent;
+  margin-left: auto;
+}
+.landtab-out:hover { color: var(--ink); border-bottom-color: var(--line); }
+@media (max-width: 640px) {
+  /* Pushed hard right, the link falls off a narrow row. On a phone it simply
+     follows the tabs and the row scrolls. */
+  .landtab-out { margin-left: 0; }
+  .landtabs { overflow-x: auto; }
+}
