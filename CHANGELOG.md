@@ -400,6 +400,18 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   answering overlapping questions about one thing is how they drift apart.
 
 ### Fixed
+- **A seeded demo corpus answered every question for the seeder and nothing for
+  anyone else.** ACL inheritance follows the connection, and the gallery seeder
+  created its producer without one — so every record landed `private`, invisible
+  to the public visitor whose `user_id` matches no real user by design. From
+  outside it looked like "not supported by the text" on every question, which is
+  what an empty corpus looks like and is indistinguishable from a bad one.
+  Records are written through the org's shared connection now, a missing shared
+  connection is a refusal rather than a default, and the seed checks that every
+  record is org-visible before publishing — so "the questions pass" can no
+  longer mean "the questions pass for me". The seeder also picked the *oldest*
+  organization, the same trap the deploy runbook records for `add-member`; it
+  chooses the org that has a shared connection, or takes one as an argument.
 - **Recording a video failed, and the console said `[object Object]`.** Two
   faults, and the second hid the first. A data URL's header is stripped by
   slicing at the first comma — but `MediaRecorder` emits
