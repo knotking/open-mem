@@ -11,6 +11,22 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **Audio, video and documents too large to send inline can now go through the
+  provider's file upload instead of being refused.** Off by default and opt-in
+  per org (`large_media`), because it exists to let much more expensive inputs
+  through: the ceiling moves from about 18 MB to whatever the deployment allows,
+  256 MB unless raised. **There are two ceilings and only one of them moves** —
+  a file upload changes how much can be *sent*, not how much the model can
+  *understand*, which is a duration for video and audio and a page count for a
+  document. Something past the second is refused before anything is uploaded,
+  with a sentence that says so rather than pointing at a setting that would not
+  help. The transcript that comes back is chunked, embedded and retrievable like
+  any other record.
+  **No knowledge graph is built from these transcripts unless asked**
+  (`large_media_graph`): an hour of speech-to-text yields hundreds of candidate
+  entities, mostly mishearings, and every other record in the project resolves
+  against the same entity table. The summary and the artifact are still written.
+  New env vars: `LARGE_MEDIA`, `MAX_LARGE_MEDIA_BYTES`.
 - **The console says where the project has got to.** Five stages above every
   screen — make a place, get something in, watch it climb, get it back, keep it
   — read from counts that already existed. Nearly every confusion this week was

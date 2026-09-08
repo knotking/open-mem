@@ -96,6 +96,46 @@ service about what "current" means. Never deploy a job by hand.
   `IF NOT EXISTS` so a database created from the edited version converges rather
   than failing.
 
+### Large media is off unless the deploy says otherwise
+
+`cloudrun.sh` passes `LARGE_MEDIA=${LARGE_MEDIA:-false}` and
+`MAX_LARGE_MEDIA_BYTES=${MAX_LARGE_MEDIA_BYTES:-268435456}` to the service **and
+to every job**, for the reason the job-coupling rule above exists: the parse
+worker runs in both, and a service that can interpret a 200 MB video while the
+reconciler cannot would repair the corpus back toward `needs_model`.
+
+Without `LARGE_MEDIA=true`, audio, video and documents over about 18 MB are
+recorded as `needs_model` with the inline ceiling as the reason — which is the
+correct default, because this is the most expensive thing the platform can be
+asked to do. Nothing is lost; the bytes are stored and the item can be
+reprocessed once it is switched on.
+
+```bash
+cd api && LARGE_MEDIA=true ./deploy/cloudrun.sh <tag>
+```
+
+Two things to know before turning it on:
+
+- **`--set-env-vars` replaces the whole set.** Deploying afterwards without
+  `LARGE_MEDIA=true` in the environment silently turns it back off, and the
+  symptom is large media quietly returning to `needs_model`. This is the same
+  trap that made the reconciler drift.
+- **An org can still decline it, and by default an org has said nothing.** The
+  `large_media` setting resolves org-first with this env var as the platform
+  default, and the platform value is seeded into `settings` at startup so
+  `GET /settings/effective` reports what is actually happening rather than a
+  default the runtime is ignoring.
+
+`large_media_graph` is a setting only, off by default, and needs no deploy: a
+multi-hour transcript otherwise puts hundreds of low-precision entities into a
+graph every other record in the project resolves against.
+
+**The provider limits in `multimodal.MODEL_LIMITS` have never been checked
+against a live account.** They are written from published documentation and
+carry the date they were read. An item refused as beyond the model is refused on
+the strength of that table, so a stale number is a wrong answer rather than a
+slow one — worth one manual run against a real key.
+
 ### The repo analysis job
 
 **It is not on the API image and is not in the job loop.** Every other job runs
