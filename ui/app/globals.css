@@ -2008,3 +2008,49 @@ button.tab-cta { font-family: inherit; line-height: 1.35; cursor: pointer; }
 .use-return text { fill: var(--muted); font-size: 12px; font-family: var(--mono); }
 /* Reading back out of the memory, as against writing into it. */
 .use-read-line path { opacity: 0.55; stroke-dasharray: 3 4; }
+
+/* The diagram sub-tabs. A pill row rather than a second underlined strip: the
+   tabs above it are underlined, and two identical strips stacked read as one
+   confused control instead of a hierarchy. */
+.landsubs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 0 0 16px;
+}
+.landsub {
+  appearance: none;
+  /* Answering the bare-`button` rule on every property it sets — background,
+     colour, padding, font — because a class that answers only the one that
+     looked wrong is how a chip ended up light-on-light here before. */
+  background: var(--panel);
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 7px 14px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.landsub:hover { color: var(--ink); border-color: var(--muted); }
+.landsub.on {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--ink);
+  font-weight: 600;
+}
+.landsub:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* On a phone the row scrolls sideways rather than wrapping to three lines and
+   pushing the diagram off the first screen — which is the whole reason these
+   are tabs and not a column. */
+@media (max-width: 640px) {
+  .landsubs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    /* Room for the focus ring, which a scroll container would otherwise clip. */
+    padding-bottom: 4px;
+  }
+  .landsub { font-size: 12.5px; padding: 6px 12px; }
+}

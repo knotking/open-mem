@@ -98,12 +98,10 @@ function Flow() {
     { x: 1054, label: "Built on it" },
   ];
 
+  // Bare, like the other three: the heading, the claim and the scroll container
+  // belong to whatever is presenting the diagram, so all four can be panes of
+  // one strip instead of one of them carrying its own furniture.
   return (
-    <section className="flow" id="flow" aria-labelledby="flow-title">
-      <h2 className="section-title" id="flow-title">
-        From a source to something somebody uses
-      </h2>
-      <div className="flow-scroll">
         <svg viewBox="0 0 1180 400" className="flow-svg" role="img"
              aria-label="Pull and inbound sources feed one write path. That path builds a
                          retrieval index, a knowledge graph and a reverse index, which together
@@ -235,8 +233,6 @@ function Flow() {
             <path d="M 900 335 L 936 335" />
           </g>
         </svg>
-      </div>
-    </section>
   );
 }
 
@@ -469,35 +465,68 @@ function AgentDiagram() {
  * follow it, each drawn around the one thing that makes its case.
  */
 function Diagrams() {
-  const USES = [
-    { key: "brain", title: "A company brain",
+  // Sub-tabs rather than a column. Four diagrams stacked is a long scroll on a
+  // desktop and a very long one on a phone, and the reader has no idea how much
+  // is left — so the fourth may as well not exist. One at a time makes each a
+  // screen, and the strip says up front what the other three are.
+  const [pane, setPane] = useState("system");
+
+  const PANES = [
+    { key: "system", label: "The system",
+      title: "From a source to something somebody uses",
+      claim: "Pull and push land on the same write path. What it builds — three "
+           + "indexes — is the memory, and three surfaces reach it.",
+      art: <Flow /> },
+    { key: "brain", label: "Company brain",
+      title: "A company brain",
       claim: "Everything the team writes, in one place — and every sentence of an "
            + "answer opens the record it came from.",
       art: <BrainDiagram /> },
-    { key: "cdc", title: "A timeline memory",
+    { key: "cdc", label: "Timeline memory",
+      title: "A timeline memory",
       claim: "The same report arrives every week. Ask what happened across a span and "
            + "you get the churn; ask what is different and you get the net. They "
            + "disagree on purpose, and the answer says which one it is.",
       art: <TimelineDiagram /> },
-    { key: "agent", title: "Agent memory",
+    { key: "agent", label: "Agent memory",
+      title: "Agent memory",
       claim: "What one session learned, the next one can read — without replaying a "
            + "transcript into a context window.",
       art: <AgentDiagram /> },
   ];
+  const shown = PANES.find((x) => x.key === pane) ?? PANES[0];
+
   return (
     <>
       <ArrowDefs />
-      <Flow />
-      {USES.map((u) => (
-        <section className="use" key={u.key} aria-labelledby={`use-${u.key}`}>
-          <h2 className="section-title" id={`use-${u.key}`}>{u.title}</h2>
-          <p className="use-claim">{u.claim}</p>
-          <div className="flow-scroll">{u.art}</div>
-        </section>
-      ))}
+      {/* `landsub`, not `subtab` — the console owns that one, and a shared class
+          name is the mistake this stylesheet has already made once. */}
+      <nav className="landsubs" role="tablist" aria-label="Diagrams">
+        {PANES.map((x) => (
+          <button
+            key={x.key}
+            role="tab"
+            id={`sub-${x.key}`}
+            aria-controls="sub-panel"
+            aria-selected={x.key === shown.key}
+            className={`landsub${x.key === shown.key ? " on" : ""}`}
+            onClick={() => setPane(x.key)}
+          >
+            {x.label}
+          </button>
+        ))}
+      </nav>
+
+      <section className="use" id="sub-panel" role="tabpanel"
+               aria-labelledby={`sub-${shown.key}`}>
+        <h2 className="section-title">{shown.title}</h2>
+        <p className="use-claim">{shown.claim}</p>
+        <div className="flow-scroll">{shown.art}</div>
+      </section>
     </>
   );
 }
+
 
 function PublicDemo({ app, info, setInfo }: {
   app: DemoApp;
