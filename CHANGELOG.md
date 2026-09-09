@@ -17,6 +17,12 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   that was suppressed — and the sign-in card rendered in neither place.
 
 ### Added
+- **A Zoom recall use case on the signed-out page.** Zoom posts a signed webhook
+  when a recording is ready — a real path, with its own signature scheme and
+  handshake in `providers.py` — and the transcript joins every earlier instance
+  of the same standing meeting. Ask the series a question and the answer carries
+  the passage and the day it was said; and because the meeting recurs, the same
+  series answers "what changed since last week".
 - **A `© buildgeek.ai` notice**, on the landing page footer and at the foot of
   the console sidebar. The year comes from the clock, not a literal.
 - **A rental-property use case on the signed-out page** — what asset-mem.com is
