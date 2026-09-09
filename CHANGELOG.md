@@ -11,6 +11,12 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **Asking a memory what changed across a span, from the console.** The range
+  endpoint had shipped with no UI at all — you could see a timeline but not ask
+  the question a timeline exists for. The memory screen now has a since/until
+  pair and a churn-or-net toggle, and the result says which of the two questions
+  was answered, which checkpoints in the window contributed nothing and why, and
+  whether the ask spent a model call.
 - **Two more diagrams on the signed-out page: a researcher, and a repository.**
   Both features existed only behind sign-in, so the two most distinctive things
   you can point mem-dog at were invisible to anyone deciding whether to try it.
@@ -498,6 +504,9 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   to the end of said less about what this is than four lines do.
 
 ### Migrations
+- **`0058_checkpoint_deferred.sql`** — widens the checkpoint status constraint
+  with `deferred` and replaces the pending index to cover it. Applies itself on
+  startup; without it a postponed check would violate the CHECK constraint.
 - **`0057_memory_change_ranges.sql`** — the stored net answer for a span of a
   checkpoint timeline. Applies itself on the first startup of the new revision,
   as every migration here does; nothing but `?net=true` reads the table, so the
@@ -544,6 +553,14 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   answering overlapping questions about one thing is how they drift apart.
 
 ### Fixed
+- **A rate-limited checkpoint said `failed` about work that was coming back.**
+  The queue classifies a capacity error as deferred and retries it, but the row
+  was written `failed` first — harmless while only the console read it, and then
+  `checkpoint.checked` put it on the event stream where it announced a failure
+  for something that succeeds on the next attempt. `deferred` is now its own
+  state, classified by the same function the queue uses so the two cannot
+  disagree, swept like `pending`, and reported in a range as not-yet-checked
+  rather than as a failure.
 - **The landing page painted its hero and every diagram, then discarded them.**
   The demo gallery loads client-side and `null` meant both "not asked yet" and
   "there is none", so the first paint took the no-demo branch and the whole
