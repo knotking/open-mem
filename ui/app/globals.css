@@ -2091,6 +2091,16 @@ button.tab-cta { font-family: inherit; line-height: 1.35; cursor: pointer; }
 .copyright a { color: inherit; text-decoration: none; border-bottom: 1px solid var(--line); }
 .copyright a:hover { color: var(--ink); border-bottom-color: var(--muted); }
 .copyright a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-/* The landing footer is a row, so the notice sits opposite the tagline rather
-   than under it. */
-.landfoot { display: flex; gap: 16px; justify-content: space-between; flex-wrap: wrap; align-items: baseline; }
+/* One item now that the tagline is gone, so the row exists only to keep the
+   notice from stretching. `space-between` over a single child would be a rule
+   that reads as doing something and does not. */
+.landfoot { display: flex; gap: 16px; flex-wrap: wrap; align-items: baseline; }
+
+/* On the sign-in card the notice is the last thing in a stack, so it needs a
+   rule of its own above it — without one it reads as another sentence of the
+   security copy rather than as a footer. */
+.signin-card .copyright {
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+  margin-top: 12px;
+}

@@ -1067,6 +1067,14 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
                 New accounts are closed on this deployment. Existing members can still sign in.
               </p>
             )}
+            {/* On the card, not only in the page footer. When a demo is present
+                this card is a popover off the header, so the footer is nowhere
+                near the person signing in — and the card is the login UI in the
+                sense that matters. */}
+            <p className="empty copyright">
+              © {new Date().getFullYear()}{" "}
+              <a href="https://buildgeek.ai" rel="noopener">buildgeek.ai</a>
+            </p>
           </form>
         ) : (
           <div className="signin-card" id="signin">
@@ -1074,6 +1082,10 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
             <p className="empty">
               This deployment has no identity provider set, so the console cannot be opened from a
               browser.
+            </p>
+            <p className="empty copyright">
+              © {new Date().getFullYear()}{" "}
+              <a href="https://buildgeek.ai" rel="noopener">buildgeek.ai</a>
             </p>
           </div>
         );
@@ -1097,7 +1109,14 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
         </nav>
         <div className="row">
           <ThemeToggle />
-          {heroHasDemo ? (
+          {/* `demoShell`, not `heroHasDemo`. They differ for the moment the
+              gallery is in flight, and in that moment the old condition put a
+              `#signin` anchor in the header while the hero that owns that id
+              was suppressed — a Sign in link pointing at nothing, and the card
+              rendered in neither place. Introduced by making the demo shell
+              optimistic; the two conditions have to agree about which layout
+              is being drawn. */}
+          {demoShell ? (
             <div className="signin-menu">
               <button
                 className="tab-cta"
@@ -1217,9 +1236,6 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
       )}
 
       <footer className="landfoot">
-        <span className="empty">
-          Every claim on this page is one the console will let you check.
-        </span>
         {/* The year comes from the clock rather than a literal, because a
             hardcoded one is wrong every January and nobody notices until a
             visitor does. */}
