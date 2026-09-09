@@ -11,6 +11,14 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **A rental-property use case on the signed-out page** — what asset-mem.com is
+  built on, and the clearest case for change detection the page has. A unit is
+  inspected at move-in, quarterly and at move-out; each report is a checkpoint.
+  Ask what happened during the tenancy and you get three changes, the
+  maintenance history including a faucet that broke and was repaired; ask what
+  is different since move-in and you get one, because the faucet ends where it
+  started and the carpet does not. Two numbers, two conversations, and each is
+  obviously right for its own question.
 - **Asking a memory what changed across a span, from the console.** The range
   endpoint had shipped with no UI at all — you could see a timeline but not ask
   the question a timeline exists for. The memory screen now has a since/until
