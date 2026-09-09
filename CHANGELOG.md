@@ -10,6 +10,12 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 
 ## Unreleased
 
+### Fixed
+- **A Sign in link that pointed at nothing while the demo gallery loaded.** The
+  header and the hero disagreed about which layout was being drawn for the
+  moment the gallery was in flight, so the header emitted an anchor to a hero
+  that was suppressed — and the sign-in card rendered in neither place.
+
 ### Added
 - **A `© buildgeek.ai` notice**, on the landing page footer and at the foot of
   the console sidebar. The year comes from the clock, not a literal.
@@ -412,6 +418,10 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   its reason — never left pending, which would read as still running.
 
 ### Changed
+- **The copyright notice is on the sign-in card**, not only in the page footer —
+  when a demo is present the card is a popover off the header, so the footer is
+  nowhere near the person signing in. The landing footer is now the notice
+  alone; the "every claim on this page" line is gone.
 - **"How it compares" moved from the landing header into the tab strip**, beside
   the demo and the diagrams — it is one of the things a visitor came to do, not
   a utility link. It stays an anchor rather than becoming a tab, with an arrow
