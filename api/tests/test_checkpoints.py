@@ -1337,3 +1337,106 @@ async def test_an_empty_answer_still_says_which_question_it_answered(
     # And both still distinguish "will never have a timeline" from "has one with
     # nothing on it yet".
     assert "not a checkpoint timeline" in composed["note"] == netted["note"]
+
+
+# ------------------------------------------------- postponed is not failed
+#
+# `run_check` wrote `failed` before re-raising and the queue then classified a
+# capacity error as *deferred* and retried it, so the row said failed about work
+# that was coming back. Harmless while only the console read it; `checkpoint.checked`
+# put it on the event stream, where it cries wolf.
+
+
+class Busy:
+    """A provider saying "not now" — the shape `_is_capacity` recognises."""
+
+    model_id = "fake-extractor-1"
+
+    async def extract(self, *args, **kwargs):  # noqa: ANN002, ANN003
+        from memdog.quota import QuotaExceeded
+
+        raise QuotaExceeded("slow down")
+
+
+async def test_a_rate_limited_check_is_deferred_rather_than_failed(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    principal = await principal_for(tenant.api_key)
+    name = await _timeline_type(pool, tenant)
+    await _write(pool, queue, blobs, settings, principal, tenant,
+                 type_name=name, external_id="week-1.md", text="Status: green")
+    row = (await _checkpoints(pool, tenant))[0]
+
+    with pytest.raises(Exception):
+        await run_check(pool, principal, Busy(), row["checkpoint_id"])
+
+    settled = (await _checkpoints(pool, tenant))[0]
+    assert settled["status"] == "deferred", (
+        "a provider saying 'not now' is not a defect, and calling it one sends "
+        "somebody looking for a bug that is a quota")
+    assert settled["reason"]
+
+    checked = await _transition(pool, tenant, "checkpoint.checked")
+    assert checked["status"] == "deferred"
+
+
+async def test_a_real_failure_is_still_a_failure(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """The other half. If everything became `deferred` the distinction would be
+    worth nothing — and the queue, which drops non-capacity errors, would be
+    disagreeing with the row about whether the work is coming back."""
+    principal = await principal_for(tenant.api_key)
+
+    class Broken:
+        model_id = "fake-extractor-1"
+
+        async def extract(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            raise ValueError("the prompt is malformed")
+
+    name = await _timeline_type(pool, tenant)
+    await _write(pool, queue, blobs, settings, principal, tenant,
+                 type_name=name, external_id="week-1.md", text="Status: green")
+    row = (await _checkpoints(pool, tenant))[0]
+
+    with pytest.raises(ValueError):
+        await run_check(pool, principal, Broken(), row["checkpoint_id"])
+    assert (await _checkpoints(pool, tenant))[0]["status"] == "failed"
+
+
+async def test_the_sweep_picks_a_deferred_check_back_up(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    """The queue message that would have retried it was already consumed, so
+    without the sweep the work waits for a nudge that never comes."""
+    from memdog.checkpoints import pending
+
+    principal = await principal_for(tenant.api_key)
+    name = await _timeline_type(pool, tenant)
+    await _write(pool, queue, blobs, settings, principal, tenant,
+                 type_name=name, external_id="week-1.md", text="Status: green")
+    row = (await _checkpoints(pool, tenant))[0]
+    await pool.execute(
+        "UPDATE memory_checkpoints SET status = 'deferred' WHERE checkpoint_id = $1",
+        row["checkpoint_id"])
+
+    waiting = [r["checkpoint_id"] for r in await pending(pool)]
+    assert row["checkpoint_id"] in waiting
+
+
+async def test_a_deferred_checkpoint_is_a_hole_not_a_failure_in_a_range(
+    pool, queue, blobs, settings, tenant, principal_for
+):
+    from memdog.checkpoints import changes_between
+
+    principal = await principal_for(tenant.api_key)
+    rows = await _built(pool, queue, blobs, settings, principal, tenant, [
+        ("v1", []), ("v2", [_change("two")])])
+    await pool.execute(
+        "UPDATE memory_checkpoints SET status = 'deferred' WHERE checkpoint_id = $1",
+        rows[1]["checkpoint_id"])
+
+    result = await changes_between(pool, principal, rows[0]["memory_id"])
+    assert [g["why"] for g in result["gaps"]] == ["not_checked"], (
+        "the sweep is going to pick it up, so calling it a failure sends "
+        "somebody looking for a defect that is a rate limit")

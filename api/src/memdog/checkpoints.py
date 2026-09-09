@@ -197,6 +197,20 @@ async def capture(conn, *, org_id: str, project_id: str, memory_id: str,
     return inserted
 
 
+def _stopped_because(exc: BaseException) -> str:
+    """`deferred` when the provider said "not now", `failed` when it said no.
+
+    The same question `workers._is_capacity` already answers for the queue, and
+    deliberately the same function rather than a second opinion: the queue
+    retries a capacity error and drops everything else, so a row that disagreed
+    with it would say `failed` about work that is coming back, or `deferred`
+    about work that is not. Both read as the system lying about its own state.
+    """
+    from .workers import _is_capacity
+
+    return "deferred" if _is_capacity(exc) else "failed"
+
+
 async def _states(conn, checkpoint_id: str) -> dict | None:
     return await conn.fetchrow(
         """
@@ -365,7 +379,8 @@ async def run_check(pool: asyncpg.Pool, principal: Principal, extractor,
             pool, principal, row["memory_id"], generator=STATE_GENERATOR,
             extractor=extractor, only=[row["data_id"]])
     except Exception as exc:  # noqa: BLE001 - recorded, not swallowed
-        await _finish(pool, checkpoint_id, row=row, status="failed", reason=str(exc)[:500])
+        await _finish(pool, checkpoint_id, row=row, status=_stopped_because(exc),
+                      reason=str(exc)[:500])
         raise
 
     state_id = made.get("artifact_id")
@@ -427,7 +442,7 @@ async def run_check(pool: asyncpg.Pool, principal: Principal, extractor,
         envelope = await extractor.extract(
             text[:200_000], data_type=spec["data_type"], prompt=spec["prompt"])
     except Exception as exc:  # noqa: BLE001
-        await _finish(pool, checkpoint_id, row=row, status="failed",
+        await _finish(pool, checkpoint_id, row=row, status=_stopped_because(exc),
                       state_artifact_id=state_id, reason=str(exc)[:500])
         raise
 
@@ -544,7 +559,11 @@ async def pending(pool: asyncpg.Pool, *, grace_seconds: int = 0,
     rows = await pool.fetch(
         """
         SELECT checkpoint_id, memory_id, seq FROM memory_checkpoints
-        WHERE status IN ('pending', 'running')
+        -- `deferred` too, and it is the reason this sweep matters rather than
+        -- merely tidying: the queue message that would have retried a
+        -- rate-limited check was already consumed, so without the sweep the
+        -- work waits for a nudge that is never coming.
+        WHERE status IN ('pending', 'running', 'deferred')
           AND created_at < now() - make_interval(secs => $1)
         ORDER BY memory_id, seq
         LIMIT $2
@@ -806,7 +825,11 @@ async def changes_between(pool: asyncpg.Pool, principal: Principal, memory_id: s
     changes: list[dict] = []
     gaps: list[dict] = []
     for row in rows:
-        if row["status"] in ("pending", "running"):
+        # `deferred` belongs with the not-yet-checked, not with the failures:
+        # the sweep is going to pick it up, so a range asked again in a minute
+        # will have it. Calling it `failed` would send somebody looking for a
+        # defect that is a rate limit.
+        if row["status"] in ("pending", "running", "deferred"):
             gaps.append(_gap(row, "not_checked"))
             continue
         if row["status"] == "failed":

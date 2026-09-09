@@ -224,13 +224,46 @@ export type Checkpoint = {
   seq: number;
   data_id: string;
   external_id: string;
-  status: "pending" | "running" | "complete" | "failed";
+  // `deferred` is "the provider said not now, and the sweep will come back" —
+  // separate from `failed` because one resolves itself and the other does not,
+  // and separate from `pending` because only one of them is worth going to look
+  // at a quota over.
+  status: "pending" | "running" | "complete" | "failed" | "deferred";
   outcome: "first" | "changed" | "unchanged" | "incomparable" | null;
   reason: string | null;
   created_at: string;
   change_artifact_id: string | null;
   change_summary: string | null;
   change_fields: { changes?: Change[] } | null;
+};
+
+/** What moved across a span of a timeline.
+ *
+ * `basis` is the field that makes this usable rather than merely available.
+ * `composed` concatenates the stored per-step deltas and reports *churn* —
+ * green, red, green is two changes; `net` compares the two ends directly and
+ * reports none. Both are correct answers to different questions, so a reader
+ * holding one without knowing which cannot reconcile it with the other.
+ */
+export type ChangeRange = {
+  memory_id: string;
+  basis: "composed" | "net";
+  from: { checkpoint_id: string; seq: number; created_at?: string } | null;
+  to: { checkpoint_id: string; seq: number; created_at?: string } | null;
+  checkpoints: number;
+  changes: (Change & {
+    seq?: number; checkpoint_id?: string; external_id?: string; at?: string;
+  })[];
+  counts: { added: number; removed: number; changed: number };
+  // Every checkpoint in the span that contributed nothing, and why. A range
+  // that omits what it could not read presents as complete.
+  gaps: { seq: number; checkpoint_id: string; external_id?: string;
+          why: "not_checked" | "failed" | "incomparable" | "not_visible";
+          detail?: string | null }[];
+  // Only on a net answer: whether this particular ask spent a model call.
+  cached?: boolean;
+  change_artifact_id?: string | null;
+  note?: string;
 };
 
 export type Change = {

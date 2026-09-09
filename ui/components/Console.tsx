@@ -35,6 +35,7 @@ import {
   MemoryTree,
   MemoryType,
   Checkpoint,
+  ChangeRange,
   ResolvedAuthor,
   Section,
   Algorithm,
@@ -263,6 +264,9 @@ const HOW_TO: Partial<Record<Section, string[]>> = {
     "Name a memory and create it. That is the whole of the ordinary case — everything is kept, nothing expires.",
     "A memory has a *type*, which is the policy for what lands in it: how long it lives, whether a model reads it on arrival, how a URL in it is fetched, whether it keeps a change-tracked timeline. Types ship configured and most installations never touch them, which is why they sit under “Lifecycle policy” rather than in front of the name field.",
     "“Past its TTL” is what to act on. Changing or removing a memory affects everything mapped into it.",
+      "On a change-tracked type, “What changed across a span” answers the question a timeline is for — what moved since Monday — rather than one step at a time.",
+    "Churn and net disagree on purpose: green, red, green is two changes composed and nothing net. The answer says which one you got, and the two cannot be read against each other.",
+    "Read the gaps. A checkpoint that failed, was never checked, or whose delta you cannot see contributes nothing — and a range that hid that would look complete.",
   ],
   reprocess: [
     "“What is behind” counts records built by a generator that is no longer current.",
@@ -3957,11 +3961,121 @@ function SnapshotState({
  * turns silence into a clean bill of health, so each says which it is, in its
  * own words, and `unchanged` is stated rather than left as an absence.
  */
+/**
+ * What a span came back with.
+ *
+ * Three things this has to say and a plainer table would not. **Which question
+ * was answered** — composed and net disagree by construction, so a count with
+ * no basis beside it is unreadable. **What it could not see** — a range that
+ * omits the checkpoints it failed to read presents as complete, which for a
+ * change detector is the same lie as a failed check reporting no change. And
+ * **whether it spent anything**, next to the answer rather than in a bill.
+ */
+function ChangeSpan({ span }: { span: ChangeRange }) {
+  const GAP_WORDS: Record<string, string> = {
+    not_checked: "not checked yet",
+    failed: "the check did not finish",
+    incomparable: "could not be compared",
+    not_visible: "you cannot see this one",
+  };
+  return (
+    <div className="panel" style={{ marginTop: 10 }}>
+      <div className="row" style={{ gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
+        <span className={span.basis === "net" ? "chip on" : "chip"}>
+          {span.basis === "net" ? "net — what is different" : "churn — what happened"}
+        </span>
+        <strong>
+          {span.changes.length === 0
+            ? "nothing"
+            : `${span.changes.length} change${span.changes.length === 1 ? "" : "s"}`}
+        </strong>
+        <span className="empty">
+          across {span.checkpoints} checkpoint{span.checkpoints === 1 ? "" : "s"}
+          {span.from ? ` · after #${span.from.seq}` : " · from the beginning"}
+          {span.to ? ` · through #${span.to.seq}` : ""}
+        </span>
+        {span.basis === "net" && (
+          <span className="empty far">
+            {span.cached ? "served from cache — no model call" : "one model call"}
+          </span>
+        )}
+      </div>
+
+      {span.note && <p className="empty">{span.note}</p>}
+
+      {/* An empty answer is a result, not a blank. Saying nothing here is how
+          "we compared and it had not moved" and "we never looked" end up
+          rendering the same, which is the distinction the whole feature is for. */}
+      {span.changes.length === 0 && !span.note && (
+        <p className="empty">
+          Compared, and nothing moved{span.gaps.length > 0 ? " in what could be read" : ""}.
+        </p>
+      )}
+
+      {span.changes.length > 0 && (
+        <table className="kv">
+          <tbody>
+            {span.changes.map((c, i) => (
+              <tr key={`${c.checkpoint_id ?? "net"}-${i}`}>
+                <td style={{ whiteSpace: "nowrap" }}>
+                  {/* Net rows carry no seq, and that is deliberate: the claim is
+                      about the span, not a point inside it. */}
+                  {c.seq ? <span className="empty">#{c.seq}</span> : <span className="empty">—</span>}
+                </td>
+                <td>
+                  <span className={c.significance === "high" ? "chip on" : "chip"}>
+                    {c.kind}
+                  </span>{" "}
+                  {c.statement}
+                  {(c.earlier_value || c.later_value) && (
+                    <div className="empty">
+                      <code>{c.earlier_value || "—"}</code> → <code>{c.later_value || "—"}</code>
+                    </div>
+                  )}
+                  {c.external_id && <div className="empty">{c.external_id}</div>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      {span.gaps.length > 0 && (
+        <>
+          <p className="warned" style={{ marginTop: 10 }}>
+            <strong>{span.gaps.length} checkpoint{span.gaps.length === 1 ? "" : "s"} in this
+            window contributed nothing.</strong> The answer above is about the rest of it.
+          </p>
+          <table className="kv">
+            <tbody>
+              {span.gaps.map((g) => (
+                <tr key={g.checkpoint_id}>
+                  <td style={{ whiteSpace: "nowrap" }}><span className="empty">#{g.seq}</span></td>
+                  <td>
+                    {GAP_WORDS[g.why] ?? g.why}
+                    {g.detail && <div className="empty">{g.detail}</div>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+    </div>
+  );
+}
+
 function CheckpointState({ checkpoint }: { checkpoint: Checkpoint }) {
   const { status, outcome } = checkpoint;
   if (status === "pending") return <span className="hint">queued — not checked yet</span>;
   if (status === "running") return <span className="hint">checking…</span>;
   if (status === "failed") return <span className="err">could not be checked</span>;
+  // Waiting, not broken. Rendered as a hint rather than an error because the
+  // sweep will pick it up — and said in the words that tell somebody where to
+  // look if it persists, which is the provider's quota and not this record.
+  if (status === "deferred") {
+    return <span className="warntext">the model was busy — queued to try again</span>;
+  }
   if (outcome === "first") return <span className="hint">first — nothing to compare</span>;
   if (outcome === "changed") return <span className="ok">changed</span>;
   if (outcome === "unchanged") return <span className="empty">no change</span>;
@@ -6038,6 +6152,14 @@ function MemorySection({ projectId }: { projectId: string }) {
                                            created_at: string }[]>([]);
 
   const [checkpoints, setCheckpoints] = useState<Checkpoint[]>([]);
+  // Asking the timeline about a span rather than a step. `since` empty means
+  // from the beginning, which is a real position and the common one.
+  const [since, setSince] = useState("");
+  const [until, setUntil] = useState("");
+  const [net, setNet] = useState(false);
+  const [span, setSpan] = useState<ChangeRange | null>(null);
+  const [spanBusy, setSpanBusy] = useState(false);
+  const [spanError, setSpanError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -6518,6 +6640,77 @@ function MemorySection({ projectId }: { projectId: string }) {
 
             {checkpoints.length > 0 && (
               <>
+                <h3>What changed across a span</h3>
+                <p className="hint">
+                  Each checkpoint is compared with the one before it. This asks the question
+                  people actually have — <em>what has changed since Monday</em> — across a
+                  window rather than a step.
+                </p>
+                <div className="row" style={{ gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  <label>
+                    Since
+                    <select value={since} onChange={(e) => setSince(e.target.value)}>
+                      <option value="">the beginning</option>
+                      {[...checkpoints].reverse().map((c) => (
+                        <option key={c.checkpoint_id} value={String(c.seq)}>
+                          #{c.seq} · {c.external_id}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    Until
+                    <select value={until} onChange={(e) => setUntil(e.target.value)}>
+                      <option value="">now</option>
+                      {[...checkpoints].reverse().map((c) => (
+                        <option key={c.checkpoint_id} value={String(c.seq)}>
+                          #{c.seq} · {c.external_id}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="check" title={net
+                    ? "Compares the two ends directly — one model call, then cached"
+                    : "Concatenates the deltas already stored — free"}>
+                    <input type="checkbox" checked={net}
+                           onChange={(e) => { setNet(e.target.checked); setSpan(null); }} />
+                    Net, not churn
+                  </label>
+                  <button
+                    disabled={spanBusy}
+                    onClick={async () => {
+                      setSpanBusy(true); setSpanError(null); setSpan(null);
+                      const q = new URLSearchParams();
+                      if (since) q.set("from", since);
+                      if (until) q.set("to", until);
+                      if (net) q.set("net", "true");
+                      try {
+                        setSpan(await call<ChangeRange>(
+                          `api/v1/memories/${selected.memory_id}/changes${
+                            q.toString() ? `?${q}` : ""}`));
+                      } catch (e) {
+                        setSpanError((e as Error).message);
+                      } finally {
+                        setSpanBusy(false);
+                      }
+                    }}
+                  >
+                    {spanBusy ? "Reading…" : "What changed?"}
+                  </button>
+                </div>
+                {/* Cost beside the control that causes it. */}
+                <p className="empty" style={{ marginTop: 6 }}>
+                  {net
+                    ? <><strong>Net</strong> compares the description at each end directly:
+                        green, red, green comes back as nothing, because nothing is different
+                        between the ends. One model call, then cached.</>
+                    : <><strong>Churn</strong> concatenates the deltas already stored: green,
+                        red, green comes back as two changes, because two changes happened.
+                        Costs nothing.</>}
+                </p>
+                {spanError && <p className="err">{spanError}</p>}
+                {span && <ChangeSpan span={span} />}
+
                 <h3>Timeline</h3>
                 <p className="hint">
                   Every record added here is a checkpoint, described on its own and compared

@@ -74,6 +74,9 @@ export const ALLOWED = [
   // enrich that is how a timeline written without enrichment is promoted
   // into the graph later.
   /^api\/v1\/memories\/[A-Za-z0-9_]+\/checkpoints$/,
+  // What moved across a span of a timeline. The query string carries `from`,
+  // `to` and `net`, so the pattern has to admit one.
+  /^api\/v1\/memories\/[A-Za-z0-9_]+\/changes(\?.*)?$/,
   /^api\/v1\/memories\/[A-Za-z0-9_]+\/checkpoints\/[A-Za-z0-9_]+\/recheck$/,
   /^api\/v1\/memories\/[A-Za-z0-9_]+\/enrich$/,
   // Repository analysis. `snapshots/{id}` is listed before the `{case_id}`
