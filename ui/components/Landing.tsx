@@ -455,6 +455,76 @@ function AgentDiagram() {
 
 
 
+function ZoomDiagram() {
+  return (
+    <svg viewBox="0 0 940 322" className="flow-svg use-svg" role="img"
+         aria-label="When a Zoom meeting ends, Zoom posts a signed webhook. The transcript
+                     is verified on arrival and joins the earlier instances of the same
+                     recurring meeting. You then ask the series a question and get the
+                     answer with the passage and the date it was said, rather than
+                     re-watching a recording — and because the meeting recurs, the series
+                     is also a timeline you can ask what changed since last time.">
+      <text x="8" y="16" className="flow-stage">A MEETING ENDS</text>
+
+      <g className="flow-box">
+        <rect x="8" y="34" width="228" height="74" rx="10" />
+        <text x="26" y="62" className="flow-h">Zoom</text>
+        <text x="26" y="84" className="flow-s">posts the moment the</text>
+        <text x="26" y="100" className="flow-s">recording is ready</text>
+      </g>
+
+      <g className="flow-box flow-spine">
+        <rect x="282" y="34" width="228" height="74" rx="10" />
+        <text x="300" y="62" className="flow-h">Verified on arrival</text>
+        <text x="300" y="84" className="flow-s">Zoom&rsquo;s own signature,</text>
+        <text x="300" y="100" className="flow-s">and a replay is refused</text>
+      </g>
+
+      <g className="flow-box flow-app">
+        <rect x="556" y="34" width="376" height="74" rx="10" />
+        <text x="576" y="62" className="flow-h">This meeting&rsquo;s series</text>
+        <text x="576" y="84" className="flow-s">the transcript joins every earlier</text>
+        <text x="576" y="100" className="flow-s">instance of the same standing meeting</text>
+      </g>
+
+      <g className="flow-box flow-surface">
+        <rect x="8" y="168" width="548" height="118" rx="10" />
+        <text x="28" y="196" className="flow-h">&ldquo;What did we decide about the cutover?&rdquo;</text>
+        <text x="28" y="222" className="flow-s">Moved to 3 October, because the replica lag</text>
+        <text x="28" y="240" className="flow-s">risk was still open.</text>
+      </g>
+      {/* The citation is the difference between recall and a summary: it says
+          which meeting, and when in it. */}
+      <g className="use-cite">
+        <rect x="28" y="252" width="212" height="20" rx="5" />
+        <text x="38" y="266">12 Sept standup · 14:03</text>
+      </g>
+
+      <g className="flow-box use-read">
+        <rect x="592" y="168" width="340" height="118" rx="10" />
+        <text x="612" y="196" className="flow-h">It recurs, so it is a timeline</text>
+        <text x="612" y="220" className="flow-s">what changed since last week</text>
+        <text x="612" y="252" className="use-count">3 changes</text>
+        <text x="612" y="276" className="flow-s">the date moved twice, the owner once</text>
+      </g>
+
+      <g className="flow-line">
+        <path d="M 236 71 L 282 71" />
+        <path d="M 510 71 L 556 71" />
+        <path d="M 700 108 C 700 140 400 136 300 168" />
+        <path d="M 780 108 L 780 168" />
+      </g>
+
+      {/* Below the boxes, not between them. At y=150 it sat exactly where the
+          connector from the series down to the question crosses, and the line
+          struck the sentence out. */}
+      <text x="8" y="314" className="flow-s">
+        nobody re-watches the recording — the answer carries the passage and the day it was said
+      </text>
+    </svg>
+  );
+}
+
 function PropertyDiagram() {
   const VISITS = [
     { x: 8, when: "Move-in · January", a: "faucet: fine", b: "carpet: clean", ok: true },
@@ -715,6 +785,15 @@ function Diagrams() {
            + "change is qualified by how much it matters — so fair wear sorts below damage "
            + "instead of arriving in the same undifferentiated list.",
       art: <PropertyDiagram /> },
+    { key: "zoom", label: "Zoom recall",
+      title: "Recall from meetings, without re-watching them",
+      claim: "Zoom posts a signed webhook when a recording is ready; the transcript is "
+           + "verified on arrival and joins every earlier instance of the same standing "
+           + "meeting. Ask the series a question and the answer carries the passage and "
+           + "the day it was said. And because the meeting recurs, the series is a "
+           + "timeline as well — so “what changed since last week” is a question you can "
+           + "ask of it.",
+      art: <ZoomDiagram /> },
   ];
   const shown = PANES.find((x) => x.key === pane) ?? PANES[0];
 
