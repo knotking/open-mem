@@ -85,6 +85,31 @@ was stale, and quietly repaired the corpus back toward the state it was supposed
 to be leaving.** Anything that reads `current_generators` has to agree with the
 service about what "current" means. Never deploy a job by hand.
 
+- **`failed to build: ... proxyconnect tcp: dial tcp 192.168.65.1:3128: i/o
+  timeout`.** Seen twice on 2026-09-08. Docker Desktop's proxy times out pushing
+  a layer to Artifact Registry. It is **transient — re-run the same command and
+  it goes through**, and it is not the expired-login failure below: that one
+  reports a credential error with an empty `out:`, this one names a socket.
+
+  **The trap is not the timeout, it is how it reports.** `./deploy.sh <tag> |
+  tail -4` exits 0 even when the build failed, because the pipeline's status is
+  `tail`'s. A deploy that failed then looks like one that worked while the old
+  revision keeps serving — the same false success the `ui/deploy.sh` note at the
+  end of this file describes. Redirect instead of piping, and read the script's
+  own exit code:
+
+  ```bash
+  ./deploy.sh <tag> > /tmp/deploy.log 2>&1; echo "EXIT=$?"; tail -3 /tmp/deploy.log
+  ```
+
+  Confirm against the served tag regardless — that is the only fact that
+  settles it:
+
+  ```bash
+  gcloud run services describe memdog-sandbox --project memdog-dev-506718 \
+    --region us-central1 --format='value(spec.template.spec.containers[0].image)'
+  ```
+
 - **A deploy succeeds and the public demo gallery goes dark.** Found 2026-09-08.
   `PUBLIC_DEMOS` is the gallery registry, it is JSON, and JSON is full of
   commas — which is exactly the character `--set-env-vars` splits on. So it was

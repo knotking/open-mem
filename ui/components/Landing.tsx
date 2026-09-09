@@ -455,6 +455,76 @@ function AgentDiagram() {
 
 
 
+function PropertyDiagram() {
+  const VISITS = [
+    { x: 8, when: "Move-in · January", a: "faucet: fine", b: "carpet: clean", ok: true },
+    { x: 330, when: "Quarterly · July", a: "faucet: leaking", b: "carpet: clean", ok: false },
+    { x: 652, when: "Move-out · December", a: "faucet: fine", b: "carpet: stained", ok: false },
+  ];
+  return (
+    <svg viewBox="0 0 940 348" className="flow-svg use-svg" role="img"
+         aria-label="One rental unit is inspected at move-in, quarterly and at move-out.
+                     Each report is a checkpoint. Read as churn the tenancy has three
+                     changes, including a faucet that broke and was repaired; read as net
+                     against move-in it has one, the stained carpet — because the faucet
+                     ends where it started. The first is the maintenance history and the
+                     second is the deposit conversation.">
+      <text x="8" y="16" className="flow-stage">UNIT 4B — THE SAME INSPECTION, AGAIN AND AGAIN</text>
+
+      {VISITS.map((v) => (
+        <g key={v.when}>
+          <g className="flow-box">
+            <rect x={v.x} y="30" width="280" height="90" rx="10" />
+            <text x={v.x + 18} y="58" className="flow-h">{v.when}</text>
+            <text x={v.x + 18} y="82" className="flow-s">{v.a}</text>
+            <text x={v.x + 18} y="102" className="flow-s">{v.b}</text>
+          </g>
+          <g className={`use-dot ${v.ok ? "use-green" : "use-red"}`}>
+            <circle cx={v.x + 258} cy="52" r="7" />
+          </g>
+        </g>
+      ))}
+
+      <g className="flow-line">
+        <path d="M 288 74 L 322 74" />
+        <path d="M 610 74 L 644 74" />
+        <path d="M 314 120 L 314 132" />
+        <path d="M 636 120 L 636 132" />
+      </g>
+      <g className="use-delta">
+        <rect x="186" y="132" width="256" height="26" rx="6" />
+        <text x="198" y="150">faucet fine → leaking</text>
+        <rect x="506" y="132" width="270" height="26" rx="6" />
+        <text x="518" y="150">faucet fixed · carpet stained</text>
+      </g>
+
+      <text x="8" y="196" className="flow-stage">TWO QUESTIONS, AND THEY HAVE DIFFERENT ANSWERS</text>
+
+      <g className="flow-box use-read">
+        <rect x="8" y="210" width="452" height="112" rx="10" />
+        <text x="28" y="238" className="flow-h">What happened during the tenancy?</text>
+        <text x="28" y="268" className="use-count">3 changes</text>
+        <text x="28" y="296" className="flow-s">the maintenance history — including a</text>
+        <text x="28" y="313" className="flow-s">faucet that broke and was repaired</text>
+      </g>
+      <g className="flow-box use-read">
+        <rect x="480" y="210" width="452" height="112" rx="10" />
+        <text x="500" y="238" className="flow-h">What is different since move-in?</text>
+        <text x="500" y="268" className="use-count">1 change</text>
+        <text x="500" y="296" className="flow-s">the deposit conversation — the faucet</text>
+        <text x="500" y="313" className="flow-s">ends where it started; the carpet does not</text>
+      </g>
+
+      {/* Muted, not the warning colour. This is how the feature behaves, not
+          something going wrong — and red on an ordinary note spends the one
+          colour that should mean "look at this". */}
+      <text x="8" y="342" className="flow-s">
+        each change carries how much it matters, so a scuffed skirting board sorts below a cracked window
+      </text>
+    </svg>
+  );
+}
+
 function RepoDiagram() {
   const REPORTS = [
     ["Design", "what it is, structurally", 34],
@@ -635,6 +705,16 @@ function Diagrams() {
            + "snapshot is pinned to its commit and compared to nothing — a report "
            + "attributed to a moving branch is one nobody could reproduce later.",
       art: <RepoDiagram /> },
+    { key: "property", label: "Rental property",
+      title: "A rental unit, inspected again and again",
+      claim: "What asset-mem.com is built on. Every inspection of a unit is a checkpoint "
+           + "on that unit's timeline, and each one is compared with the one before it. "
+           + "Ask what happened during the tenancy and you get the maintenance history; "
+           + "ask what is different since move-in and you get the deposit conversation. "
+           + "They are different numbers because they are different questions, and each "
+           + "change is qualified by how much it matters — so fair wear sorts below damage "
+           + "instead of arriving in the same undifferentiated list.",
+      art: <PropertyDiagram /> },
   ];
   const shown = PANES.find((x) => x.key === pane) ?? PANES[0];
 
