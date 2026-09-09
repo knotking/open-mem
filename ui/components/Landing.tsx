@@ -1220,6 +1220,13 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
         <span className="empty">
           Every claim on this page is one the console will let you check.
         </span>
+        {/* The year comes from the clock rather than a literal, because a
+            hardcoded one is wrong every January and nobody notices until a
+            visitor does. */}
+        <span className="empty copyright">
+          © {new Date().getFullYear()}{" "}
+          <a href="https://buildgeek.ai" rel="noopener">buildgeek.ai</a>
+        </span>
       </footer>
     </div>
   );

@@ -517,6 +517,14 @@ export default function Console({
               {me.email} · {me.role ?? "member"}
             </p>
           )}
+          {/* Below the identity, quietest thing in the rail. It belongs to the
+              product rather than to any screen, and the sidebar foot is the one
+              place already holding standing information rather than the
+              contents of the panel on the right. */}
+          <p className="empty copyright">
+            © {new Date().getFullYear()}{" "}
+            <a href="https://buildgeek.ai" rel="noopener">buildgeek.ai</a>
+          </p>
         </div>
       </nav>
 
