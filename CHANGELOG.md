@@ -11,6 +11,8 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **A `© buildgeek.ai` notice**, on the landing page footer and at the foot of
+  the console sidebar. The year comes from the clock, not a literal.
 - **A rental-property use case on the signed-out page** — what asset-mem.com is
   built on, and the clearest case for change detection the page has. A unit is
   inspected at move-in, quarterly and at move-out; each report is a checkpoint.
