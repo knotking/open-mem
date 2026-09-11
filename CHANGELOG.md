@@ -17,6 +17,32 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   that was suppressed — and the sign-in card rendered in neither place.
 
 ### Added
+- **The eleven diagrams in the published docs are diagrams now.** They were
+  being served as their own mermaid source — `flowchart LR` and a list of node
+  definitions, set in a code block — because the markdown renderer turns every
+  fence into `<pre><code>`. They had never rendered in the UI at all, and it
+  read as documentation written that way rather than as a bug.
+- **`npm run diagrams`**, which renders them. Mermaid measures text to lay a
+  diagram out and so needs a real browser; this renders once through headless
+  Chrome and commits the SVG to `lib/docs-diagrams.ts`, keyed by the diagram's
+  own source. **Run it after changing a diagram in `docs/` and commit the
+  result** — `npm run verify` now fails and names the document otherwise. A
+  changed diagram cannot serve a stale picture: the key misses and it degrades
+  to the code block it used to be. `npm run verify` itself needs no browser.
+
+### Changed
+- **Every diagram on the site now sits on a near-black slab**, the same in light
+  and dark theme, with black boxes and light borders. The docs diagrams are
+  rendered ahead of time with their colours baked in and cannot answer a theme
+  toggle, so the choice was one constant ground for all of them or half the
+  diagrams refusing to follow the theme. The hand-drawn landing diagrams were
+  moved onto the same palette, so generated and hand-drawn read as one thing.
+- **`npm ci` installs 155 more packages** — mermaid and its tree, all
+  `devDependencies`, pinned so a re-render reproduces byte for byte. It lands in
+  the Docker builder stage, not the served image; the client bundle is unchanged
+  at 109 kB, because the SVG is inlined server-side.
+
+### Added
 - **A classroom use case on the signed-out page** — the marks a teacher writes
   down anyway, read back to the student. A diagnostic, exit tickets and a unit
   test become checkpoints on one student's timeline, and the same record answers
