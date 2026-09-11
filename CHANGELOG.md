@@ -17,6 +17,16 @@ Newest first. Entries under `## Unreleased` have not been tagged.
   that was suppressed — and the sign-in card rendered in neither place.
 
 ### Added
+- **A classroom use case on the signed-out page** — the marks a teacher writes
+  down anyway, read back to the student. A diagnostic, exit tickets and a unit
+  test become checkpoints on one student's timeline, and the same record answers
+  two questions that are not the same question: the teacher's, where one
+  misconception recurring across three lessons is visible in the third lesson
+  rather than in December's report card; and the student's, where the answer is
+  a direction rather than a verdict — 4/10 to 9/10, the sentence that says what
+  changed, and a citation opening the piece of their own work it came from. One
+  student and one skill on purpose: a whole-class dashboard is the picture every
+  school product already draws.
 - **A Zoom recall use case on the signed-out page.** Zoom posts a signed webhook
   when a recording is ready — a real path, with its own signature scheme and
   handshake in `providers.py` — and the transcript joins every earlier instance
