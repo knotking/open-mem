@@ -10,7 +10,46 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 
 ## Unreleased
 
+### Added
+- **Cases is a screen again**, under *Your data* — the other way to walk a
+  corpus. A memory answers how long something matters; a case answers what it is
+  about, and a patient, a legal matter or an asset outlives every conversation
+  filed under it. Declare a subject on an authoritative identifier (an MRN, a
+  matter number, an asset tag) together with the other identifiers it is known
+  by, list what exists, and open one history. The screen was removed in September
+  as a third description of how the corpus is arranged; this is the subject half
+  of the story instead.
+- **A history says how each record got onto it.** `asserted` — a producer said
+  whose it is — reads differently from `inferred`, which carries the identifier
+  it matched on and its confidence. Collapsing the two is how a timeline
+  silently comes to contain somebody else's records, and nothing downstream can
+  detect it.
+- **Ordered by when it happened, not when it arrived**, oldest first. An undated
+  record is stated rather than quietly filed under today, and the API's
+  500-record ceiling is said out loud — a clinical or legal history truncated in
+  silence reads as a complete one.
+- **Add data step 3 is now *Where it goes, and what it is about*.** It files the
+  record against a subject, takes the identifiers written on the record, and
+  takes **when it happened** — so a scanned, forwarded or backfilled document
+  lands where the event belongs rather than at the top of the chart. Records
+  join a subject at write time, so without this the new screen could only ever
+  show an empty timeline.
+- **A `subjects` tile on Overview.** The API had always counted cases; the tile
+  was removed because there was nowhere for the number to go.
+- **A patient-timeline use case on the signed-out page.** Four records arrive
+  from four systems; three join on the record number and the fourth — a letter
+  carrying only a name — attaches to nothing rather than to a guess, because two
+  patients share a name and that merge is coherent, checkable and undetectable.
+  Then the history on an axis, with a discharge summary scanned last Tuesday
+  sitting in 2019 where the care actually happened.
+
 ### Fixed
+- **A document large enough to need an upload session lost its subject and its
+  date.** `POST /api/v1/uploads/{id}/complete` forwarded `access`, `template`
+  and `options` and dropped `case`, `identifiers` and `event_time` — so the same
+  file inlined attached to its patient and kept its date, while the uploaded one
+  arrived detached and dated on arrival. Nothing raised: the record was real and
+  simply missing from the history it belonged to.
 - **A Sign in link that pointed at nothing while the demo gallery loaded.** The
   header and the hero disagreed about which layout was being drawn for the
   moment the gallery was in flight, so the header emitted an anchor to a hero
