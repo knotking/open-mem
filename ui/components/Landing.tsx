@@ -913,6 +913,111 @@ function PatientDiagram() {
   );
 }
 
+function WatchDiagram() {
+  // The two things that can make a rule fire, and the one that gets it
+  // refused. Three left-hand boxes rather than a list, because the refusal is
+  // not an error case here -- it is the design, and it belongs at the same
+  // weight as the two that work.
+  const CAUSES = [
+    { h: "A record arrives", s: "matched as it lands, once", y: 30 },
+    { h: "A date comes into reach", s: "30 days before the deadline", y: 90 },
+    { h: "A rule narrowing nothing", s: "every write would match it", y: 150 },
+  ];
+  // The second beat: what stands between a rule and the thing it says.
+  const GUARDS = [
+    // Lines are kept to about thirty characters. The box is 296 wide with 20 of
+    // padding, and `flow-s` is 12px mono -- so a line in the high thirties
+    // reaches the border and reads as clipped rather than as a sentence.
+    { x: 8, h: "Backtested, then enabled",
+      lines: ["created switched off, like a",
+              "crawler — and editing what it",
+              "matches drops that approval"] },
+    { x: 322, h: "Delivery is a read",
+      lines: ["checked under the owner's",
+              "rights at match time, never",
+              "rights copied when it was made"] },
+    { x: 636, h: "A feed, or a corpus",
+      lines: ["poll it, or land it in a memory",
+              "— so what it caught is itself",
+              "something you can question"] },
+  ];
+  return (
+    <svg viewBox="0 0 940 456" className="flow-svg use-svg" role="img"
+         aria-label="A standing query is written once and then watches forward. A record
+                     that arrives and matches is matched as it lands, exactly once, from a
+                     watermark — never a re-scan of the corpus. A deadline is a second kind
+                     of rule over the record's own date, because nothing arrives on the day
+                     a deadline approaches. A rule that narrows nothing is refused outright,
+                     because its feed would be a copy of the project. Everything else in the
+                     system answers when asked; this is the one primitive that speaks first.
+                     Before it can speak it must be backtested and enabled, and editing what
+                     it matches drops that approval. Every match is checked under the
+                     owner's own visibility at match time rather than rights copied when the
+                     rule was written, and it is delivered either as a feed you poll or into
+                     a memory, which makes what it caught a corpus you can question.">
+      <text x="8" y="16" className="flow-stage">
+        SAID ONCE — AND THEN IT WATCHES FORWARD
+      </text>
+
+      {CAUSES.map((c) => (
+        <g className="flow-box" key={c.h}>
+          <rect x="8" y={c.y} width="264" height="50" rx="10" />
+          <text x="26" y={c.y + 22} className="flow-h">{c.h}</text>
+          <text x="26" y={c.y + 40} className="flow-s">{c.s}</text>
+        </g>
+      ))}
+
+      <g className="flow-box flow-spine">
+        <rect x="320" y="40" width="244" height="92" rx="10" />
+        <text x="338" y="68" className="flow-h">Forward from a watermark</text>
+        <text x="338" y="92" className="flow-s">each record seen exactly once</text>
+        <text x="338" y="110" className="flow-s">— never a re-scan</text>
+      </g>
+
+      {/* Refused, not degraded. A selector that narrows nothing produces a feed
+          indistinguishable from the corpus it watches, which is not a standing
+          query at all -- so it is turned away rather than accepted and
+          regretted at the hundredth one. */}
+      <g className="flow-box use-refused">
+        <rect x="320" y="180" width="244" height="64" rx="10" />
+        <text x="338" y="208" className="flow-h">Refused</text>
+        <text x="338" y="230" className="flow-s">the feed would be the corpus</text>
+      </g>
+
+      <g className="flow-box flow-app">
+        <rect x="624" y="40" width="308" height="92" rx="10" />
+        <text x="644" y="68" className="flow-h">It speaks first</text>
+        <text x="644" y="92" className="flow-s">everything else answers when asked</text>
+        <text x="644" y="110" className="flow-s">this is the one that does not wait</text>
+      </g>
+
+      <g className="flow-line">
+        <path d="M 272 55 C 300 55 300 86 320 86" />
+        <path d="M 272 115 C 300 115 300 86 320 86" />
+        <path d="M 272 175 C 300 175 300 212 320 212" />
+        <path d="M 564 86 L 624 86" />
+      </g>
+      <text x="338" y="262" className="use-refused-note">narrow it, or nothing is registered</text>
+
+      <text x="8" y="302" className="flow-stage">AND CHECKED BEFORE IT IS ALLOWED TO SPEAK</text>
+
+      {GUARDS.map((g) => (
+        <g className="flow-box use-read" key={g.h}>
+          <rect x={g.x} y="318" width="296" height="112" rx="10" />
+          <text x={g.x + 20} y="346" className="flow-h">{g.h}</text>
+          {g.lines.map((line, i) => (
+            <text key={line} x={g.x + 20} y={372 + i * 18} className="flow-s">{line}</text>
+          ))}
+        </g>
+      ))}
+
+      <text x="8" y="448" className="flow-s">
+        a rule matching everything looks exactly like one that works — until you read what it caught
+      </text>
+    </svg>
+  );
+}
+
 /**
  * The diagrams tab: how it works, then what it is for.
  *
@@ -1005,6 +1110,19 @@ function Diagrams() {
            + "the history is ordered by when the care happened rather than when the record "
            + "arrived: a discharge summary scanned last Tuesday sits in 2019.",
       art: <PatientDiagram /> },
+    { key: "watch", label: "It tells you",
+      title: "The one thing here that speaks first",
+      claim: "Every other picture on this page is somebody asking. A standing query is "
+           + "written once and then watches forward: each record is matched as it lands, "
+           + "from a watermark, so it is never a re-scan of the corpus. A deadline cannot "
+           + "be a predicate over new writes — nothing arrives on the day one approaches — "
+           + "so that is a second kind of rule, over the record’s own date, rather than the "
+           + "first one stretched to cover it. A rule that narrows nothing is refused "
+           + "outright, because its feed would be a copy of the project. And since a match "
+           + "handed to somebody who cannot see the record is a leak through the "
+           + "notification channel, visibility is checked under the owner’s rights at the "
+           + "moment of the match rather than rights copied when the rule was written.",
+      art: <WatchDiagram /> },
   ];
   const shown = PANES.find((x) => x.key === pane) ?? PANES[0];
 
