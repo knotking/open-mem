@@ -813,6 +813,106 @@ function SchoolDiagram() {
   );
 }
 
+function PatientDiagram() {
+  // Three records that did attach, in the order the care happened. The dot
+  // colour carries the basis rather than a verdict on the record: green is a
+  // system saying whose this is, red is an identifier we read out of a page
+  // and have not had confirmed.
+  const POINTS = [
+    { x: 150, when: "2019", what: "discharge summary",
+      how: "inferred — matched MRN-4417", ok: false,
+      note: "scanned last Tuesday — still 2019" },
+    { x: 470, when: "2024", what: "clinic note", how: "asserted by the EHR", ok: true },
+    { x: 790, when: "2026", what: "lab result", how: "asserted by the lab", ok: true },
+  ];
+  return (
+    <svg viewBox="0 0 940 430" className="flow-svg use-svg" role="img"
+         aria-label="A clinic note, a lab result and a scanned discharge summary arrive from
+                     three systems that never talk to each other. All three are joined to the
+                     patient on the medical record number MRN-4417 and never on the name, so a
+                     letter carrying only the name J. Smith attaches to nothing — two patients
+                     share a name and merging them cannot be undone. What a system asserted
+                     stays marked apart from what was merely matched out of the text. The
+                     history is then ordered by when the care happened rather than when the
+                     record arrived: a discharge summary scanned last Tuesday sits in 2019.">
+      <text x="8" y="16" className="flow-stage">
+        FOUR THINGS ARRIVE — AND ONLY THREE OF THEM ARE THIS PATIENT
+      </text>
+
+      {[["Clinic note", "the EHR said: MRN-4417", 30],
+        ["Lab result", "the lab said: MRN-4417", 90],
+        ["Discharge summary", "MRN-4417, read off the page", 150],
+        ["Letter for J. Smith", "a name, and nothing else", 210]].map(([h, s, y]) => (
+        <g className="flow-box" key={h as string}>
+          <rect x="8" y={y as number} width="252" height="50" rx="10" />
+          <text x="26" y={(y as number) + 22} className="flow-h">{h}</text>
+          <text x="26" y={(y as number) + 40} className="flow-s">{s}</text>
+        </g>
+      ))}
+
+      <g className="flow-box flow-spine">
+        <rect x="320" y="40" width="244" height="92" rx="10" />
+        <text x="338" y="68" className="flow-h">Joined on the number</text>
+        <text x="338" y="92" className="flow-s">never on the name — two</text>
+        <text x="338" y="110" className="flow-s">patients share one</text>
+      </g>
+
+      {/* The refusal is the feature. A merge of two patients is coherent,
+          checkable and catastrophic, and nothing downstream can detect it --
+          so a name on its own buys nothing. */}
+      <g className="flow-box use-refused">
+        <rect x="320" y="196" width="244" height="64" rx="10" />
+        <text x="338" y="224" className="flow-h">No number?</text>
+        <text x="338" y="246" className="flow-s">it attaches to nothing</text>
+      </g>
+
+      <g className="flow-box flow-app">
+        <rect x="624" y="40" width="308" height="92" rx="10" />
+        <text x="644" y="68" className="flow-h">MRN-4417 — one subject</text>
+        <text x="644" y="92" className="flow-s">2 asserted — a system said so</text>
+        <text x="644" y="110" className="flow-s">1 inferred — and what it matched</text>
+      </g>
+
+      <g className="flow-line">
+        <path d="M 260 55 C 292 55 292 86 320 86" />
+        <path d="M 260 115 C 292 115 292 86 320 86" />
+        <path d="M 260 175 C 292 175 292 86 320 86" />
+        <path d="M 260 235 C 292 235 292 228 320 228" />
+        <path d="M 564 86 L 624 86" />
+      </g>
+      <text x="338" y="278" className="use-refused-note">refused, not guessed</text>
+
+      <text x="8" y="316" className="flow-stage">
+        ORDERED BY WHEN THE CARE HAPPENED — NOT BY WHEN WE HEARD ABOUT IT
+      </text>
+
+      <g className="flow-line">
+        <path d="M 24 380 L 916 380" />
+      </g>
+      {POINTS.map((p) => (
+        <g key={p.when}>
+          <text x={p.x} y="344" className="flow-h" textAnchor="middle">
+            {p.when} · {p.what}
+          </text>
+          <text x={p.x} y="364" className="flow-s" textAnchor="middle">{p.how}</text>
+          <g className={`use-dot ${p.ok ? "use-green" : "use-red"}`}>
+            <circle cx={p.x} cy="380" r="7" />
+          </g>
+          {p.note && (
+            <text x={p.x} y="402" className="use-refused-note" textAnchor="middle">
+              {p.note}
+            </text>
+          )}
+        </g>
+      ))}
+
+      <text x="8" y="426" className="flow-s">
+        the other ordering — by arrival — renders perfectly and puts 2019 at the top of the chart
+      </text>
+    </svg>
+  );
+}
+
 /**
  * The diagrams tab: how it works, then what it is for.
  *
@@ -894,6 +994,17 @@ function Diagrams() {
            + "10 to 9 out of 10, with the sentence that says what changed and the piece "
            + "of their own work it came from.",
       art: <SchoolDiagram /> },
+    { key: "patient", label: "Patient timeline",
+      title: "One patient, and every system that ever wrote about them",
+      claim: "A clinic note, a lab result and a scanned discharge summary arrive from three "
+           + "systems that do not talk to each other. They are joined to the patient on the "
+           + "record number and never on the name — two patients share a name, and merging "
+           + "them produces a history that is coherent, checkable and somebody else’s — so a "
+           + "letter carrying only a name attaches to nothing rather than to a guess. What a "
+           + "system asserted stays marked apart from what was matched out of the text, and "
+           + "the history is ordered by when the care happened rather than when the record "
+           + "arrived: a discharge summary scanned last Tuesday sits in 2019.",
+      art: <PatientDiagram /> },
   ];
   const shown = PANES.find((x) => x.key === pane) ?? PANES[0];
 

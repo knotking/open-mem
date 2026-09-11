@@ -188,6 +188,38 @@ the source of truth and re-sending it must not create a second case.
 Bulk writes carry case assignment per item — see
 [operations/bulk-operations.md](operations/bulk-operations.md).
 
+## What exists today
+
+Three of the eight endpoints above are built, and they are the three the primitive rests on:
+
+```http
+PUT  /api/v1/cases                         # upsert by (project, case_type, external_id)
+GET  /api/v1/projects/{id}/cases           # what subjects exist, with visible member counts
+GET  /api/v1/cases/{id}/timeline           # ordered by event_time, oldest first
+```
+
+Writes accept `case`, `identifiers` and `event_time` inline, on both the JSON path and the upload
+path — a document large enough to need an upload session files against the same subject and keeps
+the same date as the identical file sent inline.
+
+Membership provenance is built and is **visible rather than held for operator review**, which
+answers one of the open questions below in the direction the console could actually act on:
+`asserted` and `inferred` are distinguished, an inferred member carries the identifier it
+`matched_on` and its confidence, and an assertion arriving later **upgrades** an inference and
+never the reverse.
+
+The console reaches all of it from **Cases**: declare a subject and the identifiers it is known
+by, list what exists, and open one history. Records join a subject at write time, under *Where it
+goes, and what it is about* on **Add data** — which is also where a scanned or backfilled document
+is dated by when it happened rather than when it arrived.
+
+Not built, and not pretended to be: typed `attributes`, `status`, case-level ACL and the
+intersection with item ACL, break-glass, ethical walls, per-case retention and legal hold, the
+derived layer (summary, key facts, contradiction set, case embedding), and the `summary`,
+`retrieve`, `similar` and resolve-by-identifier endpoints. The case ACL gap is the load-bearing
+one: today a case constrains nothing, so what a reader sees on a timeline is exactly what the
+item ACL already allowed them to see.
+
 ## What changes elsewhere
 
 | Area | Change |

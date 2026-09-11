@@ -241,7 +241,9 @@ factor of eighteen. A facet storing the number without the unit produces a range
 confidently, silently wrong. The normalization schema carries units as part of the value, not as
 an adjacent metadata string.
 
-See [examples/medical.md](examples/medical.md) for the worked patient timeline.
+See [examples/medical.md](examples/medical.md) for the worked patient timeline, and
+[cases.md](cases.md#what-exists-today) for the part of it that is built — declaring the patient,
+filing records against the MRN, and reading the history back in `event_time` order.
 
 ---
 

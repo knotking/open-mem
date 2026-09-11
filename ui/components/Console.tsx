@@ -26,6 +26,9 @@ import {
   ARMS,
   ArmKey,
   AuditTrail,
+  CaseSummary,
+  CaseTimeline,
+  TimelineEntry,
   Item,
   Membership,
   Alert,
@@ -131,6 +134,11 @@ const GROUPS: { title: string; items: { key: Section; label: string; hint: strin
       // half of the story, walking the corpus by container down to one
       // revision, and its name should say that rather than promise an edit.
       { key: "update", label: "Deep dive", hint: "read it yourself, down to one revision" },
+      // The other way to walk a corpus: by *subject* rather than by container.
+      // A memory answers how long something matters; a case answers what it is
+      // about, and a patient, a legal matter or an asset outlives every
+      // conversation filed under it.
+      { key: "cases", label: "Cases", hint: "one patient, matter or asset — its whole history" },
       { key: "ask", label: "Chat", hint: "ask it, with citations and the trace" },
     ],
   },
@@ -241,7 +249,8 @@ const HOW_TO: Partial<Record<Section, string[]>> = {
   ],
   add: [
     "Pick what kind of thing you are adding, then give it the content.",
-    "Steps 3 to 5 all have working defaults; open them only to change where it goes, what is done to it, or who may see it.",
+    "Steps 3 to 5 all have working defaults; open them only to change where it goes and what it is about, what is done to it, or who may see it.",
+    "Step 3 also files the record against a subject — a patient, a matter, an asset — and dates it by when it happened rather than when it arrived. Both matter for anything scanned, forwarded or backfilled.",
     "Press Add data. What happened to it appears at the top — the climb from stored to searchable is watched there.",
     "Two kinds are not writes and skip steps 3 to 5, because neither becomes an item: a GitHub repository becomes a snapshot, and a researcher becomes a crawler.",
     // The worked example, because this one has a step people skip and a failure
@@ -267,6 +276,13 @@ const HOW_TO: Partial<Record<Section, string[]>> = {
       "On a change-tracked type, “What changed across a span” answers the question a timeline is for — what moved since Monday — rather than one step at a time.",
     "Churn and net disagree on purpose: green, red, green is two changes composed and nothing net. The answer says which one you got, and the two cannot be read against each other.",
     "Read the gaps. A checkpoint that failed, was never checked, or whose delta you cannot see contributes nothing — and a range that hid that would look complete.",
+  ],
+  cases: [
+    "Declare the subject first. A case is joined on an authoritative identifier — an MRN, a matter number, an asset tag — and never on a name.",
+    "Add the other identifiers it is known by. Anything written alongside a record that should pull it onto this timeline: an accession number, a claim reference, a serial.",
+    "Records join at write time, not here. Attach one under “Where it goes, and what it is about” on Add data.",
+    "Read the timeline by when things happened, oldest first. A record nothing dated sits at the end and says so, rather than being quietly filed under today.",
+    "Inferred members are what to check. An identifier that merely appeared in the text is a guess, and the row says what it matched on — so a wrong correlation can be traced to its cause instead of hunted for.",
   ],
   reprocess: [
     "“What is behind” counts records built by a generator that is no longer current.",
@@ -642,6 +658,7 @@ export default function Console({
         {section === "update" && (
           <UpdateData projectId={projectId} producerId={producerId} onChange={refresh} />
         )}
+        {section === "cases" && <CasesSection projectId={projectId} onGo={setSection} />}
         {section === "ask" && <AskSection projectId={projectId} />}
         {section === "inbound" && <InboundSection projectId={projectId} />}
         {section === "crawlers" && <CrawlersSection projectId={projectId} />}
@@ -1113,6 +1130,22 @@ function AddData({
   const [memoryChoice, setMemoryChoice] = useState("");
   const [memoryType, setMemoryType] = useState("");
   const [memoryKey, setMemoryKey] = useState("");
+  // What this record is *about*, which is a different question from where it
+  // lives. A memory decides how long it matters; a case decides whose it is,
+  // and for a patient, a legal matter or an asset the second outlives the
+  // first by years.
+  const [cases, setCases] = useState<CaseSummary[]>([]);
+  const [caseChoice, setCaseChoice] = useState("");
+  // Identifiers written on the record itself. These attach it to any subject
+  // that claims one as an *inferred* member -- a match, not an assertion --
+  // which is why they are a separate field from the subject picked above and
+  // not a convenience for filling it in.
+  const [identifiers, setIdentifiers] = useState("");
+  // When it happened, not when it arrived. Blank, the API dates it now: right
+  // for something that just happened, wrong for anything scanned, forwarded or
+  // backfilled -- and a history ordered on the wrong one of those renders
+  // perfectly while being wrong, which is the failure nobody sees.
+  const [happenedOn, setHappenedOn] = useState("");
   // Enrichment is off by default at the API, and a write that does not say
   // otherwise stops at `stored` — durable, and invisible to search. Right for a
   // producer pushing ten thousand records, wrong for a person adding one item
@@ -1161,6 +1194,13 @@ function AddData({
   }, [projectId]);
   useEffect(() => { loadMemories(); }, [loadMemories]);
 
+  const loadCases = useCallback(() => {
+    void call<{ cases: CaseSummary[] }>(`api/v1/projects/${projectId}/cases`)
+      .then((r) => setCases(r.cases))
+      .catch(() => setCases([]));
+  }, [projectId]);
+  useEffect(() => { loadCases(); }, [loadCases]);
+
   const chosenTemplate = templates.find((x) => x.template === template) ?? null;
 
   // Served rather than hardcoded, for the reason every vocabulary in this
@@ -1203,6 +1243,18 @@ function AddData({
       : memoryChoice === "new"
         ? `${memoryType || "default"}${memoryKey ? ` · ${memoryKey}` : " · a new memory each write"}`
         : "your default memory";
+
+  const chosenCase = cases.find((c) => c.case_id === caseChoice) ?? null;
+
+  // The whole of step 3 in one line: container, subject, and the date it is
+  // filed under. The subject belongs here rather than only inside the step,
+  // because "which patient" is not a detail somebody should have to open a
+  // panel to re-check before pressing a button.
+  const filing = [
+    destination,
+    chosenCase ? `${chosenCase.case_type} ${chosenCase.external_id}` : null,
+    happenedOn ? `dated ${happenedOn}` : null,
+  ].filter(Boolean).join(" · ");
 
   const audienceSummary = meeting
     ? `the room — ${room.level}`
@@ -1253,6 +1305,26 @@ function AddData({
       : level
         ? { level, principals: level === "shared" || level === "restricted" ? principals : [] }
         : undefined;
+
+  /**
+   * The three fields that say what an item is *about* rather than what to do
+   * with it, extracted for exactly the reason `memoryFor` was: there are two
+   * paths to a record, and a field defined in only one of them is a field the
+   * other silently drops.
+   */
+  const subjectFor = () => {
+    const list = identifiers.split(/[,;]+/).map((i) => i.trim()).filter(Boolean);
+    return {
+      ...(chosenCase
+        ? { case: { case_type: chosenCase.case_type, external_id: chosenCase.external_id } }
+        : {}),
+      ...(list.length ? { identifiers: list } : {}),
+      // A date input yields a calendar day; the API wants an instant. Midday
+      // local rather than midnight, so a timezone shift cannot land the record
+      // on the day before the one somebody picked.
+      ...(happenedOn ? { event_time: new Date(`${happenedOn}T12:00:00`).toISOString() } : {}),
+    };
+  };
 
   const optionsFor = () => ({
     enrich,
@@ -1346,6 +1418,7 @@ function AddData({
       memory: memoryFor(),
       access: accessFor(),
       template: template || undefined,
+      ...subjectFor(),
       options: optionsFor(),
     });
     afterWrite(response, `${file.name} (${humanBytes(file.size)})`);
@@ -1437,6 +1510,7 @@ function AddData({
           memory: memoryFor(externalId),
           template: template || undefined,
           access: accessFor(),
+          ...subjectFor(),
         }],
         options: optionsFor(),
       });
@@ -1753,7 +1827,7 @@ function AddData({
           summary line above the button says what stands in their place. */}
       {!notAWrite && (
         <>
-      <Step n={3} name="memory" title="Where it goes" value={destination}>
+      <Step n={3} name="memory" title="Where it goes, and what it is about" value={filing}>
         <p className="empty" style={{ marginTop: 0 }}>
           A memory is the container a record lives in and what decides when it expires. Nothing is
           orphaned — leave this alone and it lands in your <code>default</code> memory.
@@ -1826,6 +1900,57 @@ function AddData({
             )}
           </>
         )}
+
+        <h3>What it is about</h3>
+        <p className="empty" style={{ marginTop: 0 }}>
+          A subject outlives the container it is filed in — a patient, a legal matter, an asset.
+          Naming one here puts this record on that subject&rsquo;s history as an{" "}
+          <strong>asserted</strong> member: you are saying whose it is, rather than leaving it to
+          be matched.
+        </p>
+        <div className="row">
+          <label style={{ flex: 1, minWidth: 260 }}>
+            Subject
+            <select value={caseChoice} onChange={(e) => setCaseChoice(e.target.value)}>
+              <option value="">not about a particular subject</option>
+              {cases.map((c) => (
+                <option key={c.case_id} value={c.case_id}>
+                  {c.case_type} · {c.external_id}{c.title ? ` — ${c.title}` : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label style={{ flex: "0 0 190px" }}>
+            When it happened
+            <input type="date" value={happenedOn}
+                   onChange={(e) => setHappenedOn(e.target.value)} />
+          </label>
+        </div>
+        {cases.length === 0 && (
+          <div className="row" style={{ marginTop: 6 }}>
+            <span className="empty">No subject has been declared in this project yet.</span>
+            <button className="secondary" onClick={() => onGo("cases")}>Open Cases</button>
+          </div>
+        )}
+        <div className="row" style={{ marginTop: 8 }}>
+          <label style={{ flex: 1 }}>
+            Identifiers written on this record
+            <input type="text" value={identifiers} placeholder="MRN-A12345, ACC-99821"
+                   onChange={(e) => setIdentifiers(e.target.value)} />
+          </label>
+        </div>
+        <p className="empty">
+          Comma-separated. These attach it to any subject that already claims one, as an{" "}
+          <strong>inferred</strong> member — a match rather than an assertion, recorded with what
+          it matched on so a wrong correlation can be traced to its cause. Left blank, nothing is
+          guessed.
+        </p>
+        <p className="empty">
+          <strong>When it happened</strong> is not when it arrived. Left blank the API dates this
+          now, which is right for something that just happened and wrong for anything scanned,
+          forwarded or backfilled — a history ordered on the arrival date renders perfectly and
+          puts a 2019 discharge summary at the top.
+        </p>
       </Step>
 
       <Step n={4} name="interpret" title="What is done to it" value={willDo}>
@@ -2009,7 +2134,7 @@ function AddData({
             </>
           ) : (
             <>
-              <span className="empty">→ {destination}</span>
+              <span className="empty">→ {filing}</span>
               <span className={enrich ? "empty" : "warntext"}>· {willDo}</span>
               <span className="empty">· {audienceSummary}</span>
             </>
@@ -7094,6 +7219,404 @@ function MemorySection({ projectId }: { projectId: string }) {
   );
 }
 
+/* --------------------------------------------------------------- cases */
+
+/**
+ * A subject, and everything ever filed against it.
+ *
+ * The other way to walk a corpus. A memory answers *how long does this matter*
+ * and groups by container; a case answers *what is this about* and groups by
+ * subject — a patient, a legal matter, an asset, an incident — which outlives
+ * every conversation filed under it.
+ *
+ * Two things this screen exists to keep visible, because a plain list of
+ * records shows neither:
+ *
+ * **Asserted is not inferred.** A producer saying "this belongs to MRN-A12345"
+ * is a fact; an identifier that merely turned up in the text is a guess.
+ * Rendering them the same makes a timeline that silently contains somebody
+ * else's records, and there is nothing downstream that can detect it.
+ *
+ * **When it happened is not when it arrived.** The API orders on `event_time`
+ * for exactly that reason — a record backfilled from 2019 belongs in 2019 —
+ * and a record nothing dated is *said* rather than quietly filed under today.
+ */
+function CasesSection({ projectId, onGo }: {
+  projectId: string;
+  onGo: (section: Section) => void;
+}) {
+  const [cases, setCases] = useState<CaseSummary[]>([]);
+  const [timeline, setTimeline] = useState<CaseTimeline | null>(null);
+  const [kind, setKind] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+
+  // The declaration. `case_type` is free text on the API — the four below are
+  // the documented ones, not a closed set — so this is an input with
+  // suggestions rather than a select that would refuse a domain we have not
+  // thought of.
+  const [caseType, setCaseType] = useState("patient");
+  const [externalId, setExternalId] = useState("");
+  const [title, setTitle] = useState("");
+  // A list, because the column is a list. A single input here would make a
+  // subject known by both an MRN and an accession number undeclarable, though
+  // the schema has always allowed it.
+  const [identifiers, setIdentifiers] = useState<string[]>([""]);
+
+  const load = useCallback(async () => {
+    try {
+      const page = await call<{ cases: CaseSummary[] }>(`api/v1/projects/${projectId}/cases`);
+      setCases(page.cases);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const types = useMemo(
+    () => Array.from(new Set(cases.map((c) => c.case_type))).sort(),
+    [cases],
+  );
+  const shown = kind ? cases.filter((c) => c.case_type === kind) : cases;
+
+  // Why the button is not pressable, in the button's own tooltip.
+  const blocked = !caseType.trim()
+    ? "Say what kind of subject this is — patient, matter, asset"
+    : !externalId.trim()
+      ? "The identifier is what a case is joined on, and there is no default for it"
+      : null;
+
+  async function declare() {
+    setBusy(true);
+    setError(null);
+    setNote(null);
+    try {
+      const known = new Set(cases.map((c) => c.case_id));
+      const made = await call<{ case_id: string; case_type: string; external_id: string }>(
+        "api/v1/cases",
+        {
+          project_id: projectId,
+          case_type: caseType.trim(),
+          external_id: externalId.trim(),
+          title: title.trim() || null,
+          identifiers: identifiers.map((i) => i.trim()).filter(Boolean),
+        },
+        "PUT",
+      );
+      // An upsert, not an insert. Declaring an id that already exists returns
+      // the subject that is already there rather than a second one -- which is
+      // what makes this safe to press twice, and worth saying so nobody
+      // concludes they have just split a patient in half.
+      setNote(known.has(made.case_id)
+        ? `${made.external_id} was already declared — this is the same subject, not a second one.`
+        : `Declared ${made.case_type} ${made.external_id}.`);
+      setExternalId("");
+      setTitle("");
+      setIdentifiers([""]);
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function openTimeline(row: CaseSummary) {
+    setError(null);
+    try {
+      setTimeline(await call<CaseTimeline>(`api/v1/cases/${row.case_id}/timeline`));
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  return (
+    <div className="stack">
+      <h1>Cases</h1>
+      <p className="lede">
+        A subject and everything ever filed against it — a patient, a legal matter, an asset, an
+        incident. Records are joined to it on an <strong>identifier</strong> and never on a name:
+        two patients called John Smith are two subjects, and a merge of the two would be coherent,
+        checkable and somebody else&rsquo;s history.
+      </p>
+
+      {note && <p className="ok">{note}</p>}
+      {error && <p className="err">{error}</p>}
+
+      <section className="panel">
+        <h2>Declare a subject</h2>
+        <p className="empty" style={{ marginTop: 0 }}>
+          The identifier is the authoritative one the outside world already uses — a medical record
+          number, a matter number, an asset tag. The title is a label for people and is never
+          matched on.
+        </p>
+        <div className="row">
+          <label style={{ flex: "0 0 200px" }}>
+            Kind of subject
+            <input type="text" list="case-types" value={caseType}
+                   placeholder="patient" onChange={(e) => setCaseType(e.target.value)} />
+            <datalist id="case-types">
+              {Array.from(new Set([...types, "patient", "matter", "asset", "incident"]))
+                .sort()
+                .map((t) => <option key={t} value={t} />)}
+            </datalist>
+          </label>
+          <label style={{ flex: "0 0 220px" }}>
+            Identifier
+            <input type="text" value={externalId} placeholder="MRN-A12345"
+                   onChange={(e) => setExternalId(e.target.value)} />
+          </label>
+          <label style={{ flex: 1, minWidth: 200 }}>
+            Title — for people to read
+            <input type="text" value={title} placeholder="optional"
+                   onChange={(e) => setTitle(e.target.value)} />
+          </label>
+        </div>
+
+        <h3>Also known by</h3>
+        <p className="empty" style={{ marginTop: 0 }}>
+          Any other identifier that, written alongside a record, should pull it onto this
+          timeline — an accession number, a claim reference, a serial. These produce{" "}
+          <strong>inferred</strong> membership: a match rather than an assertion, recorded with
+          what it matched on.
+        </p>
+        {identifiers.map((value, i) => (
+          <div className="row" key={i} style={{ marginTop: 6 }}>
+            <input
+              type="text"
+              style={{ flex: 1 }}
+              placeholder="e.g. ACC-99821"
+              value={value}
+              onChange={(e) =>
+                setIdentifiers((list) => list.map((v, n) => (n === i ? e.target.value : v)))}
+            />
+            <button
+              className="linkish"
+              title={identifiers.length === 1 ? "Clear this one" : "Remove this identifier"}
+              onClick={() =>
+                setIdentifiers((list) =>
+                  list.length === 1 ? [""] : list.filter((_, n) => n !== i))}
+            >
+              remove
+            </button>
+          </div>
+        ))}
+        <div className="row" style={{ marginTop: 8 }}>
+          <button className="secondary" onClick={() => setIdentifiers((list) => [...list, ""])}>
+            Add another identifier
+          </button>
+          <span className="far" />
+          <button disabled={busy || blocked !== null} title={blocked ?? undefined}
+                  onClick={() => void declare()}>
+            {busy ? "Declaring…" : "Declare subject"}
+          </button>
+        </div>
+      </section>
+
+      <section className="panel">
+        <h2>Subjects</h2>
+        <div className="row">
+          <label style={{ flex: "0 0 220px" }}>
+            Kind
+            <select value={kind} onChange={(e) => setKind(e.target.value)}>
+              <option value="">all kinds</option>
+              {types.map((t) => <option key={t} value={t}>{t}</option>)}
+            </select>
+          </label>
+          <span className="hint far">
+            {shown.length === cases.length
+              ? `${cases.length} subject${cases.length === 1 ? "" : "s"}`
+              : `${shown.length} of ${cases.length}`}
+            {" · newest first"}
+          </span>
+        </div>
+
+        {/* Three different situations, three different sentences. One blank
+            table for all of them is the bug this console has shipped before. */}
+        {cases.length === 0 ? (
+          <p className="empty">
+            No subject has been declared in this project — or none you may see. Declare one above,
+            then attach records to it from <strong>Add data</strong>.
+          </p>
+        ) : shown.length === 0 ? (
+          <p className="empty">
+            No subject of kind <code>{kind}</code>. There are {cases.length} of other kinds.
+          </p>
+        ) : (
+          <table className="kv">
+            <tbody>
+              {shown.map((row) => (
+                <tr key={row.case_id}>
+                  <td style={{ width: "auto" }}>
+                    <button className="chip" onClick={() => void openTimeline(row)}>
+                      {row.external_id}
+                    </button>
+                  </td>
+                  <td>{row.title ?? <span className="empty">no title</span>}</td>
+                  <td style={{ width: 110 }}>{row.case_type}</td>
+                  <td style={{ width: 150 }}>
+                    {row.members === 0
+                      ? <span className="empty">nothing filed yet</span>
+                      : `${row.members} record${row.members === 1 ? "" : "s"}`}
+                  </td>
+                  <td style={{ width: 120, whiteSpace: "nowrap" }}>
+                    <span className="hint">
+                      {new Date(row.created_at).toLocaleDateString()}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+
+        {/* Never silent. "Nothing else matched" and "we stopped looking" are
+            different facts about this list. */}
+        {cases.length >= 200 && (
+          <p className="warned">
+            <strong>Stopped at 200 subjects.</strong> This project has more than are listed here,
+            so the counts above are of what was fetched rather than of what exists.
+          </p>
+        )}
+      </section>
+
+      {timeline && <CaseTimelineView timeline={timeline} onGo={onGo} />}
+    </div>
+  );
+}
+
+/**
+ * One subject's history, oldest first.
+ *
+ * The two facts a table of records cannot carry on its own are what this is
+ * built around: **how each record got here** — asserted or matched — and
+ * **when it happened**, which is not when it arrived.
+ */
+function CaseTimelineView({ timeline, onGo }: {
+  timeline: CaseTimeline;
+  onGo: (section: Section) => void;
+}) {
+  const undated = timeline.entries.filter((e) => !e.event_time).length;
+  // The API's own ceiling. A history silently truncated at 500 reads as a
+  // complete history, which for a clinical or legal subject is the worst
+  // available failure.
+  const capped = timeline.entries.length >= 500;
+
+  return (
+    <section className="panel">
+      <h2>{timeline.title ?? timeline.external_id}</h2>
+      <p className="hint">
+        <code>{timeline.case_type}</code> · <code>{timeline.external_id}</code> — oldest first, by
+        when each record says it happened rather than when we heard about it.
+      </p>
+
+      <div className="row">
+        <span className="chip on">{timeline.asserted} asserted</span>
+        <span className={`chip${timeline.inferred > 0 ? " warnchip" : ""}`}>
+          {timeline.inferred} inferred
+        </span>
+      </div>
+
+      {timeline.inferred > 0 ? (
+        <p className="warned">
+          <strong>{timeline.inferred} of these were matched, not asserted.</strong> An identifier
+          appearing in the text put them here; nobody declared that they belong to this subject.
+          Each row says what it matched on, which is the only way a wrong correlation can be
+          traced to its cause instead of hunted for.
+        </p>
+      ) : (
+        <p className="empty">
+          Every record here was asserted — a producer said whose it is. Nothing was guessed.
+        </p>
+      )}
+
+      {timeline.entries.length === 0 ? (
+        <>
+          <p className="empty">
+            Nothing is filed against this subject yet — or nothing you may see. The ACL is inside
+            the query, so an empty history and a history you have no access to look identical from
+            here.
+          </p>
+          <p className="empty">
+            Records join a subject when they are written, not from this screen. Attach one under{" "}
+            <strong>Where it goes, and what it is about</strong>.
+          </p>
+          <div className="row end">
+            <button onClick={() => onGo("add")}>Open Add data</button>
+          </div>
+        </>
+      ) : (
+        <table className="kv">
+          <tbody>
+            {timeline.entries.map((entry) => (
+              <tr key={entry.data_id}>
+                <td style={{ whiteSpace: "nowrap" }}>
+                  {entry.event_time
+                    ? new Date(entry.event_time).toLocaleDateString(undefined,
+                        { year: "numeric", month: "short", day: "numeric" })
+                    : <span className="warntext">undated</span>}
+                </td>
+                <td style={{ width: 140 }}>
+                  {entry.data_type ?? <span className="empty">unclassified</span>}
+                  <span className="hint"> · {entry.state}</span>
+                </td>
+                <td style={{ width: "auto" }}>
+                  {entry.preview?.trim()
+                    ? entry.preview.trim()
+                    : <span className="empty">no text was stored for this record</span>}
+                </td>
+                <td style={{ width: 260 }}><Basis entry={entry} /></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      {undated > 0 && (
+        <p className="warned">
+          <strong>{undated} record{undated === 1 ? "" : "s"} carr{undated === 1 ? "ies" : "y"} no
+          event time</strong>, so {undated === 1 ? "it sits" : "they sit"} at the end rather than
+          where {undated === 1 ? "it belongs" : "they belong"}. Set{" "}
+          <strong>When it happened</strong> on the write to place {undated === 1 ? "it" : "them"}.
+        </p>
+      )}
+
+      {capped && (
+        <p className="warned">
+          <strong>Stopped at 500 records.</strong> This is not the whole history — there is more
+          filed against this subject than is shown.
+        </p>
+      )}
+
+      <p className="empty">
+        Opening a history records a read against every record in it. That is what lets{" "}
+        <strong>Audit</strong> answer who looked at this subject, and it is deliberate rather than
+        incidental.
+      </p>
+    </section>
+  );
+}
+
+/** How a record got onto this timeline, as a sentence rather than a field. */
+function Basis({ entry }: { entry: TimelineEntry }) {
+  if (entry.basis === "asserted") {
+    return <span className="ok">asserted — a producer said so</span>;
+  }
+  return (
+    <span className="warntext">
+      matched on{" "}
+      {entry.matched_on
+        ? <code>{entry.matched_on}</code>
+        : <em>something that was not recorded</em>}
+      {entry.confidence !== null && ` · ${Math.round(entry.confidence * 100)}%`}
+    </span>
+  );
+}
+
 /* ----------------------------------------------------- 5. sharing */
 
 function SharingSection() {
@@ -9628,10 +10151,10 @@ type OverviewData = {
     probe_indexed: number | null;
     searchable_here: number;
   };
-  // `cases` is still counted by the API and no longer shown: the console has
-  // no case screen, and a tile for something with nowhere to go is a number
-  // that can only raise a question it cannot answer.
-  containers: { memories: number; live_shares: number };
+  // `cases` was counted by the API and not shown here, because the console had
+  // no case screen and a tile for something with nowhere to go is a number that
+  // can only raise a question it cannot answer. There is a screen now.
+  containers: { memories: number; cases: number; live_shares: number };
   activity: { writes_24h: number; reads_24h: number; queries_24h: number };
 };
 
@@ -9781,6 +10304,11 @@ function Overview({
         />
         <Tile value={derived.revisions} label="revisions kept" />
         <Tile value={containers.memories} label="memories" />
+        <Tile
+          value={containers.cases}
+          label="subjects"
+          note={containers.cases > 0 ? "patients, matters, assets — under Cases" : undefined}
+        />
         <Tile
           value={containers.live_shares}
           label="public shares"

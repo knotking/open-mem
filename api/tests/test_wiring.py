@@ -309,9 +309,10 @@ UNCALLED_ENDPOINTS: dict[str, str] = {
     "PATCH /api/v1/connections/{connection_id}":
         "personal vs shared scope, which decides ACL inheritance; nothing sets it",
 
-    # Cases are read by the console -- timelines and scope pickers -- and
-    # declared only by a producer through the write path.
-    "PUT /api/v1/cases": "cases are declared by producers; the console only reads them",
+    # `PUT /api/v1/cases` was exempt on the grounds that cases are declared by
+    # producers and the console only reads them. The Cases screen declares one
+    # now -- a subject nobody can create is a timeline nobody can start -- so
+    # the exemption is retired rather than reworded.
 
     # Configuration surfaces that read but do not write.
     "POST /api/v1/agents/{data_type}/config/test":
@@ -353,8 +354,11 @@ UNCALLED_ENDPOINTS: dict[str, str] = {
     # Listed here rather than deleted so this test keeps saying so out loud: if
     # one of these is ever meant to be reachable again, it needs a screen, and
     # if it is meant to be gone it should be deleted rather than exempted.
-    "GET /api/v1/projects/{project_id}/cases": "the Cases screen was removed",
-    "GET /api/v1/cases/{case_id}/timeline": "the Cases screen was removed",
+    # The two case reads are no longer here: the Cases screen came back, this
+    # time as the *subject* half of the story -- a patient, a matter, an asset
+    # and its whole history -- rather than as a third description of how the
+    # corpus is arranged, which is what got it removed. Exactly the movement
+    # this list is a ratchet for.
     "GET /api/v1/entities/{entity_id}": "the Entities screen was removed",
     "GET /api/v1/entities/{entity_id}/graph": "the Entities screen was removed",
     "GET /api/v1/entities/{entity_id}/co-mentions": "the Entities screen was removed",

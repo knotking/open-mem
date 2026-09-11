@@ -141,3 +141,61 @@ async def test_the_range_endpoint_binds_its_from_and_to(client, tenant, pool):
         f"/api/v1/memories/{memory_id}/changes?net=true", headers=auth)
     assert netted.status_code == 400, netted.text
     assert "starting point" in netted.json()["detail"]
+
+
+async def test_a_completed_upload_keeps_its_subject_and_its_date(client, tenant, pool):
+    """An uploaded item must be able to say everything an inline one can.
+
+    `access`, `template` and `options` were added here once for this reason.
+    `case`, `identifiers` and `event_time` were not, so a document big enough to
+    need an upload session landed **detached from the subject it was filed
+    under and dated when it arrived**, while the identical file sent inline
+    attached and kept its date. Nothing raises: the write succeeds, the record
+    is real, and it is simply missing from the patient's timeline -- which is
+    the failure a case exists to prevent.
+
+    Asserted through the timeline rather than the response, because the response
+    is 207 either way.
+    """
+    auth = {"Authorization": f"Bearer {tenant.api_key}"}
+
+    session = await client.post(
+        "/api/v1/uploads", headers=auth,
+        json={"producer_id": tenant.producer_id, "external_id": "discharge.txt",
+              "mime_type": "text/plain", "size": 21})
+    assert session.status_code == 200, session.text
+    upload_id, token = session.json()["upload_id"], session.json()["token"]
+
+    put = await client.put(
+        f"/api/v1/uploads/{upload_id}/bytes",
+        headers={"X-Upload-Token": token, "content-type": "text/plain"},
+        content=b"Discharged, improving",
+    )
+    assert put.status_code == 200, put.text
+
+    finished = await client.post(
+        f"/api/v1/uploads/{upload_id}/complete", headers=auth,
+        json={"external_id": "discharge.txt",
+              "case": {"case_type": "patient", "external_id": "MRN-A12345"},
+              "identifiers": ["ACC-99821"],
+              # Back-dated on purpose: an `event_time` that is silently dropped
+              # is invisible until somebody reads a history in the wrong order.
+              "event_time": "2019-04-02T09:00:00+00:00"},
+    )
+    assert finished.status_code == 207, finished.text
+
+    case_id = await pool.fetchval(
+        "SELECT case_id FROM cases WHERE project_id = $1 AND external_id = $2",
+        tenant.project_id, "MRN-A12345")
+    assert case_id, "the completion should have declared the subject it named"
+
+    timeline = await client.get(f"/api/v1/cases/{case_id}/timeline", headers=auth)
+    assert timeline.status_code == 200, timeline.text
+    entries = timeline.json()["entries"]
+    assert len(entries) == 1, "the uploaded document is a member of the case it named"
+    assert entries[0]["basis"] == "asserted"
+    assert entries[0]["event_time"].startswith("2019-04-02")
+
+    identifiers = await pool.fetchval(
+        "SELECT identifiers FROM data_items WHERE data_id = $1", entries[0]["data_id"])
+    assert identifiers == ["ACC-99821"]

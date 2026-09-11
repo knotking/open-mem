@@ -130,6 +130,13 @@ export const ALLOWED = [
   /^api\/v1\/compaction\/jobs\/[A-Za-z0-9_]+\/(preview|run|enabled|runs)(\?.*)?$/,
   /^api\/v1\/projects\/[A-Za-z0-9_]+\/compaction\/jobs$/,
   /^api\/v1\/data\/[A-Za-z0-9_]+\/memories$/,
+  // Cases -- a subject and its timeline. The console had no case screen when
+  // these endpoints landed, which is why they were absent here; a screen
+  // without them would have rendered an empty list against a project full of
+  // subjects and looked like a project with no subjects in it.
+  /^api\/v1\/cases$/,
+  /^api\/v1\/cases\/[A-Za-z0-9_]+\/timeline$/,
+  /^api\/v1\/projects\/[A-Za-z0-9_]+\/cases$/,
   /^api\/v1\/audit(\?.*)?$/,
   /^api\/v1\/events(\?.*)?$/,
   /^api\/v1\/data\/[A-Za-z0-9_]+\/enrich$/,

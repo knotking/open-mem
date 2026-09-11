@@ -2149,6 +2149,18 @@ async def finish_upload(
         item["access"] = body["access"]
     if body.get("template"):
         item["template"] = body["template"]
+    # The same rule, for the three fields that say what an item is *about*
+    # rather than what to do with it. Without them a document large enough to
+    # need this path would land detached from the subject it was filed under
+    # and dated when it arrived, while the identical file inlined attached and
+    # kept its date -- which is the quiet difference the block above exists to
+    # prevent, and a patient timeline is where it does the most damage.
+    if body.get("case"):
+        item["case"] = body["case"]
+    if body.get("identifiers"):
+        item["identifiers"] = body["identifiers"]
+    if body.get("event_time"):
+        item["event_time"] = body["event_time"]
     write_request = WriteRequest(
         producer_id=session["producer_id"],
         items=[item],

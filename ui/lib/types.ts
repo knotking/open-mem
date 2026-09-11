@@ -189,11 +189,67 @@ export type ResolvedAuthor = {
 export type Section =
   | "overview"
   | "add" | "update" | "ask" | "inbound" | "crawlers" | "repos" | "mcp"
-  | "memory" | "compaction" | "reprocess"
+  | "memory" | "cases" | "compaction" | "reprocess"
   | "alerts" | "standing"
   | "audit" | "sharing" | "deletion"
   | "settings" | "models" | "prompts"
   | "projects" | "keys" | "platform";
+
+/**
+ * A subject, and everything said about it — a patient, a legal matter, an asset.
+ *
+ * A memory answers *how long does this matter*; a case answers *what is this
+ * about*. The load-bearing field is `external_id`: a case is joined on an
+ * authoritative identifier and never on a name, because two patients called
+ * John Smith must never become one patient.
+ */
+export type CaseSummary = {
+  case_id: string;
+  case_type: string;
+  external_id: string;
+  title: string | null;
+  created_at: string;
+  /** Members *you* can see. The ACL is inside the count, so two people
+   *  looking at the same subject can legitimately see different numbers. */
+  members: number;
+};
+
+/**
+ * One record on a timeline, and how it got there.
+ *
+ * `basis` is the distinction the whole feature rests on. `asserted` is a
+ * producer saying "this belongs to MRN-A12345"; `inferred` is an identifier
+ * that turned up in the text. A timeline that renders them identically is a
+ * timeline that silently includes somebody else's records.
+ */
+export type TimelineEntry = {
+  data_id: string;
+  /** When it *happened*. Null is a real state — nothing dated this record, so
+   *  the API sorts it last rather than guessing where it belongs. */
+  event_time: string | null;
+  ingested_at: string;
+  state: string;
+  data_type: string | null;
+  mime_type: string | null;
+  basis: "asserted" | "inferred";
+  confidence: number | null;
+  /** The identifier an inferred membership matched on — the only way a wrong
+   *  correlation can be traced to its cause rather than guessed at. */
+  matched_on: string | null;
+  preview: string | null;
+};
+
+export type CaseTimeline = {
+  case_id: string;
+  case_type: string;
+  external_id: string;
+  title: string | null;
+  project_id: string;
+  /** Oldest first, by `event_time`. Capped at 500 by the API. */
+  entries: TimelineEntry[];
+  asserted: number;
+  inferred: number;
+};
 
 export type MemoryType = {
   type_id: string;
