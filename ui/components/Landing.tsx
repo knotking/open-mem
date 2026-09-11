@@ -723,6 +723,92 @@ function ScholarDiagram() {
   );
 }
 
+function SchoolDiagram() {
+  // The marks a teacher writes down anyway. Deliberately one student and one
+  // skill: a dashboard of a whole class is the picture every school product
+  // already draws, and it is not the claim here.
+  const LESSONS = [
+    { x: 8, when: "September · diagnostic", a: "fractions 4/10",
+      b: "wrote: “guesses the denominator”", ok: false },
+    { x: 330, when: "October · exit tickets", a: "fractions 7/10",
+      b: "wrote: “checks it now, slowly”", ok: true },
+    { x: 652, when: "December · unit test", a: "fractions 9/10",
+      b: "ratios 8/10 — it carried", ok: true },
+  ];
+  return (
+    <svg viewBox="0 0 940 396" className="flow-svg use-svg" role="img"
+         aria-label="A teacher's own marks and comments — a diagnostic, exit tickets, a
+                     unit test — become checkpoints on one student's timeline. Read
+                     forwards by the teacher, the same denominator error appearing three
+                     lessons running is visible in the third lesson rather than in
+                     December's report card. Read back to the student, the same record is
+                     a trajectory rather than a verdict: four out of ten to nine out of
+                     ten, with the sentence that says what changed and the piece of work
+                     it came from.">
+      <text x="8" y="16" className="flow-stage">
+        ONE STUDENT, ONE SKILL — THE MARKS A TEACHER WRITES DOWN ANYWAY
+      </text>
+
+      {LESSONS.map((l) => (
+        <g key={l.when}>
+          <g className="flow-box">
+            <rect x={l.x} y="30" width="280" height="90" rx="10" />
+            <text x={l.x + 18} y="58" className="flow-h">{l.when}</text>
+            <text x={l.x + 18} y="82" className="flow-s">{l.a}</text>
+            <text x={l.x + 18} y="102" className="flow-s">{l.b}</text>
+          </g>
+          <g className={`use-dot ${l.ok ? "use-green" : "use-red"}`}>
+            <circle cx={l.x + 258} cy="52" r="7" />
+          </g>
+        </g>
+      ))}
+
+      <g className="flow-line">
+        <path d="M 288 74 L 322 74" />
+        <path d="M 610 74 L 644 74" />
+        <path d="M 314 120 L 314 132" />
+        <path d="M 636 120 L 636 132" />
+      </g>
+      <g className="use-delta">
+        <rect x="169" y="132" width="290" height="26" rx="6" />
+        <text x="181" y="150">4/10 → 7/10 · the guess stopped</text>
+        <rect x="491" y="132" width="290" height="26" rx="6" />
+        <text x="503" y="150">7/10 → 9/10 · and it held in ratios</text>
+      </g>
+
+      <text x="8" y="196" className="flow-stage">THE SAME RECORD, READ TWO WAYS</text>
+
+      <g className="flow-box use-read">
+        <rect x="8" y="210" width="452" height="146" rx="10" />
+        <text x="28" y="238" className="flow-h">The teacher: who needs me this week?</text>
+        <text x="28" y="270" className="use-count">the same error, 3 times</text>
+        <text x="28" y="296" className="flow-s">one misconception recurring across three</text>
+        <text x="28" y="313" className="flow-s">lessons is a thing to say something about</text>
+        <text x="28" y="330" className="flow-s">in the third lesson, not in December</text>
+      </g>
+
+      {/* The half of the picture a grade never shows the student: not where
+          they landed but which way they are travelling, and the evidence is
+          their own work rather than an encouraging adjective. */}
+      <g className="flow-box use-read">
+        <rect x="480" y="210" width="452" height="146" rx="10" />
+        <text x="500" y="238" className="flow-h">The student: how far have I come?</text>
+        <text x="500" y="270" className="use-count">4/10 → 9/10</text>
+        <text x="500" y="296" className="flow-s">and the sentence that says why — you</text>
+        <text x="500" y="313" className="flow-s">stopped guessing the denominator</text>
+      </g>
+      <g className="use-cite">
+        <rect x="500" y="322" width="176" height="20" rx="5" />
+        <text x="510" y="336">4 Oct exit ticket · q7</text>
+      </g>
+
+      <text x="8" y="388" className="flow-s">
+        a grade is a verdict; a term of checkpoints is a direction — and every claim opens the work it came from
+      </text>
+    </svg>
+  );
+}
+
 /**
  * The diagrams tab: how it works, then what it is for.
  *
@@ -794,6 +880,16 @@ function Diagrams() {
            + "timeline as well — so “what changed since last week” is a question you can "
            + "ask of it.",
       art: <ZoomDiagram /> },
+    { key: "school", label: "A student’s term",
+      title: "A term of a teacher’s own notes, read back to the student",
+      claim: "A teacher records marks, exit tickets and comments anyway. Each lesson "
+           + "becomes a checkpoint on one student’s timeline, so the same misconception "
+           + "three lessons running is visible in the third lesson rather than in "
+           + "December’s report card. Read the other way, that record is the thing a "
+           + "grade never shows the student: not a verdict but a direction — 4 out of "
+           + "10 to 9 out of 10, with the sentence that says what changed and the piece "
+           + "of their own work it came from.",
+      art: <SchoolDiagram /> },
   ];
   const shown = PANES.find((x) => x.key === pane) ?? PANES[0];
 
