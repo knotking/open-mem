@@ -11,6 +11,20 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **A use case on the signed-out page for the thing that speaks first.** The
+  other ten are all somebody asking a question; standing queries and alerts
+  appeared on the site only as two labels inside the architecture diagram. This
+  one draws what the Monitor half of the console actually does: a rule written
+  once that watches *forward* from a watermark and sees each record exactly
+  once — never a re-scan; a deadline as a second kind of rule over the record's
+  own date, because nothing arrives on the day one approaches; a selector that
+  narrows nothing refused outright, since its feed would be a copy of the
+  project; and delivery checked under the owner's own visibility **at match
+  time** rather than rights copied when the rule was written, because a match
+  handed to somebody who cannot see the record leaves the system through the
+  notification channel. Delivery is a feed you poll or a memory you can then
+  question — there is no webhook delivery for a standing query; that is event
+  subscriptions, which is a different primitive.
 - **Cases is a screen again**, under *Your data* — the other way to walk a
   corpus. A memory answers how long something matters; a case answers what it is
   about, and a patient, a legal matter or an asset outlives every conversation
