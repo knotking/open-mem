@@ -268,7 +268,11 @@ function ArrowDefs() {
       <defs>
         <marker id="flow-arrow" viewBox="0 0 10 10" refX="9" refY="5"
                 markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-          <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--muted)" />
+          {/* A literal, where everything else here is a token. A marker inherits
+              from where it is *defined*, and this one is defined in a hidden
+              svg outside every slab — so `var(--d-rule)` resolves to nothing
+              and the arrowheads disappear. Same value as `--d-rule`. */}
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#9aa08e" />
         </marker>
       </defs>
     </svg>
@@ -918,7 +922,7 @@ function Diagrams() {
                aria-labelledby={`sub-${shown.key}`}>
         <h2 className="section-title">{shown.title}</h2>
         <p className="use-claim">{shown.claim}</p>
-        <div className="flow-scroll">{shown.art}</div>
+        <div className="slab">{shown.art}</div>
       </section>
     </>
   );

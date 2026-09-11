@@ -81,3 +81,33 @@ test("bold and italic, without eating a bare asterisk", () => {
   assert.match(render("**loud** and *quiet*"),
     /<strong>loud<\/strong> and <em>quiet<\/em>/);
 });
+
+test("a mermaid block becomes its rendered diagram, keyed by its own source", () => {
+  const source = "flowchart LR\n  A --> B";
+  const md = ["```mermaid", source, "```"].join("\n");
+
+  const html = render(md, (h) => h, { [source]: "<svg id='d'></svg>" });
+  assert.match(html, /<figure class="slab slab-doc"><svg id='d'><\/svg><\/figure>/);
+  assert.doesNotMatch(html, /<pre/);
+});
+
+test("a mermaid block with no rendering stays a code block rather than vanishing", () => {
+  const md = ["```mermaid", "flowchart LR", "  A --> B", "```"].join("\n");
+
+  // The whole point of keying on the source: an edited diagram misses the
+  // lookup, and a miss has to degrade to what it was before -- readable text --
+  // not to an empty figure.
+  assert.match(render(md), /<pre class="lang-mermaid"><code>flowchart LR/);
+  assert.match(render(md, (h) => h, { "flowchart LR\n  A --> C": "<svg/>" }),
+    /<pre class="lang-mermaid">/);
+});
+
+test("a diagram lookup cannot be talked into emitting the document's own markup", () => {
+  // The key comes from the document; the markup never does. A block whose
+  // source is a script tag looks up a diagram that does not exist and is
+  // escaped as text, exactly like any other unrendered block.
+  const md = ["```mermaid", "<script>alert(1)</script>", "```"].join("\n");
+  const html = render(md, (h) => h, {});
+  assert.doesNotMatch(html, /<script>/);
+  assert.match(html, /&lt;script&gt;/);
+});

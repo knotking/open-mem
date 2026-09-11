@@ -16,6 +16,19 @@ MEMDOG_PROJECT_ID=prj_... MEMDOG_PRODUCER_ID=key_... npm start
 
 Live: `https://memdog-sandbox-266276359448.us-central1.run.app`
 
+## Diagrams are rendered ahead of time, not in the browser
+
+Every ```mermaid block in the published docs is rendered to SVG by
+`npm run diagrams` and committed to `lib/docs-diagrams.ts`, keyed by its own
+source text. **Run it whenever a diagram in `docs/` changes, and commit what it
+writes** — `npm run verify` fails otherwise, naming the document, because a
+diagram with no rendering serves as mermaid source text and that is exactly what
+it looked like for as long as it was happening.
+
+It needs Google Chrome: mermaid measures text to lay a diagram out, and in jsdom
+every shape collapses. Rendering in the browser instead would make mermaid the
+fourth runtime dependency of a UI that has three.
+
 ## Both credentials stay on the server
 
 The browser talks only to `/api/proxy/*`. That route adds two headers and

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
+import DIAGRAMS from "@/lib/docs-diagrams";
 import { BY_SLUG, DOCS, linkFor } from "@/lib/docs";
 import { render } from "@/lib/markdown";
 
@@ -23,7 +24,7 @@ export default async function DocPage({ params }: { params: Promise<{ slug: stri
   // Links are resolved against the *published* set, so a reference to a
   // document this section does not carry renders as its own label rather than
   // as a link to nothing.
-  const html = render(doc.body, (href) => linkFor(doc, href));
+  const html = render(doc.body, (href) => linkFor(doc, href), DIAGRAMS);
   const index = DOCS.findIndex((d) => d.slug === doc.slug);
   const previous = index > 0 ? DOCS[index - 1] : null;
   const next = index < DOCS.length - 1 ? DOCS[index + 1] : null;
