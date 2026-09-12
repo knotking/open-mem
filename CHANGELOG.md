@@ -11,6 +11,31 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **Connect a Google Drive folder by sharing it with an address.** *Add data* has
+  a sixth kind: copy the address the console shows, share the folder with it in
+  Drive, paste the folder's link. Every document under it, subfolders included,
+  is downloaded and parsed — Docs, Sheets and Slides exported as text — so what
+  lands is answerable with citations rather than a list of filenames. It replaces
+  the old route, which was to create a service account elsewhere, download its
+  key and paste that.
+- **The crawler arrives switched off and the dry run is the point.** A folder
+  nobody shared authenticates perfectly and returns nothing, so a dry run
+  reporting **zero is the answer, not a failure** — it is the only signal that
+  the share step was missed, and it has to arrive before anything is ingested.
+- **A folder belongs to the first project that connects it**, and a second is
+  refused with `409`. One identity reads every folder shared with it and a folder
+  id lives in a URL, so without this, knowing an id would be enough to read
+  another tenant's documents. Reconnecting a folder you already have returns the
+  existing crawler rather than a second one.
+
+### Migrations
+- None. **A new optional secret**: `memdog-drive-key`, a service-account JSON key,
+  mounted as `DRIVE_SERVICE_ACCOUNT`. `cloudrun.sh` binds it only when the secret
+  exists, because `--set-secrets` fails on one that does not. Without it the
+  feature reports itself unconfigured and everything else is unaffected — see the
+  `deploy-gcp` skill for switching it on.
+
+### Added
 - **A use case on the signed-out page for the thing that speaks first.** The
   other ten are all somebody asking a question; standing queries and alerts
   appeared on the site only as two labels inside the architecture diagram. This
