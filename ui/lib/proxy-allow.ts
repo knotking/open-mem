@@ -134,6 +134,11 @@ export const ALLOWED = [
   // these endpoints landed, which is why they were absent here; a screen
   // without them would have rendered an empty list against a project full of
   // subjects and looked like a project with no subjects in it.
+  // Connecting a Drive folder: the address to share it with, and the connect
+  // itself. Without these the panel would render, show a blank address and
+  // refuse every connect -- silently, which is how the Alerts screen shipped.
+  /^api\/v1\/drive\/share-address$/,
+  /^api\/v1\/drive\/connect$/,
   /^api\/v1\/cases$/,
   /^api\/v1\/cases\/[A-Za-z0-9_]+\/timeline$/,
   /^api\/v1\/projects\/[A-Za-z0-9_]+\/cases$/,

@@ -27,6 +27,8 @@ import {
   ArmKey,
   AuditTrail,
   CaseSummary,
+  DriveAddress,
+  DriveConnected,
   CaseTimeline,
   TimelineEntry,
   Item,
@@ -252,7 +254,9 @@ const HOW_TO: Partial<Record<Section, string[]>> = {
     "Steps 3 to 5 all have working defaults; open them only to change where it goes and what it is about, what is done to it, or who may see it.",
     "Step 3 also files the record against a subject — a patient, a matter, an asset — and dates it by when it happened rather than when it arrived. Both matter for anything scanned, forwarded or backfilled.",
     "Press Add data. What happened to it appears at the top — the climb from stored to searchable is watched there.",
-    "Two kinds are not writes and skip steps 3 to 5, because neither becomes an item: a GitHub repository becomes a snapshot, and a researcher becomes a crawler.",
+    "Three kinds are not writes and skip steps 3 to 5, because none of them becomes an item: a GitHub repository becomes a snapshot, and a researcher or a Drive folder becomes a crawler.",
+    "Example — a Google Drive folder: share the folder with the address shown, in Drive, then paste the folder's link. Every document under it, subfolders included, is downloaded and parsed — Docs, Sheets and Slides exported as text — so what lands is answerable with citations rather than a list of filenames.",
+    "Then dry-run it under Crawlers, and read the count. Zero is the answer rather than a failure: it means the folder was never shared with that address, which is the one step in this that has no error message of its own.",
     // The worked example, because this one has a step people skip and a failure
     // they cannot see afterwards.
     "Example — a researcher's papers: paste a Scholar profile URL. The profile says which researcher is meant; OpenAlex supplies the full works list and the open-access PDFs, which are downloaded, read and indexed into a memory of their own, keyed to the author — so you can ask questions of their work with citations.",
@@ -1097,7 +1101,7 @@ function AddData({
     "The checkout service returned 502s for eleven minutes after a bad deploy.\n\nRollback completed at 14:02 UTC and error rates recovered.",
   );
   const [source, setSource] =
-    useState<"text" | "file" | "video" | "page" | "repo" | "scholar">("text");
+    useState<"text" | "file" | "video" | "page" | "repo" | "scholar" | "drive">("text");
   const [videoUrl, setVideoUrl] = useState("");
   const [pageUrl, setPageUrl] = useState("");
   const [repoUrl, setRepoUrl] = useState("");
@@ -1116,10 +1120,20 @@ function AddData({
   const [scholarDone, setScholarDone] = useState<ResolvedAuthor | null>(null);
   const [scholarKey, setScholarKey] = useState<string | null>(null);
 
+  // Connecting a Drive folder is two steps in Drive and one here, so the
+  // address is the screen's whole first half. Fetched rather than configured in
+  // the client: it is a property of the deployment, and a console that printed
+  // an address the server does not actually hold would send somebody to share a
+  // folder with nobody.
+  const [driveAddress, setDriveAddress] = useState<DriveAddress | null>(null);
+  const [driveUrl, setDriveUrl] = useState("");
+  const [driveDone, setDriveDone] = useState<DriveConnected | null>(null);
+  const [copied, setCopied] = useState(false);
+
   // Kinds that do not go through the write path at all. A repository becomes a
   // snapshot and a researcher becomes a crawler, so neither takes the memory,
   // enrichment or audience decisions in steps 3 to 5.
-  const notAWrite = source === "repo" || source === "scholar";
+  const notAWrite = source === "repo" || source === "scholar" || source === "drive";
   const [staged, setStaged] = useState<Staged | null>(null);
   // Which optional steps are open. Closed by default because each has a
   // working default and the button is what people came for.
@@ -1193,6 +1207,16 @@ function AddData({
       .catch(() => setMemories([]));
   }, [projectId]);
   useEffect(() => { loadMemories(); }, [loadMemories]);
+
+  // Asked once, and only when it could be needed. A deployment without a Drive
+  // reader answers `configured: false`, which the panel renders as a sentence
+  // rather than as an empty field.
+  useEffect(() => {
+    if (source !== "drive" || driveAddress) return;
+    void call<DriveAddress>("api/v1/drive/share-address")
+      .then(setDriveAddress)
+      .catch(() => setDriveAddress({ configured: false, address: null }));
+  }, [source, driveAddress]);
 
   const loadCases = useCallback(() => {
     void call<{ cases: CaseSummary[] }>(`api/v1/projects/${projectId}/cases`)
@@ -1274,6 +1298,10 @@ function AddData({
       ? (scholarProfile(scholarUrl) ? null : scholarUrl.trim()
           ? "That is not a Google Scholar profile URL"
           : "Paste a Scholar profile link first")
+    : source === "drive"
+      ? (!driveAddress?.configured
+          ? "This deployment has no Drive reader configured"
+          : driveUrl.trim() ? null : "Share the folder, then paste its link")
     : source === "page"
       ? (httpUrl(pageUrl) ? null : pageUrl.trim()
           ? "That needs to be a http:// or https:// address"
@@ -1439,6 +1467,22 @@ function AddData({
       // OpenAlex author, and their papers arrive as a *crawler* — created
       // disabled, because the resolution can land on the wrong person and a dry
       // run is how that gets caught before a corpus exists.
+      // Not a write either. A folder becomes a *crawler*, created disabled,
+      // because the dry run is the only thing that can tell a folder somebody
+      // forgot to share from a folder with nothing in it — and that answer has
+      // to arrive before anything is ingested rather than as a quiet zero
+      // afterwards.
+      if (source === "drive") {
+        const made = await call<DriveConnected>("api/v1/drive/connect", {
+          project_id: projectId, folder: driveUrl.trim(), enrich,
+        });
+        setDriveDone(made);
+        setNote(made.reused
+          ? "That folder was already connected here — this is the same crawler."
+          : "Connected. The crawler is created and switched off.");
+        await onChange();
+        return;
+      }
       if (source === "scholar") {
         const made = await call<{ crawler_id?: string; memory_key?: string;
                                   author?: ResolvedAuthor;
@@ -1598,6 +1642,43 @@ function AddData({
         </section>
       )}
 
+      {/* Not "done". The dry run is the only thing that distinguishes a folder
+          nobody shared from a folder with nothing in it, so the confirmation is
+          a route to the place that answers that, and it says what the answer
+          will look like before it is read. */}
+      {driveDone && (
+        <section className="panel">
+          <h2>
+            {driveDone.reused
+              ? "Already connected — this is the same folder"
+              : "Connected — now find out whether it was shared"}
+          </h2>
+          {driveDone.reused && (
+            <p className="empty" style={{ marginTop: 0 }}>
+              This folder was already connected to this project, so the crawler below is the one
+              that already existed rather than a second one on the same folder.
+            </p>
+          )}
+          <table className="kv">
+            <tbody>
+              <tr><td>Folder</td><td><code>{driveDone.folder}</code></td></tr>
+              <tr><td>Shared with</td><td><code>{driveDone.share_address}</code></td></tr>
+              <tr><td>Crawler</td><td><code>{driveDone.crawler_id}</code> — switched off</td></tr>
+            </tbody>
+          </table>
+          <p className="empty">
+            Dry-run it under <strong>Crawlers</strong>. The dry run walks the identical code and
+            stops short of the write, so its count is what a live run would fetch.{" "}
+            <strong>A count of zero is the answer, not a failure</strong> — it means the folder was
+            never shared with that address, which is the one step of this that has no error
+            message of its own.
+          </p>
+          <div className="row end">
+            <button onClick={() => onGo("crawlers")}>Open Crawlers</button>
+          </div>
+        </section>
+      )}
+
       {repoDone && note && (
         <section className="panel">
           <h2>What happened to it</h2>
@@ -1687,6 +1768,15 @@ function AddData({
             />
             A researcher&rsquo;s papers
           </label>
+          <label className="check">
+            <input
+              type="radio"
+              name="add-source"
+              checked={source === "drive"}
+              onChange={() => { setSource("drive"); setStaged(null); setDriveDone(null); }}
+            />
+            A Google Drive folder
+          </label>
         </div>
       </section>
 
@@ -1697,10 +1787,72 @@ function AddData({
             : source === "page" ? "The page"
             : source === "repo" ? "The repository"
             : source === "scholar" ? "The Scholar profile"
+            : source === "drive" ? "The folder"
             : "The file"
         }</h2>
         {source === "text" ? (
           <textarea value={text} onChange={(e) => setText(e.target.value)} />
+        ) : source === "drive" ? (
+          <>
+            {/* Two of the three steps happen in Drive, so they are numbered
+                here rather than implied. The share is the one people skip, and
+                it is the one whose failure is silent — an unshared folder is
+                not an error, it is an empty folder — so it goes first and it
+                gets the address on a control rather than in prose. */}
+            {driveAddress === null ? (
+              <p className="empty" style={{ marginTop: 0 }}>Looking up the address…</p>
+            ) : !driveAddress.configured ? (
+              <p className="warned" style={{ marginTop: 0 }}>
+                <strong>This deployment has no Drive reader.</strong> There is no address to share
+                a folder with until <code>DRIVE_SERVICE_ACCOUNT</code> is set on the API, so
+                connecting a folder would fail. Nothing here is broken — the feature is not
+                switched on.
+              </p>
+            ) : (
+              <>
+                <p className="empty" style={{ marginTop: 0 }}>
+                  <strong>1.</strong> In Drive, share the folder with this address — <em>Viewer</em>{" "}
+                  is enough. This is the step that has no error: a folder nobody shared reads as a
+                  folder with nothing in it.
+                </p>
+                <div className="row">
+                  <code style={{ flex: 1, wordBreak: "break-all" }}>{driveAddress.address}</code>
+                  <button
+                    className="secondary"
+                    onClick={() => {
+                      void navigator.clipboard?.writeText(driveAddress.address ?? "");
+                      setCopied(true);
+                    }}
+                  >
+                    {copied ? "Copied" : "Copy"}
+                  </button>
+                </div>
+                <p className="empty" style={{ marginTop: 12 }}>
+                  <strong>2.</strong> Paste the folder&rsquo;s link. Open the folder itself — the
+                  address contains <code>/folders/</code>.
+                </p>
+                <input
+                  type="url"
+                  value={driveUrl}
+                  placeholder="https://drive.google.com/drive/folders/1AbCdEf..."
+                  onChange={(e) => { setDriveUrl(e.target.value); setDriveDone(null); }}
+                  style={{ width: "100%" }}
+                />
+                <p className="empty" style={{ marginTop: 6 }}>
+                  Every document under it, including subfolders. Docs, Sheets and Slides are
+                  exported as text; everything else is downloaded as it is and parsed — so what
+                  lands is a corpus you can <strong>ask questions of with citations</strong>, not a
+                  list of filenames.
+                </p>
+                <p className="warned" style={{ marginTop: 6 }}>
+                  <strong>One address reads every folder shared with it</strong>, which is why a
+                  folder belongs to the first project that connects it — a folder id is in a URL
+                  and is not a secret. A folder another project already connected is refused rather
+                  than attached to twice.
+                </p>
+              </>
+            )}
+          </>
         ) : source === "scholar" ? (
           <>
             <input
@@ -2122,7 +2274,12 @@ function AddData({
       {/* The whole decision, next to the thing that commits it. */}
       <section className="panel addbar">
         <div className="addsummary">
-          {source === "scholar" ? (
+          {source === "drive" ? (
+            <>
+              <span className="empty">→ a memory of its own, keyed to the folder</span>
+              <span className="warntext">· created switched off, until a dry run says it was shared</span>
+            </>
+          ) : source === "scholar" ? (
             <>
               <span className="empty">→ a memory of its own, keyed to the author</span>
               <span className="warntext">· created switched off, until you confirm the person</span>
@@ -2154,7 +2311,8 @@ function AddData({
               ? (source === "repo" ? "Analysing…"
                  : source === "scholar" ? "Resolving…" : "Adding…")
               : (source === "repo" ? "Analyse repository"
-                 : source === "scholar" ? "Find this researcher" : "Add data")}
+                 : source === "scholar" ? "Find this researcher"
+        : source === "drive" ? "Connect this folder" : "Add data")}
           </button>
         </div>
       </section>

@@ -32,6 +32,7 @@ reachable as `pagarwal@buildgeek.ai`.
 | Repo analysis | Cloud Run Job `memdog-repo-analysis` | **Not on the API image** — own Dockerfile, own tag, own deploy. Off unless `REPO_ANALYSIS_JOB` is set. |
 | Schedules | `memdog-reconcile-tick` every 10 min → `memdog-reconcile`; `memdog-alert-sweep` every 1 min → `memdog-alert-tick` | |
 | Secrets | `memdog-db-password`, `memdog-master-key`, `memdog-demo-key`, `memdog-web-api-key`, `gemini-api-key` | |
+| Drive reader | `memdog-drive-key` | **Optional.** A service-account JSON key, mounted as `DRIVE_SERVICE_ACCOUNT`. Absent, Drive folders report themselves unconfigured — see [Connecting a Drive folder](#connecting-a-drive-folder). |
 | Console sign-in | `owner@memdog.dev` (owner), `demo@memdog.dev` (admin) | Identity Platform; passwords in `memdog-owner-password` / `memdog-demo-password` |
 
 **There is no GKE, no Kubernetes and no Supabase.** If a doc or an old memory
@@ -191,6 +192,50 @@ against a live account.** They are written from published documentation and
 carry the date they were read. An item refused as beyond the model is refused on
 the strength of that table, so a stale number is a wrong answer rather than a
 slow one — worth one manual run against a real key.
+
+### Connecting a Drive folder
+
+`DRIVE_SERVICE_ACCOUNT` holds one service-account JSON key — the deployment's own
+Drive reader — so that connecting a folder is *sharing it with an address*
+rather than every tenant creating a service account and pasting its key.
+
+**It is optional and `cloudrun.sh` treats it that way.** The secret is added to
+`--set-secrets` only when it exists, because `--set-secrets` fails outright on a
+secret that does not — and a deployment without a Drive reader is not broken.
+`GET /api/v1/drive/share-address` answers `configured: false` and the console
+says the feature is not switched on, which is a different sentence from a panel
+that failed to load.
+
+To switch it on, create the key in **Google Cloud → IAM → Service Accounts** (a
+plain account, no roles needed on this project — its power comes entirely from
+what people share with it), enable the Drive API on the key's own project, then:
+
+```bash
+gcloud secrets create memdog-drive-key --project memdog-dev-506718 --replication-policy automatic
+gcloud secrets versions add memdog-drive-key --project memdog-dev-506718 --data-file=key.json
+gcloud secrets add-iam-policy-binding memdog-drive-key --project memdog-dev-506718 \
+  --member serviceAccount:memdog-api@memdog-dev-506718.iam.gserviceaccount.com \
+  --role roles/secretmanager.secretAccessor
+cd api && ./deploy/cloudrun.sh <tag>     # the secret only binds on a new revision
+rm key.json
+```
+
+Then verify the address the console will show, and share a folder with exactly
+that address:
+
+```bash
+curl -sf -H "X-API-Key: $KEY" $URL/api/v1/drive/share-address
+```
+
+- **A connected folder crawls nothing and reports zero, with no error.** That is
+  the folder never having been shared with the address, and it is the only
+  failure mode this feature has that does not announce itself — which is why the
+  crawler is created disabled and the dry run is the step that answers it. Zero
+  is the diagnosis, not a bug.
+- **A second project connecting the same folder is refused with 409.** Deliberate:
+  one identity reads every folder shared with it, and a folder id is in a URL and
+  is not a secret, so the first project to connect a folder owns it. Without that
+  refusal, knowing an id would be enough to read another tenant's documents.
 
 ### The repo analysis job
 

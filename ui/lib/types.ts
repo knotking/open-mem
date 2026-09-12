@@ -196,7 +196,29 @@ export type Section =
   | "projects" | "keys" | "platform";
 
 /**
- * A subject, and everything said about it — a patient, a legal matter, an asset.
+ * The address a Drive folder has to be shared with.
+ *
+ * `configured: false` is a real state, not a failure. A deployment with no
+ * Drive reader has to say so — a blank address reads as a panel that failed to
+ * load, and those need different reactions from the person looking at it.
+ */
+export type DriveAddress = { configured: boolean; address: string | null };
+
+/** What connecting a folder produced. Disabled, like every crawler. */
+export type DriveConnected = {
+  crawler_id: string;
+  connection_id: string;
+  folder: string;
+  share_address: string;
+  enabled: boolean;
+  /** Set when this folder was already connected here and the existing crawler
+   *  was returned. Pressing the button twice must not make a second one, and
+   *  the screen has to say which happened. */
+  reused?: boolean;
+};
+
+/**
+ * A subject, and everything ever said about it — a patient, a legal matter, an asset.
  *
  * A memory answers *how long does this matter*; a case answers *what is this
  * about*. The load-bearing field is `external_id`: a case is joined on an

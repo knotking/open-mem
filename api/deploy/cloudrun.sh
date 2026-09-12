@@ -139,13 +139,30 @@ if missing:
     sys.exit(f"cloudrun.sh: no value resolved for {', '.join(missing)}")
 json.dump(env, open(sys.argv[1], "w"), indent=2, sort_keys=True)
 ENVPY
+# The Drive reader, if this deployment has one. A service-account *private key*
+# belongs in Secret Manager and not in the env file, which is readable in the
+# Cloud Run console by anyone who can see the service.
+#
+# **Optional on purpose, and conditional because `--set-secrets` fails on a
+# secret that does not exist.** A deployment without one is not broken: the
+# console asks `GET /drive/share-address`, is told `configured: false`, and says
+# the feature is not switched on rather than showing a blank address. So the
+# absence has to survive a deploy rather than stop one.
+SECRETS="DB_PASSWORD=memdog-db-password:latest,MEMDOG_MASTER_KEY=memdog-master-key:latest,GEMINI_API_KEY=gemini-api-key:latest"
+if gcloud secrets describe memdog-drive-key --project "$PROJECT" >/dev/null 2>&1; then
+  SECRETS="${SECRETS},DRIVE_SERVICE_ACCOUNT=memdog-drive-key:latest"
+  echo "    Drive reader: memdog-drive-key"
+else
+  echo "    no memdog-drive-key -- Drive folders will report themselves unconfigured"
+fi
+
 gcloud run deploy "$SERVICE" \
   --project "$PROJECT" --region "$REGION" \
   --image "$IMAGE" \
   --service-account "$SA" \
   --network default --subnet default --vpc-egress private-ranges-only \
   --env-vars-file "$ENV_FILE" \
-  --set-secrets "DB_PASSWORD=memdog-db-password:latest,MEMDOG_MASTER_KEY=memdog-master-key:latest,GEMINI_API_KEY=gemini-api-key:latest" \
+  --set-secrets "$SECRETS" \
   --allow-unauthenticated \
   --min-instances 0 --max-instances 4 \
   --cpu 1 --memory 1Gi --timeout 600 \

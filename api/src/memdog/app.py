@@ -1933,6 +1933,57 @@ async def get_connectors() -> dict:
     return {"connectors": connectors.catalog()}
 
 
+@app.get("/api/v1/drive/share-address")
+async def get_drive_address(request: Request, actor: Principal = Depends(principal)) -> dict:
+    """The address a Drive folder has to be shared with, and nothing else.
+
+    `configured: false` is a real answer rather than an error. A deployment
+    without a Drive reader should say so plainly -- a blank address reads as a
+    broken panel, and the person looking at it cannot tell the difference
+    between "not switched on here" and "failed to load".
+    """
+    from .drive import DriveError, share_address
+
+    try:
+        address = share_address(request.app.state.settings.drive_service_account)
+    except DriveError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    return {"configured": address is not None, "address": address}
+
+
+@app.post("/api/v1/drive/connect", status_code=201)
+async def post_drive_connect(
+    request: Request, body: dict, actor: Principal = Depends(principal)
+) -> dict:
+    """Share a folder with us, paste its link, get a crawler for it.
+
+    Created **disabled**, like every crawler. Here the dry run is doing more
+    than the usual gate: an unshared folder authenticates perfectly and returns
+    nothing, so "found no documents" is the signal that the share step was
+    missed -- and it has to arrive before anything is ingested rather than as a
+    quiet zero afterwards.
+    """
+    from .drive import DriveError, connect
+
+    state = request.app.state
+    try:
+        return await connect(
+            state.pool, actor, state.envelope,
+            project_id=body.get("project_id", ""),
+            folder=body.get("folder", ""),
+            service_account=state.settings.drive_service_account,
+            enrich=bool(body.get("enrich", True)),
+        )
+    except DriveError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    except CrawlerError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    except connections.ConnectionError_ as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
 @app.post("/api/v1/crawlers/from-connector")
 async def post_crawler_from_connector(
     request: Request, body: dict, actor: Principal = Depends(principal)

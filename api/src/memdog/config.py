@@ -63,6 +63,24 @@ class Settings:
         default_factory=lambda: _env("MEDIA_INTERPRETATION", "false").lower() == "true"
     )
     gemini_api_key: str = field(default_factory=lambda: _env("GEMINI_API_KEY", ""))
+
+    # The deployment's own Drive reader, as a service-account JSON key.
+    #
+    # It exists so that connecting a Drive folder is *sharing a folder with an
+    # address* rather than creating a service account, downloading its key and
+    # pasting it -- four steps, three of them in a different product's console,
+    # and the one people skip (sharing the folder) fails silently by returning
+    # an empty folder.
+    #
+    # **One identity reads every tenant's folders, and that is the trade.** It
+    # is only ever reachable where somebody deliberately shared a folder with
+    # it, and `drive.connect` refuses a folder another project already claimed
+    # -- without that refusal, knowing a folder id would be enough to read
+    # somebody else's documents. Absent, the feature reports itself as not
+    # configured rather than half-working.
+    drive_service_account: str = field(
+        default_factory=lambda: _env("DRIVE_SERVICE_ACCOUNT", "")
+    )
     multimodal_model: str = field(
         default_factory=lambda: _env("MULTIMODAL_MODEL", "gemini-3.7-flash")
     )
