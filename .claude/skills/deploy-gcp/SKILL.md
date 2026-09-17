@@ -128,16 +128,63 @@ service about what "current" means. Never deploy a job by hand.
   toggle with a sensible constant, so the only correct default is what is
   already true. `PUBLIC_DEMOS=''` clears it deliberately.
 
-  **`seed-demos` is now a much bigger run than it was.** The gallery gained the
-  Gita, which is 701 records against roughly a hundred for everything else
-  combined, and every one of them is enriched — so one seed is on the order of
-  seven hundred model calls where it used to be about a hundred. Against the
-  free tier described under [When it fails](#when-it-fails) that is not a slow
-  seed, it is a seed that falls back to the local heuristic partway through and
-  publishes a corpus with **no entities and therefore no graph** — which is the
-  one thing that corpus exists to show. Check the key's quota before seeding,
-  not after, and re-read `claims` on `GET /api/v1/public/demos` afterwards: a
-  Gita entry reporting few or no claims is that failure, not a quiet corpus.
+  **`seed-demos` is now a much bigger run than it was, and seeding one corpus
+  is the normal way to use it.** The gallery gained the Gita, which is 701
+  records against roughly a hundred for everything else combined, and every one
+  is enriched — so a full run is on the order of seven hundred model calls where
+  it used to be about a hundred.
+
+  Seed one corpus, not all of them:
+
+  ```bash
+  gcloud run jobs execute memdog-seed --project memdog-dev-506718 --region us-central1 \
+    --args="-m,memdog,seed-demos,--only=gita" --wait
+  ```
+
+  **`--only` exists because seeding is destructive.** `seed_corpus` deletes the
+  project of its own name before writing, so a full run takes every published
+  corpus down and builds it back. That is fine on an empty deployment and a poor
+  trade on one where four corpora already work — a run that exhausts its quota
+  partway stops at a `DemoSeedError` and what it leaves behind is the corpora it
+  had already deleted.
+
+  A filtered run prints **only the entries it seeded**, and `PUBLIC_DEMOS` is
+  the whole gallery, so the output has to be **merged** into the existing value
+  rather than pasted over it. Setting it to a filtered run's output unpublishes
+  everything not named. The seeder says so on the way out; it is repeated here
+  because it is the step that loses corpora.
+
+  Three things sized for a hundred records that seven hundred broke, all fixed
+  and all worth recognising if they come back:
+
+  - **`--task-timeout` is now per job**, 3 hours for `memdog-seed` against 30
+    minutes for the ticks. Enrichment is one worker per topic, so it is serial —
+    a model call per record, one after the next. Under the shared thirty the
+    task is killed partway and leaves a project written and half-enriched.
+  - **The in-process drain matches it**, `DEMO_SEED_DRAIN_SECONDS`, default two
+    hours. It raises `TimeoutError` rather than returning early, so when it was
+    ten minutes the seed died on what reads as a broken queue. Raise it and the
+    task timeout together or the job is killed inside the drain.
+  - **The seeder waits out `429`.** It writes through the public verb on purpose,
+    so it meets the same `6000 credits/minute` limit any client does — which a
+    hundred records never reach and seven hundred reach in the first few batches.
+    It reads `Retry-After` and retries. Raising the seeder's quota instead was
+    rejected: it would seed by a route no client has.
+
+  Against the free tier described under [When it fails](#when-it-fails) a seed
+  this size does not merely run slowly — it falls back to the local heuristic
+  partway through and publishes a corpus with **no entities and therefore no
+  graph**, which is the one thing that corpus exists to show. Check the key's
+  quota before seeding, and re-read `claims` on `GET /api/v1/public/demos`
+  afterwards: a Gita entry reporting few or no claims is that failure, not a
+  quiet corpus.
+
+  **The sample questions rest entirely on the vector arm.** `websearch_to_tsquery`
+  ANDs every word of a query, so a natural-language question almost never
+  matches lexically — measured on the seeded Gita, the lexical arm returned
+  nothing for all five. A corpus whose questions depend on the embedder is the
+  failure `papers.py` names, so validate them against the configured embedder
+  before spending a seed on them, not after.
 
   The gcloud `^delim^` escape was rejected on purpose: it works until a blurb
   contains the delimiter — an email address, a percentage — which trades a

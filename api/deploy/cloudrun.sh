@@ -225,12 +225,20 @@ for job_spec in "memdog-reconcile:reconcile" "memdog-crawl-tick:crawl-tick" \
   # synchronously in one shot, and it must not be retried: a second attempt
   # finds the org the first one created and fails with that as its reason,
   # which reads as a broken seed rather than a duplicate run.
+  #
+  # **The timeout is per job, because the seed is not a tick.** Thirty minutes
+  # suits a job that sweeps a queue and exits; it does not suit one that
+  # enriches a corpus. Enrichment is a single worker per topic -- serial by
+  # construction, a model call per record -- so the gallery's scripture corpus
+  # alone is seven hundred of them, comfortably over an hour. Under the shared
+  # thirty the task is killed partway and leaves a project written, partly
+  # enriched, and published if anyone sets the registry from it.
   case "$job" in
-    memdog-seed) cpu=2; memory=2Gi; retries=0 ;;
+    memdog-seed) cpu=2; memory=2Gi; retries=0; timeout=10800 ;;
     # A retried bootstrap finds the tenant the first attempt created and fails
     # with that as its reason, which reads as a broken bootstrap.
-    memdog-bootstrap) cpu=1; memory=1Gi; retries=0 ;;
-    *)           cpu=1; memory=1Gi; retries=1 ;;
+    memdog-bootstrap) cpu=1; memory=1Gi; retries=0; timeout=1800 ;;
+    *)           cpu=1; memory=1Gi; retries=1; timeout=1800 ;;
   esac
   if gcloud run jobs describe "$job" --project "$PROJECT" --region "$REGION" >/dev/null 2>&1; then
     verb=update
@@ -245,7 +253,7 @@ for job_spec in "memdog-reconcile:reconcile" "memdog-crawl-tick:crawl-tick" \
     --set-env-vars "$JOB_ENV" \
     --set-secrets "$JOB_SECRETS" \
     --command python --args="-m,memdog,$command" \
-    --max-retries "$retries" --task-timeout 1800 \
+    --max-retries "$retries" --task-timeout "$timeout" \
     --cpu "$cpu" --memory "$memory" \
     --quiet
 done

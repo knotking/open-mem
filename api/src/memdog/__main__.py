@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 
 from .bootstrap import AlreadyBootstrapped, bootstrap_tenant, refuse_if_occupied
@@ -434,7 +435,7 @@ async def _smoke(url: str, key: str, producer_id: str, project_id: str) -> int:
     return 0
 
 
-async def _seed_demos() -> int:
+async def _seed_demos(only: frozenset[str] | None = None) -> int:
     """Seed the gallery corpora and print the registry they become.
 
     In-process like `seed --demo`, and for the same reason: every request goes
@@ -445,6 +446,20 @@ async def _seed_demos() -> int:
     deployment configuration -- the one thing deciding what an unauthenticated
     visitor can reach -- and a seeder that could edit it would be a seeder that
     could publish a corpus nobody chose to publish.
+
+    **`--only` exists because seeding is destructive.** `seed_corpus` deletes
+    the project of the same name before writing, so a full run takes every
+    published corpus down and builds it back -- which is fine the first time and
+    is a poor trade when one corpus is being added to four that already work.
+    The failure that motivates it is concrete: enrichment is a model call per
+    record, a run that exhausts its quota partway stops at a `DemoSeedError`,
+    and what is left behind is the corpora it had already deleted. Naming one
+    corpus keeps the blast radius to the corpus being changed.
+
+    The printed registry then covers **only what was seeded**, which is the
+    whole of the caller's job to reconcile: `PUBLIC_DEMOS` is the full list, so
+    a filtered run's output has to be merged into it rather than pasted over it.
+    Said out loud below rather than left to be noticed.
     """
     import json
 
@@ -453,6 +468,18 @@ async def _seed_demos() -> int:
     from .app import app
     from .demos import CORPORA
     from .demos.seeding import DemoSeedError, seed_corpus
+
+    chosen = dict(CORPORA)
+    if only is not None:
+        unknown = sorted(only - set(CORPORA))
+        if unknown:
+            # Refused rather than ignored, for the reason `graph_templates`
+            # refuses an unknown template: a typo that silently seeds nothing
+            # looks exactly like a run that succeeded.
+            print(f"unknown corpus: {', '.join(unknown)} — known corpora are "
+                  f"{', '.join(sorted(CORPORA))}", file=sys.stderr)
+            return 2
+        chosen = {k: v for k, v in CORPORA.items() if k in only}
 
     async with app.router.lifespan_context(app):
         pool = app.state.pool
@@ -489,8 +516,23 @@ async def _seed_demos() -> int:
             capabilities=[DATA_READ, DATA_WRITE, CONFIG_WRITE],
         )
 
+        # **Ten minutes was sized for a hundred records and this gallery now
+        # holds seven hundred.** Enrichment is one worker per topic, so it is
+        # serial by construction -- a model call per record, one after the next
+        # -- and `queue.drain` raises `TimeoutError` rather than returning
+        # early. Under the old number the scripture corpus could not finish: it
+        # would write every record, enrich part of it, and die on a timeout that
+        # reads as a broken queue rather than as a deadline set for a smaller
+        # gallery.
+        #
+        # Overridable because the honest bound is the *job's* task timeout, and
+        # that is deployment configuration rather than something this file can
+        # know. Raise both together or the job is killed mid-enrichment, which
+        # leaves a published corpus half-read.
+        drain_seconds = float(os.environ.get("DEMO_SEED_DRAIN_SECONDS") or 7200)
+
         async def drain() -> None:
-            await app.state.queue.drain(timeout=600)
+            await app.state.queue.drain(timeout=drain_seconds)
 
         entries = []
         try:
@@ -498,7 +540,7 @@ async def _seed_demos() -> int:
             async with httpx.AsyncClient(
                 transport=transport, base_url="http://seed", timeout=180.0
             ) as client:
-                for corpus in CORPORA.values():
+                for corpus in chosen.values():
                     entry = await seed_corpus(
                         pool, client, corpus,
                         org_id=org_id, admin_key=token, drain=drain)
@@ -514,8 +556,17 @@ async def _seed_demos() -> int:
                 " WHERE org_id = $1 AND name = 'demo-gallery-seeder'", org_id)
 
     print()
-    print("Set this on the API, and nothing is public until you do:")
-    print(f"PUBLIC_DEMOS={json.dumps(json.dumps(entries))}")
+    if only is not None:
+        # The difference between this and the line below is the whole hazard of
+        # a filtered run: `PUBLIC_DEMOS` is the entire gallery, so pasting a
+        # partial registry over it unpublishes everything not named here.
+        print(f"Seeded {len(entries)} of {len(CORPORA)} corpora. These entries "
+              "must be MERGED into the existing PUBLIC_DEMOS —")
+        print("setting it to just this would unpublish every corpus not listed:")
+        print(json.dumps(entries))
+    else:
+        print("Set this on the API, and nothing is public until you do:")
+        print(f"PUBLIC_DEMOS={json.dumps(json.dumps(entries))}")
     return 0
 
 
@@ -602,7 +653,7 @@ def main() -> int:
         print("       python -m memdog crawl-tick [max_crawlers]", file=sys.stderr)
         print("       python -m memdog alert-tick [max_alerts]", file=sys.stderr)
         print("       python -m memdog seed --demo [--reset]", file=sys.stderr)
-        print("       python -m memdog seed-demos"
+        print("       python -m memdog seed-demos [org_id] [--only=key,key]"
               "   # gallery corpora; prints the PUBLIC_DEMOS to set",
               file=sys.stderr)
         print("       python -m memdog bootstrap-to-secret <email> <scope> "
@@ -615,7 +666,20 @@ def main() -> int:
             _seed(reset="--reset" in flags, demo="--demo" in flags)
         )
     if sys.argv[1] == "seed-demos":
-        return asyncio.run(_seed_demos())
+        # The positional argument is an org id and the flag is a filter, so the
+        # flag has to be pulled out before the positional is read -- otherwise
+        # `seed-demos --only=gita` seeds into an organization called
+        # "--only=gita", which resolves to nothing and reports no shared
+        # connection rather than a bad argument.
+        rest = [a for a in sys.argv[2:] if not a.startswith("--")]
+        picked = [a for a in sys.argv[2:] if a.startswith("--only=")]
+        only = None
+        if picked:
+            only = frozenset(
+                k.strip() for k in picked[-1].split("=", 1)[1].split(",") if k.strip()
+            )
+        sys.argv = [sys.argv[0], sys.argv[1], *rest]
+        return asyncio.run(_seed_demos(only))
 
     if sys.argv[1] == "smoke":
         return asyncio.run(_smoke(*sys.argv[2:6]))

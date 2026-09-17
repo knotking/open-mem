@@ -17,6 +17,8 @@ quietly useless.
 
 from __future__ import annotations
 
+import asyncio
+
 import asyncpg
 
 from ..ids import new_id
@@ -29,8 +31,34 @@ class DemoSeedError(RuntimeError):
 
 
 async def _post(client, path: str, key: str, body: dict, *, expect: int = 200):
-    response = await client.post(
-        path, headers={"Authorization": f"Bearer {key}"}, json=body)
+    """One call, waiting out the rate limiter rather than failing on it.
+
+    **A seeder that wrote through a privileged path would be proving a route
+    nobody else can take** -- which is why this speaks the public write verb --
+    and the same reasoning says it must obey the limit that verb enforces. The
+    alternative considered was raising the quota for the seeder's key, and that
+    is the version that proves nothing: it would seed a corpus by a route no
+    client has.
+
+    Found by seeding the scripture corpus. The gallery's other corpora are a
+    hundred records at most and never reach `6000 credits/minute`; seven hundred
+    reaches it inside the first few batches, and the seed died on a `429` after
+    having already deleted the project it was replacing. `Retry-After` is on the
+    response and says exactly how long the deficit takes to refill, so the wait
+    is read rather than guessed.
+    """
+    for attempt in range(20):
+        response = await client.post(
+            path, headers={"Authorization": f"Bearer {key}"}, json=body)
+        if response.status_code != 429:
+            break
+        # The header is the server's own arithmetic on the deficit. One second
+        # of slack because refilling is continuous and arriving exactly on the
+        # boundary just earns a second 429.
+        delay = int(response.headers.get("retry-after") or 5) + 1
+        print(f"    rate limited, waiting {delay}s "
+              f"(attempt {attempt + 1})", flush=True)
+        await asyncio.sleep(delay)
     if response.status_code != expect:
         raise DemoSeedError(
             f"{path} returned {response.status_code}, expected {expect}: "
