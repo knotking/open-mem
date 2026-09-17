@@ -273,6 +273,7 @@ export default function GraphView({
 
   const drawn = useMemo(() => matching.slice(0, shown), [matching, shown]);
 
+
   /** Positions, degrees, radii, and which names fit. */
   const picture = useMemo(() => {
     const ids: string[] = [];
@@ -482,6 +483,12 @@ export default function GraphView({
         if (point.id !== selected && neighbours.has(point.id)) placeNode(point, false);
       }
     } else {
+      // **Narrowed to one kind, the names still come first.** The tempting move
+      // is to promote the predicates once there are few enough lines to fit
+      // them -- and it is wrong, because every line then says the same word.
+      // The chip above the drawing already names the kind; repeating it
+      // twenty-two times is noise competing with the only thing that still
+      // distinguishes one line from another, which is who is at each end.
       for (const point of byDegree) placeNode(point, false);
       for (const edge of drawn) placeEdge(edge, false);
     }
@@ -504,6 +511,47 @@ export default function GraphView({
   const reading = selected
     ? drawn.filter((e) => e.subject_id === selected || e.object_id === selected)
     : drawn;
+
+  /**
+   * The claims, gathered under the kind of relationship they are.
+   *
+   * **A flat list buries the thing the vocabulary exists to express.** Fifty
+   * rows of "A — some phrase — B" reads as fifty unrelated facts, and the
+   * question somebody actually brings to a graph is what *kinds* of
+   * relationship this corpus asserts and how much of each. `teaches` and
+   * `part_of` being different claims is the whole point of a typed predicate,
+   * and an ungrouped list is exactly as informative as an untyped one.
+   *
+   * Ordered by weight so the corpus's dominant relationship leads. A project
+   * whose biggest group is `related_to` — glossed "connected, in a way the text
+   * did not specify" — is telling you something about itself, and it should not
+   * take counting to notice.
+   */
+  const grouped = useMemo(() => {
+    const by = new Map<string, GraphEdge[]>();
+    for (const edge of reading) {
+      const rows = by.get(edge.predicate);
+      if (rows) rows.push(edge);
+      else by.set(edge.predicate, [edge]);
+    }
+    return [...by.entries()]
+      .map(([predicate, rows]) => ({ predicate, rows }))
+      .sort((a, b) => b.rows.length - a.rows.length
+                      || a.predicate.localeCompare(b.predicate));
+  }, [reading]);
+
+  /** Every kind of relationship in the corpus, with how much of it there is --
+   *  computed over all the edges rather than the drawn ones, so narrowing the
+   *  picture does not rewrite the summary that explains it. */
+  const kinds = useMemo(() => {
+    const count = new Map<string, number>();
+    for (const edge of data.edges) {
+      count.set(edge.predicate, (count.get(edge.predicate) ?? 0) + 1);
+    }
+    return [...count.entries()]
+      .map(([predicate, n]) => ({ predicate, count: n }))
+      .sort((a, b) => b.count - a.count || a.predicate.localeCompare(b.predicate));
+  }, [data.edges]);
 
   const [one, many] = evidenceUnit;
 
@@ -529,26 +577,38 @@ export default function GraphView({
       {lede && <p className="hint dgraph-lede">{lede}</p>}
 
       <div className="dgraph-controls">
-        <label>
-          Relationship
-          <select value={predicate}
-                  onChange={(e) => { setPredicate(e.target.value); setSelected(null); }}>
-            <option value="">All {data.edges.length} claims</option>
-            {/* The vocabulary comes from the response, so this list cannot
-                drift from what the server actually returned. */}
-            {data.predicates.map((p) => (
-              <option key={p.predicate} value={p.predicate}>
-                {p.predicate.replace(/_/g, " ")} — {p.gloss}
-              </option>
-            ))}
-          </select>
-        </label>
         {chosen && (
           <button className="secondary" onClick={() => setSelected(null)}
                   title={`Stop following ${chosen.name}`}>
             Following {chosen.name} — clear
           </button>
         )}
+      </div>
+
+      {/* **What kinds of relationship this is made of, before the picture.**
+          A node-link drawing shows that things are connected; it takes counting
+          to see *how*, and the vocabulary is the part with meaning in it. Each
+          is a control as well as a count, because "show me only that kind" is
+          the next thing anybody wants after reading the list. */}
+      <p className="dgraph-kindlabel">
+        Kinds of relationship here — choose one to narrow the picture to it
+      </p>
+      <div className="dgraph-kinds">
+        <button className={`dgraph-kindchip${predicate === "" ? " on" : ""}`}
+                onClick={() => { setPredicate(""); setSelected(null); }}>
+          all kinds <span>{data.edges.length}</span>
+        </button>
+        {kinds.map((k) => (
+          <button key={k.predicate}
+                  className={`dgraph-kindchip${predicate === k.predicate ? " on" : ""}`}
+                  title={glosses.get(k.predicate) ?? k.predicate}
+                  onClick={() => {
+                    setPredicate(predicate === k.predicate ? "" : k.predicate);
+                    setSelected(null);
+                  }}>
+            {k.predicate.replace(/_/g, " ")} <span>{k.count}</span>
+          </button>
+        ))}
       </div>
 
       <div className="slab dgraph-slab">
@@ -718,30 +778,46 @@ export default function GraphView({
           <p className="hint">
             Nothing of that kind touches {chosen?.name ?? "this selection"}.
           </p>
-        ) : reading.map((edge, i) => (
-          <div className="dgraph-claim"
-               key={`${edge.subject_id}-${edge.predicate}-${edge.object_id}-${i}`}>
-            <span className="dgraph-said">
-              {/* A sentence, not a triple. `{"subject":"ent_01H…"}` is a
-                  payload; "Krishna puts forward detachment" is the claim. */}
-              <button className="linkish" onClick={() => setSelected(edge.subject_id)}>
-                {byId.get(edge.subject_id)?.name ?? "—"}
-              </button>{" "}
-              {glosses.get(edge.predicate) ?? edge.predicate.replace(/_/g, " ")}{" "}
-              <button className="linkish" onClick={() => setSelected(edge.object_id)}>
-                {byId.get(edge.object_id)?.name ?? "—"}
-              </button>
-            </span>
-            <span className="dgraph-meta">
-              {edge.confidence_class === "interpretive" && (
-                <span className="chip" title="A defensible reading of what the text argues, not something it states in so many words.">
-                  a reading
-                </span>
-              )}
-              <span className="chip" title={`How many separate ${many} assert this.`}>
-                {edge.evidence} {edge.evidence === 1 ? one : many}
+        ) : grouped.map((group) => (
+          <div className="dgraph-group" key={group.predicate}>
+            {/* The kind of relationship, named and glossed, with how much of it
+                there is. The predicate is the API's own term and the gloss is
+                the API's own words for it -- a reader who learns to recognise
+                `works_for` as a term is better off than one who takes the
+                phrase beside it for something a person wrote. */}
+            <div className="dgraph-kind">
+              <code>{group.predicate}</code>
+              <span className="dgraph-gloss">
+                {glosses.get(group.predicate) ?? group.predicate.replace(/_/g, " ")}
               </span>
-            </span>
+              <span className="dgraph-kind-n">{group.rows.length}</span>
+            </div>
+            {group.rows.map((edge, i) => (
+              <div className="dgraph-claim"
+                   key={`${edge.subject_id}-${edge.object_id}-${i}`}>
+                <span className="dgraph-said">
+                  {/* A sentence, not a triple. `{"subject":"ent_01H…"}` is a
+                      payload; "Krishna puts forward detachment" is the claim. */}
+                  <button className="linkish" onClick={() => setSelected(edge.subject_id)}>
+                    {byId.get(edge.subject_id)?.name ?? "—"}
+                  </button>{" "}
+                  <span className="dgraph-arrow" aria-hidden="true">→</span>{" "}
+                  <button className="linkish" onClick={() => setSelected(edge.object_id)}>
+                    {byId.get(edge.object_id)?.name ?? "—"}
+                  </button>
+                </span>
+                <span className="dgraph-meta">
+                  {edge.confidence_class === "interpretive" && (
+                    <span className="chip" title="A defensible reading of what the text argues, not something it states in so many words.">
+                      a reading
+                    </span>
+                  )}
+                  <span className="chip" title={`How many separate ${many} assert this.`}>
+                    {edge.evidence} {edge.evidence === 1 ? one : many}
+                  </span>
+                </span>
+              </div>
+            ))}
           </div>
         ))}
       </div>

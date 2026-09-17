@@ -10,6 +10,26 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 
 ## Unreleased
 
+### Changed
+- **Chat asks one thing instead of five.** Scoping is now the memories you pick,
+  combinable or all of them. The topic, lens and entity-anchor filters and the
+  "follow connections" switch are gone from the console; `entity_ids` and
+  `template` still work on the API.
+- **Retrieval always runs all three arms.** The graph was opt-in; it fails to
+  nothing — it starts from an entity your question names, contributes nothing
+  when it finds none, and costs a bounded traversal rather than a model call —
+  so the choice had one sensible answer and has been removed.
+- **A memory's keywords and entities are description, not controls.** They were
+  buttons that added filters and looked like data; now they are data.
+
+### Added
+- **An answer says which relationships the graph arm crossed.**
+  `Answer.graph_relations` and `RetrieveResponse.graph_relations` — subject,
+  predicate, the server's gloss for it, object, how many records assert it, and
+  whether it is structural or a reading. Previously `_expand` kept only the
+  reachable entity ids, so a record reached only through the graph arrived with
+  no account of why it was there.
+
 ### Added
 - **The Graph screen narrows to a memory or a single record.** `memory_id` and
   `data_id` on `GET /api/v1/projects/{id}/graph`, both asked of the *evidence* —
