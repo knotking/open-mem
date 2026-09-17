@@ -10,6 +10,13 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 
 ## Unreleased
 
+### Added
+- **The graph drawing is back, beside the lists.** It was removed when it could
+  not name anything; the cause was the node-shape mismatch, not the drawing, and
+  with that fixed the same layout labels its nodes. The picture carries the shape
+  of the corpus and the lists carry everything it cannot fit — selecting anything
+  drives both.
+
 ### Removed
 - **Cases is gone from the console**, along with the "Subject" picker on *Add
   data* that fed it — nothing on this deployment has ever written a case, so
