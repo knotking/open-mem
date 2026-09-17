@@ -6205,6 +6205,12 @@ function AskSection({ projectId }: { projectId: string }) {
  */
 /* -------------------------------------------------------------- 4b. graph */
 
+/** How many records the "one record" picker offers. A project can hold
+ *  hundreds of thousands and a `select` cannot, so this is the most recent
+ *  page of them — and the screen says so rather than presenting a truncated
+ *  list as the whole. */
+const RECORD_CHOICES = 100;
+
 /**
  * What this project claims, as a picture and then as sentences.
  *
@@ -6247,6 +6253,14 @@ function GraphSection({ projectId }: { projectId: string }) {
   // widen on its own; writing is not, and the two are not the same change.
   const [inProject, setInProject] = useState(projectId);
   const [projects, setProjects] = useState<{ project_id: string; name: string; items?: number }[]>([]);
+  // The deep dive: a project is what a graph is *of*, and a memory or one
+  // record is what somebody actually wants to interrogate. Both narrow by where
+  // the evidence came from rather than by what the claim says, so a claim
+  // several records support appears under each of them.
+  const [memoryId, setMemoryId] = useState("");
+  const [memories, setMemories] = useState<Memory[]>([]);
+  const [dataId, setDataId] = useState("");
+  const [records, setRecords] = useState<{ data_id: string; external_id?: string | null }[]>([]);
 
   useEffect(() => {
     void call<{ projects: { project_id: string; name: string; items?: number }[] }>(
@@ -6256,6 +6270,21 @@ function GraphSection({ projectId }: { projectId: string }) {
       // still loads, which is what the console did before this existed.
       .catch(() => setProjects([]));
   }, []);
+
+  // Both lists follow the project, and both reset with it: a memory id from
+  // another project narrows to nothing, which would read as an empty graph
+  // rather than as a stale filter.
+  useEffect(() => {
+    setMemoryId("");
+    setDataId("");
+    void call<{ memories: Memory[] }>(`api/v1/projects/${inProject}/memories`)
+      .then((r) => setMemories(r.memories))
+      .catch(() => setMemories([]));
+    void call<{ items: { data_id: string; external_id?: string | null }[] }>(
+      `api/v1/projects/${inProject}/data?limit=${RECORD_CHOICES}`)
+      .then((r) => setRecords(r.items ?? []))
+      .catch(() => setRecords([]));
+  }, [inProject]);
 
   // The lens list comes from the API rather than a copy here, the same way the
   // predicate glosses inside the drawing do.
@@ -6270,11 +6299,13 @@ function GraphSection({ projectId }: { projectId: string }) {
     setError(null);
     const query = new URLSearchParams({ limit: String(limit) });
     if (template) query.set("template", template);
+    if (memoryId) query.set("memory_id", memoryId);
+    if (dataId) query.set("data_id", dataId);
     call<GraphData>(`api/v1/projects/${inProject}/graph?${query}`)
       .then(setData)
       .catch((e) => setError((e as Error).message))
       .finally(() => setBusy(false));
-  }, [inProject, limit, template]);
+  }, [inProject, limit, template, memoryId, dataId]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -6311,6 +6342,30 @@ function GraphSection({ projectId }: { projectId: string }) {
             </select>
           </label>
           <label>
+            Memory
+            <select value={memoryId}
+                    onChange={(e) => { setMemoryId(e.target.value); setDataId(""); }}>
+              <option value="">Everything in the project</option>
+              {memories.map((m) => (
+                <option key={m.memory_id} value={m.memory_id}>
+                  {m.title || m.memory_key || m.memory_id} ({m.type})
+                  {typeof m.members === "number" ? ` · ${m.members} records` : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            One record
+            <select value={dataId} onChange={(e) => setDataId(e.target.value)}>
+              <option value="">Any record</option>
+              {records.map((r) => (
+                <option key={r.data_id} value={r.data_id}>
+                  {r.external_id || r.data_id}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
             Read under
             <select value={template}
                     onChange={(e) => setTemplate(e.target.value)}>
@@ -6341,7 +6396,13 @@ function GraphSection({ projectId }: { projectId: string }) {
         <p className="hint">
           A lens narrows to claims drawn under that schema — asked of the
           evidence, so a claim several lenses agree on is reachable through each
-          of them. Fetching more costs a larger query, not a model call.
+          of them. Memory and record narrow the same way, by where the evidence
+          came from, so a claim several records support appears under each of
+          them. Fetching more costs a larger query, not a model call.
+          {records.length >= RECORD_CHOICES && (
+            <> The record list is the {RECORD_CHOICES} most recent in this
+              project, not all of them.</>
+          )}
         </p>
       </div>
 
@@ -6352,7 +6413,7 @@ function GraphSection({ projectId }: { projectId: string }) {
           <GraphView
             // Refetching under a different lens is a different subject, so the
             // selection and the relationship filter go with it.
-            key={`${inProject}:${template}:${limit}`}
+            key={`${inProject}:${memoryId}:${dataId}:${template}:${limit}`}
             data={data}
             evidenceUnit={["record", "records"]}
             // The landing card says this and the console did not, which left
@@ -6366,7 +6427,16 @@ function GraphSection({ projectId }: { projectId: string }) {
               </>
             }
             emptyNote={
-              template ? (
+              dataId ? (
+                <>That record asserts no claims. It may be stored and indexed
+                without having been read by a model, or read and found to state
+                no relationship worth keeping — <em>Deep dive</em> shows which.</>
+              ) : memoryId ? (
+                <>Nothing in this memory asserts a claim
+                {template ? <> under the <code>{template}</code> lens</> : null}.
+                The project may still have plenty — set <em>Memory</em> back to{" "}
+                <em>Everything in the project</em> to see.</>
+              ) : template ? (
                 <>Nothing in this project was read under the <code>{template}</code>{" "}
                 lens. That is a result rather than an error — it is what
                 declaring a schema buys, since an empty slot means nothing was

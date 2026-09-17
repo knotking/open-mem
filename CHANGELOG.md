@@ -10,6 +10,14 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 
 ## Unreleased
 
+### Added
+- **The Graph screen has a project picker.** The console is otherwise pinned to
+  `MEMDOG_PROJECT_ID` for every section, so looking at another project's graph
+  meant redeploying the UI. Reading is widened on its own here rather than in the
+  shell: a console-wide switcher would have to carry `MEMDOG_PRODUCER_ID` with
+  it, and a producer belongs to one project — switching the shell would point
+  *Add data* at a producer that is not in the project on screen.
+
 ### Fixed
 - **The graph drew a dozen disconnected islands on a real project.** Claims were
   ordered by how many records assert them, which grades well on a demo corpus

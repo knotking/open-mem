@@ -134,6 +134,38 @@ def _drawn_under(template_p: int, org_p: int, user_p: int, principals_p: int,
            AND {visibility_sql("d", org_p, user_p, principals_p)}))"""
 
 
+def _from_source(memory_p: int, data_p: int, org_p: int, user_p: int,
+                 principals_p: int, alias: str = "f") -> str:
+    """Whether any *visible evidence* for this fact came from a given memory, or
+    from one particular record.
+
+    Asked of the evidence rather than of the claim, for the reason
+    `_drawn_under` gives at length: facts merge across records, so a claim's own
+    row remembers whichever write created it and is silent about every other
+    record that later corroborated it. "Which claims does this memory support"
+    is a question about evidence, and answering it from the claim would report
+    one edge where several were asserted.
+
+    The visibility join is not optional. Without it a filter would confirm that
+    some record the caller cannot read sits in a named memory -- the same
+    structural leak the traversal ACL exists to prevent, arriving through a
+    filter rather than through a path.
+    """
+    return f"""(
+        (${memory_p}::text IS NULL AND ${data_p}::text IS NULL)
+        OR EXISTS (
+            SELECT 1 FROM entity_edges ev
+              JOIN data_items d ON d.data_id = ev.source_data_id
+             WHERE ev.fact_id = {alias}.fact_id
+               AND (${data_p}::text IS NULL OR ev.source_data_id = ${data_p})
+               AND (${memory_p}::text IS NULL OR EXISTS (
+                     SELECT 1 FROM memory_members mm
+                      WHERE mm.data_id = ev.source_data_id
+                        AND mm.memory_id = ${memory_p}))
+               AND {visibility_sql("d", org_p, user_p, principals_p)})
+    )"""
+
+
 def _temporal(valid_p: int, asof_p: int, alias: str = "f") -> str:
     """The two clocks, as a predicate.
 
@@ -237,6 +269,7 @@ class GraphStore(Protocol):
     async def overview(
         self, principal: Principal, *, project_id: str, limit: int = 200,
         predicates: list[str] | None = None, template: str | None = None,
+        memory_id: str | None = None, data_id: str | None = None,
         valid_at: datetime | None = None, as_of: datetime | None = None,
     ) -> Overview: ...
 
@@ -404,6 +437,7 @@ class PostgresGraph:
     async def overview(
         self, principal: Principal, *, project_id: str, limit: int = 200,
         predicates: list[str] | None = None, template: str | None = None,
+        memory_id: str | None = None, data_id: str | None = None,
         valid_at: datetime | None = None, as_of: datetime | None = None,
     ) -> Overview:
         """Everything a project currently claims, best-attested first.
@@ -472,6 +506,7 @@ class PostgresGraph:
                  WHERE f.project_id = $4
                    AND ($5::text[] IS NULL OR f.predicate = ANY($5))
                    AND {_drawn_under(8, 1, 2, 3)}
+                   AND {_from_source(10, 11, 1, 2, 3)}
                    AND {_temporal(6, 7)}
                    AND {_fact_visibility(1, 2, 3)}
                    AND {mentioned("s")}
@@ -483,7 +518,7 @@ class PostgresGraph:
                  LIMIT $9
                 """,
                 org_id, user_id, principals, project_id, predicates,
-                valid_at, as_of, template, limit,
+                valid_at, as_of, template, limit, memory_id, data_id,
             )
 
         nodes: dict[str, Node] = {}

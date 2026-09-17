@@ -3453,6 +3453,7 @@ async def entity_graph_endpoint(
 async def project_graph_endpoint(
     request: Request, project_id: str, limit: int = 200,
     predicates: str | None = None, template: str | None = None,
+    memory_id: str | None = None, data_id: str | None = None,
     valid_at: datetime | None = None, as_of: datetime | None = None,
     actor: Principal = Depends(principal),
 ) -> dict:
@@ -3474,6 +3475,12 @@ async def project_graph_endpoint(
     traversal takes, applied the same way. The public demo surface deliberately
     exposes none of them; here the caller is known and a narrower query is
     cheaper than the one it replaces.
+
+    `memory_id` and `data_id` narrow it the other way -- by where the evidence
+    came from rather than by what the claim says. That is the deep dive the
+    console is for: a project is what a graph is *of*, and a memory or a single
+    record is what somebody actually wants to interrogate. Both are asked of the
+    evidence, so a claim several records support appears under each of them.
     """
     from . import predicates as predicates_mod
 
@@ -3481,7 +3488,8 @@ async def project_graph_endpoint(
         result = await request.app.state.graph.overview(
             actor, project_id=project_id, limit=limit,
             predicates=[p for p in (predicates or "").split(",") if p] or None,
-            template=template, valid_at=valid_at, as_of=as_of,
+            template=template, memory_id=memory_id, data_id=data_id,
+            valid_at=valid_at, as_of=as_of,
         )
     except (GraphError, AuthError) as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc

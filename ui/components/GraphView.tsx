@@ -350,54 +350,73 @@ export default function GraphView({
       cy: Math.min(VIEW_H - PAD, Math.max(PAD, py[i])),
       degree: degree.get(id) ?? 1,
       r: radius[i],
-      label: false,
-      // Where the name goes. Decided by the placement pass below rather than
-      // fixed, because "under it" is only the best answer when there is room.
-      at: "below" as Placement,
     }));
 
-    // **Labels placed greedily, busiest first, and skipped where one would
-    // collide.** The rule this replaces was "label anything above a degree
-    // threshold", which is a guess about crowding rather than a check of it.
-    // Here a name is drawn only if it actually fits, so the drawing never
-    // carries text nobody can read, and the count underneath is what says the
-    // graph holds more than it names.
+    return {
+      points,
+      at: new Map(points.map((p) => [p.id, p])),
+      shapes: new Map(points.map((point) => [point.id, {
+        x0: point.cx - point.r - 1, x1: point.cx + point.r + 1,
+        y0: point.cy - point.r - 1, y1: point.cy + point.r + 1,
+      }])),
+    };
+  }, [drawn, byId]);
+
+  /**
+   * Which names and which predicates actually get drawn.
+   *
+   * **Separate from the layout, and that separation is what makes it work.**
+   * Placement has to know the selection — the whole point is that following a
+   * node promotes its edges — and the layout must not, because re-running a
+   * force simulation on every click is both slow and disorienting, as the
+   * picture would rearrange under the pointer. Positions are a pure function of
+   * the claims; labels are a function of the positions *and* what is being
+   * followed.
+   *
+   * **The order is the priority, and it is the whole design.** Space runs out
+   * long before the labels do — 40 claims and 45 names in one frame, measured —
+   * so what matters is who gets it first:
+   *
+   * 1. *the followed node's own name*, so a reader can see what they clicked;
+   * 2. *the predicates on its edges*, because "related how?" is the question
+   *    following something asks, and an unlabelled arrow does not answer it;
+   * 3. *its neighbours' names*, which is the other half of that answer;
+   * 4. *everything else by degree*, which is the unselected view's whole rule.
+   *
+   * Getting this order wrong is not subtle. With neighbour names placed before
+   * edge predicates, following a hub labelled **three of its fourteen edges** —
+   * the names had taken every wedge — which reads as most of the claims having
+   * no predicate at all.
+   */
+  const labels = useMemo(() => {
     type Box = { x0: number; y0: number; x1: number; y1: number };
     const overlaps = (a: Box, b: Box) =>
       a.x0 < b.x1 && a.x1 > b.x0 && a.y0 < b.y1 && a.y1 > b.y0;
-    // Seeded with the shapes, not only with the labels already placed. Tested
-    // against other labels alone, a name could be drawn cleanly through the
-    // node standing next to it.
-    const shapes = new Map<string, Box>(points.map((point) => [point.id, {
-      x0: point.cx - point.r - 1, x1: point.cx + point.r + 1,
-      y0: point.cy - point.r - 1, y1: point.cy + point.r + 1,
-    }]));
+    const shapes = [...picture.shapes.values()];
     const boxes: Box[] = [];
-    for (const point of [...points].sort((a, b) => b.degree - a.degree)) {
+    const placement = new Map<string, Placement>();
+    const edges: { key: string; x: number; y: number; text: string }[] = [];
+
+    /** A name, at the first of five positions that is free. */
+    const placeNode = (point: typeof picture.points[number], force: boolean) => {
       const node = byId.get(point.id);
-      if (!node) continue;
+      if (!node) return;
       // Approximate, and deliberately so: measuring text needs a laid-out DOM,
       // and being a few pixels generous costs a label that would have fitted
       // while being wrong the other way costs one that overlaps.
       const half = Math.max(12, shortName(node.name).length * 3.2);
-      // Four places to try rather than one. Below is the default because a name
-      // under its shape is the easiest to associate; but a dense middle has
-      // room above and to the sides, and refusing to look there left nearly
-      // half the graph unnamed on a frame with space to spare.
-      // **`centre` last, and it is what stops the hub going unnamed.** The four
-      // outside positions are all blocked for exactly the node a reader most
-      // needs identified: a hub is ringed by its own neighbours at a fixed
-      // separation, so a name wider than that ring collides with every one of
-      // them and the busiest thing in the picture ends up the only anonymous
-      // shape in it. That is how `BHAGAVAD-GITA` at degree 14 went unnamed
-      // while ten of its leaves were labelled.
+      // Below first because a name under its shape is the easiest to associate;
+      // then above and the sides, because a dense middle has room there and
+      // refusing to look left nearly half the graph unnamed on a frame with
+      // space to spare.
       //
-      // So `centre` is checked against other *labels* only. Overlapping a
-      // shape is acceptable here in a way it is not for the outside positions:
-      // the halo knocks the fill and the edges out from behind the glyphs, and
-      // the alternative on offer is no name at all on the node that matters
-      // most. Overlapping another *label* is never acceptable, because two
-      // names on top of each other are neither of them readable.
+      // **`centre` last, and it is what stops a hub going unnamed.** A hub is
+      // ringed by its own neighbours at a fixed separation, so a name wider
+      // than that ring collides with every one of them and the busiest thing in
+      // the picture ends up the only anonymous shape in it -- `BHAGAVAD-GITA`
+      // at degree 14, while ten of its leaves were labelled. So `centre` is
+      // checked against other labels only: overlapping a shape stays legible
+      // through the halo, and overlapping another *name* never does.
       const spots: [number, number, Placement][] = [
         [point.cx, point.cy + point.r + 9, "below"],
         [point.cx, point.cy - point.r - 5, "above"],
@@ -410,20 +429,66 @@ export default function GraphView({
         if (box.x0 < 2 || box.x1 > VIEW_W - 2) continue;
         if (box.y0 < 2 || box.y1 > VIEW_H - 2) continue;
         if (boxes.some((b) => overlaps(box, b))) continue;
-        if (at !== "centre"
-            && [...shapes.values()].some((b) => overlaps(box, b))) continue;
+        if (at !== "centre" && !force && shapes.some((b) => overlaps(box, b))) continue;
         boxes.push(box);
-        point.label = true;
-        point.at = at;
-        break;
+        placement.set(point.id, at);
+        return;
       }
+    };
+
+    /** A predicate, along its own line. */
+    const placeEdge = (edge: GraphEdge, force: boolean) => {
+      const from = picture.at.get(edge.subject_id);
+      const to = picture.at.get(edge.object_id);
+      if (!from || !to) return;
+      const text = edge.predicate.replace(/_/g, " ");
+      // Narrower than a name: 9.5px against 11.5.
+      const half = Math.max(10, text.length * 2.8);
+      // **Slid toward the less connected end rather than sitting at the
+      // midpoint.** On a hub the spokes are short and every midpoint lands in
+      // the same crowded ring beside it, so the labels queue for one patch of
+      // canvas; 62% out along each spoke gives every one its own wedge.
+      const hubFirst = from.degree >= to.degree;
+      const a = hubFirst ? from : to;
+      const z = hubFirst ? to : from;
+      const x = a.cx + (z.cx - a.cx) * 0.62;
+      const y = a.cy + (z.cy - a.cy) * 0.62;
+      const box = { x0: x - half, x1: x + half, y0: y - 7, y1: y + 3 };
+      if (box.x0 < 2 || box.x1 > VIEW_W - 2) return;
+      if (box.y0 < 2 || box.y1 > VIEW_H - 2) return;
+      // Never over another label: two strings on top of each other lose both.
+      if (boxes.some((b) => overlaps(box, b))) return;
+      // Over a shape is allowed for an edge being followed -- the halo carries
+      // it, and a followed edge with no predicate is the thing this exists to
+      // prevent.
+      if (!force && shapes.some((b) => overlaps(box, b))) return;
+      boxes.push(box);
+      edges.push({
+        key: `${edge.subject_id}-${edge.predicate}-${edge.object_id}`, x, y, text,
+      });
+    };
+
+    const byDegree = [...picture.points].sort((a, b) => b.degree - a.degree);
+
+    if (selected) {
+      const root = picture.at.get(selected);
+      if (root) placeNode(root, true);
+      const touching = drawn.filter(
+        (e) => e.subject_id === selected || e.object_id === selected);
+      for (const edge of touching) placeEdge(edge, true);
+      const neighbours = new Set(touching.flatMap(
+        (e) => [e.subject_id, e.object_id]));
+      for (const point of byDegree) {
+        if (point.id !== selected && neighbours.has(point.id)) placeNode(point, false);
+      }
+    } else {
+      for (const point of byDegree) placeNode(point, false);
+      for (const edge of drawn) placeEdge(edge, false);
     }
 
-    return {
-      points, at: new Map(points.map((p) => [p.id, p])),
-      labelled: boxes.length,
-    };
-  }, [drawn, byId]);
+    return { placement, edges, named: placement.size };
+  }, [picture, drawn, selected, byId]);
+
 
   const heaviest = useMemo(
     () => Math.max(1, ...drawn.map((e) => e.evidence)),
@@ -537,6 +602,12 @@ export default function GraphView({
             );
           })}
 
+          <g className="dgraph-edgelabels">
+            {labels.edges.map((label) => (
+              <text key={label.key} x={label.x} y={label.y}>{label.text}</text>
+            ))}
+          </g>
+
           {picture.points.map((point) => {
             const node = byId.get(point.id);
             if (!node) return null;
@@ -560,6 +631,11 @@ export default function GraphView({
                    }
                  }}>
                 <NodeShape node={node} cx={point.cx} cy={point.cy} r={r} />
+                {/* The whole value, for a name the drawing had to shorten and
+                    for one it could not place at all. `aria-label` above serves
+                    a screen reader; this serves a pointer. */}
+                <title>{`${node.name} — ${node.type}, ${point.degree} claim${
+                  point.degree === 1 ? "" : "s"}`}</title>
               </g>
             );
           })}
@@ -580,24 +656,23 @@ export default function GraphView({
                 || drawn.some((e) =>
                      (e.subject_id === selected && e.object_id === point.id)
                      || (e.object_id === selected && e.subject_id === point.id));
-              // Drawn where the placement pass found room for it, and always
-              // for whatever is being followed -- a reader who has just
-              // selected something must be able to see which one it was, even
-              // if its name would otherwise have been skipped.
-              if (!(point.label || point.id === selected
-                    || (selected !== null && near))) return null;
+              // Only where the placement pass found room. With a selection
+              // active that pass already prioritised the followed node and its
+              // neighbours, so there is nothing to force here.
+              const at = labels.placement.get(point.id);
+              if (!at) return null;
               const r = point.r;
               return (
                 <text key={point.id}
                       className={`${point.id === selected ? "sel" : ""}${
-                        point.at === "centre" ? " over" : ""}`}
+                        at === "centre" ? " over" : ""}`}
                       opacity={selected && !near ? 0.16 : 1}
-                      x={point.at === "right" ? point.cx + r + 4
-                         : point.at === "left" ? point.cx - r - 4 : point.cx}
-                      y={point.at === "above" ? point.cy - r - 5
-                         : point.at === "below" ? point.cy + r + 11 : point.cy + 4}
-                      textAnchor={point.at === "right" ? "start"
-                                  : point.at === "left" ? "end" : "middle"}>
+                      x={at === "right" ? point.cx + r + 4
+                         : at === "left" ? point.cx - r - 4 : point.cx}
+                      y={at === "above" ? point.cy - r - 5
+                         : at === "below" ? point.cy + r + 11 : point.cy + 4}
+                      textAnchor={at === "right" ? "start"
+                                  : at === "left" ? "end" : "middle"}>
                   {shortName(node.name)}
                 </text>
               );
@@ -620,10 +695,10 @@ export default function GraphView({
         Showing <strong>{drawn.length}</strong> of {matching.length}
         {predicate ? " matching" : ""} claim{matching.length === 1 ? "" : "s"}
         {" "}across {picture.points.length} things, best-attested first.
-        {picture.labelled < picture.points.length && (
-          <> {picture.points.length - picture.labelled} of them are drawn
-            without a name because one would not fit — select any shape to read
-            it.</>
+        {labels.named < picture.points.length && (
+          <> {picture.points.length - labels.named} of them are drawn without a
+            name because one would not fit — select any shape to read it, and
+            its own claims get labelled too.</>
         )}
         {drawn.length < matching.length && (
           <> <button className="linkish"

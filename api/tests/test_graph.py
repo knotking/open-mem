@@ -581,3 +581,112 @@ async def test_another_orgs_project_graph_is_empty_over_http(
     )
     assert response.status_code == 200
     assert response.json()["edges"] == []
+
+
+# ------------------------------------------------- narrowing by where it came from
+
+
+async def _in_memory(pool, tenant, data_id, memory_id):
+    await pool.execute(
+        "INSERT INTO memories (memory_id, org_id, project_id, memory_key, type)"
+        " VALUES ($1,$2,$3,$4,'notes') ON CONFLICT DO NOTHING",
+        memory_id, tenant.org_id, tenant.project_id, memory_id,
+    )
+    await pool.execute(
+        "INSERT INTO memory_members (memory_id, data_id, added_by)"
+        " VALUES ($1,$2,'explicit') ON CONFLICT DO NOTHING",
+        memory_id, data_id,
+    )
+
+
+async def test_the_overview_narrows_to_one_memory(pool, tenant, principal_for):
+    """The deep dive the console exists for: a project is what a graph is *of*,
+    and a memory is what somebody actually wants to interrogate."""
+    actor = await principal_for(tenant.api_key)
+    here = await _item(pool, tenant, "in-memory")
+    elsewhere = await _item(pool, tenant, "out-of-memory")
+    await _ingest(pool, tenant, here, PEOPLE[:2], RELATIONS[:1])
+    await _ingest(pool, tenant, elsewhere, PEOPLE[1:], RELATIONS[1:])
+    await _in_memory(pool, tenant, here, "mem_one")
+
+    result = await PostgresGraph(pool).overview(
+        actor, project_id=tenant.project_id, memory_id="mem_one")
+    assert {e.predicate for e in result.edges} == {"works_for"}
+
+    # And the whole project still has both, so the filter narrowed rather than
+    # the second claim never having existed.
+    everything = await PostgresGraph(pool).overview(
+        actor, project_id=tenant.project_id)
+    assert {e.predicate for e in everything.edges} == {"works_for", "located_in"}
+
+
+async def test_the_overview_narrows_to_one_record(pool, tenant, principal_for):
+    actor = await principal_for(tenant.api_key)
+    first = await _item(pool, tenant, "first")
+    second = await _item(pool, tenant, "second")
+    await _ingest(pool, tenant, first, PEOPLE[:2], RELATIONS[:1])
+    await _ingest(pool, tenant, second, PEOPLE[1:], RELATIONS[1:])
+
+    result = await PostgresGraph(pool).overview(
+        actor, project_id=tenant.project_id, data_id=second)
+    assert {e.predicate for e in result.edges} == {"located_in"}
+
+
+async def test_narrowing_by_memory_cannot_confirm_a_hidden_record(
+    pool, tenant, other_tenant, principal_for
+):
+    """The filter is asked of the evidence *with* the visibility predicate. Drop
+    that join and a caller learns that some record they cannot read sits in a
+    named memory — the structural leak the traversal ACL exists to prevent,
+    arriving through a filter instead of through a path."""
+    owner = await principal_for(tenant.api_key)
+    readable = await _item(pool, tenant, "readable")
+    ids = await _ingest(pool, tenant, readable, PEOPLE[:2], RELATIONS[:1])
+
+    hidden = new_id("data")
+    await pool.execute(
+        """
+        INSERT INTO data_items (data_id, org_id, project_id, owner_id, producer_id,
+            external_id, state, access_level, content_text, event_time)
+        VALUES ($1, $2, $3, $4, $5, 'hidden', 'enriched', 'private', 'text', now())
+        """,
+        hidden, other_tenant.org_id, other_tenant.project_id,
+        other_tenant.user_id, other_tenant.producer_id,
+    )
+    lisbon = new_id("ent")
+    await pool.execute(
+        """
+        INSERT INTO entities (entity_id, org_id, project_id, type, display_name,
+                              normalized_name)
+        VALUES ($1, $2, $3, 'location', 'Lisbon', 'lisbon')
+        """,
+        lisbon, tenant.org_id, tenant.project_id,
+    )
+    async with pool.acquire() as conn, conn.transaction():
+        from memdog.graph import _upsert_fact
+        fact_id = await _upsert_fact(
+            conn, org_id=tenant.org_id, project_id=tenant.project_id,
+            subject_id=ids["Northwind Trading"], predicate="located_in",
+            object_id=lisbon,
+            valid_from=await conn.fetchval(
+                "SELECT event_time FROM data_items WHERE data_id = $1", hidden),
+            basis="derived", confidence=0.5,
+        )
+        await conn.execute(
+            """
+            INSERT INTO entity_edges (edge_id, org_id, project_id, subject_id,
+                predicate, object_id, source_data_id, fact_id)
+            VALUES ($1, $2, $3, $4, 'located_in', $5, $6, $7)
+            """,
+            new_id("edg"), tenant.org_id, tenant.project_id,
+            ids["Northwind Trading"], lisbon, hidden, fact_id,
+        )
+    # The hidden record is in the memory; the readable one is not.
+    await _in_memory(pool, tenant, hidden, "mem_secret")
+
+    result = await PostgresGraph(pool).overview(
+        owner, project_id=tenant.project_id, memory_id="mem_secret")
+    assert result.edges == [], (
+        "a claim reachable only through an unreadable record must not surface "
+        "just because that record is in the named memory"
+    )

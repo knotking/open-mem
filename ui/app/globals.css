@@ -1595,6 +1595,21 @@ button.stattile:focus-visible { outline: 2px solid var(--accent); outline-offset
   stroke: var(--d-accent);
   stroke-width: 2;
 }
+/* The predicate, written on its line. Quieter than a node name and in the mono
+   face, because it is vocabulary rather than content -- `leads_to` is a term the
+   API defines, and a reader who recognises it as one is better off than a reader
+   who takes it for a phrase somebody wrote. */
+.dgraph-edgelabels text {
+  fill: var(--d-muted);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  text-anchor: middle;
+  stroke: var(--d-ground);
+  stroke-width: 3;
+  paint-order: stroke;
+  pointer-events: none;
+}
+
 /* The labels are their own layer above every shape -- see the comment in
    GraphView. Styled here rather than under `.dgraph-node` because they are no
    longer inside one. */
