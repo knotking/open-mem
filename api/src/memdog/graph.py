@@ -49,6 +49,13 @@ PREDICATES = predicates_mod.NAMES
 
 MAX_DEPTH = 3
 
+# The ceiling on a whole-project overview, which is a readability limit before
+# it is a cost one. Past a few hundred edges a drawn graph is a grey disc that
+# tells a reader nothing, so a caller asking for more is asking for a worse
+# picture; and because `overview` is reachable from the unauthenticated demo
+# surface, the bound has to live here rather than at the call site.
+MAX_OVERVIEW = 500
+
 # Which predicates hold at most one open value at a time. A new fact on one of
 # these closes the previous one; everything else accumulates.
 #
@@ -196,6 +203,29 @@ class Neighbourhood:
     truncated: bool = False
 
 
+@dataclass
+class Overview:
+    """A whole project's graph, rather than a walk outward from one node.
+
+    Deliberately not a `Neighbourhood` with the root left out. A neighbourhood
+    answers *what is near this thing*, and every node in it carries a depth that
+    means something. Here there is no centre and no depth, and reusing the type
+    would have every consumer reading a `depth` of zero as a fact about the
+    graph rather than as an absent field.
+
+    The two also truncate differently, which is the part that would have been
+    silently wrong. A neighbourhood caps *nodes* and keeps whatever edges join
+    them; this caps *claims* and keeps whatever nodes they touch, because the
+    question it answers is "what does this corpus most assert" and an answer
+    that dropped the best-attested edge to fit a node budget would be a
+    different answer that looked the same.
+    """
+
+    nodes: list[Node]
+    edges: list[Edge]
+    truncated: bool = False
+
+
 class GraphStore(Protocol):
     async def neighbourhood(
         self, principal: Principal, *, entity_id: str, depth: int,
@@ -203,6 +233,12 @@ class GraphStore(Protocol):
         valid_at: datetime | None = None, as_of: datetime | None = None,
         template: str | None = None,
     ) -> Neighbourhood: ...
+
+    async def overview(
+        self, principal: Principal, *, project_id: str, limit: int = 200,
+        predicates: list[str] | None = None, template: str | None = None,
+        valid_at: datetime | None = None, as_of: datetime | None = None,
+    ) -> Overview: ...
 
 
 class PostgresGraph:
@@ -363,6 +399,120 @@ class PostgresGraph:
                 for e in edges
             ],
             truncated=len(nodes) >= limit,
+        )
+
+    async def overview(
+        self, principal: Principal, *, project_id: str, limit: int = 200,
+        predicates: list[str] | None = None, template: str | None = None,
+        valid_at: datetime | None = None, as_of: datetime | None = None,
+    ) -> Overview:
+        """Everything a project currently claims, best-attested first.
+
+        **Claims are selected, and nodes follow from them.** The obvious
+        implementation picks the most-mentioned entities and then asks what
+        joins them, and it produces a picture that is wrong in a way nobody can
+        see: the busiest nodes in a corpus are its cast, and the edges between
+        the cast are the ones the text bothered to state least often. Starting
+        from the facts means the thing on screen is what the corpus most
+        insists on, and the nodes are whatever that turns out to involve.
+
+        **Both endpoints are joined rather than filtered afterwards**, so an
+        edge cannot be returned pointing at a node that is not in the node list.
+        A merged entity keeps its facts -- `entities.merge` moves mentions and
+        leaves `entity_facts` alone -- so without the `merged_into` join those
+        facts would come back as edges to a node the caller never receives.
+
+        Visibility is the same predicate the traversal uses, asked of the
+        evidence and then again of each endpoint's mentions. The second check is
+        not redundant in the way it looks: a fact is visible through *some*
+        evidence, and an endpoint whose every mention sits in records the caller
+        cannot read must not be named just because a relation mentioning it was
+        extracted somewhere the caller can.
+        """
+        principal.require(DATA_READ)
+        if not 1 <= limit <= MAX_OVERVIEW:
+            raise GraphError(f"limit must be between 1 and {MAX_OVERVIEW}")
+        if predicates:
+            unknown = sorted(set(predicates) - set(PREDICATES))
+            if unknown:
+                raise GraphError(f"unknown predicate(s): {', '.join(unknown)}")
+        now = datetime.now(timezone.utc)
+        valid_at, as_of = valid_at or now, as_of or now
+
+        org_id, user_id, principals = visibility_params(principal)
+        seen = visibility_sql("d", 1, 2, 3)
+
+        def mentioned(alias: str) -> str:
+            return f"""EXISTS (
+                SELECT 1 FROM entity_mentions m
+                  JOIN data_items d ON d.data_id = m.data_id
+                 WHERE m.entity_id = {alias}.entity_id
+                   AND d.deleted_at IS NULL AND {seen})"""
+
+        with span("graph.overview", store=self.name):
+            # One query rather than facts-then-entities. The endpoints are
+            # already joined to decide the row belongs, so selecting their names
+            # here costs nothing and removes the window in which a second query
+            # could see a different graph than the first.
+            rows = await self.pool.fetch(
+                f"""
+                SELECT f.fact_id, f.predicate, f.confidence, f.basis, f.template,
+                       f.valid_from, f.valid_to,
+                       s.entity_id AS subject_id, s.display_name AS subject_name,
+                       s.type AS subject_type,
+                       o.entity_id AS object_id, o.display_name AS object_name,
+                       o.type AS object_type,
+                       count(DISTINCT ev.source_data_id) AS evidence
+                  FROM entity_facts f
+                  JOIN entities s ON s.entity_id = f.subject_id
+                                 AND s.merged_into IS NULL
+                  JOIN entities o ON o.entity_id = f.object_id
+                                 AND o.merged_into IS NULL
+                  LEFT JOIN entity_edges ev ON ev.fact_id = f.fact_id
+                 WHERE f.project_id = $4
+                   AND ($5::text[] IS NULL OR f.predicate = ANY($5))
+                   AND {_drawn_under(8, 1, 2, 3)}
+                   AND {_temporal(6, 7)}
+                   AND {_fact_visibility(1, 2, 3)}
+                   AND {mentioned("s")}
+                   AND {mentioned("o")}
+                 GROUP BY f.fact_id, s.entity_id, s.display_name, s.type,
+                          o.entity_id, o.display_name, o.type
+                 ORDER BY count(DISTINCT ev.source_data_id) DESC,
+                          f.confidence DESC, f.fact_id
+                 LIMIT $9
+                """,
+                org_id, user_id, principals, project_id, predicates,
+                valid_at, as_of, template, limit,
+            )
+
+        nodes: dict[str, Node] = {}
+        edges: list[Edge] = []
+        for row in rows:
+            for side in ("subject", "object"):
+                entity_id = row[f"{side}_id"]
+                # `depth` is zero for every node and means "no centre here",
+                # which is why this returns an Overview and not a Neighbourhood.
+                nodes.setdefault(entity_id, Node(
+                    entity_id, row[f"{side}_name"], row[f"{side}_type"], 0))
+            edges.append(Edge(
+                row["subject_id"], row["predicate"], row["object_id"],
+                row["evidence"],
+                # Deliberately empty. The record ids behind a claim are the one
+                # thing on an edge that names something outside the graph, and
+                # an overview is read to see shape -- `neighbourhood` is where a
+                # caller who wants the evidence goes and gets it one node at a
+                # time, under the same ACL.
+                [],
+                float(row["confidence"] or 0), fact_id=row["fact_id"],
+                valid_from=row["valid_from"], valid_to=row["valid_to"],
+                basis=row["basis"], template=row["template"],
+            ))
+
+        return Overview(
+            nodes=sorted(nodes.values(), key=lambda n: n.display_name),
+            edges=edges,
+            truncated=len(edges) >= limit,
         )
 
     async def co_mentioned(

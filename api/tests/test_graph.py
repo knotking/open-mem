@@ -272,3 +272,228 @@ async def test_filtering_by_predicate_narrows_the_traversal(pool, tenant, princi
     result = await PostgresGraph(pool).neighbourhood(
         actor, entity_id=ids["Priya Raman"], depth=2, predicates=["works_for"])
     assert ids["Lisbon"] not in {n.entity_id for n in result.nodes}
+
+
+# --------------------------------------------------------------- overview
+#
+# A whole project at once, rather than a walk from a root. These matter more
+# than the traversal's equivalents rather than less: `overview` is what the
+# unauthenticated demo surface calls, so a visibility hole here is one a
+# stranger can reach without a credential.
+
+
+async def test_the_overview_returns_the_projects_claims_without_a_root(
+    pool, tenant, principal_for
+):
+    actor = await principal_for(tenant.api_key)
+    data_id = await _item(pool, tenant, "a")
+    ids = await _ingest(pool, tenant, data_id, PEOPLE, RELATIONS)
+
+    result = await PostgresGraph(pool).overview(
+        actor, project_id=tenant.project_id)
+
+    assert {e.predicate for e in result.edges} == {"works_for", "located_in"}
+    assert {n.entity_id for n in result.nodes} == set(ids.values())
+
+
+async def test_every_overview_edge_has_both_endpoints_in_its_nodes(
+    pool, tenant, principal_for
+):
+    """The invariant a drawing depends on. An edge pointing at a node the
+    caller was not given is a line to nowhere, and the way it happens is a
+    filter applied to nodes after the edges were chosen."""
+    actor = await principal_for(tenant.api_key)
+    for name in ("a", "b"):
+        data_id = await _item(pool, tenant, name)
+        await _ingest(pool, tenant, data_id, PEOPLE, RELATIONS)
+
+    result = await PostgresGraph(pool).overview(
+        actor, project_id=tenant.project_id)
+    known = {n.entity_id for n in result.nodes}
+    for edge in result.edges:
+        assert edge.subject_id in known and edge.object_id in known
+
+
+async def test_the_overview_counts_how_often_a_claim_was_asserted(
+    pool, tenant, principal_for
+):
+    """The number that makes the picture worth reading: a claim three records
+    make independently is not the same claim as one made once."""
+    actor = await principal_for(tenant.api_key)
+    for name in ("a", "b", "c"):
+        data_id = await _item(pool, tenant, name)
+        await _ingest(pool, tenant, data_id, PEOPLE, RELATIONS[:1])
+
+    result = await PostgresGraph(pool).overview(
+        actor, project_id=tenant.project_id)
+    assert next(e for e in result.edges if e.predicate == "works_for").evidence == 3
+
+
+async def test_the_overview_carries_no_record_ids(pool, tenant, principal_for):
+    """Not an oversight. This is the shape the public surface returns, and a
+    record id is the one thing on an edge that names something outside the
+    graph."""
+    actor = await principal_for(tenant.api_key)
+    data_id = await _item(pool, tenant, "a")
+    await _ingest(pool, tenant, data_id, PEOPLE, RELATIONS)
+
+    result = await PostgresGraph(pool).overview(
+        actor, project_id=tenant.project_id)
+    assert all(e.source_data_ids == [] for e in result.edges)
+
+
+async def test_another_org_sees_none_of_your_overview(
+    pool, tenant, other_tenant, principal_for
+):
+    """Empty rather than an error: there is no single entity to be coy about,
+    so the disclosure to avoid is the claims themselves."""
+    actor = await principal_for(tenant.api_key)
+    data_id = await _item(pool, tenant, "a")
+    await _ingest(pool, tenant, data_id, PEOPLE, RELATIONS)
+
+    intruder = await principal_for(other_tenant.api_key)
+    result = await PostgresGraph(pool).overview(
+        intruder, project_id=tenant.project_id)
+    assert result.nodes == [] and result.edges == []
+
+
+async def test_a_claim_only_a_hidden_record_makes_is_not_in_the_overview(
+    pool, tenant, other_tenant, principal_for
+):
+    """The traversal's load-bearing test, restated for the surface a stranger
+    can reach. Priya→Northwind is readable; Northwind→Lisbon is asserted only
+    by a record belonging to another org, so Lisbon is not a node here and the
+    hop is not an edge."""
+    owner = await principal_for(tenant.api_key)
+    readable = await _item(pool, tenant, "readable")
+    ids = await _ingest(pool, tenant, readable, PEOPLE[:2], RELATIONS[:1])
+
+    hidden = new_id("data")
+    await pool.execute(
+        """
+        INSERT INTO data_items (data_id, org_id, project_id, owner_id, producer_id,
+            external_id, state, access_level, content_text, event_time)
+        VALUES ($1, $2, $3, $4, $5, 'hidden', 'enriched', 'private', 'text', now())
+        """,
+        hidden, other_tenant.org_id, other_tenant.project_id,
+        other_tenant.user_id, other_tenant.producer_id,
+    )
+    lisbon = new_id("ent")
+    await pool.execute(
+        """
+        INSERT INTO entities (entity_id, org_id, project_id, type, display_name,
+                              normalized_name)
+        VALUES ($1, $2, $3, 'location', 'Lisbon', 'lisbon')
+        """,
+        lisbon, tenant.org_id, tenant.project_id,
+    )
+    async with pool.acquire() as conn, conn.transaction():
+        from memdog.graph import _upsert_fact
+        fact_id = await _upsert_fact(
+            conn, org_id=tenant.org_id, project_id=tenant.project_id,
+            subject_id=ids["Northwind Trading"], predicate="located_in",
+            object_id=lisbon,
+            valid_from=await conn.fetchval(
+                "SELECT event_time FROM data_items WHERE data_id = $1", hidden),
+            basis="derived", confidence=0.5,
+        )
+        await conn.execute(
+            """
+            INSERT INTO entity_edges (edge_id, org_id, project_id, subject_id,
+                predicate, object_id, source_data_id, fact_id)
+            VALUES ($1, $2, $3, $4, 'located_in', $5, $6, $7)
+            """,
+            new_id("edg"), tenant.org_id, tenant.project_id,
+            ids["Northwind Trading"], lisbon, hidden, fact_id,
+        )
+
+    result = await PostgresGraph(pool).overview(
+        owner, project_id=tenant.project_id)
+    assert lisbon not in {n.entity_id for n in result.nodes}
+    assert "located_in" not in {e.predicate for e in result.edges}
+
+
+async def test_an_entity_with_no_readable_mention_is_not_named(
+    pool, tenant, other_tenant, principal_for
+):
+    """The second visibility check, and the reason it is not redundant.
+
+    The fact below is asserted by a record the caller *can* read, so it passes
+    `_fact_visibility` on its own. Its object is an entity every mention of
+    which sits in a record the caller cannot read — naming it would disclose
+    that the entity exists on the strength of somebody else's document.
+    """
+    owner = await principal_for(tenant.api_key)
+    readable = await _item(pool, tenant, "readable")
+    ids = await _ingest(pool, tenant, readable, PEOPLE[:2], RELATIONS[:1])
+
+    # An entity in this project whose only mention lives in another org's record.
+    hidden = new_id("data")
+    await pool.execute(
+        """
+        INSERT INTO data_items (data_id, org_id, project_id, owner_id, producer_id,
+            external_id, state, access_level, content_text, event_time)
+        VALUES ($1, $2, $3, $4, $5, 'hidden', 'enriched', 'private', 'text', now())
+        """,
+        hidden, other_tenant.org_id, other_tenant.project_id,
+        other_tenant.user_id, other_tenant.producer_id,
+    )
+    secret = new_id("ent")
+    await pool.execute(
+        """
+        INSERT INTO entities (entity_id, org_id, project_id, type, display_name,
+                              normalized_name)
+        VALUES ($1, $2, $3, 'organization', 'Acme Holdings', 'acme holdings')
+        """,
+        secret, tenant.org_id, tenant.project_id,
+    )
+    await pool.execute(
+        """
+        INSERT INTO entity_mentions (mention_id, entity_id, data_id, org_id,
+            project_id, surface, resolved_by)
+        VALUES ($1, $2, $3, $4, $5, 'Acme Holdings', 'new')
+        """,
+        new_id("men"), secret, hidden, other_tenant.org_id,
+        other_tenant.project_id,
+    )
+    # ...asserted by a record the caller CAN read.
+    async with pool.acquire() as conn, conn.transaction():
+        from memdog.graph import _upsert_fact
+        fact_id = await _upsert_fact(
+            conn, org_id=tenant.org_id, project_id=tenant.project_id,
+            subject_id=ids["Priya Raman"], predicate="works_for",
+            object_id=secret,
+            valid_from=await conn.fetchval(
+                "SELECT event_time FROM data_items WHERE data_id = $1", readable),
+            basis="derived", confidence=0.5,
+        )
+        await conn.execute(
+            """
+            INSERT INTO entity_edges (edge_id, org_id, project_id, subject_id,
+                predicate, object_id, source_data_id, fact_id)
+            VALUES ($1, $2, $3, $4, 'works_for', $5, $6, $7)
+            """,
+            new_id("edg"), tenant.org_id, tenant.project_id,
+            ids["Priya Raman"], secret, readable, fact_id,
+        )
+
+    result = await PostgresGraph(pool).overview(
+        owner, project_id=tenant.project_id)
+    assert secret not in {n.entity_id for n in result.nodes}
+
+
+async def test_the_overview_limit_is_bounded(pool, tenant, principal_for):
+    """`overview` is reachable from an unauthenticated endpoint, so the ceiling
+    belongs here rather than at the call site."""
+    from memdog.graph import MAX_OVERVIEW
+
+    actor = await principal_for(tenant.api_key)
+    graph = PostgresGraph(pool)
+    for bad in (0, MAX_OVERVIEW + 1):
+        with pytest.raises(GraphError):
+            await graph.overview(actor, project_id=tenant.project_id, limit=bad)
+
+    with pytest.raises(GraphError) as exc:
+        await graph.overview(actor, project_id=tenant.project_id,
+                             predicates=["not_a_predicate"])
+    assert "unknown predicate" in str(exc.value)

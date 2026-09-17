@@ -64,6 +64,11 @@ export const ALLOWED = [
   // The public demo. Unauthenticated by design -- see `public_demo.py`.
   /^api\/v1\/public\/demos$/,
   /^api\/v1\/public\/ask$/,
+  // The published corpus's graph, whole. `demo` is the only parameter it takes
+  // and it names a registry key, so the query string admitted here cannot widen
+  // what a caller reaches -- which is the property that let a graph read onto
+  // this surface at all.
+  /^api\/v1\/public\/graph(\?.*)?$/,
   /^api\/v1\/memories\/[\w-]+\/context(\?.*)?$/,
   /^api\/v1\/memories\/[A-Za-z0-9_]+\/members$/,
   // Deriving: what can be made from a memory, and what has been.
@@ -227,6 +232,11 @@ export const CALLER_CREDENTIAL = [
 export const NO_CREDENTIAL = [
   /^api\/v1\/public\/demos$/,
   /^api\/v1\/public\/ask$/,
+  // The graph read belongs here for exactly the reason the other two do, and
+  // the consequence of forgetting it is quieter: the picture would render,
+  // correctly, drawn from whatever the service key can see rather than from
+  // what the demo published -- and nothing about the result would say so.
+  /^api\/v1\/public\/graph(\?.*)?$/,
 ];
 
 export function allowed(path: string, method: string): boolean {

@@ -69,6 +69,11 @@ class Item:
     identifiers: tuple[str, ...] = ()
     # Off for a corpus whose whole point is that it never reaches a model.
     enrich: bool = True
+    # Which graph schema to read this record under. `None` is open-domain
+    # extraction, which stays the default for the same reason it is the
+    # platform's: a template is an assertion about what a document is *for*,
+    # and a corpus that cannot make that assertion should not pretend to.
+    template: str | None = None
 
     def payload(self, *, default_identifier: str, synthetic: bool = True) -> dict:
         # **The marker is a claim, so it is only made where it is true.** Three
@@ -86,6 +91,10 @@ class Item:
             "event_time": (REFERENCE - timedelta(days=self.days_ago)).isoformat(),
             "tags": [*self.tags, "demo"],
             "identifiers": list(self.identifiers) or [default_identifier],
+            # Omitted rather than sent as null when there is none, so the four
+            # corpora that predate templates produce byte-identical payloads
+            # and a re-seed of one of them is not a silent change of schema.
+            **({"template": self.template} if self.template else {}),
         }
 
 
@@ -135,11 +144,16 @@ class Corpus:
         }
 
 
+from .gita import CORPUS as GITA              # noqa: E402
 from .legal import CORPUS as LEGAL            # noqa: E402
 from .meetings import CORPUS as MEETINGS      # noqa: E402
 from .papers import CORPUS as PAPERS          # noqa: E402
 from .sensors import CORPUS as SENSORS        # noqa: E402
 
+# Order is the gallery's order, and the gallery's order is what a visitor is
+# offered first. The Gita leads because it is the only entry with something to
+# look at as well as something to ask, and a page whose opening move is a second
+# chat box teaches the same thing the four before it taught.
 CORPORA: dict[str, Corpus] = {
-    c.key: c for c in (LEGAL, MEETINGS, SENSORS, PAPERS)
+    c.key: c for c in (GITA, LEGAL, MEETINGS, SENSORS, PAPERS)
 }

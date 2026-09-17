@@ -7,6 +7,7 @@ else in the design widens this.
 
 from __future__ import annotations
 
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime
 
@@ -258,6 +259,13 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="mem-dog", version="0.1.0", lifespan=lifespan)
+
+# How many claims the public graph read returns. Well under `graph.MAX_OVERVIEW`
+# and fixed rather than a parameter: an unauthenticated caller does not get to
+# choose how much work a request costs, and a gallery card is a few hundred
+# pixels wide, where three hundred edges is already more picture than anyone can
+# read.
+PUBLIC_GRAPH_LIMIT = 300
 
 
 @app.exception_handler(AuthError)
@@ -1333,13 +1341,32 @@ async def public_demo_gallery(request: Request) -> dict:
     # One query for every corpus rather than one per corpus: the gallery is
     # rendered on a page nobody has signed in to, and a query per card is a
     # query per card for every visitor.
+    projects = [d.project_id for d in published.values()]
     counts = {
         row["project_id"]: row["n"]
         for row in await request.app.state.pool.fetch(
             "SELECT project_id, count(*) AS n FROM data_items"
             " WHERE project_id = ANY($1::text[]) AND deleted_at IS NULL"
             " GROUP BY project_id",
-            [d.project_id for d in published.values()],
+            projects,
+        )
+    }
+
+    # **How many claims each corpus holds, so the page knows which of them has a
+    # graph at all.** Without this the gallery has to offer a graph view for
+    # every card and discover on arrival that three of them are empty -- and a
+    # tab leading to "nothing here" is worse than no tab, because it reads as
+    # the feature being broken rather than absent. A corpus written without
+    # enrichment has no graph by design, and that is a fact the card can state
+    # instead of a screen a visitor has to walk into.
+    claims = {
+        row["project_id"]: row["n"]
+        for row in await request.app.state.pool.fetch(
+            "SELECT project_id, count(*) AS n FROM entity_facts"
+            " WHERE project_id = ANY($1::text[])"
+            "   AND retracted_at IS NULL AND (valid_to IS NULL OR valid_to > now())"
+            " GROUP BY project_id",
+            projects,
         )
     }
 
@@ -1347,7 +1374,8 @@ async def public_demo_gallery(request: Request) -> dict:
         "demos": [
             {"key": d.key, "title": d.title, "blurb": d.blurb,
              "questions": list(d.questions), "note": d.note,
-             "records": int(counts.get(d.project_id, 0))}
+             "records": int(counts.get(d.project_id, 0)),
+             "claims": int(claims.get(d.project_id, 0))}
             for d in published.values()
         ],
         "remaining_today": max(0, settings.public_daily_cap - int(spent)),
@@ -1445,6 +1473,103 @@ async def public_ask(request: Request, body: dict) -> dict:
             {"marker": c.marker, "text": c.text} for c in answer.citations
         ],
     }
+
+
+@app.get("/api/v1/public/graph")
+async def public_graph(request: Request, demo: str | None = None) -> dict:
+    """What one published corpus claims, as a graph. No login, no traversal.
+
+    The gallery's other corpora are demonstrations of *retrieval* and a chat box
+    is the whole of what they have to show. The scripture corpus is a
+    demonstration of *extraction* -- that declaring a graph schema before
+    reading turns short passages into claims somebody can inspect -- and an
+    answer paragraph cannot show that. This is the endpoint that can.
+
+    **Narrow in the same way `/public/ask` is narrow, and narrower in one
+    respect.** The corpus is resolved from the registry by key, never from the
+    request, so there is no scope to widen. The principal is the same synthetic
+    visitor with `DATA_READ` alone and a `user_id` matching no real user, so
+    private records are as invisible here as they are to any stranger. And where
+    `ask` at least takes a question, this takes nothing at all: no root entity,
+    no depth, no predicate filter, no clock. Narrowing the picture -- showing
+    only `leads_to`, say -- is done by the page on data it already has, because
+    a filter parameter here would be a traversal control on an unauthenticated
+    endpoint in exchange for nothing the client cannot do itself.
+
+    **Unmetered, and cached instead.** `public_asks` bounds model spend; this
+    calls no model, so charging it against the day's answers would close the
+    chat to pay for a picture. What it needs is a bound on database work, and
+    for a result that cannot change between seeds the right bound is to compute
+    it once and serve it for a few minutes.
+    """
+    from . import predicates as predicates_mod
+    from .auth import DATA_READ, Principal
+    from .public_demo import (DemoUnavailable, cache_graph, cached_graph,
+                              resolve as resolve_demo)
+
+    settings = request.app.state.settings
+    try:
+        chosen = resolve_demo(settings, demo)
+    except DemoUnavailable as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+    now = time.monotonic()
+    hit = cached_graph(chosen.key, now)
+    if hit is not None:
+        return hit
+
+    pool = request.app.state.pool
+    org_id = await pool.fetchval(
+        "SELECT org_id FROM projects WHERE project_id = $1", chosen.project_id
+    )
+    if org_id is None:
+        raise HTTPException(status_code=404, detail="no public demo on this deployment")
+
+    visitor = Principal(
+        user_id="public", org_id=org_id, project_id=chosen.project_id,
+        capabilities=frozenset({DATA_READ}), mode="public",
+    )
+    try:
+        result = await request.app.state.graph.overview(
+            visitor, project_id=chosen.project_id, limit=PUBLIC_GRAPH_LIMIT)
+    except (GraphError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+    # Deliberately not the traversal's shape. `fact_id`, `source_data_ids`,
+    # `basis`, `valid_from` and `valid_to` are all either record identity or
+    # operational detail, and an anonymous caller has no use for them and no
+    # business holding them. What is left is what a drawing needs: which things,
+    # joined how, and how hard the corpus insisted.
+    payload = {
+        "demo": chosen.key,
+        "title": chosen.title,
+        "nodes": [
+            {"id": n.entity_id, "name": n.display_name, "type": n.type}
+            for n in result.nodes
+        ],
+        "edges": [
+            {"subject": e.subject_id, "predicate": e.predicate,
+             "object": e.object_id, "evidence": e.evidence,
+             # The one thing on an edge that says whether a claim was read off
+             # the page or read into it. A graph of a religious text that did
+             # not distinguish those would be asserting the reading as the text.
+             "confidence": e.confidence_class}
+            for e in result.edges
+        ],
+        # The vocabulary, glossed, and only the part in use. A page that has to
+        # turn `leads_to` into words otherwise carries its own copy of the
+        # predicate registry, which is a second definition that drifts from
+        # `predicates.py` silently -- the failure is a label that quietly stops
+        # matching what the server means by the edge under it.
+        "predicates": [
+            spec for spec in predicates_mod.describe()
+            if spec["predicate"] in {e.predicate for e in result.edges}
+        ],
+        "truncated": result.truncated,
+        "limit": PUBLIC_GRAPH_LIMIT,
+    }
+    cache_graph(chosen.key, now, payload)
+    return payload
 
 
 @app.get("/s/{token}")

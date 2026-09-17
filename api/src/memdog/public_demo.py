@@ -9,10 +9,20 @@ replaces that is narrowness:
 says", not a parameter -- an environment variable set by whoever deployed it. A
 request cannot ask for a different corpus, so there is no scope to escalate.
 
-**Read-only, and only the question path.** No write, no entities, no graph
-traversal, no memory listing. The public surface is one endpoint that answers
-one question over one corpus, and every additional verb here would be another
-thing to prove safe.
+**Read-only, and only two shapes of read.** No write, no entity lookup, no
+memory listing, and no traversal a caller can steer. The surface is a question
+answered over one corpus, and -- since the gallery gained a corpus whose point
+is the *shape* of what was extracted -- that corpus's graph, returned whole.
+
+The graph read is the addition that had to earn its place, because the original
+rule here was "no graph" and it is worth saying exactly what replaced it. It
+takes no traversal parameters at all: no root, no depth, no predicate list, no
+clock. A caller names a demo key and receives that project's claims, capped, and
+that is the entire vocabulary. The ACL is the traversal's own rather than a
+weaker one -- `graph.overview` asks the same visibility predicate of the
+evidence and again of every endpoint -- and no record id, record text or corpus
+count leaves with it. What comes back is nodes, predicates, and how many times
+the corpus asserted each, which is what a picture needs and nothing else.
 
 **Answers are never stored.** The rest of the platform records queries and
 optionally their text, attributed to the user who asked. There is no user here,
@@ -222,6 +232,36 @@ async def release(pool: asyncpg.Pool, ask_id: str) -> None:
     await pool.execute(
         "UPDATE public_asks SET answered = false WHERE ask_id = $1", ask_id
     )
+
+
+# ------------------------------------------------------------------ caching
+
+# How long a demo's graph is served from memory. A seeded corpus does not change
+# between seeds, so the only thing this can serve stale is a re-seed, and that
+# corrects itself within the window.
+#
+# Cached because the graph read is the one *unmetered* thing on this surface.
+# `public_asks` exists to bound model spend and a graph query calls no model, so
+# metering it would be the wrong instrument -- but an unauthenticated endpoint
+# still needs a bound on what a refresh loop can make the database do, and for
+# an answer that cannot change between seeds the honest bound is to compute it
+# once.
+GRAPH_TTL_SECONDS = 300
+
+_graph_cache: dict[str, tuple[float, dict]] = {}
+
+
+def cached_graph(key: str, now: float) -> dict | None:
+    hit = _graph_cache.get(key)
+    if hit is None or now - hit[0] > GRAPH_TTL_SECONDS:
+        return None
+    return hit[1]
+
+
+def cache_graph(key: str, now: float, payload: dict) -> None:
+    # Bounded by the registry: the key comes from `resolve`, which refuses
+    # anything the deployment did not publish, so a caller cannot grow this.
+    _graph_cache[key] = (now, payload)
 
 
 def client_ip(request) -> str:
