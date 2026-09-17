@@ -119,36 +119,62 @@ type Member = { user_id: string; email: string | null; role: string };
 // refused at this line -- it only decides which way the bytes travel.
 const INLINE_MAX = 8 * 1024 * 1024;
 
-const GROUPS: { title: string; items: { key: Section; label: string; hint: string }[] }[] = [
+/**
+ * `under` is a subsection heading inside a group.
+ *
+ * `Your data` had grown to seven items and was still one flat list, so the
+ * three different things it holds — making a place, getting data in, getting
+ * something back out — were distinguishable only by reading every label. They
+ * are subsections rather than three separate groups because the group is the
+ * claim: this is the whole product, and splitting it into peers of `Admin`
+ * would say the opposite.
+ *
+ * Rendered when it changes, so an item that repeats the heading above it does
+ * not repeat the heading.
+ */
+const GROUPS: { title: string;
+                items: { key: Section; label: string; hint: string;
+                         under?: string }[] }[] = [
   {
     // The whole product, in the order it is done. Everything below this heading
     // is a supporting concern; nothing below it is the point.
     title: "Your data",
     items: [
-      { key: "memory", label: "Memories", hint: "make a place to keep things" },
-      { key: "add", label: "Add data", hint: "paste, upload or record" },
-      // "Repositories", not "Add a repo". Two entries that both began with
-      // "Add" were two answers to "where do I put something", and a repository
-      // is not a different *kind* of action -- it is a different kind of thing,
-      // which is what step 1 of Add data is for. So the adding moved there and
-      // this is now purely the reading half: snapshots and what they found.
-      { key: "repos", label: "Repositories", hint: "read what the analysis found" },
-      // "Deep dive", not "Update" and no longer "Browse": this is the reading
-      // half of the story, walking the corpus by container down to one
-      // revision, and its name should say that rather than promise an edit.
-      { key: "update", label: "Deep dive", hint: "read it yourself, down to one revision" },
-      // The other way to walk a corpus: by *subject* rather than by container.
-      // A memory answers how long something matters; a case answers what it is
-      // about, and a patient, a legal matter or an asset outlives every
-      // conversation filed under it.
-      { key: "cases", label: "Cases", hint: "one patient, matter or asset — its whole history" },
-      { key: "ask", label: "Chat", hint: "ask it, with citations and the trace" },
-      // The third way to walk a corpus, after by-container and by-subject: by
-      // what it *claims*. Entities was removed for being a screen that
-      // described how the corpus was arranged without being on the path from
-      // "I have data" to "I have an answer"; this earns the place that one
-      // did not, because the picture is the answer rather than an index of one.
-      { key: "graph", label: "Graph", hint: "what it claims, and how often" },
+      // The container comes first because it is what everything else lands in,
+      // and because its policy -- how long this matters -- is the decision
+      // somebody makes once and lives with.
+      { key: "memory", label: "Memories", hint: "make a place to keep things",
+        under: "Set up" },
+
+      // **Every way data arrives, under one heading.** `Inbound` and `Crawlers`
+      // were a top-level `Sources` group, which split "how does data get in"
+      // across two places in the sidebar -- and a person looking for where to
+      // connect a feed had no reason to prefer one over the other. They are
+      // adding data without a person present, which is a difference in who
+      // does it rather than in what happens.
+      { key: "add", label: "Add data", hint: "paste, upload or record",
+        under: "Put it in" },
+      { key: "inbound", label: "Inbound", hint: "webhooks providers post to",
+        under: "Put it in" },
+      { key: "crawlers", label: "Crawlers", hint: "pull what won't push",
+        under: "Put it in" },
+
+      // Ordered by what people reach for, not by how literal each one is.
+      { key: "ask", label: "Chat", hint: "ask it, with citations and the trace",
+        under: "Read it" },
+      { key: "graph", label: "Graph", hint: "what it claims, and how often",
+        under: "Read it" },
+      { key: "update", label: "Deep dive",
+        hint: "read it yourself, down to one revision", under: "Read it" },
+      { key: "cases", label: "Cases",
+        hint: "one patient, matter or asset — its whole history",
+        under: "Read it" },
+      // **Named for what the screen does, not for what it holds.** "Repositories"
+      // read as a place to add one, and adding lives in Add data with every
+      // other kind of thing; this is the half that reports what the analysis
+      // found, which is why it sits under Read it.
+      { key: "repos", label: "Repository analysis",
+        hint: "read what the analysis found", under: "Read it" },
     ],
   },
   {
@@ -157,16 +183,6 @@ const GROUPS: { title: string; items: { key: Section; label: string; hint: strin
       { key: "overview", label: "Overview", hint: "is this working?" },
       { key: "alerts", label: "Alerts", hint: "tell me when this happens" },
       { key: "standing", label: "Standing queries", hint: "tell me when this arrives" },
-    ],
-  },
-  {
-    // The write path without a person. Producers left the nav: it was a
-    // freshness table for something you cannot create here, and the lag it
-    // reported belongs where a source is configured.
-    title: "Sources",
-    items: [
-      { key: "inbound", label: "Inbound", hint: "webhooks providers post to" },
-      { key: "crawlers", label: "Crawlers", hint: "pull what won't push" },
     ],
   },
   {
@@ -504,9 +520,19 @@ export default function Console({
                   {!open && current && <span className="here" aria-hidden="true" />}
                 </button>
                 {open &&
-                  items.map((item) => (
+                  items.map((item, i) => (
+                    <Fragment key={item.key}>
+                    {/* Only when it changes, so four items under one heading
+                        get one heading. Filtering can hide the item a heading
+                        was introduced by, so this compares against the previous
+                        *rendered* item rather than the previous declared one --
+                        otherwise a search would strand a subsection with
+                        nothing under it, or drop the heading from the items
+                        that survived. */}
+                    {item.under && item.under !== items[i - 1]?.under && (
+                      <div className="navsub">{item.under}</div>
+                    )}
                     <button
-                      key={item.key}
                       className={`navitem${section === item.key ? " active" : ""}`}
                       /* The hint was a second line under every one of twenty-six
                          items -- twenty-six sentences competing with twenty-six
@@ -518,6 +544,7 @@ export default function Console({
                     >
                       <span className="navlabel">{item.label}</span>
                     </button>
+                    </Fragment>
                   ))}
               </div>
             );

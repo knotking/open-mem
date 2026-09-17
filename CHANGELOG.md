@@ -10,6 +10,22 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 
 ## Unreleased
 
+### Fixed
+- **The Graph screen showed relationships and no entities.**
+  `GET /api/v1/projects/{id}/graph` returned nodes as `entity_id`/`display_name`
+  while the public graph route returned `id`/`name`, and the shared component
+  reads the latter — so every node lookup missed and every label was skipped.
+  Predicates were unaffected because they ride on the edge and need no lookup,
+  which is why relationships stayed visible throughout. Both routes now return
+  one spelling, with a test on it.
+
+### Changed
+- **The Graph screen is two lists, not a drawing.** Entities ranked by how many
+  claims touch them, and the claims themselves gathered under the kind of
+  relationship they are; selecting an entity narrows both. The canvas is gone —
+  it could not name more than a fraction of what it drew, and a list can name
+  all of it.
+
 ### Added
 - **The Graph screen says what kind each relationship is.** A counted, glossed
   chip per predicate above the drawing — each one a control that narrows to it —
