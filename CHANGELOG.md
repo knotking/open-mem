@@ -10,6 +10,13 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 
 ## Unreleased
 
+### Removed
+- **Cases is gone from the console**, along with the "Subject" picker on *Add
+  data* that fed it — nothing on this deployment has ever written a case, so
+  both were controls over an empty table. The API, the write path and the
+  asserted-vs-inferred membership machinery are untouched; a producer can still
+  declare a case.
+
 ### Changed
 - **`Your data` is now three subsections** — *Set up*, *Put it in*, *Read it* —
   rather than seven items in one list.
