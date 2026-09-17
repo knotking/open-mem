@@ -6232,6 +6232,30 @@ function GraphSection({ projectId }: { projectId: string }) {
   const [limit, setLimit] = useState(200);
   const [template, setTemplate] = useState("");
   const [templates, setTemplates] = useState<GraphTemplate[]>([]);
+  // **Which project, chosen here rather than at deploy time.**
+  //
+  // The console is otherwise pinned to `MEMDOG_PROJECT_ID` — `page.tsx` reads
+  // it from the environment and every section inherits it — which means the
+  // only way to look at another project's graph is to redeploy the UI. That is
+  // a strange thing to ask of somebody who is a member of seven.
+  //
+  // Scoped to this screen deliberately, and not lifted into the shell. A
+  // console-wide switcher would have to carry `MEMDOG_PRODUCER_ID` with it,
+  // because the producer is the identity every *write* goes through and it
+  // belongs to one project: switching the shell would silently point Add data
+  // at a producer that is not in the project on screen. Reading is safe to
+  // widen on its own; writing is not, and the two are not the same change.
+  const [inProject, setInProject] = useState(projectId);
+  const [projects, setProjects] = useState<{ project_id: string; name: string; items?: number }[]>([]);
+
+  useEffect(() => {
+    void call<{ projects: { project_id: string; name: string; items?: number }[] }>(
+      "api/v1/projects")
+      .then((r) => setProjects(r.projects))
+      // A failure here costs the picker, not the screen: the configured project
+      // still loads, which is what the console did before this existed.
+      .catch(() => setProjects([]));
+  }, []);
 
   // The lens list comes from the API rather than a copy here, the same way the
   // predicate glosses inside the drawing do.
@@ -6246,11 +6270,11 @@ function GraphSection({ projectId }: { projectId: string }) {
     setError(null);
     const query = new URLSearchParams({ limit: String(limit) });
     if (template) query.set("template", template);
-    call<GraphData>(`api/v1/projects/${projectId}/graph?${query}`)
+    call<GraphData>(`api/v1/projects/${inProject}/graph?${query}`)
       .then(setData)
       .catch((e) => setError((e as Error).message))
       .finally(() => setBusy(false));
-  }, [projectId, limit, template]);
+  }, [inProject, limit, template]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -6265,6 +6289,27 @@ function GraphSection({ projectId }: { projectId: string }) {
 
       <div className="card">
         <div className="row">
+          {/* First, because it is the widest scope on the screen: every other
+              control narrows within whatever this names. A console that never
+              said which project it was showing also gains a screen that does. */}
+          <label>
+            Project
+            <select value={inProject}
+                    onChange={(e) => setInProject(e.target.value)}>
+              {/* The configured project is always offered even if the listing
+                  failed, so the picker can never strand the reader somewhere
+                  they cannot get back from. */}
+              {(projects.length
+                ? projects
+                : [{ project_id: projectId, name: "this project", items: undefined }]
+               ).map((p) => (
+                <option key={p.project_id} value={p.project_id}>
+                  {p.name}{p.project_id === projectId ? " — configured" : ""}
+                  {typeof p.items === "number" ? ` · ${p.items} records` : ""}
+                </option>
+              ))}
+            </select>
+          </label>
           <label>
             Read under
             <select value={template}
@@ -6307,7 +6352,7 @@ function GraphSection({ projectId }: { projectId: string }) {
           <GraphView
             // Refetching under a different lens is a different subject, so the
             // selection and the relationship filter go with it.
-            key={`${projectId}:${template}:${limit}`}
+            key={`${inProject}:${template}:${limit}`}
             data={data}
             evidenceUnit={["record", "records"]}
             // The landing card says this and the console did not, which left
