@@ -1656,7 +1656,7 @@ button.stattile:focus-visible { outline: 2px solid var(--accent); outline-offset
 .dgraph-edgelabels text {
   fill: var(--d-muted);
   font-family: var(--mono);
-  font-size: 9.5px;
+  font-size: 11px;
   text-anchor: middle;
   stroke: var(--d-ground);
   stroke-width: 3;
@@ -1669,7 +1669,11 @@ button.stattile:focus-visible { outline: 2px solid var(--accent); outline-offset
    longer inside one. */
 .dgraph-labels text {
   fill: var(--d-ink);
-  font-size: 11.5px;
+  /* In viewBox units, and the box is scaled to the column: 900 units rendered
+     into roughly 800 pixels, less on a narrow window. At 11.5 the names landed
+     near 8px on anything but a wide screen, which is small enough to read as
+     an unlabelled graph. */
+  font-size: 13.5px;
   /* A halo, so a label crossing a line stays readable without moving the node
      that owns it. `paint-order` is what makes the stroke sit behind the glyph
      rather than eating it. */

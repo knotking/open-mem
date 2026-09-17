@@ -10,6 +10,13 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 
 ## Unreleased
 
+### Added
+- **The Graph screen says what kind each relationship is.** A counted, glossed
+  chip per predicate above the drawing — each one a control that narrows to it —
+  and the claims below gathered under their kind rather than listed flat. The
+  drawing showed that things were connected and never how, which is the part a
+  typed vocabulary exists to express.
+
 ### Changed
 - **Chat asks one thing instead of five.** Scoping is now the memories you pick,
   combinable or all of them. The topic, lens and entity-anchor filters and the

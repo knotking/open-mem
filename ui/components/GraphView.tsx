@@ -405,7 +405,7 @@ export default function GraphView({
       // Approximate, and deliberately so: measuring text needs a laid-out DOM,
       // and being a few pixels generous costs a label that would have fitted
       // while being wrong the other way costs one that overlaps.
-      const half = Math.max(12, shortName(node.name).length * 3.2);
+      const half = Math.max(14, shortName(node.name).length * 3.8);
       // Below first because a name under its shape is the easiest to associate;
       // then above and the sides, because a dense middle has room there and
       // refusing to look left nearly half the graph unnamed on a frame with
@@ -426,7 +426,7 @@ export default function GraphView({
         [point.cx, point.cy + 4, "centre"],
       ];
       for (const [lx, ly, at] of spots) {
-        const box = { x0: lx - half, x1: lx + half, y0: ly - 9, y1: ly + 3 };
+        const box = { x0: lx - half, x1: lx + half, y0: ly - 10, y1: ly + 4 };
         if (box.x0 < 2 || box.x1 > VIEW_W - 2) continue;
         if (box.y0 < 2 || box.y1 > VIEW_H - 2) continue;
         if (boxes.some((b) => overlaps(box, b))) continue;
@@ -444,7 +444,7 @@ export default function GraphView({
       if (!from || !to) return;
       const text = edge.predicate.replace(/_/g, " ");
       // Narrower than a name: 9.5px against 11.5.
-      const half = Math.max(10, text.length * 2.8);
+      const half = Math.max(11, text.length * 3.2);
       // **Slid toward the less connected end rather than sitting at the
       // midpoint.** On a hub the spokes are short and every midpoint lands in
       // the same crowded ring beside it, so the labels queue for one patch of
