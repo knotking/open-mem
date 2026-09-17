@@ -128,6 +128,17 @@ service about what "current" means. Never deploy a job by hand.
   toggle with a sensible constant, so the only correct default is what is
   already true. `PUBLIC_DEMOS=''` clears it deliberately.
 
+  **`seed-demos` is now a much bigger run than it was.** The gallery gained the
+  Gita, which is 701 records against roughly a hundred for everything else
+  combined, and every one of them is enriched — so one seed is on the order of
+  seven hundred model calls where it used to be about a hundred. Against the
+  free tier described under [When it fails](#when-it-fails) that is not a slow
+  seed, it is a seed that falls back to the local heuristic partway through and
+  publishes a corpus with **no entities and therefore no graph** — which is the
+  one thing that corpus exists to show. Check the key's quota before seeding,
+  not after, and re-read `claims` on `GET /api/v1/public/demos` afterwards: a
+  Gita entry reporting few or no claims is that failure, not a quiet corpus.
+
   The gcloud `^delim^` escape was rejected on purpose: it works until a blurb
   contains the delimiter — an email address, a percentage — which trades a
   certain bug for a latent one.

@@ -11,6 +11,47 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **The Bhagavad Gita, as the first corpus in the gallery you can *look* at.**
+  The demo card gained a second tab beside the chat: the claims a model actually
+  extracted, drawn, and then listed as sentences — *"Krishna puts forward
+  detachment · 9 verses"*. Selecting anything narrows both halves to it. The
+  other four corpora each demonstrate something about retrieval; this one is the
+  only place the knowledge graph — half of what the write path builds — is
+  visible at all.
+- **701 verses, one record each, read under the `scripture` template.** The
+  citation is `BG 2.47`, the reference the commentary tradition already uses, so
+  an answer is checkable by the reader most likely to check it. The template is
+  what makes the graph worth drawing: open-domain extraction over the same text
+  yields `related_to` edges saying two words occurred nearby, while the declared
+  schema records BG 2.62–63 as a chain of directed `leads_to` edges you can
+  follow from the senses to ruin.
+- **`GET /api/v1/public/graph?demo=<key>`** — unauthenticated, like the rest of
+  the demo surface, and deliberately narrower than it. It takes no traversal
+  parameters at all: no root, no depth, no predicate filter, no clock. Narrowing
+  the picture to one relationship is done in the page. No record id, record text
+  or corpus count is returned. It is **not** charged against the daily question
+  budget — no model is called to draw it — and is cached for five minutes
+  instead, which is the bound that replaces metering.
+- **`graph.overview(project_id)`** for signed-in callers too: a whole project's
+  current claims, best-attested first, rather than a walk outward from one
+  entity. Both endpoints are joined inside the query, so an edge is never
+  returned pointing at a node the caller was not given, and an entity whose every
+  mention sits in a record you cannot read is not named.
+
+### Changed
+- **`GET /api/v1/public/demos` now reports `claims` per corpus.** The page uses
+  it to decide whether to offer the graph tab at all — a corpus written without
+  enrichment has no graph by design, and a tab opening onto an empty box reads as
+  a broken feature rather than an absent one.
+
+### Migrations
+- None, and no new environment variable — but **nothing new is public until
+  `PUBLIC_DEMOS` is reset.** `python -m memdog seed-demos` writes the corpus and
+  prints the registry to set; it fetches the text at seed time and **fails rather
+  than publishing** if any sample question has stopped finding its verse. Budget
+  for one model call per record on the enrichment pass.
+
+### Added
 - **Connect a Google Drive folder by sharing it with an address.** *Add data* has
   a sixth kind: copy the address the console shows, share the folder with it in
   Drive, paste the folder's link. Every document under it, subfolders included,
