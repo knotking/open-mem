@@ -10,6 +10,25 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 
 ## Unreleased
 
+### Fixed
+- **The graph drew a dozen disconnected islands on a real project.** Claims were
+  ordered by how many records assert them, which grades well on a demo corpus
+  and not at all on an ordinary one — 91 of 92 edges were asserted exactly once,
+  so the ordering did nothing and the first forty claims were an arbitrary sample
+  from across the corpus. Ties now break on how connected the endpoints are,
+  which draws the corpus's actual clusters instead.
+- **Long entity names went unlabelled.** A name can be a whole sentence; at the
+  drawing's size a 43-character one is half the canvas wide, so it was rejected
+  everywhere and its node left anonymous — losing precisely the most specific
+  names. Truncated in the drawing only; the claims list and the accessible name
+  carry the full text.
+- **The busiest node was the one most likely to be unnamed**, because a hub is
+  ringed by its own neighbours and every position around it is taken. A name can
+  now be drawn over its own node as a last resort.
+- **Labels could be painted over by nodes drawn after them**, so a centred hub
+  label lost its opening characters. They are their own layer above every shape
+  now.
+
 ### Added
 - **A Graph screen in the console, under *Your data*.** What this project
   asserts, drawn best-attested first and then listed as sentences — *"Priya
