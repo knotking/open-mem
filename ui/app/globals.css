@@ -1595,7 +1595,10 @@ button.stattile:focus-visible { outline: 2px solid var(--accent); outline-offset
   stroke: var(--d-accent);
   stroke-width: 2;
 }
-.dgraph-node text {
+/* The labels are their own layer above every shape -- see the comment in
+   GraphView. Styled here rather than under `.dgraph-node` because they are no
+   longer inside one. */
+.dgraph-labels text {
   fill: var(--d-ink);
   font-size: 11.5px;
   /* A halo, so a label crossing a line stays readable without moving the node
@@ -1606,7 +1609,12 @@ button.stattile:focus-visible { outline: 2px solid var(--accent); outline-offset
   paint-order: stroke;
   pointer-events: none;
 }
-.dgraph-node.sel text { font-weight: 600; }
+.dgraph-labels text.sel { font-weight: 600; }
+/* A name drawn over its own node, which is the last resort for a hub ringed by
+   its neighbours. Weighted so it reads as the node's label rather than as a
+   caption that happens to sit there, and with a heavier halo because it is
+   crossing the shape's own fill and every edge meeting it. */
+.dgraph-labels text.over { font-weight: 600; stroke-width: 4; }
 .dgraph-node:focus-visible circle, .dgraph-node:focus-visible rect {
   stroke: var(--d-accent); stroke-width: 2;
 }

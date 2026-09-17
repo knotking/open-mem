@@ -49,6 +49,10 @@ export type GraphData = {
  */
 const GRAPH_PAGE = 40;
 
+/** Where a node's name sits relative to it. `centre` is the last resort — see
+ *  the placement pass, which is where it earns its place. */
+type Placement = "below" | "above" | "left" | "right" | "centre";
+
 const VIEW_W = 900;
 const VIEW_H = 520;
 const PAD = 46;
@@ -155,6 +159,23 @@ export function layout(count: number, links: { s: number; t: number }[]) {
 }
 
 /**
+ * A name short enough to draw.
+ *
+ * Entity names come from a model reading a document, and some of them are a
+ * sentence — *"The Yoga of the Division Of the Three Gunas"* is 43 characters,
+ * and one real project holds a 73. At the drawing's font that is half the
+ * canvas wide, so the placement pass rejects it everywhere and the node is left
+ * anonymous: the longest names, which are usually the most specific, become the
+ * ones nobody can read.
+ *
+ * Truncating is the lesser loss, and only for the *drawing* — the claims under
+ * it, the selection button and the accessible name all carry the whole thing.
+ */
+function shortName(name: string): string {
+  return name.length > 30 ? `${name.slice(0, 29)}…` : name;
+}
+
+/**
  * What a node *is*, as a shape.
  *
  * **Shape rather than colour, and the split is the API's own.** `predicates.py`
@@ -213,11 +234,41 @@ export default function GraphView({
     [data.nodes],
   );
 
-  // Ordered by how hard the corpus insisted, so "show more" reaches down the
-  // list rather than sideways into an arbitrary slice of it.
+  /**
+   * Which claims to draw first: how hard the corpus insisted, then how
+   * connected the thing it insisted about is.
+   *
+   * **Evidence alone is not an ordering on real data.** It reads well on a
+   * corpus where a few claims are made twenty times over, and on an ordinary
+   * project almost every claim is made exactly once — 91 of 92, the first time
+   * this was pointed at one. A sort whose key is constant is not a sort, so the
+   * first forty were simply the first forty the server happened to return: a
+   * random sample spread across the whole corpus, which draws as a dozen
+   * disconnected islands rather than as a graph. Two thirds of the nodes had a
+   * single edge and nothing touched anything else.
+   *
+   * Breaking the tie on the endpoints' degree pulls the dense parts forward
+   * instead. What arrives is the corpus's actual clusters — the lab and its
+   * people, the text and its chapters — because a claim about a well-connected
+   * thing is one more edge in a picture that is already coherent, while a claim
+   * between two things nothing else mentions is an island wherever it lands.
+   *
+   * Degree is measured over everything that passes the filter rather than over
+   * what is drawn, so it ranks by the node's place in the *corpus* and does not
+   * change as the reader draws more.
+   */
   const matching = useMemo(() => {
-    const all = [...data.edges].sort((a, b) => b.evidence - a.evidence);
-    return predicate ? all.filter((e) => e.predicate === predicate) : all;
+    const all = predicate
+      ? data.edges.filter((e) => e.predicate === predicate)
+      : [...data.edges];
+    const degree = new Map<string, number>();
+    for (const edge of all) {
+      degree.set(edge.subject_id, (degree.get(edge.subject_id) ?? 0) + 1);
+      degree.set(edge.object_id, (degree.get(edge.object_id) ?? 0) + 1);
+    }
+    const pull = (e: GraphEdge) =>
+      (degree.get(e.subject_id) ?? 0) + (degree.get(e.object_id) ?? 0);
+    return all.sort((a, b) => b.evidence - a.evidence || pull(b) - pull(a));
   }, [data.edges, predicate]);
 
   const drawn = useMemo(() => matching.slice(0, shown), [matching, shown]);
@@ -302,7 +353,7 @@ export default function GraphView({
       label: false,
       // Where the name goes. Decided by the placement pass below rather than
       // fixed, because "under it" is only the best answer when there is room.
-      at: "below" as "below" | "above" | "left" | "right",
+      at: "below" as Placement,
     }));
 
     // **Labels placed greedily, busiest first, and skipped where one would
@@ -317,10 +368,10 @@ export default function GraphView({
     // Seeded with the shapes, not only with the labels already placed. Tested
     // against other labels alone, a name could be drawn cleanly through the
     // node standing next to it.
-    const shapes: Box[] = points.map((point) => ({
+    const shapes = new Map<string, Box>(points.map((point) => [point.id, {
       x0: point.cx - point.r - 1, x1: point.cx + point.r + 1,
       y0: point.cy - point.r - 1, y1: point.cy + point.r + 1,
-    }));
+    }]));
     const boxes: Box[] = [];
     for (const point of [...points].sort((a, b) => b.degree - a.degree)) {
       const node = byId.get(point.id);
@@ -328,23 +379,39 @@ export default function GraphView({
       // Approximate, and deliberately so: measuring text needs a laid-out DOM,
       // and being a few pixels generous costs a label that would have fitted
       // while being wrong the other way costs one that overlaps.
-      const half = Math.max(12, node.name.length * 3.2);
+      const half = Math.max(12, shortName(node.name).length * 3.2);
       // Four places to try rather than one. Below is the default because a name
       // under its shape is the easiest to associate; but a dense middle has
       // room above and to the sides, and refusing to look there left nearly
       // half the graph unnamed on a frame with space to spare.
-      const spots: [number, number, "below" | "above" | "left" | "right"][] = [
+      // **`centre` last, and it is what stops the hub going unnamed.** The four
+      // outside positions are all blocked for exactly the node a reader most
+      // needs identified: a hub is ringed by its own neighbours at a fixed
+      // separation, so a name wider than that ring collides with every one of
+      // them and the busiest thing in the picture ends up the only anonymous
+      // shape in it. That is how `BHAGAVAD-GITA` at degree 14 went unnamed
+      // while ten of its leaves were labelled.
+      //
+      // So `centre` is checked against other *labels* only. Overlapping a
+      // shape is acceptable here in a way it is not for the outside positions:
+      // the halo knocks the fill and the edges out from behind the glyphs, and
+      // the alternative on offer is no name at all on the node that matters
+      // most. Overlapping another *label* is never acceptable, because two
+      // names on top of each other are neither of them readable.
+      const spots: [number, number, Placement][] = [
         [point.cx, point.cy + point.r + 9, "below"],
         [point.cx, point.cy - point.r - 5, "above"],
         [point.cx + point.r + 4 + half, point.cy + 4, "right"],
         [point.cx - point.r - 4 - half, point.cy + 4, "left"],
+        [point.cx, point.cy + 4, "centre"],
       ];
       for (const [lx, ly, at] of spots) {
         const box = { x0: lx - half, x1: lx + half, y0: ly - 9, y1: ly + 3 };
         if (box.x0 < 2 || box.x1 > VIEW_W - 2) continue;
         if (box.y0 < 2 || box.y1 > VIEW_H - 2) continue;
         if (boxes.some((b) => overlaps(box, b))) continue;
-        if (shapes.some((b) => overlaps(box, b))) continue;
+        if (at !== "centre"
+            && [...shapes.values()].some((b) => overlaps(box, b))) continue;
         boxes.push(box);
         point.label = true;
         point.at = at;
@@ -493,25 +560,49 @@ export default function GraphView({
                    }
                  }}>
                 <NodeShape node={node} cx={point.cx} cy={point.cy} r={r} />
-                {/* Drawn where the placement pass found room for it, and always
-                    for whatever is being followed -- a reader who has just
-                    selected something must be able to see which one it was,
-                    even if its name would otherwise have been skipped. */}
-                {(point.label || point.id === selected
-                  || (selected !== null && near)) && (
-                  <text
-                    x={point.at === "right" ? point.cx + r + 4
-                       : point.at === "left" ? point.cx - r - 4 : point.cx}
-                    y={point.at === "above" ? point.cy - r - 5
-                       : point.at === "below" ? point.cy + r + 11 : point.cy + 4}
-                    textAnchor={point.at === "right" ? "start"
-                                : point.at === "left" ? "end" : "middle"}>
-                    {node.name}
-                  </text>
-                )}
               </g>
             );
           })}
+
+          {/* **Every label above every shape.** They used to live inside each
+              node's own group, which paints them in node order -- so a node
+              drawn later covered the name of one drawn earlier, and a centred
+              hub label lost its first characters to whichever neighbour came
+              next. `BHAGAVAD-GITA` rendered as `HAGAVAD-GITA`. A separate layer
+              is the whole fix; the halo was never going to help, because the
+              thing covering the text was a filled shape rather than a line. */}
+          <g className="dgraph-labels">
+            {picture.points.map((point) => {
+              const node = byId.get(point.id);
+              if (!node) return null;
+              const near = !selected
+                || point.id === selected
+                || drawn.some((e) =>
+                     (e.subject_id === selected && e.object_id === point.id)
+                     || (e.object_id === selected && e.subject_id === point.id));
+              // Drawn where the placement pass found room for it, and always
+              // for whatever is being followed -- a reader who has just
+              // selected something must be able to see which one it was, even
+              // if its name would otherwise have been skipped.
+              if (!(point.label || point.id === selected
+                    || (selected !== null && near))) return null;
+              const r = point.r;
+              return (
+                <text key={point.id}
+                      className={`${point.id === selected ? "sel" : ""}${
+                        point.at === "centre" ? " over" : ""}`}
+                      opacity={selected && !near ? 0.16 : 1}
+                      x={point.at === "right" ? point.cx + r + 4
+                         : point.at === "left" ? point.cx - r - 4 : point.cx}
+                      y={point.at === "above" ? point.cy - r - 5
+                         : point.at === "below" ? point.cy + r + 11 : point.cy + 4}
+                      textAnchor={point.at === "right" ? "start"
+                                  : point.at === "left" ? "end" : "middle"}>
+                  {shortName(node.name)}
+                </text>
+              );
+            })}
+          </g>
         </svg>
 
         <div className="dgraph-key">

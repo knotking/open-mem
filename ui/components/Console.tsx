@@ -6310,6 +6310,16 @@ function GraphSection({ projectId }: { projectId: string }) {
             key={`${projectId}:${template}:${limit}`}
             data={data}
             evidenceUnit={["record", "records"]}
+            // The landing card says this and the console did not, which left
+            // the drawing looking like a picture rather than a control.
+            lede={
+              <>
+                Each line is a claim a model read out of a record, pointing from
+                subject to object. The densest part of the corpus is drawn first.{" "}
+                <strong>Select anything to follow it</strong> — the list below
+                narrows with the picture.
+              </>
+            }
             emptyNote={
               template ? (
                 <>Nothing in this project was read under the <code>{template}</code>{" "}

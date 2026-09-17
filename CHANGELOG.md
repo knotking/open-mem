@@ -10,6 +10,32 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 
 ## Unreleased
 
+### Added
+- **A Graph screen in the console, under *Your data*.** What this project
+  asserts, drawn best-attested first and then listed as sentences — *"Priya
+  Raman is employed by Northwind Trading · 3 records"*. Selecting anything
+  narrows the drawing and the list together. Filters for the lens a record was
+  read under, the relationship, and how many claims to fetch; the lens list and
+  the predicate glosses both come from the API rather than a copy in the page.
+- **`GET /api/v1/projects/{project_id}/graph`** — a whole project's current
+  claims, rather than a walk outward from one entity. Claims are selected and
+  nodes follow: ranking entities by mentions and drawing what joins them
+  produces a picture of the cast, and the relations between the most-mentioned
+  things are the ones a corpus states least often. Takes `limit`, `predicates`,
+  `template`, `valid_at` and `as_of`; both endpoints of every edge are joined
+  inside the query, so an edge is never returned pointing at a node the caller
+  was not given.
+
+### Fixed
+- **Three things in the graph drawing that only rendering it revealed**, now
+  fixed once in a component both the landing page and the console use: hub nodes
+  were dragged into the middle of their own neighbours until the graph was a
+  knot; arrowheads inherited `markerUnits="strokeWidth"`, so the best-attested
+  claims — drawn thickest on purpose — got heads three times the size of the
+  node they pointed at; and labels were tested for collision against other
+  labels but not against nodes, so a name could render straight through the
+  shape beside it.
+
 ### Changed
 - **`seed-demos` takes `--only=<key>` and seeding one corpus is now the normal
   way to use it.** The seeder deletes each corpus's project before writing it, so
