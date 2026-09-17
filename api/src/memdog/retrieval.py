@@ -23,6 +23,7 @@ from .contracts import (
     Citation,
     Corpus,
     Excluded,
+    GraphRelation,
     GraphSeed,
     RetrieveRequest,
     RetrieveResponse,
@@ -193,7 +194,7 @@ async def seeds_for_ids(
 async def _expand(
     graph, principal: Principal, seeds: list[GraphSeed], *, limit: int,
     valid_at=None, as_of=None, template: str | None = None,
-) -> dict[str, int]:
+) -> tuple[dict[str, int], list[GraphRelation]]:
     """Seeds, plus what one hop reaches, with the fewest hops to each.
 
     Goes through `GraphStore` rather than reading `entity_edges` here. The
@@ -209,10 +210,22 @@ async def _expand(
     at eight and each call is an indexed traversal, so the ceiling is small and
     known -- which is a better trade than a faster query that has to be audited
     separately.
+
+    **The edges are kept, not only the endpoints.** This used to return the
+    reachable ids alone, which is all the ranking needs -- and it meant a record
+    that arrived only through the graph could never be explained. `graph_seeds`
+    says where the walk began and the citation says where it ended; the step
+    between them is the edge, and discarding it left the reader with a passage
+    containing none of the words they searched for and no account of why it was
+    there. The traversal already returns them under the same ACL, so this is a
+    matter of not throwing them away.
     """
     from .graph import GraphError
+    from . import predicates as predicates_mod
 
     reachable: dict[str, int] = {}
+    names: dict[str, str] = {}
+    walked: dict[str, GraphRelation] = {}
     for seed in seeds:
         try:
             found = await graph.neighbourhood(
@@ -228,7 +241,31 @@ async def _expand(
         for node in [found.root, *found.nodes]:
             hops = min(node.depth, reachable.get(node.entity_id, node.depth))
             reachable[node.entity_id] = hops
-    return reachable
+            names[node.entity_id] = node.display_name
+        for edge in found.edges:
+            # Keyed by the claim, because two seeds one hop apart walk the same
+            # edge from both ends and it is one relationship either way.
+            walked[edge.fact_id or
+                   f"{edge.subject_id}:{edge.predicate}:{edge.object_id}"] = edge
+
+    relations = [
+        GraphRelation(
+            subject=names.get(edge.subject_id, edge.subject_id),
+            predicate=edge.predicate,
+            gloss=(predicates_mod.REGISTRY[edge.predicate].gloss
+                   if edge.predicate in predicates_mod.REGISTRY else edge.predicate),
+            object=names.get(edge.object_id, edge.object_id),
+            evidence=edge.evidence,
+            confidence=edge.confidence_class,
+        )
+        for edge in walked.values()
+        # An endpoint the traversal did not name is one whose entity row this
+        # walk never loaded. Reporting a raw id would be a payload rather than a
+        # sentence, which is the thing this exists to avoid.
+        if edge.subject_id in names and edge.object_id in names
+    ]
+    relations.sort(key=lambda r: (-r.evidence, r.subject, r.predicate))
+    return reachable, relations
 
 
 async def retrieve(
@@ -342,6 +379,7 @@ async def _retrieve(
         )
     seeds: list[GraphSeed] = []
     reachable: dict[str, int] = {}
+    relations: list[GraphRelation] = []
     if "graph" in request.match:
         # A named anchor replaces the parsed one rather than adding to it. If
         # the caller said where to start, starting somewhere else as well is
@@ -353,7 +391,7 @@ async def _retrieve(
             pool, principal, project_id=request.filter.project_id, query=request.query
         )
         if seeds:
-            reachable = await _expand(
+            reachable, relations = await _expand(
                 graph or build_graph(pool), principal, seeds,
                 limit=request.limit * 8,
                 valid_at=request.filter.valid_at, as_of=request.filter.as_of,
@@ -599,6 +637,7 @@ async def _retrieve(
         corpus=corpus,
         excluded=excluded,
         graph_seeds=seeds,
+        graph_relations=relations,
     )
 
 

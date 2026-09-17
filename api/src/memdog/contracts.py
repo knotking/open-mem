@@ -278,6 +278,32 @@ class Excluded(BaseModel):
     state: str | None = None
 
 
+class GraphRelation(BaseModel):
+    """One relationship the graph arm walked, in words.
+
+    **Reported because "found through the graph" is otherwise an assertion the
+    reader has to take on faith.** `graph_seeds` already says where the walk
+    started, which answers *why this entity*; it cannot answer *why this
+    record*, because the step between them is the edge and the edge was thrown
+    away. A passage that contains none of the words searched for, arriving with
+    no account of how, is indistinguishable from a bad result.
+
+    The predicate is carried as the vocabulary spells it and glossed beside it,
+    so a client renders a sentence rather than a triple -- and `confidence` says
+    whether the claim was read off the page or read into it, which for an answer
+    resting on one is the difference between a citation and an inference.
+    """
+
+    subject: str
+    predicate: str
+    gloss: str
+    object: str
+    # How many distinct records assert it. One document saying something is a
+    # claim; four saying it independently is closer to a fact.
+    evidence: int
+    confidence: Literal["structural", "interpretive"]
+
+
 class GraphSeed(BaseModel):
     """An entity the query named, and how it was recognised.
 
@@ -350,6 +376,10 @@ class AskResponse(BaseModel):
     excluded: list[Excluded] = Field(default_factory=list)
     # What the graph arm started from. Empty when it was not asked for.
     graph_seeds: list[GraphSeed] = Field(default_factory=list)
+    # And what it walked from there. Empty when the arm was not asked for
+    # or found nothing to start from -- which are different facts, and
+    # `graph_seeds` is what tells them apart.
+    graph_relations: list[GraphRelation] = Field(default_factory=list)
     model_id: str
     served_by_model: str | None = None
     generator_version: str | None = None
@@ -372,6 +402,10 @@ class RetrieveResponse(BaseModel):
     excluded: list[Excluded] = Field(default_factory=list)
     # What the graph arm started from. Empty when it was not asked for.
     graph_seeds: list[GraphSeed] = Field(default_factory=list)
+    # And what it walked from there. Empty when the arm was not asked for
+    # or found nothing to start from -- which are different facts, and
+    # `graph_seeds` is what tells them apart.
+    graph_relations: list[GraphRelation] = Field(default_factory=list)
     # ACL exclusions are deliberately absent and cannot be added: reporting
     # "3 records were hidden from you" discloses their existence, which is the
     # thing the ACL is for. The predicate runs inside the query, so the count

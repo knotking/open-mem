@@ -661,6 +661,7 @@ async def _ask(
         # graph supplied cites a record that does not contain the question's
         # words, and the seed is the only thing that explains why it is there.
         graph_seeds=found.graph_seeds,
+        graph_relations=found.graph_relations,
         model_id=answerer.model_id,
         served_by_model=generated.model_version or answerer.model_id,
         generator_version=generated.generator_version or answerer.generator_version,

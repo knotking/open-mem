@@ -42,6 +42,21 @@ export type Trace = {
   // graph-only result contains none of the words searched for, so this is the
   // only thing that explains why it is in the list.
   graph_seeds: GraphSeed[];
+  // And the relationships it crossed from them. The seeds say where the walk
+  // began and a citation says where it ended; this is the step between, which
+  // is the part a reader has to take on faith without it.
+  graph_relations: GraphRelation[];
+};
+
+export type GraphRelation = {
+  subject: string;
+  predicate: string;
+  /** The vocabulary's own words for the predicate, so no client keeps a second
+   *  copy of `predicates.py` that drifts from it in silence. */
+  gloss: string;
+  object: string;
+  evidence: number;
+  confidence: "structural" | "interpretive";
 };
 
 // The retrieval arms, and the one place their names and labels live. The API

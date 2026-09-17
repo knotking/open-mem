@@ -442,3 +442,35 @@ async def test_a_store_that_reaches_nothing_yields_no_graph_hits(
     # The seed's own records still match; nothing a hop away does.
     assert "the-assertion" in found
     assert "the-connected-one" not in found
+
+
+
+async def test_the_graph_arm_reports_what_it_walked(pool, embedder, tenant):
+    """A record that arrived only through the graph contains none of the words
+    searched for. `graph_seeds` says where the walk began and the citation says
+    where it ended; without the edge between them the reader has a passage and
+    no account of why it is there."""
+    await _world(pool, tenant)
+    response = await _search(
+        pool, embedder, tenant, "Priya Raman", ["lexical", "graph"]
+    )
+    assert response.graph_relations, "the walk was not reported"
+    walked = {(r.subject, r.predicate, r.object) for r in response.graph_relations}
+    assert ("Priya Raman", "works_for", "Northwind") in walked
+    one = next(r for r in response.graph_relations if r.predicate == "works_for")
+    # A sentence, not a triple: the gloss is what turns `works_for` into words a
+    # reader recognises, and no client should carry its own copy of it.
+    assert one.gloss and one.gloss != one.predicate
+    assert one.confidence in ("structural", "interpretive")
+
+
+async def test_no_seed_means_no_relations_either(pool, embedder, tenant):
+    """Distinct from "walked and found nothing connected". An empty relation
+    list on its own would not say which of those happened; `graph_seeds` is
+    what tells them apart."""
+    await _world(pool, tenant)
+    response = await _search(
+        pool, embedder, tenant, "badger husbandry", ["lexical", "graph"]
+    )
+    assert response.graph_seeds == []
+    assert response.graph_relations == []

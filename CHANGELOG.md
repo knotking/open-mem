@@ -11,6 +11,17 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **The Graph screen narrows to a memory or a single record.** `memory_id` and
+  `data_id` on `GET /api/v1/projects/{id}/graph`, both asked of the *evidence* —
+  so a claim several records support appears under each of them — and both
+  carrying the visibility predicate, or a filter would confirm that a record you
+  cannot read sits in a named memory.
+- **Edges are labelled with their predicate.** Not all of them: forty labels do
+  not fit beside forty-five names, and the handful that land read as though the
+  rest had no predicate. Following a node labels *its* edges, which is the
+  question the control is being used to ask anyway.
+
+### Added
 - **The Graph screen has a project picker.** The console is otherwise pinned to
   `MEMDOG_PROJECT_ID` for every section, so looking at another project's graph
   meant redeploying the UI. Reading is widened on its own here rather than in the

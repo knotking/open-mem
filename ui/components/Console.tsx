@@ -5361,6 +5361,12 @@ type Answer = {
   // What the graph arm started from. Empty when it was not asked for — which
   // is a different fact from it having found nothing connected, and the two
   // must not render the same.
+  // What the walk asserted, in words. Without it, a record that arrived only
+  // through the graph is a passage containing none of the words asked about and
+  // no account of why it is there -- the seeds say where the walk began, the
+  // citation says where it ended, and this is the step between them.
+  graph_relations: { subject: string; predicate: string; gloss: string;
+                     object: string; evidence: number; confidence: string }[];
   graph_seeds: { entity_id: string; display_name: string; type: string;
                  matched_on: "name" | "identifier" | "chosen" }[];
   model_id: string;
@@ -5417,15 +5423,15 @@ function AskSection({ projectId }: { projectId: string }) {
   const [memories, setMemories] = useState<Memory[]>([]);
   const [scope, setScope] = useState<string[]>([]);
   const [picking, setPicking] = useState(false);
-  // What the corpus says it is about. The model produced these from the first
-  // enrichment onwards and nothing could reach them -- they were a field, not a
-  // way in. Offered here because "I do not know what to ask" is the real first
-  // problem with a chat over somebody else's data.
+  // What the corpus says it is about, in the model's own words. These were
+  // buttons that added a keyword filter, and the filtering is gone — but the
+  // *information* was never the problem. "I do not know what to ask" is the
+  // real first difficulty with a chat over somebody else's data, and this is
+  // the only thing on the screen that answers it.
   const [topics, setTopics] = useState<{ keyword: string; records: number }[]>([]);
-  const [about, setAbout] = useState<string[]>([]);
   useEffect(() => {
     void call<{ keywords: { keyword: string; records: number }[] }>(
-      `api/v1/projects/${projectId}/keywords?limit=24`)
+      `api/v1/projects/${projectId}/keywords?limit=18`)
       .then((r) => setTopics(r.keywords))
       .catch(() => setTopics([]));
   }, [projectId]);
@@ -5433,18 +5439,6 @@ function AskSection({ projectId }: { projectId: string }) {
     void call<{ memories: Memory[] }>(`api/v1/projects/${projectId}/memories`)
       .then((r) => setMemories(r.memories))
       .catch(() => setMemories([]));
-  }, [projectId]);
-
-  // Anchors. Naming the entity outright is the difference between hoping the
-  // graph arm keys off the right thing and saying where to start: the parser
-  // scrapes names out of the question text, which is fine for "what did Priya
-  // decide" and useless for a question that never names its subject.
-  const [anchors, setAnchors] = useState<Entity[]>([]);
-  const [anchored, setAnchored] = useState<string[]>([]);
-  useEffect(() => {
-    void call<{ entities: Entity[] }>(`api/v1/projects/${projectId}/entities?limit=60`)
-      .then((r) => setAnchors(r.entities))
-      .catch(() => setAnchors([]));
   }, [projectId]);
 
   // What is actually in the memories you picked. A count of members says how
@@ -5458,20 +5452,6 @@ function AskSection({ projectId }: { projectId: string }) {
       .catch(() => setHeld(null));
   }, [scope]);
 
-  // The lens the content was read under.
-  const [lens, setLens] = useState("");
-  const [lenses, setLenses] = useState<GraphTemplate[]>([]);
-  useEffect(() => {
-    void call<{ templates: GraphTemplate[] }>("api/v1/templates")
-      .then((r) => setLenses(r.templates))
-      .catch(() => setLenses([]));
-  }, []);
-
-  // The graph arm. Off by default, and that default is not laziness: it
-  // answers "what else is connected to this?", which is a different question
-  // from "what matches this?", and it is only as good as the entity layer
-  // underneath it. Turning it on is a decision, so it is a control.
-  const [follow, setFollow] = useState(false);
 
   const [question, setQuestion] = useState("");
   const [turns, setTurns] = useState<Answer[]>([]);
@@ -5539,18 +5519,13 @@ function AskSection({ projectId }: { projectId: string }) {
   }, [turns.length, pending, typed?.upto]);
 
   const chosen = memories.filter((m) => scope.includes(m.memory_id));
-  const anchorNames = anchors
-    .filter((a) => anchored.includes(a.entity_id))
-    .map((a) => a.display_name);
-  const scopeLabel = [
-    scope.length === 0
-      ? "everything in this project"
-      : chosen.map((m) => m.title ?? m.memory_key ?? m.memory_id).join(", "),
-    about.length > 0 ? `about ${about.join(", ")}` : null,
-    lens ? `read as ${lens}` : null,
-    anchorNames.length > 0 ? `anchored on ${anchorNames.join(", ")}` : null,
-    follow ? "following connections" : null,
-  ].filter(Boolean).join(" · ");
+  // One scope, said in words. It used to concatenate five — memories, topics,
+  // lens, anchors, and whether connections were followed — which is a sentence
+  // nobody reads and, more to the point, five decisions standing between a
+  // person and a question.
+  const scopeLabel = scope.length === 0
+    ? "everything in this project"
+    : chosen.map((m) => m.title ?? m.memory_key ?? m.memory_id).join(", ");
 
   async function send(preset?: string) {
     const text = (preset ?? question).trim();
@@ -5559,15 +5534,21 @@ function AskSection({ projectId }: { projectId: string }) {
     setError(null);
     setPending(text);
     setQuestion("");
-    const filter = {
-      project_id: projectId, memory_ids: scope, keywords: about,
-      template: lens || null, entity_ids: anchored,
-    };
-    // The graph is an arm of the same retrieval the trace below shows, not a
-    // separate mode. Adding it widens what can be found; it does not change
-    // what an answer is.
-    const match: ArmKey[] = follow
-      ? ["vector", "lexical", "graph"] : ["vector", "lexical"];
+    const filter = { project_id: projectId, memory_ids: scope };
+    // **All three arms, every time.** The graph used to be a switch, on the
+    // argument that "what else is connected to this?" is a different question
+    // from "what matches this?" and that turning it on should be a decision.
+    // True about the questions, and it turned asking one into a configuration
+    // exercise -- five controls between a person and a sentence, of which the
+    // one that mattered most was the one nobody could evaluate without first
+    // turning it on.
+    //
+    // It is safe left on because it fails to nothing. The arm begins by finding
+    // an entity the question names; finding none it contributes nothing,
+    // `graph_seeds` comes back empty and says so, and the cost is a bounded
+    // traversal rather than a model call. A choice with one sensible answer is
+    // a setting that should not exist.
+    const match: ArmKey[] = ["vector", "lexical", "graph"];
     try {
       const answer = await call<Answer>("api/v1/ask", { question: text, filter, match });
       asked.current[answer.query_id] = { question: text, filter };
@@ -5636,6 +5617,19 @@ function AskSection({ projectId }: { projectId: string }) {
       {picking && (
         <section className="panel">
           <h2>What to ask of</h2>
+          {topics.length > 0 && (
+            <p className="empty" style={{ marginTop: 0 }}>
+              This project is about{" "}
+              {topics.slice(0, 12).map((t, i) => (
+                <span key={t.keyword}>
+                  {i > 0 ? ", " : ""}
+                  <strong>{t.keyword}</strong>
+                </span>
+              ))}
+              {topics.length > 12 ? ", among other things" : ""} — the model&rsquo;s
+              words for its records, not tags anybody applied.
+            </p>
+          )}
           <div className="row">
             <button
               className={scope.length === 0 ? "" : "secondary"}
@@ -5670,34 +5664,6 @@ function AskSection({ projectId }: { projectId: string }) {
               : "Everything outside the selection is excluded, not merely ranked lower."}
           </p>
 
-          {topics.length > 0 && (
-            <>
-              <h3>Or narrow by what it is about</h3>
-              <div className="row">
-                {topics.map((k) => {
-                  const on = about.includes(k.keyword);
-                  return (
-                    <button
-                      key={k.keyword}
-                      className={on ? "" : "secondary"}
-                      title={`${k.records} record${k.records === 1 ? "" : "s"}`}
-                      onClick={() => setAbout(on
-                        ? about.filter((x) => x !== k.keyword)
-                        : [...about, k.keyword])}
-                    >
-                      {k.keyword} <span className="empty">· {k.records}</span>
-                    </button>
-                  );
-                })}
-              </div>
-              <p className="empty" style={{ marginBottom: 0 }}>
-                These are the model&rsquo;s words for what each record is about, not tags anybody
-                applied — which is why they are shown separately from tags and can be wrong.
-                Selecting several matches a record carrying <strong>any</strong> of them.
-              </p>
-            </>
-          )}
-
           {held && (
             <div className="card" style={{ marginTop: 14 }}>
               <h3 style={{ marginTop: 0 }}>
@@ -5726,42 +5692,33 @@ function AskSection({ projectId }: { projectId: string }) {
 
               {held.keywords.length > 0 && (
                 <>
+                  {/* Description, not a control. These were buttons that added
+                      a keyword filter; with the filtering collapsed to the
+                      memory itself they are what they always looked like — the
+                      model's account of what is in here, which is the thing
+                      somebody reads *before* they know what to ask. */}
                   <p className="empty" style={{ marginBottom: 4 }}>What it is about</p>
                   <div className="row">
-                    {held.keywords.slice(0, 16).map((k) => {
-                      const on = about.includes(k.keyword);
-                      return (
-                        <button key={k.keyword} className={on ? "" : "secondary"}
-                                title={`${k.records} record${k.records === 1 ? "" : "s"}`}
-                                onClick={() => setAbout(on
-                                  ? about.filter((x) => x !== k.keyword)
-                                  : [...about, k.keyword])}>
-                          {k.keyword} <span className="empty">· {k.records}</span>
-                        </button>
-                      );
-                    })}
+                    {held.keywords.slice(0, 16).map((k) => (
+                      <span key={k.keyword} className="chip"
+                            title={`${k.records} record${k.records === 1 ? "" : "s"}`}>
+                        {k.keyword} <span className="empty">· {k.records}</span>
+                      </span>
+                    ))}
                   </div>
                 </>
               )}
 
               {held.entities.length > 0 && (
                 <>
-                  <p className="empty" style={{ marginBottom: 4 }}>
-                    Who and what is in it — click to anchor the question here
-                  </p>
+                  <p className="empty" style={{ marginBottom: 4 }}>Who and what is in it</p>
                   <div className="row">
-                    {held.entities.slice(0, 20).map((e) => {
-                      const on = anchored.includes(e.entity_id);
-                      return (
-                        <button key={e.entity_id} className={on ? "" : "secondary"}
-                                title={`${e.type} · named in ${e.records} record${e.records === 1 ? "" : "s"}`}
-                                onClick={() => setAnchored(on
-                                  ? anchored.filter((x) => x !== e.entity_id)
-                                  : [...anchored, e.entity_id])}>
-                          {e.display_name} <span className="empty">· {e.records}</span>
-                        </button>
-                      );
-                    })}
+                    {held.entities.slice(0, 20).map((e) => (
+                      <span key={e.entity_id} className="chip"
+                            title={`${e.type} · named in ${e.records} record${e.records === 1 ? "" : "s"}`}>
+                        {e.display_name} <span className="empty">· {e.records}</span>
+                      </span>
+                    ))}
                   </div>
                 </>
               )}
@@ -5807,70 +5764,6 @@ function AskSection({ projectId }: { projectId: string }) {
             </p>
           )}
 
-          {lenses.length > 0 && (
-            <>
-              <h3>Or narrow by what it was read as</h3>
-              <div className="row">
-                <button className={lens === "" ? "" : "secondary"} onClick={() => setLens("")}>
-                  any lens
-                </button>
-                {lenses.map((x) => (
-                  <button key={x.template} className={lens === x.template ? "" : "secondary"}
-                          title={x.description}
-                          onClick={() => setLens(lens === x.template ? "" : x.template)}>
-                    {x.template}
-                  </button>
-                ))}
-              </div>
-              <p className="empty" style={{ marginBottom: 0 }}>
-                A lens is declared when a record is written. Choosing one keeps only records read
-                that way — and walks only the relationships that reading produced.
-              </p>
-            </>
-          )}
-
-          <h3>Start from</h3>
-          <p className="empty" style={{ marginTop: 0 }}>
-            Anchor the question on something the corpus already knows about. Without an anchor the
-            graph has to scrape a name out of your question — which works for{" "}
-            <em>what did Krishna teach</em> and not for a question that never names its subject.
-          </p>
-          <div className="row">
-            {anchors.length === 0 ? (
-              <span className="empty">
-                Nothing extracted yet — entities appear after an enrichment pass.
-              </span>
-            ) : anchors.slice(0, 40).map((a) => {
-              const on = anchored.includes(a.entity_id);
-              return (
-                <button key={a.entity_id} className={on ? "" : "secondary"}
-                        title={`${a.type} · ${a.visible_mentions} mention${a.visible_mentions === 1 ? "" : "s"}`}
-                        onClick={() => setAnchored(on
-                          ? anchored.filter((x) => x !== a.entity_id)
-                          : [...anchored, a.entity_id])}>
-                  {a.display_name}
-                  <span className="empty"> · {a.type}</span>
-                </button>
-              );
-            })}
-          </div>
-
-          <h3>How far to look</h3>
-          <div className="row">
-            <label className="check">
-              <input type="checkbox" checked={follow}
-                     onChange={(e) => setFollow(e.target.checked)} />
-              Follow connections — reach records through the graph
-            </label>
-          </div>
-          <p className="empty" style={{ marginBottom: 0 }}>
-            {follow
-              ? "Records connected to your anchors are searched too, even when they never contain "
-                + "the words you asked about. That is the question the other arms cannot answer — "
-                + "and it is only as good as the entities underneath it."
-              : "Only records matching the question itself. Turn this on to also reach records "
-                + "joined to them by a relationship some document asserted."}
-          </p>
         </section>
       )}
 
@@ -5965,6 +5858,41 @@ function AskSection({ projectId }: { projectId: string }) {
                     </span>
                   ))}
                 </p>
+              )}
+              {/* The relationships the walk actually crossed, as sentences.
+                  A count of connections followed is not an explanation; "Priya
+                  Raman is employed by Northwind, asserted by 3 records" is. */}
+              {(turn.graph_relations ?? []).length > 0 && (
+                <div className="walked">
+                  <p className="provenance" style={{ marginBottom: 6 }}>
+                    …and crossed {turn.graph_relations.length} relationship
+                    {turn.graph_relations.length === 1 ? "" : "s"} to get there
+                  </p>
+                  {turn.graph_relations.slice(0, 8).map((r, i) => (
+                    <div className="walk" key={`${r.subject}-${r.predicate}-${r.object}-${i}`}>
+                      <span>
+                        <strong>{r.subject}</strong> {r.gloss}{" "}
+                        <strong>{r.object}</strong>
+                      </span>
+                      <span className="walk-meta">
+                        {r.confidence === "interpretive" && (
+                          <span className="chip warnchip"
+                                title="A defensible reading of what a document argues, not something it states in so many words.">
+                            a reading
+                          </span>
+                        )}
+                        <span className="chip">{r.evidence} record
+                          {r.evidence === 1 ? "" : "s"}</span>
+                      </span>
+                    </div>
+                  ))}
+                  {turn.graph_relations.length > 8 && (
+                    <p className="empty" style={{ margin: "6px 0 0" }}>
+                      …and {turn.graph_relations.length - 8} more, best-attested
+                      first.
+                    </p>
+                  )}
+                </div>
               )}
               {turn.citations.length === 0 ? (
                 <p className="empty">
