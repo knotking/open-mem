@@ -204,7 +204,7 @@ export type ResolvedAuthor = {
 export type Section =
   | "overview"
   | "add" | "update" | "ask" | "graph" | "inbound" | "crawlers" | "repos" | "mcp"
-  | "memory" | "cases" | "compaction" | "reprocess"
+  | "memory" | "compaction" | "reprocess"
   | "alerts" | "standing"
   | "audit" | "sharing" | "deletion"
   | "settings" | "models" | "prompts"

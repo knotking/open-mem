@@ -309,10 +309,23 @@ UNCALLED_ENDPOINTS: dict[str, str] = {
     "PATCH /api/v1/connections/{connection_id}":
         "personal vs shared scope, which decides ACL inheritance; nothing sets it",
 
-    # `PUT /api/v1/cases` was exempt on the grounds that cases are declared by
-    # producers and the console only reads them. The Cases screen declares one
-    # now -- a subject nobody can create is a timeline nobody can start -- so
-    # the exemption is retired rather than reworded.
+    # Cases, exempt again -- and the history is the point, so it is kept rather
+    # than rewritten. This was originally exempt because cases were declared by
+    # producers and the console only read them; the exemption was retired when
+    # the Cases screen learned to declare one, on the grounds that a subject
+    # nobody can create is a timeline nobody can start.
+    #
+    # The screen is now removed. Not because the feature is wrong -- the
+    # asserted/inferred distinction underneath it is the part of this system
+    # that keeps one patient's timeline from quietly including another's -- but
+    # because nothing on this deployment has ever written a case, so what
+    # shipped was a screen over an empty table, and a picker on Add data that
+    # could only ever offer nothing. The machinery, its tests and the write
+    # path all stand; only the console stopped claiming to be a way in.
+    "PUT /api/v1/cases":
+        "declaring a subject; the console has no cases screen while nothing writes one",
+    "GET /api/v1/projects/{project_id}/cases":
+        "listing subjects; same -- restore the screen and both come back",
 
     # Configuration surfaces that read but do not write.
     "POST /api/v1/agents/{data_type}/config/test":

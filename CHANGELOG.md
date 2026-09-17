@@ -10,6 +10,15 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 
 ## Unreleased
 
+### Changed
+- **`Your data` is now three subsections** — *Set up*, *Put it in*, *Read it* —
+  rather than seven items in one list.
+- **The `Sources` group is gone**, folded into *Put it in*: `Inbound` and
+  `Crawlers` are how data arrives without a person present, and having them
+  elsewhere split "how does data get in" across two parts of the sidebar.
+- **`Repositories` is now `Repository analysis`**, which is what the screen does
+  — adding a repo lives in `Add data` with everything else.
+
 ### Fixed
 - **The Graph screen showed relationships and no entities.**
   `GET /api/v1/projects/{id}/graph` returned nodes as `entity_id`/`display_name`

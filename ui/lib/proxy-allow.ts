@@ -148,9 +148,6 @@ export const ALLOWED = [
   // refuse every connect -- silently, which is how the Alerts screen shipped.
   /^api\/v1\/drive\/share-address$/,
   /^api\/v1\/drive\/connect$/,
-  /^api\/v1\/cases$/,
-  /^api\/v1\/cases\/[A-Za-z0-9_]+\/timeline$/,
-  /^api\/v1\/projects\/[A-Za-z0-9_]+\/cases$/,
   /^api\/v1\/audit(\?.*)?$/,
   /^api\/v1\/events(\?.*)?$/,
   /^api\/v1\/data\/[A-Za-z0-9_]+\/enrich$/,
