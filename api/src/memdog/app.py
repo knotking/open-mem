@@ -3494,7 +3494,21 @@ async def project_graph_endpoint(
     except (GraphError, AuthError) as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
     return {
-        "nodes": [vars(n) for n in result.nodes],
+        # **`id` and `name`, not `entity_id` and `display_name`.**
+        #
+        # `vars(n)` was the obvious thing and it shipped a screen that could not
+        # name anything. The public graph route maps the same nodes to `id` and
+        # `name`; this one handed back the dataclass as it stands, so the client
+        # -- written against one shape, reading the other -- looked every node up
+        # by an `id` that was not there, got nothing for all of them, and
+        # silently drew no labels at all. Relationships still appeared, because
+        # a predicate rides on the edge and needs no lookup, which is why the
+        # symptom was "I can see the relationships but not the entities".
+        #
+        # Two routes returning the same thing under two spellings is the whole
+        # cause. They return one spelling now.
+        "nodes": [{"id": n.entity_id, "name": n.display_name, "type": n.type}
+                  for n in result.nodes],
         # `confidence_class` is a property rather than a field, so `vars()` does
         # not reach it -- and it is the one thing on an edge that says whether a
         # claim was read off the page or read into it.

@@ -534,7 +534,7 @@ async def test_the_project_graph_route_returns_nodes_edges_and_glosses(
     assert response.status_code == 200
     body = response.json()
     assert {e["predicate"] for e in body["edges"]} == {"works_for", "located_in"}
-    assert {n["entity_id"] for n in body["nodes"]}
+    assert {n["id"] for n in body["nodes"]}
     # `confidence_class` is a property, so `vars()` does not reach it -- and it
     # is the one thing on an edge that says whether a claim was read off the
     # page or read into it.
@@ -690,3 +690,29 @@ async def test_narrowing_by_memory_cannot_confirm_a_hidden_record(
         "a claim reachable only through an unreadable record must not surface "
         "just because that record is in the named memory"
     )
+
+
+async def test_the_two_graph_routes_name_nodes_the_same_way(pool, tenant, http):
+    """One shape, both routes.
+
+    They disagreed: the public route mapped nodes to `id`/`name` and this one
+    returned the dataclass, so `entity_id`/`display_name`. A client written
+    against either shape reads the other as a node with no name — and because
+    the lookup fails silently, what shipped was a graph that drew its
+    relationships and none of the things they were between.
+    """
+    data_id = await _item(pool, tenant, "a")
+    await _ingest(pool, tenant, data_id, PEOPLE, RELATIONS)
+
+    response = await http.get(
+        f"/api/v1/projects/{tenant.project_id}/graph",
+        headers={"Authorization": f"Bearer {tenant.api_key}"},
+    )
+    nodes = response.json()["nodes"]
+    assert nodes, "nothing to check"
+    for node in nodes:
+        assert set(node) == {"id", "name", "type"}, node
+        assert node["name"] and not node["name"].startswith("ent_"), (
+            "a node whose name is its id is what an unmapped dataclass looks "
+            "like from the client"
+        )

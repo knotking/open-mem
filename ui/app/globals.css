@@ -1611,6 +1611,74 @@ button.stattile:focus-visible { outline: 2px solid var(--accent); outline-offset
 }
 .dgraph-arrow { color: var(--muted); }
 
+/* Two lists side by side: what this corpus is about, and what it asserts.
+   Stacked on a narrow screen rather than squeezed, because the relationship
+   column carries whole sentences and a 200px column would break every one of
+   them across three lines. */
+.dgraph-split {
+  display: grid;
+  grid-template-columns: minmax(220px, 300px) 1fr;
+  gap: 12px;
+  align-items: start;
+}
+@media (max-width: 760px) { .dgraph-split { grid-template-columns: 1fr; } }
+
+.dgraph-side {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+  overflow: hidden;
+}
+.dgraph-scroll { max-height: 420px; overflow-y: auto; }
+
+/* A row per entity: its name, what kind of thing it is, and how many claims
+   touch it. A `button`, and the bare `button` rule paints the primary action --
+   accent ground, light text, 9px, weight 550 -- so every one of those is
+   answered here or a list of names renders as a column of solid pills. */
+.dgraph-entity {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 8px;
+  align-items: baseline;
+  width: 100%;
+  background: none;
+  color: var(--ink);
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  padding: 7px 12px;
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 400;
+  text-align: left;
+  cursor: pointer;
+}
+.dgraph-side .dgraph-entity:first-child { border-top: 0; }
+.dgraph-entity:hover { background: var(--accent-soft); }
+.dgraph-entity:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* Selected reads as selected without colour alone -- the name goes bold and the
+   ground tints, so it survives greyscale and forced-colors. */
+.dgraph-entity.on { background: var(--accent-soft); }
+.dgraph-entity.on .dgraph-ename { font-weight: 600; color: var(--accent); }
+.dgraph-ename { min-width: 0; overflow-wrap: anywhere; }
+.dgraph-etype { font-size: 11px; color: var(--muted); font-family: var(--mono); }
+.dgraph-ecount {
+  font-family: var(--mono); font-size: 11px; color: var(--muted);
+  min-width: 2ch; text-align: right;
+}
+
+/* The heading on each column, and on each kind within the right-hand one. */
+.dgraph-sub {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  padding: 8px 12px 4px;
+  border-top: 1px solid var(--line);
+  position: sticky; top: 0; background: var(--bg); z-index: 1;
+}
+.dgraph-group:first-child .dgraph-sub { border-top: 0; }
+.dgraph-sub code {
+  font-family: var(--mono); font-size: 12px; font-weight: 600; color: var(--accent);
+}
+
 .dgraph-controls {
   display: flex; flex-wrap: wrap; gap: 10px; align-items: end;
 }
@@ -1624,103 +1692,29 @@ button.stattile:focus-visible { outline: 2px solid var(--accent); outline-offset
 /* The slab is the ground every diagram on this site sits on, fixed in both
    themes -- so the drawing inherits `--d-*` and matches the flow diagram
    further down the page instead of being a second visual language. */
-.dgraph-slab { padding: 12px 12px 10px; }
 /* A floor, then it scrolls in its own container. A graph shrunk to fit a phone
    is a graph nobody can read, and the page body must not scroll sideways. */
-.dgraph-svg { display: block; width: 100%; min-width: 560px; height: auto; }
 
-.dgraph-edge line {
-  stroke: var(--d-rule);
-  fill: none;
-  stroke-linecap: round;
-  opacity: 0.55;
-}
-.dgraph-edge.on line { opacity: 0.9; }
 
-.dgraph-node { cursor: pointer; }
-.dgraph-node circle, .dgraph-node rect {
-  fill: var(--d-box);
-  stroke: var(--d-line);
-  stroke-width: 1.2;
-}
-.dgraph-node:hover circle, .dgraph-node:hover rect { stroke: var(--d-accent); }
-.dgraph-node.sel circle, .dgraph-node.sel rect {
-  fill: var(--d-accent-soft);
-  stroke: var(--d-accent);
-  stroke-width: 2;
-}
 /* The predicate, written on its line. Quieter than a node name and in the mono
    face, because it is vocabulary rather than content -- `leads_to` is a term the
    API defines, and a reader who recognises it as one is better off than a reader
    who takes it for a phrase somebody wrote. */
-.dgraph-edgelabels text {
-  fill: var(--d-muted);
-  font-family: var(--mono);
-  font-size: 11px;
-  text-anchor: middle;
-  stroke: var(--d-ground);
-  stroke-width: 3;
-  paint-order: stroke;
-  pointer-events: none;
-}
 
 /* The labels are their own layer above every shape -- see the comment in
    GraphView. Styled here rather than under `.dgraph-node` because they are no
    longer inside one. */
-.dgraph-labels text {
-  fill: var(--d-ink);
-  /* In viewBox units, and the box is scaled to the column: 900 units rendered
-     into roughly 800 pixels, less on a narrow window. At 11.5 the names landed
-     near 8px on anything but a wide screen, which is small enough to read as
-     an unlabelled graph. */
-  font-size: 13.5px;
-  /* A halo, so a label crossing a line stays readable without moving the node
-     that owns it. `paint-order` is what makes the stroke sit behind the glyph
-     rather than eating it. */
-  stroke: var(--d-ground);
-  stroke-width: 3;
-  paint-order: stroke;
-  pointer-events: none;
-}
-.dgraph-labels text.sel { font-weight: 600; }
 /* A name drawn over its own node, which is the last resort for a hub ringed by
    its neighbours. Weighted so it reads as the node's label rather than as a
    caption that happens to sit there, and with a heavier halo because it is
    crossing the shape's own fill and every edge meeting it. */
-.dgraph-labels text.over { font-weight: 600; stroke-width: 4; }
-.dgraph-node:focus-visible circle, .dgraph-node:focus-visible rect {
-  stroke: var(--d-accent); stroke-width: 2;
-}
 
 /* The key is on the slab rather than under it: the shapes it explains are drawn
    in these colours, and a legend in the page's own palette would be a legend
    for a different picture. */
-.dgraph-key {
-  display: flex; flex-wrap: wrap; gap: 6px 18px;
-  padding: 10px 4px 2px;
-  font-size: 11.5px; color: var(--d-muted);
-}
-.dgraph-key span { display: inline-flex; align-items: center; gap: 7px; }
-.dgraph-key i { display: inline-block; flex: none; }
-.dk-round {
-  width: 11px; height: 11px; border-radius: 50%;
-  background: var(--d-box); border: 1.2px solid var(--d-line);
-}
-.dk-box {
-  width: 14px; height: 10px; border-radius: 2px;
-  background: var(--d-box); border: 1.2px solid var(--d-line);
-}
-.dk-solid { width: 20px; border-top: 2px solid var(--d-rule); }
-.dk-dash { width: 20px; border-top: 2px dashed var(--d-rule); }
 
 .dgraph-count { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.55; }
 
-.dgraph-claims {
-  display: grid; gap: 1px;
-  max-height: 260px; overflow-y: auto;
-  border: 1px solid var(--line); border-radius: 10px;
-  background: var(--line);
-}
 .dgraph-claim {
   display: flex; flex-wrap: wrap; gap: 6px 12px;
   align-items: baseline; justify-content: space-between;
