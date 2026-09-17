@@ -188,7 +188,7 @@ export type ResolvedAuthor = {
 // without importing a ten-thousand-line component to do it.
 export type Section =
   | "overview"
-  | "add" | "update" | "ask" | "inbound" | "crawlers" | "repos" | "mcp"
+  | "add" | "update" | "ask" | "graph" | "inbound" | "crawlers" | "repos" | "mcp"
   | "memory" | "cases" | "compaction" | "reprocess"
   | "alerts" | "standing"
   | "audit" | "sharing" | "deletion"

@@ -29,6 +29,10 @@ export const ALLOWED = [
   /^api\/v1\/prompts$/,
   /^api\/v1\/projects\/[\w-]+\/entities(\?.*)?$/,
   /^api\/v1\/graph\/predicates$/,
+  // The project's whole graph, rather than a walk out from one entity. The
+  // query string carries `limit`, `predicates` and `template`, so the pattern
+  // has to admit one.
+  /^api\/v1\/projects\/[A-Za-z0-9_]+\/graph(\?.*)?$/,
   /^api\/v1\/projects\/[\w-]+\/crawlers$/,
   /^api\/v1\/health$/,
   /^api\/v1\/data\/[A-Za-z0-9_]+(\?.*)?$/,

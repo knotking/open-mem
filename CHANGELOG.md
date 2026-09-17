@@ -10,6 +10,35 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 
 ## Unreleased
 
+### Changed
+- **`seed-demos` takes `--only=<key>` and seeding one corpus is now the normal
+  way to use it.** The seeder deletes each corpus's project before writing it, so
+  an unfiltered run takes the whole published gallery down and builds it back —
+  and a run that runs out of quota partway leaves behind only the corpora it had
+  already deleted. A filtered run prints just the entries it seeded, which must
+  be **merged** into `PUBLIC_DEMOS`; setting the variable to that output
+  unpublishes everything not named in it.
+
+### Fixed
+- **A large corpus could not be seeded at all.** Three limits sized for a hundred
+  records, all of which the 701-verse corpus hit: the seeder failed on the write
+  rate limit (`6000 credits/minute`) instead of waiting out `Retry-After`; the
+  in-process drain gave up after ten minutes, though enrichment is one worker per
+  topic and therefore serial; and every Cloud Run job carried a 30-minute task
+  timeout. The seeder now backs off, the drain defaults to two hours
+  (`DEMO_SEED_DRAIN_SECONDS`), and `--task-timeout` is per job — three hours for
+  `memdog-seed`, unchanged for the ticks. **Raise the drain and the task timeout
+  together**, or the job is killed inside the drain and leaves a project written
+  and half-enriched.
+
+### Migrations
+- None. A seed of the scripture corpus is roughly seven hundred model calls and
+  over an hour of wall clock, and it rests entirely on the vector arm — the
+  lexical arm returns nothing for a natural-language question, because
+  `websearch_to_tsquery` ANDs every word of it. Check `claims` on
+  `GET /api/v1/public/demos` after seeding: an entry reporting few or none is
+  enrichment having fallen back to the local heuristic, not a quiet corpus.
+
 ### Added
 - **The Bhagavad Gita, as the first corpus in the gallery you can *look* at.**
   The demo card gained a second tab beside the chat: the claims a model actually

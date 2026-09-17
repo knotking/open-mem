@@ -15,6 +15,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import Arc from "./Arc";
 import { ARC_STEPS } from "@/lib/arc";
 import Capture, { humanBytes, type Staged } from "./Capture";
+import GraphView, { type GraphData } from "./GraphView";
 import { base64FromDataUrl } from "@/lib/payload";
 import ThemeToggle from "./ThemeToggle";
 import { WriteProgress, assess, useTracked } from "./Progress";
@@ -142,6 +143,12 @@ const GROUPS: { title: string; items: { key: Section; label: string; hint: strin
       // conversation filed under it.
       { key: "cases", label: "Cases", hint: "one patient, matter or asset — its whole history" },
       { key: "ask", label: "Chat", hint: "ask it, with citations and the trace" },
+      // The third way to walk a corpus, after by-container and by-subject: by
+      // what it *claims*. Entities was removed for being a screen that
+      // described how the corpus was arranged without being on the path from
+      // "I have data" to "I have an answer"; this earns the place that one
+      // did not, because the picture is the answer rather than an index of one.
+      { key: "graph", label: "Graph", hint: "what it claims, and how often" },
     ],
   },
   {
@@ -664,6 +671,7 @@ export default function Console({
         )}
         {section === "cases" && <CasesSection projectId={projectId} onGo={setSection} />}
         {section === "ask" && <AskSection projectId={projectId} />}
+        {section === "graph" && <GraphSection projectId={projectId} />}
         {section === "inbound" && <InboundSection projectId={projectId} />}
         {section === "crawlers" && <CrawlersSection projectId={projectId} />}
         {section === "repos" && <ReposSection projectId={projectId} />}
@@ -6195,6 +6203,133 @@ function AskSection({ projectId }: { projectId: string }) {
  * So the shape is summary → selection → detail. The table appears when an
  * action is chosen, which is also the moment it becomes small enough to read.
  */
+/* -------------------------------------------------------------- 4b. graph */
+
+/**
+ * What this project claims, as a picture and then as sentences.
+ *
+ * **The way in, where the traversal is the way onward.**
+ * `/entities/{id}/graph` answers *what is near this thing* and needs a root,
+ * which is the right question once you know which thing to ask about and
+ * useless as a starting point — a corpus has no root, and picking one means
+ * already knowing the answer.
+ *
+ * Entities was removed from this console for describing how a corpus was
+ * arranged without being on the path from *I have data* to *I have an answer*.
+ * This is not that screen returning. A list of entities is an index; the thing
+ * a reader wants from a graph is which claims the corpus keeps making, and that
+ * is what is drawn.
+ *
+ * Every filter the endpoint takes is on the screen, because a screen offering
+ * two of an API's four parameters makes the other two invisible defaults nobody
+ * can find. `limit` is a cost as much as a filter, so the control that sets it
+ * says what it costs to raise.
+ */
+function GraphSection({ projectId }: { projectId: string }) {
+  const [data, setData] = useState<GraphData | null>(null);
+  const [busy, setBusy] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [limit, setLimit] = useState(200);
+  const [template, setTemplate] = useState("");
+  const [templates, setTemplates] = useState<GraphTemplate[]>([]);
+
+  // The lens list comes from the API rather than a copy here, the same way the
+  // predicate glosses inside the drawing do.
+  useEffect(() => {
+    void call<{ templates: GraphTemplate[] }>("api/v1/templates")
+      .then((r) => setTemplates(r.templates))
+      .catch(() => setTemplates([]));
+  }, []);
+
+  const load = useCallback(() => {
+    setBusy(true);
+    setError(null);
+    const query = new URLSearchParams({ limit: String(limit) });
+    if (template) query.set("template", template);
+    call<GraphData>(`api/v1/projects/${projectId}/graph?${query}`)
+      .then(setData)
+      .catch((e) => setError((e as Error).message))
+      .finally(() => setBusy(false));
+  }, [projectId, limit, template]);
+
+  useEffect(() => { load(); }, [load]);
+
+  return (
+    <section className="stack">
+      <h1>Graph</h1>
+      <p className="hint">
+        What this project asserts, drawn best-attested first. A claim several
+        records make separately is a different claim from one made once, so the
+        line is thicker — and the count is on every row.
+      </p>
+
+      <div className="card">
+        <div className="row">
+          <label>
+            Read under
+            <select value={template}
+                    onChange={(e) => setTemplate(e.target.value)}>
+              <option value="">Any lens</option>
+              {templates.map((t) => (
+                <option key={t.template} value={t.template}>
+                  {t.template} — {t.description}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Claims to fetch
+            <select value={limit} onChange={(e) => setLimit(Number(e.target.value))}>
+              <option value={100}>100</option>
+              <option value={200}>200</option>
+              <option value={500}>500 — the ceiling</option>
+            </select>
+          </label>
+          <button className="secondary" onClick={load} disabled={busy}
+                  title="Re-read the graph from the database">
+            {busy ? "Reading…" : "Refresh"}
+          </button>
+        </div>
+        {/* A template filter is applied inside the traversal rather than to its
+            result, and that is worth saying: it changes which claims exist for
+            this question, not merely which are shown. */}
+        <p className="hint">
+          A lens narrows to claims drawn under that schema — asked of the
+          evidence, so a claim several lenses agree on is reachable through each
+          of them. Fetching more costs a larger query, not a model call.
+        </p>
+      </div>
+
+      {error && <p className="err">{error}</p>}
+      {busy && !data && <p className="hint">Reading the graph…</p>}
+      {data && (
+        <div className="card">
+          <GraphView
+            // Refetching under a different lens is a different subject, so the
+            // selection and the relationship filter go with it.
+            key={`${projectId}:${template}:${limit}`}
+            data={data}
+            evidenceUnit={["record", "records"]}
+            emptyNote={
+              template ? (
+                <>Nothing in this project was read under the <code>{template}</code>{" "}
+                lens. That is a result rather than an error — it is what
+                declaring a schema buys, since an empty slot means nothing was
+                found where something was looked for. Try <em>Any lens</em>.</>
+              ) : (
+                <>This project has no claims yet. A graph is built by
+                enrichment, so records that were stored and indexed but never
+                read by a model produce none — <em>Interpret &amp; rebuild</em>{" "}
+                is where that is started.</>
+              )
+            }
+          />
+        </div>
+      )}
+    </section>
+  );
+}
+
 function Audit({ projectId }: { projectId: string }) {
   const PAGE = 25;
   const [trail, setTrail] = useState<AuditTrail | null>(null);

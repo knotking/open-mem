@@ -3449,6 +3449,60 @@ async def entity_graph_endpoint(
     }
 
 
+@app.get("/api/v1/projects/{project_id}/graph")
+async def project_graph_endpoint(
+    request: Request, project_id: str, limit: int = 200,
+    predicates: str | None = None, template: str | None = None,
+    valid_at: datetime | None = None, as_of: datetime | None = None,
+    actor: Principal = Depends(principal),
+) -> dict:
+    """The whole project's current claims, best-attested first.
+
+    The traversal next door answers *what is near this thing* and needs a root.
+    That is the right question once you know which thing to ask about, and it is
+    useless as a way in: a corpus has no root, and picking one means already
+    knowing the answer. This is the way in.
+
+    **Claims are selected and nodes follow**, rather than the other way round.
+    Ranking entities by how often they are mentioned and then drawing what joins
+    them produces a picture of the *cast* -- and the relations between the most
+    mentioned things are the ones a corpus states least often, because they go
+    without saying. Starting from the facts puts what the corpus most insists on
+    on the screen.
+
+    `predicates` and `template` narrow it, and both are the same filters the
+    traversal takes, applied the same way. The public demo surface deliberately
+    exposes none of them; here the caller is known and a narrower query is
+    cheaper than the one it replaces.
+    """
+    from . import predicates as predicates_mod
+
+    try:
+        result = await request.app.state.graph.overview(
+            actor, project_id=project_id, limit=limit,
+            predicates=[p for p in (predicates or "").split(",") if p] or None,
+            template=template, valid_at=valid_at, as_of=as_of,
+        )
+    except (GraphError, AuthError) as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    return {
+        "nodes": [vars(n) for n in result.nodes],
+        # `confidence_class` is a property rather than a field, so `vars()` does
+        # not reach it -- and it is the one thing on an edge that says whether a
+        # claim was read off the page or read into it.
+        "edges": [{**vars(e), "confidence_class": e.confidence_class}
+                  for e in result.edges],
+        "truncated": result.truncated,
+        "limit": limit,
+        # The vocabulary in use, glossed, so no client carries a second copy of
+        # the predicate registry that drifts from `predicates.py` in silence.
+        "predicates": [
+            spec for spec in predicates_mod.describe()
+            if spec["predicate"] in {e.predicate for e in result.edges}
+        ],
+    }
+
+
 @app.get("/api/v1/entities/{entity_id}/co-mentions")
 async def co_mentions_endpoint(
     request: Request, entity_id: str, limit: int = 25,

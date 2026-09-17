@@ -497,3 +497,87 @@ async def test_the_overview_limit_is_bounded(pool, tenant, principal_for):
         await graph.overview(actor, project_id=tenant.project_id,
                              predicates=["not_a_predicate"])
     assert "unknown predicate" in str(exc.value)
+
+
+# ---------------------------------------------------- the project graph route
+#
+# The HTTP layer over `overview`. The store is tested directly above; what only
+# the route can get wrong is the shape it returns and whether the filters it
+# advertises are wired to anything.
+
+
+@pytest.fixture
+async def http(pool, tenant):
+    import httpx
+
+    from memdog.app import app
+
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+            yield c
+
+
+async def test_the_project_graph_route_returns_nodes_edges_and_glosses(
+    pool, tenant, http
+):
+    """The glosses are the point of returning them: without the vocabulary the
+    console has to carry its own copy of the predicate registry, which drifts
+    from the server's in silence."""
+    data_id = await _item(pool, tenant, "a")
+    await _ingest(pool, tenant, data_id, PEOPLE, RELATIONS)
+
+    response = await http.get(
+        f"/api/v1/projects/{tenant.project_id}/graph",
+        headers={"Authorization": f"Bearer {tenant.api_key}"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert {e["predicate"] for e in body["edges"]} == {"works_for", "located_in"}
+    assert {n["entity_id"] for n in body["nodes"]}
+    # `confidence_class` is a property, so `vars()` does not reach it -- and it
+    # is the one thing on an edge that says whether a claim was read off the
+    # page or read into it.
+    assert all("confidence_class" in e for e in body["edges"])
+    assert {p["predicate"] for p in body["predicates"]} == {"works_for", "located_in"}
+    assert all(p.get("gloss") for p in body["predicates"])
+
+
+async def test_the_project_graph_route_filters_by_predicate(pool, tenant, http):
+    data_id = await _item(pool, tenant, "a")
+    await _ingest(pool, tenant, data_id, PEOPLE, RELATIONS)
+
+    response = await http.get(
+        f"/api/v1/projects/{tenant.project_id}/graph?predicates=works_for",
+        headers={"Authorization": f"Bearer {tenant.api_key}"},
+    )
+    assert response.status_code == 200
+    assert {e["predicate"] for e in response.json()["edges"]} == {"works_for"}
+
+
+async def test_the_project_graph_route_refuses_a_bad_limit(pool, tenant, http):
+    """400 rather than a clamp. `overview` is reachable unauthenticated through
+    the demo surface, so its bound is enforced in the store; a route that
+    quietly rounded a caller's number down would be reporting a different
+    query than the one it ran."""
+    from memdog.graph import MAX_OVERVIEW
+
+    response = await http.get(
+        f"/api/v1/projects/{tenant.project_id}/graph?limit={MAX_OVERVIEW + 1}",
+        headers={"Authorization": f"Bearer {tenant.api_key}"},
+    )
+    assert response.status_code == 400
+
+
+async def test_another_orgs_project_graph_is_empty_over_http(
+    pool, tenant, other_tenant, http
+):
+    data_id = await _item(pool, tenant, "a")
+    await _ingest(pool, tenant, data_id, PEOPLE, RELATIONS)
+
+    response = await http.get(
+        f"/api/v1/projects/{tenant.project_id}/graph",
+        headers={"Authorization": f"Bearer {other_tenant.api_key}"},
+    )
+    assert response.status_code == 200
+    assert response.json()["edges"] == []
