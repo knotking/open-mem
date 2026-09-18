@@ -11,6 +11,11 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **The sign-in card carries a verse from the Gita** — Devanagari, a
+  transliteration, an English line and its chapter and verse — rotating daily
+  across six of them. It is on the card rather than the page, so it is there in
+  both shells: the popover off the header where a demo is published, and the
+  hero card where one is not.
 - **The graph drawing is back, beside the lists.** It was removed when it could
   not name anything; the cause was the node-shape mismatch, not the drawing, and
   with that fixed the same layout labels its nodes. The picture carries the shape
