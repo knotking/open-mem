@@ -1637,6 +1637,12 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
   // On the card rather than on the page, for the reason the copyright notice is:
   // where a demo is published this card is a popover hanging off the header, and
   // the page behind it is nowhere near the person signing in.
+  //
+  // Above the heading rather than below the form. It sat at the foot of the card
+  // between the invite notice and the copyright, and in that position it read as
+  // a second footer -- small, muted, after the reader had already been handed a
+  // button to press. An epigraph goes before the thing it introduces or it is
+  // not an epigraph.
   const verse = (
     <figure className="shloka">
       <blockquote>
@@ -1650,6 +1656,7 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
 
   const signInCard = authEnabled ? (
           <form className="signin-card" id="signin" onSubmit={submit}>
+            {verse}
             <h2>Sign in</h2>
             <p className="empty" style={{ marginTop: 0 }}>
               Opens the console: add data, search it, and inspect every step.
@@ -1703,11 +1710,6 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
                 New accounts are closed on this deployment. Existing members can still sign in.
               </p>
             )}
-            {/* On the card, not only in the page footer. When a demo is present
-                this card is a popover off the header, so the footer is nowhere
-                near the person signing in — and the card is the login UI in the
-                sense that matters. */}
-            {verse}
             <p className="empty copyright">
               © {new Date().getFullYear()}{" "}
               <a href="https://buildgeek.ai" rel="noopener">buildgeek.ai</a>
@@ -1715,12 +1717,12 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
           </form>
         ) : (
           <div className="signin-card" id="signin">
+            {verse}
             <h2>Sign-in is not configured</h2>
             <p className="empty">
               This deployment has no identity provider set, so the console cannot be opened from a
               browser.
             </p>
-            {verse}
             <p className="empty copyright">
               © {new Date().getFullYear()}{" "}
               <a href="https://buildgeek.ai" rel="noopener">buildgeek.ai</a>
