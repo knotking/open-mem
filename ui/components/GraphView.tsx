@@ -21,7 +21,7 @@
  * see.
  */
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 export type GraphNode = { id: string; name: string; type: string };
 export type GraphEdge = {
@@ -56,6 +56,41 @@ type Placement = "below" | "above" | "left" | "right" | "centre";
 const VIEW_W = 900;
 const VIEW_H = 520;
 const PAD = 46;
+
+/* How far the drawing may be zoomed.
+ *
+ * `1` is the fit the layout was solved for, and it is the *floor* rather than
+ * the middle: the layout already scales the corpus to the frame, so zooming out
+ * past it only adds margin around a picture that was never cropped. The ceiling
+ * is what a 700-verse graph needs -- at fit, a hub's neighbourhood is a few
+ * pixels across and the label pass has already given up on most of it, which is
+ * the whole reason zooming exists here. */
+const ZOOM_MIN = 1;
+const ZOOM_MAX = 8;
+const ZOOM_STEP = 1.35;
+
+/** A drag shorter than this is a click. Without it, selecting a node is a
+ *  coin-flip: a pointer moves a pixel or two between down and up, the pan
+ *  handler claims the gesture, and the node never registers the tap. */
+const DRAG_SLOP = 4;
+
+/** Keep the window over the drawing.
+ *
+ * Without this a pan can be dragged until the graph is entirely off-screen, and
+ * what is left is a blank slab with no indication that anything is wrong or
+ * which way to drag back. Half a window of overscroll is allowed on each side
+ * so an edge node can be brought away from the frame's border to be read; past
+ * that the window is pinned. */
+function clampView(v: { x: number; y: number; w: number; h: number }) {
+  const slackX = v.w / 2;
+  const slackY = v.h / 2;
+  return {
+    w: v.w,
+    h: v.h,
+    x: Math.min(Math.max(v.x, -slackX), VIEW_W - v.w + slackX),
+    y: Math.min(Math.max(v.y, -slackY), VIEW_H - v.h + slackY),
+  };
+}
 
 /**
  * Fruchterman–Reingold, run to completion before anything is painted.
@@ -228,6 +263,58 @@ export default function GraphView({
   const [predicate, setPredicate] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
   const [shown, setShown] = useState(GRAPH_PAGE);
+
+  // The window onto the drawing, in the layout's own coordinates. The layout
+  // solves once for a 900x520 frame; this is which part of that frame is on
+  // screen, so zooming and panning never re-run the force simulation and the
+  // picture does not rearrange itself under the reader's hands.
+  const [view, setView] = useState({ x: 0, y: 0, w: VIEW_W, h: VIEW_H });
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  // Set while a pan is in flight; `moved` is what tells a pan from a tap.
+  const drag = useRef<{ px: number; py: number; vx: number; vy: number; moved: boolean } | null>(null);
+  const [panning, setPanning] = useState(false);
+
+  const zoom = VIEW_W / view.w;
+  const atMin = zoom <= ZOOM_MIN + 0.001;
+  const atMax = zoom >= ZOOM_MAX - 0.001;
+
+  /** Re-window around a fixed point, keeping whatever is under `(ax, ay)` --
+   *  expressed as a fraction of the current window -- exactly where it is.
+   *  Zooming about the pointer rather than the centre is the difference between
+   *  magnifying what someone is looking at and magnifying the middle while the
+   *  thing they wanted slides off the edge. */
+  const zoomAbout = useCallback((factor: number, ax = 0.5, ay = 0.5) => {
+    setView((v) => {
+      const next = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, (VIEW_W / v.w) * factor));
+      const w = VIEW_W / next;
+      const h = VIEW_H / next;
+      // The anchor's absolute position, held still across the change.
+      const fx = v.x + v.w * ax;
+      const fy = v.y + v.h * ay;
+      return clampView({ x: fx - w * ax, y: fy - h * ay, w, h });
+    });
+  }, []);
+
+  const reset = useCallback(() => setView({ x: 0, y: 0, w: VIEW_W, h: VIEW_H }), []);
+
+  // Non-passive, so the page does not scroll while the pointer is over the
+  // drawing. React's own onWheel is passive and `preventDefault()` in it is
+  // ignored -- which reads as the wheel zooming *and* the page jumping.
+  useEffect(() => {
+    const el = svgRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const box = el.getBoundingClientRect();
+      zoomAbout(
+        e.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP,
+        (e.clientX - box.left) / box.width,
+        (e.clientY - box.top) / box.height,
+      );
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [zoomAbout]);
 
   const byId = useMemo(
     () => new Map(data.nodes.map((n) => [n.id, n])),
@@ -641,8 +728,77 @@ export default function GraphView({
           Selecting anything drives both: the drawing dims to that node's
           neighbourhood and labels its edges, and the lists narrow to it. */}
       <div className="slab dgraph-slab">
-        <svg viewBox={`0 0 ${VIEW_W} ${VIEW_H}`} className="dgraph-svg" role="img"
-             aria-label={`${picture.points.length} things joined by ${drawn.length} extracted claims.`}>
+        {/* Visible controls, not only the wheel. Scroll-to-zoom is discoverable
+            only by trying it, and it is unreachable entirely from a keyboard or
+            a trackpad someone has set to scroll the page -- so the gesture is
+            the shortcut and these are the control. The percentage is here
+            because a reader who has zoomed in and lost the thread needs to know
+            there is something to reset before `Reset` means anything. */}
+        <div className="dgraph-zoom">
+          <button type="button" className="dgraph-zoombtn"
+                  onClick={() => zoomAbout(1 / ZOOM_STEP)}
+                  disabled={atMin}
+                  title={atMin ? "Already showing the whole graph" : "Zoom out"}
+                  aria-label="Zoom out">−</button>
+          <span className="dgraph-zoomlevel" aria-live="polite">{Math.round(zoom * 100)}%</span>
+          <button type="button" className="dgraph-zoombtn"
+                  onClick={() => zoomAbout(ZOOM_STEP)}
+                  disabled={atMax}
+                  title={atMax ? "Already at the closest view" : "Zoom in"}
+                  aria-label="Zoom in">+</button>
+          <button type="button" className="dgraph-zoombtn wide"
+                  onClick={reset}
+                  disabled={atMin && view.x === 0 && view.y === 0}
+                  title={atMin && view.x === 0 && view.y === 0
+                         ? "Already showing the whole graph"
+                         : "Back to the whole graph"}>Reset</button>
+        </div>
+        <svg ref={svgRef}
+             viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`}
+             className={`dgraph-svg${panning ? " panning" : ""}${zoom > 1 ? " zoomed" : ""}`}
+             role="img"
+             tabIndex={0}
+             aria-label={`${picture.points.length} things joined by ${drawn.length} extracted claims.`
+               + " Scroll to zoom, drag to pan, or use the zoom controls."}
+             onPointerDown={(e) => {
+               // Left button only: a right-drag is the context menu's gesture
+               // and a middle-drag is the browser's autoscroll.
+               if (e.button !== 0) return;
+               drag.current = { px: e.clientX, py: e.clientY, vx: view.x, vy: view.y, moved: false };
+               e.currentTarget.setPointerCapture(e.pointerId);
+             }}
+             onPointerMove={(e) => {
+               const d = drag.current;
+               if (!d) return;
+               const dx = e.clientX - d.px;
+               const dy = e.clientY - d.py;
+               if (!d.moved && Math.hypot(dx, dy) < DRAG_SLOP) return;
+               if (!d.moved) { d.moved = true; setPanning(true); }
+               const box = e.currentTarget.getBoundingClientRect();
+               // Client pixels into layout units, so the drawing tracks the
+               // pointer exactly rather than at some ratio of it.
+               setView((v) => clampView({
+                 ...v,
+                 x: d.vx - (dx / box.width) * v.w,
+                 y: d.vy - (dy / box.height) * v.h,
+               }));
+             }}
+             onPointerUp={(e) => {
+               // The click that follows is swallowed by the node's own handler
+               // checking this flag, so panning across a node does not select it.
+               if (drag.current?.moved) setPanning(false);
+               drag.current = null;
+               e.currentTarget.releasePointerCapture(e.pointerId);
+             }}
+             onPointerCancel={() => { drag.current = null; setPanning(false); }}
+             onKeyDown={(e) => {
+               // The drawing is focusable, so it answers the keys a zoomable
+               // surface is expected to answer. Without these, zoom is reachable
+               // only by a pointer.
+               if (e.key === "+" || e.key === "=") { e.preventDefault(); zoomAbout(ZOOM_STEP); }
+               else if (e.key === "-" || e.key === "_") { e.preventDefault(); zoomAbout(1 / ZOOM_STEP); }
+               else if (e.key === "0") { e.preventDefault(); reset(); }
+             }}>
           <defs>
             {/* `markerUnits="userSpaceOnUse"`, because the default is
                 `strokeWidth` -- which scales the arrowhead with the line, so a
@@ -710,7 +866,11 @@ export default function GraphView({
               <g key={point.id}
                  className={`dgraph-node${point.id === selected ? " sel" : ""}`}
                  opacity={selected && !near ? 0.16 : 1}
-                 onClick={() => setSelected(point.id === selected ? null : point.id)}
+                 onClick={() => {
+                   // A pan that happened to end over a node is not a tap on it.
+                   if (drag.current?.moved) return;
+                   setSelected(point.id === selected ? null : point.id);
+                 }}
                  role="button" tabIndex={0}
                  aria-label={`${node.name} — ${point.degree} claims`}
                  onKeyDown={(e) => {

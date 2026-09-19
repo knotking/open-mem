@@ -1725,10 +1725,67 @@ button.stattile:focus-visible { outline: 2px solid var(--accent); outline-offset
    in these colours, and a legend in the page's own palette would be a legend
    for a different picture. */
 
-.dgraph-slab { padding: 12px 12px 10px; }
+.dgraph-slab { padding: 12px 12px 10px; position: relative; }
 /* A floor, then it scrolls in its own container. A graph shrunk to fit a phone
    is a graph nobody can read, and the page body must not scroll sideways. */
 .dgraph-svg { display: block; width: 100%; min-width: 560px; height: auto; }
+/* `grab`/`grabbing` is the whole affordance telling a reader the picture can be
+   dragged; at fit there is nowhere to drag to, so the cursor does not promise
+   it. `touch-action: none` hands the pointer events to the pan handler --
+   without it a touch drag scrolls the page and the graph never moves. */
+.dgraph-svg.zoomed { cursor: grab; touch-action: none; }
+.dgraph-svg.panning { cursor: grabbing; }
+.dgraph-svg:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Text selection turns a pan into a smear of highlighted labels. */
+.dgraph-svg.panning text { user-select: none; }
+
+/* The zoom controls, over the top-right of the drawing rather than beside it:
+   the slab is already the widest thing on the page and a control strip in the
+   flow would push the picture down by its own height on every screen. */
+.dgraph-zoom {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  /* Opaque, not translucent: an edge passing underneath a translucent strip
+     reads as a line through the buttons. */
+  background: var(--panel);
+}
+/* Every property the bare `button` rule paints is answered here. It sets an
+   accent background and light text at 9px 16px, which for a 20px square icon
+   button is a solid green pill with a `+` lost in the middle of it. */
+.dgraph-zoombtn {
+  background: transparent;
+  color: var(--ink);
+  border: 0;
+  border-radius: 6px;
+  padding: 0;
+  width: 26px;
+  height: 26px;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+.dgraph-zoombtn.wide { width: auto; padding: 0 9px; font-size: 12px; }
+.dgraph-zoombtn:hover:not(:disabled) { background: var(--line); }
+.dgraph-zoombtn:disabled { opacity: 0.35; cursor: not-allowed; background: transparent; }
+.dgraph-zoomlevel {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  min-width: 40px;
+  text-align: center;
+}
 
 .dgraph-edge line {
   stroke: var(--d-rule);
