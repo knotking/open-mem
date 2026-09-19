@@ -264,6 +264,66 @@ def cache_graph(key: str, now: float, payload: dict) -> None:
     _graph_cache[key] = (now, payload)
 
 
+# --------------------------------------------------- the shared-answer cache
+
+# How long a stored answer is served before it is asked again. Long enough that
+# a link doing the rounds for a week costs one call; short enough that a corpus
+# reseeded with better extraction stops serving its old answers within days.
+ANSWER_TTL_SECONDS = 7 * 24 * 3600
+
+
+def question_key(question: str) -> str:
+    """The cache key for a question.
+
+    A link that has been through a chat client, an email and a paste differs
+    from the original by whitespace and case and nothing else, and those must
+    not each buy their own model call. Normalisation is deliberately shallow --
+    case, surrounding space and runs of internal whitespace. It stops well short
+    of stemming or stripping punctuation, because "what leads to ruin" and "what
+    leads to ruin?" are the same question but "is it better" and "is it bettor"
+    are not, and a key clever enough to merge the second pair would serve the
+    wrong answer with no way for a reader to tell.
+    """
+    return " ".join(question.lower().split())
+
+
+async def cached_answer(pool, demo_key: str, question: str) -> dict | None:
+    """A stored answer for this corpus and question, or None.
+
+    Counts the hit on the way past. That number is the only evidence the cache
+    is doing its job: a table of answers with every row at zero hits is a
+    feature that costs a write and saves nothing, and the difference is
+    invisible without it.
+    """
+    row = await pool.fetchrow(
+        "UPDATE public_answers SET hits = hits + 1"
+        " WHERE demo_key = $1 AND question_key = $2"
+        "   AND answered_at > now() - ($3 || ' seconds')::interval"
+        " RETURNING payload",
+        demo_key, question_key(question), str(ANSWER_TTL_SECONDS),
+    )
+    if row is None:
+        return None
+    payload = row["payload"]
+    return json.loads(payload) if isinstance(payload, str) else dict(payload)
+
+
+async def store_answer(pool, demo_key: str, question: str, payload: dict) -> None:
+    """Keep an answer for the next person to follow the same link.
+
+    Upsert rather than insert: an entry past its TTL is not deleted on read, so
+    the row is still there when the question is asked again and the write has to
+    replace it. `answered_at` resets, which is what restarts the clock.
+    """
+    await pool.execute(
+        "INSERT INTO public_answers (demo_key, question_key, question, payload)"
+        " VALUES ($1, $2, $3, $4::jsonb)"
+        " ON CONFLICT (demo_key, question_key) DO UPDATE"
+        "   SET payload = EXCLUDED.payload, answered_at = now(), hits = 0",
+        demo_key, question_key(question), question, json.dumps(payload),
+    )
+
+
 def client_ip(request) -> str:
     """The caller's address behind Cloud Run's proxy.
 

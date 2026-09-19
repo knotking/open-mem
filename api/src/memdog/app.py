@@ -7,6 +7,7 @@ else in the design widens this.
 
 from __future__ import annotations
 
+import logging
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -257,6 +258,8 @@ async def lifespan(app: FastAPI):
         await queue.close()
         await pool.close()
 
+
+log = logging.getLogger(__name__)
 
 app = FastAPI(title="mem-dog", version="0.1.0", lifespan=lifespan)
 
@@ -1401,8 +1404,9 @@ async def public_ask(request: Request, body: dict) -> dict:
     """
     from .auth import DATA_READ, Principal
     from .contracts import AskRequest, RetrieveFilter
-    from .public_demo import (DemoUnavailable, check_and_count, client_ip,
-                              release, resolve as resolve_demo)
+    from .public_demo import (DemoUnavailable, cached_answer, check_and_count,
+                              client_ip, release, resolve as resolve_demo,
+                              store_answer)
 
     settings = request.app.state.settings
     # The corpus comes from the registry, never from the body. `demo` names a
@@ -1421,6 +1425,17 @@ async def public_ask(request: Request, body: dict) -> dict:
         raise HTTPException(status_code=400, detail="question too long")
 
     pool = request.app.state.pool
+
+    # **Before metering, not after.** A stored answer costs no model call, so
+    # charging it against the day would mean a widely-shared link exhausting the
+    # allowance for everyone while spending nothing -- the cap exists to bound
+    # model spend, and a cache hit has none to bound. It is also why this sits
+    # ahead of the org lookup: a hit needs neither the corpus's org nor a
+    # principal to read with.
+    hit = await cached_answer(pool, demo.key, question)
+    if hit is not None:
+        return {**hit, "cached": True}
+
     org_id = await pool.fetchval(
         "SELECT org_id FROM projects WHERE project_id = $1", demo.project_id
     )
@@ -1465,7 +1480,7 @@ async def public_ask(request: Request, body: dict) -> dict:
     # generator versions and corpus counts are operational facts about the
     # deployment, and an anonymous caller has no use for them and no business
     # knowing them.
-    return {
+    payload = {
         "question": answer.question,
         "answer": answer.answer,
         "grounded": answer.grounded,
@@ -1473,6 +1488,19 @@ async def public_ask(request: Request, body: dict) -> dict:
             {"marker": c.marker, "text": c.text} for c in answer.citations
         ],
     }
+
+    # Kept for the next person to follow the same link. An ungrounded answer is
+    # kept too: it is what this corpus has to say about that question, and
+    # asking again would spend a call to be told the same thing. Storing is not
+    # allowed to cost the caller their answer -- a cache that 500s the request
+    # it was meant to make cheaper is worse than no cache -- so a failure here
+    # is logged and the answer is still returned.
+    try:
+        await store_answer(pool, demo.key, question, payload)
+    except Exception:
+        log.warning("could not store a public answer for %s", demo.key, exc_info=True)
+
+    return {**payload, "cached": False}
 
 
 @app.get("/api/v1/public/graph")

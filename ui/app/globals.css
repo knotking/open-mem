@@ -1509,6 +1509,31 @@ button.stattile:focus-visible { outline: 2px solid var(--accent); outline-offset
   margin-bottom: 14px;
 }
 .demo-starters button { text-align: left; }
+/* Each starter is now the question and a control that copies a link to it. The
+   question keeps the whole row; the copy sits at its end and does not grow. */
+.demo-askrow { display: flex; align-items: stretch; gap: 6px; }
+.demo-askrow > button:first-child { flex: 1; min-width: 0; }
+/* Answers the bare `button` rule, which is accent-on-light at 9px 16px -- as a
+   small secondary control beside a full-width one that renders as a green slab
+   competing with the question it belongs to. `.demo-starters button` above also
+   reaches this one, so the alignment is set back explicitly rather than
+   inherited from a rule written for the question. */
+.demo-copy {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 0 10px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  font-family: var(--mono);
+  text-align: center;
+  cursor: pointer;
+  flex: 0 0 auto;
+  align-self: stretch;
+}
+.demo-copy:hover { color: var(--ink); border-color: var(--muted); }
 .demo-composer {
   display: flex;
   gap: 8px;

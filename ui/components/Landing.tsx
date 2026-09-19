@@ -1265,8 +1265,12 @@ function DemoGraph({ app }: { app: DemoApp }) {
 }
 
 
-function PublicDemo({ app, info, setInfo }: {
+function PublicDemo({ app, info, setInfo, linkQuestion, onAsked }: {
   app: DemoApp;
+  /** A question the URL arrived carrying, asked once on load. */
+  linkQuestion: string | null;
+  /** Reports what was asked, so the address bar can carry it. */
+  onAsked: (question: string | null) => void;
   // Widened to carry the third state the gallery has: `undefined` for "not
   // asked yet", which is what stops the page painting a screen of diagrams and
   // then discarding them.
@@ -1277,6 +1281,7 @@ function PublicDemo({ app, info, setInfo }: {
   const [turns, setTurns] = useState<{
     question: string; answer: string; grounded: boolean;
     citations: { marker: number; text: string }[];
+    cached?: boolean;
   }[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1287,6 +1292,11 @@ function PublicDemo({ app, info, setInfo }: {
   const [view, setView] = useState<"ask" | "graph">("ask");
   const foot = useRef<HTMLDivElement | null>(null);
   const hasGraph = app.claims > 0;
+  // Which corpus the link's question has already been fired for. A ref rather
+  // than state, because the whole job is to fire exactly once and a state
+  // update would re-run the effect that reads it.
+  const firedFor = useRef<string | null>(null);
+  const [copied, setCopied] = useState<string | null>(null);
 
   useEffect(() => {
     if (turns.length) foot.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -1332,12 +1342,52 @@ function PublicDemo({ app, info, setInfo }: {
         throw new Error(sentence(body?.detail));
       }
       setTurns((previous) => [...previous, body]);
-      setInfo((i) => (i ? { ...i, remaining_today: Math.max(0, i.remaining_today - 1) } : i));
+      onAsked(asked);
+      // A cached answer cost no model call and was never metered, so counting
+      // it here would show the allowance draining while nothing was spent --
+      // and a shared link would appear to burn the day's budget for everyone
+      // who opened it, which is the opposite of what the cache is for.
+      if (!body.cached) {
+        setInfo((i) => (i ? { ...i, remaining_today: Math.max(0, i.remaining_today - 1) } : i));
+      }
     } catch (e) {
       setError((e as Error).message);
       setQuestion(asked);
     } finally {
       setBusy(false);
+    }
+  }
+
+  // The link's question, asked on arrival. Deliberately after the
+  // clear-on-switch effect above rather than before it: that one empties the
+  // transcript whenever `app.key` changes, and an answer fetched first would be
+  // wiped by it on the very load it was fetched for.
+  useEffect(() => {
+    if (!linkQuestion || firedFor.current === app.key) return;
+    firedFor.current = app.key;
+    void send(linkQuestion);
+    // `send` is redefined every render and is deliberately not a dependency --
+    // the ref above is what bounds this to one call.
+  }, [linkQuestion, app.key]);
+
+  /** The address for this corpus, or for one question of it. */
+  function shareUrl(q?: string) {
+    const url = new URL(window.location.href);
+    url.searchParams.set("demo", app.key);
+    if (q) url.searchParams.set("q", q); else url.searchParams.delete("q");
+    return url.toString();
+  }
+
+  async function copyLink(q: string | undefined, token: string) {
+    try {
+      await navigator.clipboard.writeText(shareUrl(q));
+      setCopied(token);
+      window.setTimeout(() => setCopied((c) => (c === token ? null : c)), 1800);
+    } catch {
+      // Clipboard access is refused outside a secure context and in some
+      // embedded browsers. Saying so beats a control that silently does
+      // nothing, which reads as the button being broken.
+      setError("The browser would not let the page copy. The address bar has the link.");
     }
   }
 
@@ -1379,10 +1429,21 @@ function PublicDemo({ app, info, setInfo }: {
         {turns.length === 0 && (
           <div className="demo-starters">
             {app.questions.map((example) => (
-              <button key={example} className="secondary" disabled={busy}
-                      onClick={() => void send(example)}>
-                {example}
-              </button>
+              // The question and its link are two controls, not one: a single
+              // button cannot both ask and copy, and making the copy a
+              // modifier-click hides it from everyone who does not guess.
+              <div className="demo-askrow" key={example}>
+                <button className="secondary" disabled={busy}
+                        onClick={() => void send(example)}>
+                  {example}
+                </button>
+                <button className="demo-copy"
+                        title="Copy a link that opens this corpus with this question answered"
+                        aria-label={`Copy a link to: ${example}`}
+                        onClick={() => void copyLink(example, example)}>
+                  {copied === example ? "copied" : "link"}
+                </button>
+              </div>
             ))}
           </div>
         )}
@@ -1404,6 +1465,20 @@ function PublicDemo({ app, info, setInfo }: {
                   {turn.citations.length === 1 ? "" : "s"}
                 </button>
               )}
+              {/* Said plainly rather than hidden. An answer that arrived from
+                  the store is not a lesser answer, but a reader comparing two
+                  runs deserves to know which one actually asked the model --
+                  and it explains why the day's allowance did not move. */}
+              {turn.cached && (
+                <span className="chip" title="Answered earlier for this corpus and served again, so it cost no model call.">
+                  answered earlier
+                </span>
+              )}
+              <button className="linkish"
+                      title="Copy a link that opens this corpus with this question answered"
+                      onClick={() => void copyLink(turn.question, `turn-${i}`)}>
+                {copied === `turn-${i}` ? "link copied" : "copy link"}
+              </button>
             </div>
             {open === i && (
               <div className="turndetail">
@@ -1495,15 +1570,57 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
   // question, and a form demanding an account they do not have is the opposite
   // of that. Signing in is still one click away, where a header keeps it.
   const [signinOpen, setSigninOpen] = useState(false);
+
+  // What the link asked for, read once at startup.
+  //
+  // A lazy initialiser rather than an effect, because the gallery fetch below
+  // has to consult this the moment it resolves and an effect is a race against
+  // it. It is safe to read `location` during render here *only* because nothing
+  // derived from it reaches the first paint: `picked` starts null either way,
+  // so the server and the browser both render "loading the sandbox" and there
+  // is nothing to mismatch.
+  const [linked] = useState(() => {
+    if (typeof window === "undefined") return { demo: null as string | null, q: null as string | null };
+    const p = new URLSearchParams(window.location.search);
+    return { demo: p.get("demo"), q: p.get("q") };
+  });
+  // The question currently in the URL. Lifted out of the demo panel because the
+  // address bar has to carry corpus and question together -- two components
+  // writing one URL is two writers racing over `history.replaceState`, and the
+  // loser's parameter silently vanishes.
+  const [asked, setAsked] = useState<string | null>(null);
+
   useEffect(() => {
     void fetch("/api/proxy/api/v1/public/demos")
       .then((r) => (r.ok ? r.json() : null))
       .then((body: DemoInfo | null) => {
         setDemo(body);
-        setPicked(body?.demos?.[0]?.key ?? null);
+        const gallery = body?.demos ?? [];
+        // A link naming a corpus this deployment does not publish falls back to
+        // the first rather than 404ing the page: the link is stale, the gallery
+        // is fine, and showing a working demo beats showing an error about one
+        // that is gone.
+        const wanted = linked.demo && gallery.some((d) => d.key === linked.demo)
+          ? linked.demo : null;
+        setPicked(wanted ?? gallery[0]?.key ?? null);
+        // The question only survives if its corpus did. Carrying it onto a
+        // different corpus would ask the Gita a question about a contract.
+        if (wanted && linked.q) setAsked(linked.q);
       })
       .catch(() => setDemo(null));
-  }, []);
+  }, [linked]);
+
+  // One writer for the address bar. `replaceState`, not `push`: switching
+  // corpus is not a navigation, and pushing would make Back walk the reader
+  // through every card they clicked rather than off the page.
+  useEffect(() => {
+    if (!picked || typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    url.searchParams.set("demo", picked);
+    if (asked) url.searchParams.set("q", asked);
+    else url.searchParams.delete("q");
+    window.history.replaceState(null, "", url);
+  }, [picked, asked]);
 
   // Escape closes it, because a panel that can only be dismissed by finding
   // the button again is a trap for anyone not using a mouse.
@@ -1739,7 +1856,7 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
                   role="tab"
                   aria-selected={a.key === app!.key}
                   className={`demo-app${a.key === app!.key ? " on" : ""}`}
-                  onClick={() => setPicked(a.key)}
+                  onClick={() => { setPicked(a.key); setAsked(null); }}
                 >
                   <span className="demo-app-title">{a.title}</span>
                   {/* What this one shows that the others do not. Without it the
@@ -1753,7 +1870,9 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
             </div>
           )}
           {app ? (
-            <PublicDemo app={app} info={demo!} setInfo={setDemo} />
+            <PublicDemo app={app} info={demo!} setInfo={setDemo}
+                        linkQuestion={app.key === picked ? asked : null}
+                        onAsked={setAsked} />
           ) : (
             <p className="empty">Loading the sandbox…</p>
           )}

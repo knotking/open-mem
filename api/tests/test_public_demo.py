@@ -13,7 +13,8 @@ import json
 import pytest
 
 from memdog.public_demo import (
-    DemoUnavailable, check_and_count, client_ip, hash_ip, release,
+    ANSWER_TTL_SECONDS, DemoUnavailable, cached_answer, check_and_count,
+    client_ip, hash_ip, question_key, release, store_answer,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -228,3 +229,75 @@ def test_the_registry_carries_what_the_gallery_needs_to_say():
     demo = resolve(settings, "sensors")
     assert "no model call" in demo.blurb
     assert demo.questions == ("Which freezer went above -18C last week?",)
+
+
+# ------------------------------------------------- the shared-answer cache
+#
+# A link is one question asked many times. These tests are about the property
+# that makes sharing one safe: the second person through costs nothing.
+
+
+async def test_a_stored_answer_comes_back_for_the_same_question(pool):
+    await store_answer(pool, "gita", "Is it better to do your own duty?",
+                       {"answer": "yes", "citations": []})
+    hit = await cached_answer(pool, "gita", "Is it better to do your own duty?")
+    assert hit is not None and hit["answer"] == "yes"
+
+
+async def test_whitespace_and_case_do_not_buy_a_second_model_call(pool):
+    """A link that has been through a chat client, an email and a paste comes
+    back differing by case and spacing and nothing else. Each of those must not
+    be a cache miss, because a miss is a model call."""
+    await store_answer(pool, "gita", "What leads to ruin?", {"answer": "a"})
+    assert await cached_answer(pool, "gita", "  what   LEADS to ruin?  ") is not None
+
+
+def test_normalisation_stops_short_of_changing_the_question():
+    """Deliberately shallow. Merging questions that merely look alike would
+    serve the wrong answer with no way for a reader to tell."""
+    assert question_key("Is it better") == question_key("  is  IT better ")
+    # Punctuation and spelling are load-bearing and are left alone.
+    assert question_key("is it better") != question_key("is it bettor")
+    assert question_key("what leads to ruin") != question_key("what leads to ruin?")
+
+
+async def test_one_corpus_answer_is_never_served_for_another(pool):
+    """The key is the corpus *and* the question. Without the corpus in it, a
+    question two corpora share would answer from whichever was asked first --
+    citations into records the other does not contain."""
+    await store_answer(pool, "gita", "What changed?", {"answer": "gita"})
+    assert await cached_answer(pool, "legal", "What changed?") is None
+
+
+async def test_a_stale_answer_is_not_served(pool):
+    """Past the TTL a stored answer is a miss, so a corpus reseeded with better
+    extraction stops serving its old answers rather than pinning them."""
+    await store_answer(pool, "gita", "How old?", {"answer": "old"})
+    await pool.execute(
+        "UPDATE public_answers SET answered_at = now() - ($1 || ' seconds')::interval"
+        " WHERE demo_key = 'gita'", str(ANSWER_TTL_SECONDS + 60))
+    assert await cached_answer(pool, "gita", "How old?") is None
+
+
+async def test_asking_again_replaces_a_stale_answer_rather_than_failing(pool):
+    """Nothing deletes on read, so the stale row is still there when the
+    question comes round again and the write has to displace it."""
+    await store_answer(pool, "gita", "Again?", {"answer": "first"})
+    await pool.execute(
+        "UPDATE public_answers SET answered_at = now() - ($1 || ' seconds')::interval"
+        " WHERE demo_key = 'gita'", str(ANSWER_TTL_SECONDS + 60))
+    await store_answer(pool, "gita", "Again?", {"answer": "second"})
+    hit = await cached_answer(pool, "gita", "Again?")
+    assert hit is not None and hit["answer"] == "second"
+
+
+async def test_hits_are_counted_so_the_cache_can_be_shown_to_work(pool):
+    """A table of answers every one of which has been served zero times is a
+    feature that costs a write and saves nothing, and the difference is
+    invisible without this number."""
+    await store_answer(pool, "gita", "Counted?", {"answer": "a"})
+    await cached_answer(pool, "gita", "Counted?")
+    await cached_answer(pool, "gita", "Counted?")
+    assert await pool.fetchval(
+        "SELECT hits FROM public_answers WHERE demo_key='gita' AND question_key=$1",
+        question_key("Counted?")) == 2
