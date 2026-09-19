@@ -1470,63 +1470,6 @@ function PublicDemo({ app, info, setInfo }: {
   );
 }
 
-/**
- * A verse for the sign-in card.
- *
- * The Gita is the largest corpus in this deployment's gallery and the one the
- * graph picture was built on, so the page that asks for a password quotes the
- * text the demo below it is standing on rather than decorating itself with
- * something borrowed.
- *
- * Each entry is one line of its shloka, not the whole of it. A full
- * verse is two lines and a card holding a password field is not the place for a
- * paragraph -- the reference names chapter and verse so a reader who wants the
- * rest knows exactly what to look up, and nothing here is offered as a complete
- * translation.
- */
-type Shloka = { sa: string; iast: string; en: string; ref: string };
-
-const SHLOKAS: readonly Shloka[] = [
-  {
-    sa: "कर्मण्येवाधिकारस्ते मा फलेषु कदाचन।",
-    iast: "karmaṇy evādhikāras te mā phaleṣu kadācana",
-    en: "You have a right to your action alone, never to its fruits.",
-    ref: "2.47",
-  },
-  {
-    // The one this system would have picked for itself: smṛti is memory, and
-    // the verse puts memory, knowledge and their loss in the same breath.
-    sa: "सर्वस्य चाहं हृदि सन्निविष्टो मत्तः स्मृतिर्ज्ञानमपोहनं च।",
-    iast: "sarvasya cāhaṃ hṛdi sanniviṣṭo mattaḥ smṛtir jñānam apohanaṃ ca",
-    en: "I am seated in the heart of all; from me come memory, knowledge, and their loss.",
-    ref: "15.15",
-  },
-  {
-    sa: "न हि ज्ञानेन सदृशं पवित्रमिह विद्यते।",
-    iast: "na hi jñānena sadṛśaṃ pavitram iha vidyate",
-    en: "There is nothing in this world as purifying as knowledge.",
-    ref: "4.38",
-  },
-  {
-    sa: "नासतो विद्यते भावो नाभावो विद्यते सतः।",
-    iast: "nāsato vidyate bhāvo nābhāvo vidyate sataḥ",
-    en: "The unreal has no being; the real never ceases to be.",
-    ref: "2.16",
-  },
-  {
-    sa: "उद्धरेदात्मनात्मानं नात्मानमवसादयेत्।",
-    iast: "uddhared ātmanātmānaṃ nātmānam avasādayet",
-    en: "Lift yourself by yourself; do not let yourself sink.",
-    ref: "6.5",
-  },
-  {
-    sa: "तस्माद्योगाय युज्यस्व योगः कर्मसु कौशलम्॥",
-    iast: "tasmād yogāya yujyasva yogaḥ karmasu kauśalam",
-    en: "So devote yourself to yoga: yoga is skill in action.",
-    ref: "2.50",
-  },
-];
-
 export default function Landing({ authEnabled }: { authEnabled: boolean }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -1552,17 +1495,6 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
   // question, and a form demanding an account they do not have is the opposite
   // of that. Signing in is still one click away, where a header keeps it.
   const [signinOpen, setSigninOpen] = useState(false);
-  // The verse changes daily, and it is chosen *after* mount rather than during
-  // render. The server and the browser can sit on opposite sides of midnight, so
-  // an index derived from the clock in both places is a hydration mismatch --
-  // which React reports as a bug in the page rather than as the one-character
-  // race it is. The first verse renders on the server; the day's replaces it.
-  const [shlokaAt, setShlokaAt] = useState(0);
-  useEffect(() => {
-    setShlokaAt(Math.floor(Date.now() / 86_400_000) % SHLOKAS.length);
-  }, []);
-  const shloka = SHLOKAS[shlokaAt];
-
   useEffect(() => {
     void fetch("/api/proxy/api/v1/public/demos")
       .then((r) => (r.ok ? r.json() : null))
@@ -1634,29 +1566,8 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
   // wrong is a moment of "loading" on a deployment with none — against the cost
   // of being right, which was rendering four diagrams and deleting them.
   const demoShell = demo === undefined || heroHasDemo;
-  // On the card rather than on the page, for the reason the copyright notice is:
-  // where a demo is published this card is a popover hanging off the header, and
-  // the page behind it is nowhere near the person signing in.
-  //
-  // Above the heading rather than below the form. It sat at the foot of the card
-  // between the invite notice and the copyright, and in that position it read as
-  // a second footer -- small, muted, after the reader had already been handed a
-  // button to press. An epigraph goes before the thing it introduces or it is
-  // not an epigraph.
-  const verse = (
-    <figure className="shloka">
-      <blockquote>
-        <p className="shloka-sa" lang="sa">{shloka.sa}</p>
-        <p className="shloka-iast" lang="sa-Latn">{shloka.iast}</p>
-        <p className="shloka-en">{shloka.en}</p>
-      </blockquote>
-      <figcaption className="shloka-ref">— Bhagavad Gita {shloka.ref}</figcaption>
-    </figure>
-  );
-
   const signInCard = authEnabled ? (
           <form className="signin-card" id="signin" onSubmit={submit}>
-            {verse}
             <h2>Sign in</h2>
             <p className="empty" style={{ marginTop: 0 }}>
               Opens the console: add data, search it, and inspect every step.
@@ -1717,7 +1628,6 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
           </form>
         ) : (
           <div className="signin-card" id="signin">
-            {verse}
             <h2>Sign-in is not configured</h2>
             <p className="empty">
               This deployment has no identity provider set, so the console cannot be opened from a
