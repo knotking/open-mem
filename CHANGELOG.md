@@ -11,13 +11,37 @@ Newest first. Entries under `## Unreleased` have not been tagged.
 ## Unreleased
 
 ### Added
+- **A demo example can be linked to.** `?demo=<key>&q=<question>` opens that
+  corpus and asks that question, and every sample question — and every answer
+  on screen — carries a control that copies its own link. A link naming a
+  corpus the deployment no longer publishes opens the first one rather than
+  erroring.
+- **A shared question is answered once, not once per visitor.** `/public/ask`
+  keeps its answer against the corpus and the normalised question and serves it
+  again, ahead of the metering — so a link doing the rounds costs one model call
+  rather than one per click, and cannot exhaust the gallery's daily allowance
+  for everyone who follows it. An answer served from the store says so.
+- **The graph drawing zooms and pans.** Wheel to zoom, drag to pan, `+`/`-`/`0`
+  from the keyboard, and a control strip with the current percentage and a
+  reset. A 701-record corpus draws 300 claims into one frame, where a hub's
+  neighbourhood was a few pixels across and most labels were dropped for want
+  of room; zoomed, the same drawing is readable.
+- **The Bhagavad Gita is published in the demo gallery** — 701 verses, 1293
+  extracted claims, and the only corpus there with a graph worth opening. Its
+  five sample questions were checked against the configured embedder before
+  publishing.
 - **The graph drawing is back, beside the lists.** It was removed when it could
   not name anything; the cause was the node-shape mismatch, not the drawing, and
   with that fixed the same layout labels its nodes. The picture carries the shape
   of the corpus and the lists carry everything it cannot fit — selecting anything
   drives both.
 
+### Migrations
+- `0059_public_answers.sql` — the shared-answer store behind demo links.
+  Applies itself on startup; no step in the deploy.
+
 ### Removed
+- **`A sensor fleet` is no longer in the demo gallery.**
 - **Cases is gone from the console**, along with the "Subject" picker on *Add
   data* that fed it — nothing on this deployment has ever written a case, so
   both were controls over an empty table. The API, the write path and the
