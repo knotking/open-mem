@@ -18,7 +18,8 @@ all, and what to check after.
 ## The target
 
 **`memdog-dev-506718`** (project number `266276359448`), region `us-central1`,
-reachable as `pagarwal@buildgeek.ai`.
+reachable as either `pagarwal@buildgeek.ai` or `pagarwal@homegeek.ai` — both
+have full access to Cloud Run, Cloud SQL and Secret Manager here.
 
 | Piece | Name | Notes |
 |---|---|---|
