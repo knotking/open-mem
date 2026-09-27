@@ -39,7 +39,7 @@ log = logging.getLogger(__name__)
 OPENALEX = "https://api.openalex.org"
 # OpenAlex asks callers to identify themselves and gives the polite pool faster,
 # more reliable service for it. Cheap manners with a real payoff.
-MAILTO = "mem-dog@buildgeek.ai"
+MAILTO = "open-mem@buildgeek.ai"
 RESOLVE_TIMEOUT_SECONDS = 30.0
 
 # `scholar.google.com/citations?user=<id>`, and the id is what identifies the

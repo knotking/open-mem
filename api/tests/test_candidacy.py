@@ -14,10 +14,10 @@ from __future__ import annotations
 
 import pytest
 
-from memdog import models
-from memdog.auth import ApiKeyVerifier
-from memdog.models import ModelError
-from memdog.settings_store import put
+from open_mem import models
+from open_mem.auth import ApiKeyVerifier
+from open_mem.models import ModelError
+from open_mem.settings_store import put
 
 pytestmark = pytest.mark.asyncio
 
@@ -287,10 +287,10 @@ async def test_a_regulated_record_is_not_sent_to_a_remote_extractor(
 ):
     """The gap the image path did not cover, and the larger one: enrichment
     used the deployment-wide extractor and consulted nothing."""
-    from memdog.extraction import GeminiExtractor, LocalHeuristicExtractor
-    from memdog.routing import Chain, Step
-    from memdog.extraction import ChainedExtractor
-    from memdog.workers import EnrichWorker
+    from open_mem.extraction import GeminiExtractor, LocalHeuristicExtractor
+    from open_mem.routing import Chain, Step
+    from open_mem.extraction import ChainedExtractor
+    from open_mem.workers import EnrichWorker
 
     await models.ensure_catalog(pool)
     await _profile(pool, "clinical_note", "regulated", requires=["extraction"])
@@ -318,8 +318,8 @@ async def test_a_regulated_record_is_not_sent_to_a_remote_extractor(
 
 
 async def test_an_ordinary_record_uses_the_whole_chain(pool, settings, tenant):
-    from memdog.extraction import build_extractor
-    from memdog.workers import EnrichWorker
+    from open_mem.extraction import build_extractor
+    from open_mem.workers import EnrichWorker
 
     await models.ensure_catalog(pool)
     worker = EnrichWorker(pool, build_extractor(settings), settings)
@@ -336,8 +336,8 @@ async def test_a_regulated_record_with_no_local_engine_is_refused(
 ):
     """Withheld rather than sent. The item stays stored and searchable; it is
     the understanding of it that does not happen."""
-    from memdog.extraction import GeminiExtractor
-    from memdog.workers import EnrichWorker
+    from open_mem.extraction import GeminiExtractor
+    from open_mem.workers import EnrichWorker
 
     await models.ensure_catalog(pool)
     await _profile(pool, "clinical_note", "regulated", requires=["extraction"])
@@ -358,7 +358,7 @@ async def test_a_regulated_record_with_no_local_engine_is_refused(
 async def test_a_chain_restricted_to_nothing_is_a_decision_not_to_run(pool):
     """`None` rather than an empty chain: a chain with no steps is not a
     degraded chain."""
-    from memdog.routing import Chain, Step
+    from open_mem.routing import Chain, Step
 
     async def call(*_a, **_k):
         return "x"
@@ -371,7 +371,7 @@ async def test_a_chain_restricted_to_nothing_is_a_decision_not_to_run(pool):
 async def test_restriction_does_not_inherit_the_original_breaker(pool):
     """Failures recorded against steps that are no longer in the chain would
     open a circuit on evidence about somebody else."""
-    from memdog.routing import Chain, Step
+    from open_mem.routing import Chain, Step
 
     async def call(*_a, **_k):
         return "x"

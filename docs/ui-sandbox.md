@@ -2,7 +2,7 @@
 
 Upload a dataset, watch it get enriched, chat against it, and see exactly what the chat retrieved.
 
-The sandbox is where someone decides whether mem-dog works for *their* data. Nothing else in the
+The sandbox is where someone decides whether open-mem works for *their* data. Nothing else in the
 product answers that question — a connector list does not, and a benchmark on someone else's corpus
 certainly does not.
 

@@ -1,9 +1,9 @@
-# Mem-Dog — Functional Requirements
+# Open-Mem — Functional Requirements
 
-Status: baseline, derived from the published mem-dog documentation set
-(`BuildGeekAI/mem-dog/docs`, `main`).
+Status: baseline, derived from the published open-mem documentation set
+(`BuildGeekAI/open-mem/docs`, `main`).
 
-Mem-Dog is a self-hosted private AI memory system. It ingests data from
+Open-Mem is a self-hosted private AI memory system. It ingests data from
 messaging channels, third-party apps, direct API calls and a conversational
 agent; enriches it with a pipeline of specialised AI agents; stores it in a
 dual-layer (relational + temporal graph) knowledge store; and exposes it
@@ -493,7 +493,7 @@ and **MAY** carry their usual RFC 2119 meaning.
 - **FR-DM-1** A single agent instance MUST serve multiple users across 25+
   messaging channels with full data isolation between them.
 - **FR-DM-2** The agent MUST resolve channel-specific identities (phone
-  number, Slack ID, …) to a mem-dog `user_id` before acting.
+  number, Slack ID, …) to a open-mem `user_id` before acting.
 - **FR-DM-3** The agent MUST provide four skills — bridge, ingest, query and
   semantic search — routed by message content or command prefix.
 - **FR-DM-4** The agent MUST call the API using per-user credentials, acting
@@ -535,9 +535,9 @@ and **MAY** carry their usual RFC 2119 meaning.
 
 - **FR-MCP-1** The system MUST expose an MCP server over SSE at
   `/api/v1/mcp/sse`.
-- **FR-MCP-2** It MUST provide eight tools: `mem_dog_add`, `mem_dog_search`,
-  `mem_dog_get`, `mem_dog_list`, `mem_dog_delete`, `mem_dog_entities`,
-  `mem_dog_memories`, `mem_dog_chat`.
+- **FR-MCP-2** It MUST provide eight tools: `open_mem_add`, `open_mem_search`,
+  `open_mem_get`, `open_mem_list`, `open_mem_delete`, `open_mem_entities`,
+  `open_mem_memories`, `open_mem_chat`.
 - **FR-MCP-3** It MUST authenticate with the same credentials as the REST API.
 - **FR-MCP-4** It MUST enforce the same access-control rules — tools MUST only
   return data the authenticated user may see.

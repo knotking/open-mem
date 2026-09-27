@@ -13,10 +13,10 @@ import json
 
 import pytest
 
-from memdog import normalize
-from memdog.auth import ApiKeyVerifier
-from memdog.contracts import Inline, WriteItem, WriteOptions, WriteRequest
-from memdog.write import write_items
+from open_mem import normalize
+from open_mem.auth import ApiKeyVerifier
+from open_mem.contracts import Inline, WriteItem, WriteOptions, WriteRequest
+from open_mem.write import write_items
 
 pytestmark = pytest.mark.asyncio
 
@@ -139,7 +139,7 @@ async def test_a_projected_identifier_correlates_into_a_case(
     `route_case` would correlate on nothing.
     """
     await _schema(pool, tenant)
-    from memdog.contracts import CaseRef
+    from open_mem.contracts import CaseRef
 
     first = await _write(
         pool, queue, blobs, settings, tenant, external_id="anchor",

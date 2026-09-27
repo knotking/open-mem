@@ -16,11 +16,11 @@ from datetime import datetime, timezone
 
 import pytest
 
-from memdog.compaction import (
+from open_mem.compaction import (
     CompactionError, create_job, list_jobs, run, runs_for, set_enabled, tick,
     update_job,
 )
-from memdog.ids import new_id
+from open_mem.ids import new_id
 
 pytestmark = pytest.mark.asyncio
 
@@ -96,7 +96,7 @@ async def test_archived_members_leave_the_working_set_but_not_the_corpus(
     pool, tenant, principal_for
 ):
     """The whole user-visible effect: a default, not a deletion."""
-    from memdog.retrieval import list_items
+    from open_mem.retrieval import list_items
 
     actor = await principal_for(tenant.api_key)
     memory_id = await _memory(pool, tenant)
@@ -261,7 +261,7 @@ async def test_a_private_summary_is_readable_by_its_owner(
     invisible to everyone, including the person who compacted them. Invisible
     is exactly how a working summary and a missing one look the same.
     """
-    from memdog.derive import artifacts_for
+    from open_mem.derive import artifacts_for
 
     actor = await principal_for(tenant.api_key)
     memory_id = await _memory(pool, tenant)

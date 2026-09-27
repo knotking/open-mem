@@ -755,12 +755,12 @@ async def tick(pool: asyncpg.Pool, worker: CrawlWorker, *, limit: int = 5,
     prevent that -- it only prevents two of them at once.
     """
     async with pool.acquire() as conn:
-        if not await conn.fetchval("SELECT pg_try_advisory_lock(hashtext('memdog.crawl'))"):
+        if not await conn.fetchval("SELECT pg_try_advisory_lock(hashtext('open_mem.crawl'))"):
             return {"skipped_lock": True, "started": [], "skipped": [], "runs": []}
         try:
             return await _tick(pool, conn, worker, limit, org_id)
         finally:
-            await conn.execute("SELECT pg_advisory_unlock(hashtext('memdog.crawl'))")
+            await conn.execute("SELECT pg_advisory_unlock(hashtext('open_mem.crawl'))")
 
 
 async def tick_for(pool: asyncpg.Pool, principal: Principal, worker: CrawlWorker,

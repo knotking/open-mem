@@ -8,11 +8,11 @@ from __future__ import annotations
 
 import pytest
 
-from memdog import agents, cases, normalize, sharing
-from memdog.contracts import CaseRef, Inline, WriteItem, WriteRequest, WriteOptions
-from memdog.settings_store import put
-from memdog.sharing import ShareError
-from memdog.write import write_items
+from open_mem import agents, cases, normalize, sharing
+from open_mem.contracts import CaseRef, Inline, WriteItem, WriteRequest, WriteOptions
+from open_mem.settings_store import put
+from open_mem.sharing import ShareError
+from open_mem.write import write_items
 
 pytestmark = pytest.mark.asyncio
 
@@ -324,10 +324,10 @@ async def _enrich_with_recorder(
     defect this covers was a value never passed — which no assertion about the
     result can see.
     """
-    from memdog.contracts import Inline, WriteItem, WriteOptions, WriteRequest
-    from memdog.queue import InProcessQueue
-    from memdog.workers import EmbedWorker, EnrichWorker, EventWorker
-    from memdog.write import EMBED_TOPIC, write_items
+    from open_mem.contracts import Inline, WriteItem, WriteOptions, WriteRequest
+    from open_mem.queue import InProcessQueue
+    from open_mem.workers import EmbedWorker, EnrichWorker, EventWorker
+    from open_mem.write import EMBED_TOPIC, write_items
 
     prompts_seen: list[str | None] = []
 
@@ -335,7 +335,7 @@ async def _enrich_with_recorder(
         model_id = "recorder-v1"
 
         async def extract(self, text, *, data_type, prompt=None, template=None):
-            from memdog.extraction import Envelope
+            from open_mem.extraction import Envelope
 
             prompts_seen.append(prompt)
             return Envelope(title="t", summary="s", keywords=[], entities=[],

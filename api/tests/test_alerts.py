@@ -17,14 +17,14 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from memdog import alerts as alerts_mod
-from memdog import entities as entities_mod
-from memdog.alerts import (
+from open_mem import alerts as alerts_mod
+from open_mem import entities as entities_mod
+from open_mem.alerts import (
     AlertError, backtest, create_alert, evaluate_gap, poll_events, set_enabled,
     tick, update_alert,
 )
-from memdog.graph import record_edges
-from memdog.ids import new_id
+from open_mem.graph import record_edges
+from open_mem.ids import new_id
 
 pytestmark = pytest.mark.asyncio
 
@@ -292,7 +292,7 @@ async def test_llm_mode_judges_the_batch_in_one_call(pool, tenant, principal_for
     rejected for, so the batch is what makes this mode affordable at all — and
     the assertion is the call count, not the result.
     """
-    from memdog.judging import Verdict
+    from open_mem.judging import Verdict
 
     actor = await principal_for(tenant.api_key)
     calls = []
@@ -359,7 +359,7 @@ async def test_an_unavailable_judge_defers_rather_than_guessing(
     recoverable. A judgement is not: a wrong yes is a false alarm and a wrong no
     is a silence nobody notices, so this defers and the sweep tries again.
     """
-    from memdog.judging import JudgeUnavailable
+    from open_mem.judging import JudgeUnavailable
 
     actor = await principal_for(tenant.api_key)
 
@@ -402,7 +402,7 @@ async def test_the_selector_is_generic(pool, tenant, principal_for):
     people actually watch for, and a payload shape this module has never seen
     should still be reachable.
     """
-    from memdog.alerts import matches_selector
+    from open_mem.alerts import matches_selector
 
     payload = {"predicate": "located_in", "subject_type": "person",
                "basis": "derived", "detail": {"score": 7, "note": "moved north"}}
@@ -435,7 +435,7 @@ async def test_a_revision_that_changes_nothing_is_not_an_event(pool, tenant, pri
     Treating one as a change would make every poll an event, which is the
     quickest way to teach someone to ignore alerts.
     """
-    from memdog.workers import record_version
+    from open_mem.workers import record_version
 
     data_id = await _item(pool, tenant, "doc")
     async with pool.acquire() as conn:
@@ -454,7 +454,7 @@ async def test_a_revision_that_changes_nothing_is_not_an_event(pool, tenant, pri
 async def test_the_first_write_is_not_a_revision(pool, tenant, principal_for):
     """The write path already announced it; saying it twice makes every new
     record look like an edit."""
-    from memdog.workers import record_version
+    from open_mem.workers import record_version
 
     data_id = await _item(pool, tenant, "fresh")
     async with pool.acquire() as conn:
@@ -472,8 +472,8 @@ async def test_an_acl_change_is_captured_because_nothing_else_could(
     org-visible on the third of March" has no other source. Driven through the
     real write path, because a direct UPDATE would prove nothing about it.
     """
-    from memdog.contracts import Inline, WriteItem, WriteOptions, WriteRequest
-    from memdog.write import write_items
+    from open_mem.contracts import Inline, WriteItem, WriteOptions, WriteRequest
+    from open_mem.write import write_items
 
     actor = await principal_for(tenant.api_key)
     alert = await _alert(pool, actor, tenant, surface="acl.changed",
@@ -506,7 +506,7 @@ async def test_an_acl_change_is_captured_because_nothing_else_could(
 
 async def test_a_memory_retype_is_an_event_and_a_re_add_is_not(pool, tenant, principal_for):
     """Promotion is the point of a mutable type. Re-adding an item is not."""
-    from memdog.memories import add_member
+    from open_mem.memories import add_member
 
     actor = await principal_for(tenant.api_key)
     memory_id = new_id("mem")
@@ -531,7 +531,7 @@ async def test_events_about_a_memory_are_visible_to_its_owner_only(
     pool, tenant, other_tenant, principal_for
 ):
     """A memory surface resolves visibility against the memory, not the fact."""
-    from memdog.memories import add_member
+    from open_mem.memories import add_member
 
     actor = await principal_for(tenant.api_key)
     stranger = await principal_for(other_tenant.api_key)
@@ -567,7 +567,7 @@ async def test_a_fact_alert_scoped_to_a_memory_reaches_its_evidence(
     nothing, forever, with no error to find. The fact stands on the records its
     edges cite, and that is what the scope has to ask about.
     """
-    from memdog.memories import add_member
+    from open_mem.memories import add_member
 
     actor = await principal_for(tenant.api_key)
     memory_id = new_id("mem")
@@ -621,7 +621,7 @@ async def test_a_burst_becomes_one_evaluation_not_one_per_message(
     Without the window this is the design the plan set out to avoid, wearing a
     queue as a disguise.
     """
-    from memdog.alerts import AlertWorker
+    from open_mem.alerts import AlertWorker
 
     actor = await principal_for(tenant.api_key)
     alert = await _alert(pool, actor, tenant, where={"predicate": ["located_in"]})
@@ -646,7 +646,7 @@ async def test_a_window_that_fails_leaves_the_work_for_the_sweep(
     Failing loudly in the consumer would take the instance down over work that
     is already recoverable.
     """
-    from memdog.alerts import AlertWorker
+    from open_mem.alerts import AlertWorker
 
     actor = await principal_for(tenant.api_key)
     alert = await _alert(pool, actor, tenant, where={"predicate": ["located_in"]})
@@ -682,13 +682,13 @@ def envelope():
     delivery that needs one is testing the deployment rather than the code."""
     import os
 
-    from memdog.crypto import Envelope
+    from open_mem.crypto import Envelope
 
     return Envelope(os.urandom(32))
 
 
 async def _subscribe(pool, principal, envelope, tenant, url, alert_id=None):
-    from memdog.event_delivery import create_subscription
+    from open_mem.event_delivery import create_subscription
 
     return await create_subscription(
         pool, principal, envelope,
@@ -700,7 +700,7 @@ async def test_the_signing_secret_is_shown_once_and_never_listed(
 ):
     """A secret a `config:write` credential can fetch back is a secret shared
     with everyone holding one."""
-    from memdog.event_delivery import list_subscriptions
+    from open_mem.event_delivery import list_subscriptions
 
     actor = await principal_for(tenant.api_key)
     created = await _subscribe(pool, actor, envelope, tenant, "https://example.com/hook")
@@ -717,7 +717,7 @@ async def test_a_url_that_reaches_inside_is_refused(pool, envelope, tenant, prin
     server answers at 169.254.169.254. A subscription pointed at either is an
     authenticated request from a trusted position.
     """
-    from memdog.fetching import FetchError
+    from open_mem.fetching import FetchError
 
     actor = await principal_for(tenant.api_key)
     for bad in ("https://10.100.0.3:5432/x",
@@ -730,7 +730,7 @@ async def test_a_url_that_reaches_inside_is_refused(pool, envelope, tenant, prin
 async def test_http_is_refused_because_the_payload_carries_record_state(
     pool, envelope, tenant, principal_for
 ):
-    from memdog.event_delivery import DeliveryError
+    from open_mem.event_delivery import DeliveryError
 
     actor = await principal_for(tenant.api_key)
     with pytest.raises(DeliveryError):
@@ -760,7 +760,7 @@ async def test_a_failed_delivery_is_retried_and_then_dead_lettered(
 ):
     """A subscriber down for an hour must be findable in one query, not
     inferred from silence."""
-    from memdog.event_delivery import MAX_ATTEMPTS, deliver_owed
+    from open_mem.event_delivery import MAX_ATTEMPTS, deliver_owed
 
     actor = await principal_for(tenant.api_key)
     alert = await _alert(pool, actor, tenant, where={"predicate": ["located_in"]})
@@ -772,7 +772,7 @@ async def test_a_failed_delivery_is_retried_and_then_dead_lettered(
 
     # No real network from the suite: the transport is stubbed to fail the way
     # an unreachable subscriber does.
-    import memdog.event_delivery as delivery_mod
+    import open_mem.event_delivery as delivery_mod
 
     class Unreachable:
         def __init__(self, *a, **kw): pass
@@ -798,7 +798,7 @@ async def test_a_failed_delivery_is_retried_and_then_dead_lettered(
 async def test_a_dead_letter_can_be_replayed_once_the_endpoint_is_fixed(
     pool, envelope, tenant, principal_for
 ):
-    from memdog.event_delivery import replay_dead
+    from open_mem.event_delivery import replay_dead
 
     actor = await principal_for(tenant.api_key)
     sub = await _subscribe(pool, actor, envelope, tenant, "https://example.com/hook")
@@ -819,7 +819,7 @@ async def test_rotation_keeps_the_previous_secret_for_the_overlap(
     pool, envelope, tenant, principal_for
 ):
     """Rotating without an overlap is an outage for everything in flight."""
-    from memdog.event_delivery import rotate_secret
+    from open_mem.event_delivery import rotate_secret
 
     actor = await principal_for(tenant.api_key)
     sub = await _subscribe(pool, actor, envelope, tenant, "https://example.com/hook")
@@ -835,12 +835,12 @@ async def test_rotation_keeps_the_previous_secret_for_the_overlap(
 async def test_the_signature_verifies_the_way_the_inbound_path_expects(
     pool, envelope, tenant, principal_for
 ):
-    """Mirrors 0018's scheme exactly, so a subscriber verifies memdog's
-    deliveries the same way memdog asks providers to sign theirs."""
+    """Mirrors 0018's scheme exactly, so a subscriber verifies open-mem's
+    deliveries the same way open-mem asks providers to sign theirs."""
     import hashlib
     import hmac
 
-    from memdog.event_delivery import sign
+    from open_mem.event_delivery import sign
 
     secret = b"a-secret"
     body = b'{"event":"fact.superseded"}'
@@ -859,7 +859,7 @@ async def test_the_poll_route_is_not_shadowed_by_the_domain_event_log(
     catch" with `data.recorded` and `enrichment.requested`. The guard is that
     exactly one route owns each path.
     """
-    from memdog.app import app
+    from open_mem.app import app
 
     paths = [r.path for r in app.routes if getattr(r, "methods", None)]
     assert paths.count("/api/v1/alert-events") == 1
@@ -870,7 +870,7 @@ async def test_the_poll_route_is_not_shadowed_by_the_domain_event_log(
 
 async def test_no_two_endpoints_claim_the_same_path_and_method(pool):
     """The general form of the bug above, so the next one is caught at once."""
-    from memdog.app import app
+    from open_mem.app import app
 
     seen: set[tuple[str, str]] = set()
     clashes = []
@@ -908,7 +908,7 @@ async def test_a_memory_scope_bounds_which_subjects_count(pool, tenant, principa
     and denormalising membership onto the event would go stale the moment
     somebody moved it.
     """
-    from memdog.memories import add_member
+    from open_mem.memories import add_member
 
     actor = await principal_for(tenant.api_key)
     memory_id = new_id("mem")
@@ -930,7 +930,7 @@ async def test_a_memory_scope_bounds_which_subjects_count(pool, tenant, principa
                          scope={"memory_id": memory_id})
     await _approve(pool, actor, alert["alert_id"])
 
-    from memdog.workers import record_version
+    from open_mem.workers import record_version
     async with pool.acquire() as conn:
         for data_id in (watched, ignored):
             await record_version(conn, data_id, source="write", content_text="first")
@@ -1044,7 +1044,7 @@ def test_exists_with_no_value_means_exists():
     indistinguishable from a quiet week, which is the failure mode alerts exist
     to remove.
     """
-    from memdog.alerts import matches_selector
+    from open_mem.alerts import matches_selector
 
     assert matches_selector({"memory_type": {"op": "exists"}}, {"memory_type": "session"})
     assert not matches_selector({"memory_type": {"op": "exists"}}, {"other": 1})

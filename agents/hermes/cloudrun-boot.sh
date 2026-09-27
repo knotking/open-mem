@@ -24,16 +24,16 @@ PORT="${PORT:-8080}"
 # forgot the key produces an agent with no tools rather than one holding a
 # broken server definition it will retry against all session.
 MCP_BLOCK=""
-if [ -n "${MEMDOG_API_URL:-}" ] && [ -n "${MEMDOG_API_KEY:-}" ]; then
-  MCP_BLOCK=$(printf 'mcp_servers:\n  mem_dog:\n    url: "%s/api/v1/mcp"\n    headers:\n      Authorization: "Bearer %s"\n' \
-    "${MEMDOG_API_URL%/}" "$MEMDOG_API_KEY")
+if [ -n "${OPENMEM_API_URL:-}" ] && [ -n "${OPENMEM_API_KEY:-}" ]; then
+  MCP_BLOCK=$(printf 'mcp_servers:\n  open_mem:\n    url: "%s/api/v1/mcp"\n    headers:\n      Authorization: "Bearer %s"\n' \
+    "${OPENMEM_API_URL%/}" "$OPENMEM_API_KEY")
 fi
 
 # `api_server` is the platform that matters here and it is NOT `cli`.
 #
 # Found the hard way: with only `cli` narrowed, a live run called `terminal`
 # with `env | grep -i mem` -- arbitrary shell on a public endpoint, and an
-# environment dump that carries MEMDOG_API_KEY straight into the model
+# environment dump that carries OPENMEM_API_KEY straight into the model
 # provider's context. The restriction was real and it was applied to a surface
 # nothing was running on.
 #
@@ -73,7 +73,7 @@ EOF
 # SOUL.md is the agent's standing instructions, and here it carries the one
 # thing it cannot work without and cannot find out.
 #
-# `mem_dog_search` requires a project_id. Nothing in the MCP handshake supplies
+# `open_mem_search` requires a project_id. Nothing in the MCP handshake supplies
 # one, and the id is a deployment fact rather than something a model can reason
 # its way to. The first working run got it by calling `terminal` with
 # `env | grep -i mem` -- so the agent was only ever succeeding because the shell
@@ -85,9 +85,9 @@ EOF
 # argument the deployment knows belongs in the deployment, not in a tool call
 # the model has to guess at.
 cat > "$HERMES_HOME/SOUL.md" <<EOF
-# Working a mem-dog corpus
+# Working a open-mem corpus
 
-You read and write one mem-dog corpus through the \`mem_dog\` MCP tools. That
+You read and write one open-mem corpus through the \`open_mem\` MCP tools. That
 corpus is the only thing you know; answer from it rather than from anything you
 remember, and when it does not say, say that it does not say.
 
@@ -95,18 +95,18 @@ remember, and when it does not say, say that it does not say.
 
 Nothing tells you these and you cannot discover them. Use them verbatim.
 
-- **project_id**: \`${MEMDOG_PROJECT_ID:-unset}\`
-- **producer_id**: \`${MEMDOG_PRODUCER_ID:-unset}\`
+- **project_id**: \`${OPENMEM_PROJECT_ID:-unset}\`
+- **producer_id**: \`${OPENMEM_PRODUCER_ID:-unset}\`
 
-Every call to \`mem_dog_search\`, \`mem_dog_chat\`, \`mem_dog_list\`,
-\`mem_dog_entities\` and \`mem_dog_memories\` takes the project_id above.
-\`mem_dog_add\` takes the producer_id. A call without them fails, and an empty
+Every call to \`open_mem_search\`, \`open_mem_chat\`, \`open_mem_list\`,
+\`open_mem_entities\` and \`open_mem_memories\` takes the project_id above.
+\`open_mem_add\` takes the producer_id. A call without them fails, and an empty
 result means the query matched nothing -- never that the corpus is empty.
 
 ## How to answer
 
-- \`mem_dog_search\` returns evidence you must read and judge.
-  \`mem_dog_chat\` returns prose with citations. Prefer search when the
+- \`open_mem_search\` returns evidence you must read and judge.
+  \`open_mem_chat\` returns prose with citations. Prefer search when the
   question is about what is in there.
 - Cite the \`data_id\` of every record you rely on.
 - Records are \`stored\` until they are enriched, and only enriched records are
@@ -149,6 +149,6 @@ chmod 0600 "$HERMES_HOME/.env"
 # otherwise be unreadable to the process that needs them.
 chown -R 10000:10000 "$HERMES_HOME" 2>/dev/null || true
 
-echo "cloudrun-boot: seeded ${HERMES_HOME} (port ${PORT}, model ${HERMES_MODEL:-hermes-4-405b}, provider ${HERMES_PROVIDER:-nous-api}, key_var ${KEY_VAR}$([ -n "${MODEL_API_KEY:-}" ] && echo " set" || echo " MISSING"), mcp=$([ -n "$MCP_BLOCK" ] && echo mem_dog || echo none))"
+echo "cloudrun-boot: seeded ${HERMES_HOME} (port ${PORT}, model ${HERMES_MODEL:-hermes-4-405b}, provider ${HERMES_PROVIDER:-nous-api}, key_var ${KEY_VAR}$([ -n "${MODEL_API_KEY:-}" ] && echo " set" || echo " MISSING"), mcp=$([ -n "$MCP_BLOCK" ] && echo open_mem || echo none))"
 
 exec /opt/hermes/docker/entrypoint-dispatch.sh "$@"

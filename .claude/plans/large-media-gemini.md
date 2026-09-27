@@ -162,7 +162,7 @@ here; the honest refusal in §3 is the boundary.
 
 ## 5. Implementation
 
-### [x] Step 1 — `api/src/memdog/gemini_files.py` (new)
+### [x] Step 1 — `api/src/open_mem/gemini_files.py` (new)
 
 The Files API client, and nothing else.
 
@@ -173,7 +173,7 @@ The Files API client, and nothing else.
 - `delete(handle)` — always called, in a `finally`.
 - No prompt logic, no modality logic. Those stay in `multimodal.py`.
 
-### [x] Step 2 — `api/src/memdog/multimodal.py`
+### [x] Step 2 — `api/src/open_mem/multimodal.py`
 
 - Add module-level `MODEL_LIMITS` naming the *model* ceiling per modality, with
   the source of each number in a comment.
@@ -189,13 +189,13 @@ The Files API client, and nothing else.
   returns the **same `Interpreted`** with `structure["via"] = "files_api"`.
 - `build_multimodal(settings)` passes the new settings through.
 
-### [x] Step 3 — `api/src/memdog/config.py`
+### [x] Step 3 — `api/src/open_mem/config.py`
 
 - `large_media: bool` (env `LARGE_MEDIA`, default `false`)
 - `max_large_media_bytes: int` (env, default ~2 GB) — the transport bound
 - Keep `max_media_bytes` meaning what it means today.
 
-### [x] Step 4 — `api/src/memdog/settings_store.py`
+### [x] Step 4 — `api/src/open_mem/settings_store.py`
 
 Two `Definition` entries, scopes `("platform", "org", "project")`, `lockable`:
 
@@ -211,7 +211,7 @@ generically from `/settings/effective` by `kind`, which is why the ability is
 already there. The `description` field is the whole UI, so it has to be written
 for a reader, not for the schema.
 
-### [x] Step 5 — `api/src/memdog/workers.py`
+### [x] Step 5 — `api/src/open_mem/workers.py`
 
 In `_interpret()`:
 

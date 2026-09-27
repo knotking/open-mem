@@ -1,6 +1,6 @@
 ---
 name: console-ui
-description: The standard every screen in the mem-dog console has to meet, and the specific ways screens here have failed it before. Invoke before adding or changing any UI in ui/components, before wiring a new API surface into the console, and whenever a screen is described as confusing, ugly, thin or missing configuration.
+description: The standard every screen in the open-mem console has to meet, and the specific ways screens here have failed it before. Invoke before adding or changing any UI in ui/components, before wiring a new API surface into the console, and whenever a screen is described as confusing, ugly, thin or missing configuration.
 ---
 
 # Building a screen in this console
@@ -204,7 +204,7 @@ not been written yet.
 3. Walk the whole task as a person: create → verify → observe → fix. If any step
    needs a terminal, the screen is not finished.
 4. **Deploying is not the same as shipping.** `ui/deploy.sh` needs
-   `MEMDOG_PROJECT_ID`, `MEMDOG_PRODUCER_ID` and `API_URL`. It once built and
+   `OPENMEM_PROJECT_ID`, `OPENMEM_PRODUCER_ID` and `API_URL`. It once built and
    pushed an image and then died before `gcloud run deploy`, so an exit code
    said success while the old revision kept serving. Confirm the served bundle
    contains the change — see `.claude/skills/deploy-gcp/`.

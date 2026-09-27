@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import pytest
 
-from memdog import chat
-from memdog.chat import ExtractiveAnswerer, Generated, ask
-from memdog.contracts import (
+from open_mem import chat
+from open_mem.chat import ExtractiveAnswerer, Generated, ask
+from open_mem.contracts import (
     AskRequest,
     Inline,
     RetrieveFilter,
@@ -20,8 +20,8 @@ from memdog.contracts import (
     WriteOptions,
     WriteRequest,
 )
-from memdog.settings_store import put
-from memdog.write import write_items
+from open_mem.settings_store import put
+from open_mem.write import write_items
 
 pytestmark = pytest.mark.asyncio
 

@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import pytest
 
-from memdog import models
-from memdog.crypto import Envelope
-from memdog.models import ModelError
+from open_mem import models
+from open_mem.crypto import Envelope
+from open_mem.models import ModelError
 
 pytestmark = pytest.mark.asyncio
 

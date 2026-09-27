@@ -11,14 +11,14 @@ import json
 
 import pytest
 
-from memdog.drive import DriveError, folder_id, share_address
+from open_mem.drive import DriveError, folder_id, share_address
 
 # No module-level asyncio mark: `asyncio_mode = "auto"` already runs the async
 # tests here, and marking the synchronous ones warns on every run.
 
 KEY = json.dumps({
     "type": "service_account",
-    "client_email": "memdog-drive@example.iam.gserviceaccount.com",
+    "client_email": "open-mem-drive@example.iam.gserviceaccount.com",
     "private_key": "-----BEGIN PRIVATE KEY-----\nnot-a-real-key\n-----END PRIVATE KEY-----\n",
 })
 
@@ -55,7 +55,7 @@ def test_a_file_link_is_refused_rather_than_walked():
 
 
 def test_the_address_is_the_client_email_and_nothing_else():
-    assert share_address(KEY) == "memdog-drive@example.iam.gserviceaccount.com"
+    assert share_address(KEY) == "open-mem-drive@example.iam.gserviceaccount.com"
     # Absent is a real state the console renders differently from broken.
     assert share_address("") is None
     assert share_address("   ") is None
@@ -84,8 +84,8 @@ async def test_a_folder_belongs_to_the_first_project_that_connects_it(
     because the folder really is shared with the reader that is doing the
     reading. So the second project is refused.
     """
-    from memdog.crypto import Envelope
-    from memdog.drive import connect
+    from open_mem.crypto import Envelope
+    from open_mem.drive import connect
 
     envelope = Envelope(b"0" * 32)
     folder = "1AbCdEfGhIjKlMnOp"
@@ -100,7 +100,7 @@ async def test_a_folder_belongs_to_the_first_project_that_connects_it(
     # Disabled, like every crawler. Here it is also the only check that the
     # folder was ever shared.
     assert first["enabled"] is False
-    assert first["share_address"] == "memdog-drive@example.iam.gserviceaccount.com"
+    assert first["share_address"] == "open-mem-drive@example.iam.gserviceaccount.com"
 
     with pytest.raises(DriveError) as taken:
         await connect(
@@ -128,8 +128,8 @@ async def test_the_same_project_is_not_blocked_by_its_own_claim(
     not leave two crawlers on one folder -- each extra one is another encrypted
     copy of the same private key, and the second is a crawler nobody asked for.
     """
-    from memdog.crypto import Envelope
-    from memdog.drive import connect
+    from open_mem.crypto import Envelope
+    from open_mem.drive import connect
 
     envelope = Envelope(b"0" * 32)
     first = await connect(
@@ -160,8 +160,8 @@ async def test_the_same_project_is_not_blocked_by_its_own_claim(
 
 
 async def test_no_reader_configured_is_503_and_says_so(pool, tenant, principal_for):
-    from memdog.crypto import Envelope
-    from memdog.drive import connect
+    from open_mem.crypto import Envelope
+    from open_mem.drive import connect
 
     with pytest.raises(DriveError) as unset:
         await connect(

@@ -31,10 +31,10 @@ The default path. Content travels in the JSON body as `text` or base64 `bytes`.
 | Total payload | 32 MiB | `MAX_PAYLOAD_BYTES` | `413` — `payload exceeds the configured maximum` |
 | Enrichment backlog | 10,000 queued | `MAX_QUEUE_DEPTH` | `429` with `Retry-After: 30` |
 
-Enforced together in `_admit` (`api/src/memdog/write.py:112`), before anything is
+Enforced together in `_admit` (`api/src/open_mem/write.py:112`), before anything is
 stored, and after the credential and producer checks.
 
-**How the payload is measured** (`api/src/memdog/write.py:100`), because the
+**How the payload is measured** (`api/src/open_mem/write.py:100`), because the
 number is not the request size:
 
 - `Inline.text` — UTF-8 byte length.
@@ -64,16 +64,16 @@ Higher than the inline cap on purpose: uploads skip base64 inflation and never
 put bytes through the API's request body.
 
 Checked twice. At session creation, against the *declared* `size` if one is
-given (`api/src/memdog/uploads.py:69`) — rejecting before any bytes move is the
+given (`api/src/open_mem/uploads.py:69`) — rejecting before any bytes move is the
 whole point of declaring a size. And again at `PUT .../bytes` against what
-actually arrived (`api/src/memdog/app.py:1891`). If a size was declared it must
+actually arrived (`api/src/open_mem/app.py:1891`). If a size was declared it must
 match exactly; a mismatch is a `400`, not a truncation.
 
 ## 3. Fetched content — URLs, connectors, YouTube
 
 A write carrying `Pending` is materialised later by the fetch worker, which
 downloads under the **same 512 MiB `MAX_UPLOAD_BYTES` ceiling**
-(`api/src/memdog/fetching.py:378`). A pasted URL, a Drive file, a Slack export:
+(`api/src/open_mem/fetching.py:378`). A pasted URL, a Drive file, a Slack export:
 all one path.
 
 The cap is enforced against bytes that actually arrive, streamed
@@ -86,7 +86,7 @@ Also bounded: `MAX_REDIRECTS = 3`.
 ## 4. Crawlers
 
 A crawl is the one input path that can enumerate its own work, so its limits are
-per-run configuration rather than deployment settings (`api/src/memdog/crawlers.py:60`):
+per-run configuration rather than deployment settings (`api/src/open_mem/crawlers.py:60`):
 
 | Limit | Default | Range |
 |---|---|---|
@@ -125,7 +125,7 @@ visible rather than inferred.
 
 The effective extraction window is the smaller of `EXTRACT_WINDOW_CHARS` and the
 engine's own declared limit — Gemini 200,000, Ollama 100,000
-(`api/src/memdog/extraction.py:510`) — so in practice the 40k window governs. It
+(`api/src/open_mem/extraction.py:510`) — so in practice the 40k window governs. It
 is small on purpose: on a wall of text the constraint is the model's *behaviour*,
 not its context window.
 
@@ -272,9 +272,9 @@ stack. This is a client-side ceiling on the *inline* path only — it is well be
 Worth knowing before someone sets an env var and expects an effect:
 
 - **`MAX_MEDIA_BYTES` does nothing.** `Settings.max_media_bytes`
-  (`api/src/memdog/config.py:73`) is defined and never read. The real media
+  (`api/src/open_mem/config.py:73`) is defined and never read. The real media
   ceiling is `MAX_INLINE_BYTES = 18 * 1024 * 1024`, hardcoded at
-  `api/src/memdog/multimodal.py:33`, because the limit belongs to the provider's
+  `api/src/open_mem/multimodal.py:33`, because the limit belongs to the provider's
   inline-payload API rather than to this deployment. Changing the ceiling today
   means editing that constant.
 - **`MAX_EXTRACT_WINDOWS` is 24, not 12.** `CHANGELOG.md:196` and the comment at
@@ -286,7 +286,7 @@ Worth knowing before someone sets an env var and expects an effect:
 
 Everything above bounds *volume*. Separately, spend is bounded in credits — a
 per-key in-process burst bucket and a durable per-scope daily budget
-(`api/src/memdog/quota.py`), where one credit is roughly one plain vector search.
+(`api/src/open_mem/quota.py`), where one credit is roughly one plain vector search.
 A write that is comfortably inside every limit here can still be refused because
 the enrichment it would trigger has no budget left. The public demo surface has
 its own hard caps: 20 questions per IP per hour, 500 per day across everyone.

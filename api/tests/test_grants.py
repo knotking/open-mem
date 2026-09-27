@@ -19,8 +19,8 @@ import time
 import httpx
 import pytest
 
-from memdog import grants
-from memdog.grants import GrantError, Token
+from open_mem import grants
+from open_mem.grants import GrantError, Token
 
 pytestmark = pytest.mark.asyncio
 

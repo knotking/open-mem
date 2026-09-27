@@ -4,7 +4,7 @@
 arrives. Four published use cases need it; media monitoring (UC11) is *only*
 this, so shipping it without delivery ships nothing.
 
-Status: **shipped.** `api/src/memdog/standing.py` (795 lines), 21 tests.
+Status: **shipped.** `api/src/open_mem/standing.py` (795 lines), 21 tests.
 Arrival matching, date rules, backtest-gated enable, per-query sequence and
 webhook delivery are all live, with a Standing queries section in the console.
 

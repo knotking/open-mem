@@ -14,7 +14,7 @@ import os
 
 import pytest
 
-from memdog.inference import EmbeddingUnavailable, GeminiEmbedder, LocalHashEmbedder
+from open_mem.inference import EmbeddingUnavailable, GeminiEmbedder, LocalHashEmbedder
 
 pytestmark = pytest.mark.asyncio
 

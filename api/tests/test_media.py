@@ -11,12 +11,12 @@ import base64
 
 import pytest
 
-from memdog.contracts import Inline, WriteItem, WriteRequest, WriteOptions
-from memdog.multimodal import Interpreted, MediaTooLarge
-from memdog.queue import InProcessQueue
-from memdog.retrieval import get_item, get_versions
-from memdog.workers import EmbedWorker, EnrichWorker, EventWorker, ParseWorker
-from memdog.write import EMBED_TOPIC, PARSE_TOPIC, write_items
+from open_mem.contracts import Inline, WriteItem, WriteRequest, WriteOptions
+from open_mem.multimodal import Interpreted, MediaTooLarge
+from open_mem.queue import InProcessQueue
+from open_mem.retrieval import get_item, get_versions
+from open_mem.workers import EmbedWorker, EnrichWorker, EventWorker, ParseWorker
+from open_mem.write import EMBED_TOPIC, PARSE_TOPIC, write_items
 
 pytestmark = pytest.mark.asyncio
 
@@ -148,7 +148,7 @@ async def test_media_stays_stored_when_interpretation_is_off(
     pool, blobs, settings, embedder, extractor, tenant, principal_for
 ):
     """Off is a policy, not a failure -- and the reason has to survive."""
-    from memdog.multimodal import NullMultimodal
+    from open_mem.multimodal import NullMultimodal
 
     actor = await principal_for(tenant.api_key)
     queue = await _pipeline(pool, blobs, settings, embedder, extractor, NullMultimodal())
@@ -190,8 +190,8 @@ async def test_a_document_climbs_the_whole_staircase_from_bytes(
     pool, blobs, settings, embedder, extractor, tenant, principal_for
 ):
     """The case the spine could not do before: bytes in, retrievable out."""
-    from memdog.contracts import RetrieveFilter, RetrieveRequest, WriteOptions
-    from memdog.retrieval import retrieve
+    from open_mem.contracts import RetrieveFilter, RetrieveRequest, WriteOptions
+    from open_mem.retrieval import retrieve
 
     actor = await principal_for(tenant.api_key)
     queue = await _pipeline(pool, blobs, settings, embedder, extractor, FakeMultimodal())
@@ -220,9 +220,9 @@ async def test_provider_quota_defers_rather_than_failing(
     in a dead letter. The row is left untouched so the reconciler can pick it
     up when quota returns -- the item is not lost, it is waiting.
     """
-    from memdog.multimodal import QuotaExhausted
-    from memdog.reconcile import reconcile
-    from memdog.workers import EmbedWorker
+    from open_mem.multimodal import QuotaExhausted
+    from open_mem.reconcile import reconcile
+    from open_mem.workers import EmbedWorker
 
     class OutOfQuota(FakeMultimodal):
         async def interpret(self, payload, *, mime, modality):

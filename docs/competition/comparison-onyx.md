@@ -1,4 +1,4 @@
-# mem-dog vs Onyx: Detailed Comparison
+# open-mem vs Onyx: Detailed Comparison
 
 **Last updated:** August 2026
 
@@ -6,16 +6,16 @@ Onyx (formerly Danswer) is an MIT-licensed enterprise AI platform bundling 40+ c
 search over an OpenSearch-backed vector index, permission-aware retrieval, AI chat, multi-step deep
 research and custom agents. It is the leading open-source alternative to Glean.
 
-**Onyx is the most directly competitive product mem-dog faces for the team-memory use case, and
+**Onyx is the most directly competitive product open-mem faces for the team-memory use case, and
 until now it appeared in no comparison document.** It is also the product that most directly
-contests mem-dog's privacy positioning — it is self-hostable, air-gapped-capable, and permissively
+contests open-mem's privacy positioning — it is self-hostable, air-gapped-capable, and permissively
 licensed.
 
 ---
 
 ## At a Glance
 
-| | mem-dog | Onyx |
+| | open-mem | Onyx |
 |-|---------|------|
 | **What it is** | Private AI memory platform — multi-channel ingestion, 40-agent enrichment, RAG query engine | Enterprise AI search and assistant over connected company data |
 | **Focus** | End-to-end data lifecycle with a typed memory model | Search, chat and agents grounded in company knowledge |
@@ -31,7 +31,7 @@ licensed.
 
 ### Data ingestion
 
-| Feature | mem-dog | Onyx |
+| Feature | open-mem | Onyx |
 |---------|---------|------|
 | Connectors | 300+ documented, 900+ reachable via Nango | 40+ |
 | **Messaging channels** | 25+ (WhatsApp, Telegram, Signal, Discord, Slack…) via DigiMe | None |
@@ -40,34 +40,34 @@ licensed.
 | Data types | 60+ including IoT, medical, geospatial, sensor | Documents and text |
 | Enrichment | 40 typed sub-agents, 6-layer classification, tiered model routing | Indexing, chunking, embedding, LLM knowledge graph |
 
-**Verdict: mem-dog leads clearly.** Onyx ingests documents from business systems. mem-dog ingests
+**Verdict: open-mem leads clearly.** Onyx ingests documents from business systems. open-mem ingests
 from business systems *and* messaging channels *and* arbitrary data types, with typed analysis per
 type. The connector gap is roughly 7× before counting the untapped Nango catalog.
 
 ### Permissions and access control
 
-| Feature | mem-dog | Onyx |
+| Feature | open-mem | Onyx |
 |---------|---------|------|
 | Per-item ACL | 4 levels + `shared_with` | Inherited from source systems |
-| **Source ACL sync** | None — permissions set in mem-dog only | **Pulls ACLs from source**: private Slack channels, ACL'd Confluence spaces, private repos |
+| **Source ACL sync** | None — permissions set in open-mem only | **Pulls ACLs from source**: private Slack channels, ACL'd Confluence spaces, private repos |
 | Filter point | Designed for query-time; currently varies | **Pre-retrieval**, not at the chat layer |
 | RBAC | 4 org roles | RBAC + SCIM provisioning |
 | SSO | None | OIDC/SAML — Okta, Entra ID, AWS IAM |
 | Audit | Tracing memories | Full audit trails |
 
 **Verdict: Onyx leads decisively.** This is the sharpest gap in the comparison. Onyx solved a
-problem mem-dog has not started: **when you ingest a private Slack channel, who should see it?**
-Onyx answers by syncing the source system's ACLs and filtering before retrieval. mem-dog requires
+problem open-mem has not started: **when you ingest a private Slack channel, who should see it?**
+Onyx answers by syncing the source system's ACLs and filtering before retrieval. open-mem requires
 permissions to be managed separately, which does not survive contact with real corpora — a
 connector that ingests everything a user can see, and then exposes it to everyone in the org, is
 a data leak by construction.
 
-mem-dog's designed answer — connection-scoped ACL inheritance with query-time filtering — is the
+open-mem's designed answer — connection-scoped ACL inheritance with query-time filtering — is the
 right shape, but it is a design and theirs is shipped.
 
 ### Memory model
 
-| Feature | mem-dog | Onyx |
+| Feature | open-mem | Onyx |
 |---------|---------|------|
 | Typed memories | Open type set — name + TTL + expiry policy, re-typable | None — it is a search index |
 | TTL / expiry | Per-type defaults, overridable | None |
@@ -75,14 +75,14 @@ right shape, but it is a design and theirs is shipped.
 | Compression | LLM summarization with archive | None |
 | Temporal facts | Bitemporal in Postgres — valid time *and* transaction time | LLM knowledge graph, non-temporal |
 
-**Verdict: mem-dog leads.** Onyx has no memory abstraction — it indexes documents and searches
+**Verdict: open-mem leads.** Onyx has no memory abstraction — it indexes documents and searches
 them. Conversation state, session scoping, decaying context and point-in-time queries have no
 equivalent. For agent memory, Onyx is not a competitor at all; for team *knowledge*, the memory
 model may matter less than search quality.
 
 ### Search and retrieval
 
-| Feature | mem-dog | Onyx |
+| Feature | open-mem | Onyx |
 |---------|---------|------|
 | Vector search | pgvector | OpenSearch-backed |
 | Keyword | Postgres `tsvector` BM25 | Hybrid built in |
@@ -93,13 +93,13 @@ model may matter less than search quality.
 | Deep research | No | **Multi-step deep research** |
 | Custom agents | Per-agent pipeline configs | **Custom agents with MCP tool use** |
 
-**Verdict: roughly comparable, different strengths.** mem-dog has more retrieval modes and
+**Verdict: roughly comparable, different strengths.** open-mem has more retrieval modes and
 temporal filtering. Onyx has multi-step deep research and user-definable agents — capabilities
-mem-dog lacks entirely, and which are increasingly what buyers evaluate.
+open-mem lacks entirely, and which are increasingly what buyers evaluate.
 
 ### Deployment and operations
 
-| Feature | mem-dog | Onyx |
+| Feature | open-mem | Onyx |
 |---------|---------|------|
 | Docker Compose | Yes | Yes |
 | Kubernetes | GKE manifests | **Official Helm chart** |
@@ -116,7 +116,7 @@ target — the team that wants to self-host.
 
 ## Where each wins
 
-### Choose mem-dog when
+### Choose open-mem when
 
 - Data arrives from **messaging channels**, not just business systems
 - You need a **typed memory model** — sessions, TTL, decaying context, point-in-time queries
@@ -136,12 +136,12 @@ target — the team that wants to self-host.
 
 ## Assessment
 
-Onyx is not a memory platform, and mem-dog is not an enterprise search product. They collide on the
+Onyx is not a memory platform, and open-mem is not an enterprise search product. They collide on the
 team-memory use case, and on that ground **Onyx is currently stronger**: permission-aware retrieval,
 compliance, licensing and deployment tooling all favour it, and those are precisely the criteria a
 team evaluating self-hosted knowledge tooling applies.
 
-mem-dog's advantages — channels, typed memory, data-type breadth, connector count — are real but
+open-mem's advantages — channels, typed memory, data-type breadth, connector count — are real but
 sit *outside* the evaluation criteria for that buyer. They matter enormously for personal memory
 and agent infrastructure, where Onyx does not compete at all.
 

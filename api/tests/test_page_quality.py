@@ -14,9 +14,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from memdog import prompts                                    # noqa: E402
-from memdog.classify import classify, sniff_mime               # noqa: E402
-from memdog.extraction import (                               # noqa: E402
+from open_mem import prompts                                    # noqa: E402
+from open_mem.classify import classify, sniff_mime               # noqa: E402
+from open_mem.extraction import (                               # noqa: E402
     JUDGED, PAGE_KINDS, RETRIEVAL_VALUE, _gemini_schema, envelope_schema,
 )
 

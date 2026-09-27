@@ -14,8 +14,8 @@ from __future__ import annotations
 
 import pytest
 
-from memdog.config import Settings
-from memdog.urlcontext import (
+from open_mem.config import Settings
+from open_mem.urlcontext import (
     GeminiUrlReader,
     NullUrlReader,
     UrlNotRead,
@@ -64,7 +64,7 @@ def _candidate(text: str, metadata: list[dict] | None) -> dict:
 
 
 def _reader(monkeypatch, payload: dict) -> GeminiUrlReader:
-    import memdog.urlcontext as mod
+    import open_mem.urlcontext as mod
 
     _Client.payload = payload
     monkeypatch.setattr(mod.httpx, "AsyncClient", _Client)

@@ -193,7 +193,7 @@ incomplete and the demo has just found the bug.
 
 ## What is built
 
-`python -m memdog seed --demo` ships the **sales domain**, forty-two records about one Acme renewal,
+`python -m open_mem seed --demo` ships the **sales domain**, forty-two records about one Acme renewal,
 enriched synchronously, in a few seconds against local engines. `--reset` purges and re-seeds.
 
 It registers a **normalization schema** and writes two structured payloads through it — one that
@@ -254,7 +254,7 @@ supplies hands them the bucket: vary the prefix, get a fresh allowance. `X-Forwa
 deliberately not trusted, since a header the client writes is a bucket the client picks — which
 makes this a shared ceiling behind a proxy rather than a per-client one.
 
-**Bootstrap is one-time.** `python -m memdog bootstrap` refuses once any user exists and says so,
+**Bootstrap is one-time.** `python -m open_mem bootstrap` refuses once any user exists and says so,
 because an exception that can be taken twice is an unauthenticated account-creation endpoint
 wearing an operations script's clothes. The library function it calls is not guarded — the seed and
 the test fixtures use it, and both have their own guards.

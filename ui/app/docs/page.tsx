@@ -3,7 +3,7 @@ import Link from "next/link";
 import { groups } from "@/lib/docs";
 
 export const metadata = {
-  title: "Documentation · mem-dog",
+  title: "Documentation · open-mem",
   description: "How the memory layer works, and how to get data into and out of it.",
 };
 

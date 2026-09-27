@@ -1,4 +1,4 @@
-# Running and using mem-dog locally
+# Running and using open-mem locally
 
 The whole product runs on one machine with **no cloud account, no model key and
 no billing**: Postgres with pgvector, the API, and the console. Write, embed,
@@ -22,8 +22,8 @@ document is its local counterpart: the same API, the same console, no cloud.
 cd api
 docker compose up -d                                   # Postgres 16 + pgvector on :54329
 uv venv --python 3.12 .venv && uv pip install -e ".[dev]"
-EMBED_DIM=64 .venv/bin/python -m memdog seed --demo     # 42 records; see §3
-EMBED_DIM=64 .venv/bin/uvicorn memdog.app:app --port 8200
+EMBED_DIM=64 .venv/bin/python -m open_mem seed --demo     # 42 records; see §3
+EMBED_DIM=64 .venv/bin/uvicorn open_mem.app:app --port 8200
 ```
 
 The seed prints an org, a project and two credentials. Keep them — they are
@@ -31,10 +31,10 @@ The seed prints an org, a project and two credentials. Keep them — they are
 
 ```bash
 cd ui && npm install
-MEMDOG_API_URL=http://localhost:8200 \
-MEMDOG_API_KEY=<printed by the seed> \
-MEMDOG_PROJECT_ID=<printed by the seed> \
-MEMDOG_PRODUCER_ID=<from GET /api/v1/producers> \
+OPENMEM_API_URL=http://localhost:8200 \
+OPENMEM_API_KEY=<printed by the seed> \
+OPENMEM_PROJECT_ID=<printed by the seed> \
+OPENMEM_PRODUCER_ID=<from GET /api/v1/producers> \
 npm run dev                                            # console on :3000
 ```
 
@@ -60,7 +60,7 @@ fail — ranking just gets quietly worse — so the mismatch is refused at start
 instead of discovered months later as "search got bad".
 
 **It binds every process, not just the server.** The seed, the reconciler, and
-any `python -m memdog …` command open the same pool and hit the same check. An
+any `python -m open_mem …` command open the same pool and hit the same check. An
 `EMBED_DIM` exported for `uvicorn` and forgotten for the seed produces a failure
 *inside the seed*, which reads as a broken seed rather than a mismatched
 environment.
@@ -94,7 +94,7 @@ if *"what did we promise Acme?"* stops returning the commitment, something broke
 tables, so the reset path is exercised too:
 
 ```bash
-EMBED_DIM=64 .venv/bin/python -m memdog seed --demo --reset
+EMBED_DIM=64 .venv/bin/python -m open_mem seed --demo --reset
 ```
 
 **The corpus is deliberately, visibly synthetic**: reserved names, documented
@@ -212,7 +212,7 @@ answer for the majority of a corpus, where a model adds nothing. It always
 produces a title, and returns **nulls where nothing can be determined** rather
 than inventing a plausible description or language.
 
-`Envelope` failing closed matters locally too: without `MEMDOG_MASTER_KEY`,
+`Envelope` failing closed matters locally too: without `OPENMEM_MASTER_KEY`,
 anything that stores a signing secret returns `503 encryption is not configured`
 rather than storing it in the clear.
 
@@ -225,7 +225,7 @@ rather than storing it in the clear.
 | `bootstrap refused: 1 user(s) already exist` | Expected on a database used before. Bootstrap creates the *first* admin only; run the seed instead, which makes its own tenant. |
 | `index holds vector(N) but … configured for dim M` | `EMBED_DIM` disagrees with the index. See §2 — and set it for the CLI too. |
 | `column "…" does not exist` after a schema change | A migration was edited after being applied. `schema_migrations` records the version and the runner skips it, so an edit reaches only databases that never saw it. Add the next number instead. |
-| Console renders but every panel is empty | `MEMDOG_PROJECT_ID` points at a project the key cannot see, or the seed ran against a different tenant. |
+| Console renders but every panel is empty | `OPENMEM_PROJECT_ID` points at a project the key cannot see, or the seed ran against a different tenant. |
 | MCP client cannot connect from a container | `localhost` is the container's own. Use `host.docker.internal`. |
 
 Logs are plain uvicorn output; the queue's dead letters are visible in the

@@ -118,7 +118,7 @@ banner in the app itself — not only in the data.
 `seed.py` is 1143 lines for one use case, with the corpus inline. Three more in
 that style is four thousand lines of Python holding what is really content.
 
-- Move the corpus body to `api/src/memdog/demos/<key>.py` (or a data file),
+- Move the corpus body to `api/src/open_mem/demos/<key>.py` (or a data file),
   keeping the existing `Item` / `Question` dataclasses.
 - `seed.py` keeps the *sequence* — write, enrich, verify, report — and takes a
   corpus as an argument. **That sequence is the valuable part** and must not be

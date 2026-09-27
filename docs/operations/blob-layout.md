@@ -30,7 +30,7 @@ answers exactly one question: *give me the bytes for this reference.*
 ```
 
 ```
-memdog-raw-prod/org_01J8.../prj_01J9.../data_01JQRS.../raw/9f2c8e….pdf
+open-mem-raw-prod/org_01J8.../prj_01J9.../data_01JQRS.../raw/9f2c8e….pdf
                                                       /text/4a17bb….txt
                                                       /derived/c81d02….webp
 ```

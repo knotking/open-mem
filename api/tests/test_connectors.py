@@ -18,9 +18,9 @@ from pathlib import Path
 
 import pytest
 
-from memdog import connectors
-from memdog.connectors import CATALOG, ConnectorError
-from memdog.crawlers import CrawlerConfig
+from open_mem import connectors
+from open_mem.connectors import CATALOG, ConnectorError
+from open_mem.crawlers import CrawlerConfig
 
 # No module-level asyncio mark: `asyncio_mode = "auto"` runs the async tests
 # already, and most of these are pure — a catalog entry either renders into a
@@ -37,7 +37,7 @@ def test_every_available_entry_renders_a_config_the_crawler_accepts():
     available = [c for c in CATALOG if c.requires is None]
     assert available, "the catalog has nothing usable in it"
 
-    from memdog.crawlers import validate_config
+    from open_mem.crawlers import validate_config
 
     for connector in available:
         config = connectors.build(connector.key, _scope_for(connector))
@@ -148,7 +148,7 @@ def test_a_connector_exercised_against_something_names_a_thing_that_exists():
 
 
 def test_every_entry_declares_how_its_credential_is_presented():
-    from memdog.connections import AUTH_STYLES, NEEDS_NAME
+    from open_mem.connections import AUTH_STYLES, NEEDS_NAME
 
     for connector in CATALOG:
         assert connector.auth_style in AUTH_STYLES, connector.key
@@ -254,7 +254,7 @@ def test_the_crm_category_covers_what_someone_would_actually_name():
 async def client(pool, tenant):
     import httpx
 
-    from memdog.app import app
+    from open_mem.app import app
 
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(app=app)
@@ -275,7 +275,7 @@ async def test_creating_a_crawler_from_a_catalog_entry(client, tenant, pool):
     response = await client.post(
         "/api/v1/crawlers/from-connector", headers=auth,
         json={"project_id": tenant.project_id, "connector": "github_issues",
-              "scope": {"repo": "knotking/mem-dog"}},
+              "scope": {"repo": "knotking/open-mem"}},
     )
     assert response.status_code == 200, response.text
     created = response.json()
@@ -290,7 +290,7 @@ async def test_creating_a_crawler_from_a_catalog_entry(client, tenant, pool):
     )
     stored = config if isinstance(config, dict) else __import__("json").loads(config)
     assert stored["request"]["url"] == (
-        "https://api.github.com/repos/knotking/mem-dog/issues"
+        "https://api.github.com/repos/knotking/open-mem/issues"
     )
 
 
@@ -312,9 +312,9 @@ async def test_a_connection_can_be_attached_as_it_is_created(
 ):
     import os
 
-    from memdog import connections
-    from memdog.auth import ApiKeyVerifier
-    from memdog.crypto import Envelope
+    from open_mem import connections
+    from open_mem.auth import ApiKeyVerifier
+    from open_mem.crypto import Envelope
 
     envelope = Envelope(os.urandom(32))
     made = await connections.create(

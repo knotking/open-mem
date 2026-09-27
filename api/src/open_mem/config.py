@@ -28,11 +28,11 @@ def _database_url() -> str:
         return explicit
     host = os.environ.get("DB_HOST")
     if not host:
-        return "postgresql://memdog:memdog@localhost:54329/memdog"
+        return "postgresql://open_mem:open_mem@localhost:54329/open_mem"
     user = quote(os.environ.get("DB_USER", "postgres"), safe="")
     password = quote(os.environ.get("DB_PASSWORD", ""), safe="")
     port = os.environ.get("DB_PORT", "5432")
-    name = os.environ.get("DB_NAME", "memdog")
+    name = os.environ.get("DB_NAME", "open_mem")
     return f"postgresql://{user}:{password}@{host}:{port}/{name}"
 
 
@@ -51,7 +51,7 @@ class Settings:
     )
     # Envelope encryption root key, base64. Absent means credential storage
     # fails closed rather than silently storing plaintext.
-    master_key_b64: str = field(default_factory=lambda: _env("MEMDOG_MASTER_KEY", ""))
+    master_key_b64: str = field(default_factory=lambda: _env("OPENMEM_MASTER_KEY", ""))
 
     # Bytes go to GCS when a bucket is configured, and to the filesystem
     # otherwise. Cloud Run's filesystem is memory, so the bucket is not optional

@@ -1,4 +1,4 @@
-# mem-dog
+# open-mem
 
 ## Landing work
 
@@ -19,7 +19,7 @@ that lag is intended. See `.claude/skills/changelog/SKILL.md`.
 
 Invoke the `deploy-gcp` skill for any deploy to GCP, and again whenever the
 deployment process changes — a new env var, secret, step, IAM grant, or a
-failure mode not already listed. The skill is the record of how mem-dog is
+failure mode not already listed. The skill is the record of how open-mem is
 actually deployed; it is only worth trusting if it is corrected in the same
 session the change is discovered. See `.claude/skills/deploy-gcp/SKILL.md`.
 

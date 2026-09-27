@@ -17,7 +17,7 @@ import zipfile
 
 import pytest
 
-from memdog.parsers import (
+from open_mem.parsers import (
     MAX_SHEET_ROWS,
     NeedsModel,
     ParseFailed,

@@ -16,11 +16,11 @@ from __future__ import annotations
 
 import pytest
 
-from memdog.auth import ApiKeyVerifier
-from memdog.entities import resolve_mentions
-from memdog.graph import record_edges
-from memdog.ids import new_id
-from memdog.memories import context
+from open_mem.auth import ApiKeyVerifier
+from open_mem.entities import resolve_mentions
+from open_mem.graph import record_edges
+from open_mem.ids import new_id
+from open_mem.memories import context
 
 pytestmark = pytest.mark.asyncio
 
@@ -128,7 +128,7 @@ async def test_it_reports_records_keywords_entities_and_edges_together(pool, ten
 async def test_records_the_caller_cannot_read_are_not_counted(pool, tenant):
     """A memory you can see may hold records you cannot, and summarising those
     reports a corpus you are not allowed to read."""
-    from memdog.bootstrap import create_user
+    from open_mem.bootstrap import create_user
 
     other = await create_user(pool, f"outsider-{new_id('x')}@example.com")
     memory_id = await _memory(pool, tenant)
@@ -145,7 +145,7 @@ async def test_records_the_caller_cannot_read_are_not_counted(pool, tenant):
 
 
 async def test_a_memory_nobody_can_see_is_not_found_rather_than_forbidden(pool, tenant):
-    from memdog.retrieval import NotFound
+    from open_mem.retrieval import NotFound
 
     with pytest.raises(NotFound):
         await context(pool, await _principal(pool, tenant), "mem_does_not_exist")

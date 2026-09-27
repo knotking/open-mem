@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# Deploy Hermes Agent (community edition) to Cloud Run, pointed at mem-dog.
+# Deploy Hermes Agent (community edition) to Cloud Run, pointed at open-mem.
 set -euo pipefail
 
 PROJECT="${PROJECT:-memdog-dev-506718}"
 REGION="${REGION:-us-central1}"
-SERVICE="${SERVICE:-memdog-hermes}"
+SERVICE="${SERVICE:-open-mem-hermes}"
 TAG="${1:-hermes-1}"
-IMAGE="${REGION}-docker.pkg.dev/${PROJECT}/memdog/memdog-hermes:${TAG}"
-SA="memdog-api@${PROJECT}.iam.gserviceaccount.com"
-API_URL="${API_URL:-https://memdog-api-r5ifa3vgqq-uc.a.run.app}"
+IMAGE="${REGION}-docker.pkg.dev/${PROJECT}/open-mem/open-mem-hermes:${TAG}"
+SA="open-mem-api@${PROJECT}.iam.gserviceaccount.com"
+API_URL="${API_URL:-https://open-mem-api-r5ifa3vgqq-uc.a.run.app}"
 
-: "${MEMDOG_PROJECT_ID:?set MEMDOG_PROJECT_ID (the project the agent works over)}"
+: "${OPENMEM_PROJECT_ID:?set OPENMEM_PROJECT_ID (the project the agent works over)}"
 
 step() { printf '\n\033[1m==> %s\033[0m\n' "$1"; }
 
@@ -47,8 +47,8 @@ gcloud run deploy "$SERVICE" \
   --project "$PROJECT" --region "$REGION" \
   --image "$IMAGE" \
   --service-account "$SA" \
-  --set-env-vars "MEMDOG_API_URL=${API_URL},MEMDOG_PROJECT_ID=${MEMDOG_PROJECT_ID},MEMDOG_PRODUCER_ID=${MEMDOG_PRODUCER_ID:-},HERMES_MODEL=${HERMES_MODEL:-hermes-4-405b},HERMES_PROVIDER=${HERMES_PROVIDER:-nous-api},HERMES_TOOLSETS=${HERMES_TOOLSETS:-todo},IMAGE_TAG=${TAG}" \
-  --set-secrets "MEMDOG_API_KEY=memdog-demo-key:latest,MODEL_API_KEY=${MODEL_SECRET:-hermes-api-key}:latest,API_SERVER_KEY=hermes-server-key:latest" \
+  --set-env-vars "OPENMEM_API_URL=${API_URL},OPENMEM_PROJECT_ID=${OPENMEM_PROJECT_ID},OPENMEM_PRODUCER_ID=${OPENMEM_PRODUCER_ID:-},HERMES_MODEL=${HERMES_MODEL:-hermes-4-405b},HERMES_PROVIDER=${HERMES_PROVIDER:-nous-api},HERMES_TOOLSETS=${HERMES_TOOLSETS:-todo},IMAGE_TAG=${TAG}" \
+  --set-secrets "OPENMEM_API_KEY=open-mem-demo-key:latest,MODEL_API_KEY=${MODEL_SECRET:-hermes-api-key}:latest,API_SERVER_KEY=hermes-server-key:latest" \
   --allow-unauthenticated \
   --min-instances 0 --max-instances 2 \
   --cpu 2 --memory 4Gi --timeout 900 \

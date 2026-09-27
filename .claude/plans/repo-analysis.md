@@ -74,12 +74,12 @@ Rejected: adding `graphifyy` to `api/pyproject.toml`. It drags tree-sitter
 grammars and a `git` binary into an image that `pyproject.toml` has already
 refused ffmpeg for, on the same grounds.
 
-### 3.2 Does the code graph merge into mem-dog's entity graph?
+### 3.2 Does the code graph merge into open-mem's entity graph?
 
 This is the real fork, and it is worth stating plainly because it is easy to
 answer wrongly by reflex.
 
-mem-dog's entity vocabulary is `person, organization, location, product, event,
+open-mem's entity vocabulary is `person, organization, location, product, event,
 topic, other` (`predicates.py:38`). Nothing code-shaped. Graphify emits modules,
 functions, classes, packages joined by `calls`, `imports`, `inherits`,
 `references`.
@@ -152,7 +152,7 @@ pipeline that cannot carry it.
 ### 3.5 Private repos
 
 The clone needs a token. It belongs in the existing connection/credential path
-(`connections.py`, envelope-encrypted under `MEMDOG_MASTER_KEY`), passed to the
+(`connections.py`, envelope-encrypted under `OPENMEM_MASTER_KEY`), passed to the
 job, never written into a record and never into the report. **v1 may be
 public-repos-only** if that keeps it smaller — but it should refuse a private
 URL with that sentence, not fail at `git clone` with a 128.
@@ -194,14 +194,14 @@ path; the derive calls are the existing endpoint with new generator names.
 
 ### Phase 1 — the snapshot exists and is stored
 
-1. [x] **`api/src/memdog/repos.py`** *(new)* — resolve a GitHub URL and ref to a
+1. [x] **`api/src/open_mem/repos.py`** *(new)* — resolve a GitHub URL and ref to a
    commit sha; validate the URL shape the way `youtube.py:47` validates a video
    id (an exact pattern, not a permissive parse, because this string reaches a
    shell); upsert the case; create the snapshot memory; return existing on a
    repeat sha.
-2. [x] **`api/src/memdog/migrations/0051_repo_snapshots.sql`** *(new)* — see §6.
+2. [x] **`api/src/open_mem/migrations/0051_repo_snapshots.sql`** *(new)* — see §6.
    Additive only.
-3. [x] **`api/src/memdog/app.py`** — `POST /api/v1/repos/analyze`,
+3. [x] **`api/src/open_mem/app.py`** — `POST /api/v1/repos/analyze`,
    `GET /api/v1/repos/{case_id}/snapshots`, `GET /api/v1/repos/snapshots/{id}`.
    Requires `DATA_WRITE`; quota checked before the job is enqueued, never after
    (an enqueued job cannot be un-spent).
@@ -211,7 +211,7 @@ path; the derive calls are the existing endpoint with new generator names.
 
 ### Phase 2 — the four reports
 
-5. [x] **`api/src/memdog/derive.py`** — four entries in `GENERATORS`:
+5. [x] **`api/src/open_mem/derive.py`** — four entries in `GENERATORS`:
 
    | Generator | Reads | Answers |
    |---|---|---|
@@ -350,7 +350,7 @@ incomplete rather than because scope grew:
 - **`quota.estimate_repo_analysis`.** The plan said to charge before enqueueing
   but named no number. Four generations at `GENERATION_ESTIMATE`.
 
-**Verified:** `memdog.app` imports and the three routes register in the order
+**Verified:** `open_mem.app` imports and the three routes register in the order
 that keeps `repos/snapshots/{id}` from being read as a case id; `npm run verify`
 clean (proxy allow-list covers all 128 call sites, typecheck, tests, build).
 Nothing has been run against a live repository -- no job image is built and

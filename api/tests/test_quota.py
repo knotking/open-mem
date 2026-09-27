@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import pytest
 
-from memdog import quota, usage
-from memdog.settings_store import put
+from open_mem import quota, usage
+from open_mem.settings_store import put
 
 # No module-level asyncio mark: `asyncio_mode = "auto"` already runs the async
 # tests, and half of these are ordinary functions -- the pricing rules are pure
@@ -200,7 +200,7 @@ async def test_spend_today_reports_the_ceiling_that_binds(pool, tenant):
 def test_a_budget_refusal_is_a_capacity_failure_not_a_bad_message():
     """A worker that hit this must put the message back rather than burn a
     retry: the message is not faulty, the window is."""
-    from memdog.queue import _is_capacity_failure
+    from open_mem.queue import _is_capacity_failure
 
     assert _is_capacity_failure(quota.BudgetExhausted("spent", scope="org"))
 
@@ -236,7 +236,7 @@ async def _spend(pool, scope, scope_id, credits):
 async def client(pool, tenant):
     import httpx
 
-    from memdog.app import app
+    from open_mem.app import app
 
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(app=app)

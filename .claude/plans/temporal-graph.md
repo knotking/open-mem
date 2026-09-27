@@ -1,10 +1,10 @@
 # Plan — the temporal knowledge graph, in Postgres
 
-**Requirement.** Make memdog's graph answer *what was true when*, and *what we
+**Requirement.** Make open-mem's graph answer *what was true when*, and *what we
 believed when* — bitemporally, with supersession instead of accumulation, and
 with facts that an agent can assert directly without an LLM.
 
-Status: **shipped.** `api/src/memdog/graph.py` (685 lines) and `entities.py`
+Status: **shipped.** `api/src/open_mem/graph.py` (685 lines) and `entities.py`
 are live, with 54 tests across `test_graph.py`, `test_temporal_graph.py`,
 `test_graph_retrieval.py` and `test_entities.py`. Bitemporal facts with
 `valid_from` / `valid_to`, supersession rather than accumulation, `valid_at` and
@@ -50,7 +50,7 @@ Neo4j row wrong; both get fixed here.
 
 ## 2 · Two time axes, and conflating them is the classic failure
 
-| Axis | Question | Already in memdog |
+| Axis | Question | Already in open-mem |
 |---|---|---|
 | **Valid time** | When was this true *in the world*? | `data_items.event_time`, `NOT NULL` |
 | **Transaction time** | When did *we learn* it? | `created_at` everywhere |

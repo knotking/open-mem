@@ -1,18 +1,18 @@
 # Plan — workflow memory
 
-**Requirement.** Add a primitive to memdog for **long-running state machine
+**Requirement.** Add a primitive to open-mem for **long-running state machine
 instances** — a versioned definition whose state graph may contain cycles, an
 instance whose state advances on input from heterogeneous actors (robots, AI
 agents, humans) or on the expiry of a deadline, and a read path any permitted
 user can query for current state and history.
 
-Status: **shipped.** `api/src/memdog/workflows.py` (648 lines), 15 tests.
+Status: **shipped.** `api/src/open_mem/workflows.py` (648 lines), 15 tests.
 Definitions, conditional transitions, the race check, actor guards, deadlines
 and re-folding state from the log are live, with a Workflows console section.
 
 **Confirmed architecture (Parag).** The workflow **engine lives outside
-memdog**. It calls memdog's API to record input, and it **receives triggers**
-from memdog when state changes. So memdog is the *system of record* — state,
+open-mem**. It calls open-mem's API to record input, and it **receives triggers**
+from open-mem when state changes. So open-mem is the *system of record* — state,
 history, deadlines, notification — and the outside system is the *executor*.
 Every decision below follows from that split, and it is what makes D4's line
 ("delivers that it happened; does not interpret an answer") a description of
@@ -43,7 +43,7 @@ The plan uses **state graph**; nothing else changes because of the wording.
 
 ## 2 · What this lands on
 
-memdog already has most of the hard parts, and the plan's main job is to avoid
+open-mem already has most of the hard parts, and the plan's main job is to avoid
 building second versions of them.
 
 | Existing | What it gives this feature |
@@ -148,7 +148,7 @@ into one refusal, and only the second is still out:
 | **Announcing that state changed** — signed, retried, ordered delivery to a subscriber | **IN — required** |
 | **Executing business effects and reacting to their outcome** — saga, compensation, retrying downstream work, child workflows, waiting on a reply | **OUT** |
 
-The line: **memdog delivers "this happened"; it does not wait for or interpret
+The line: **open-mem delivers "this happened"; it does not wait for or interpret
 an answer.** A 200 from a subscriber means received, not agreed. If a subscriber
 wants to advance the workflow, it comes back through `POST /input` like any
 other actor — which keeps one write verb and keeps the transition log the record.
@@ -158,10 +158,10 @@ the transition.** The transition committed; delivery is at-least-once afterwards
 and independently. Any other choice means one unreachable subscriber wedges the
 state machine, and the state machine is the thing of value.
 
-#### There is no outbound path in memdog today
+#### There is no outbound path in open-mem today
 
 `webhooks.py` is **inbound only** — its own docstring says so, and
-`/producers/{id}/test-delivery` signs a payload and posts it to memdog's *own*
+`/producers/{id}/test-delivery` signs a payload and posts it to open-mem's *own*
 receive path, which is a self-test rather than delivery. `0018_webhooks.sql`
 records what arrived. So this is genuinely new surface, and the plan grows by
 one worker, two tables and a security control.
@@ -176,7 +176,7 @@ Three existing pieces carry most of it:
   SHA-256, secret encrypted at rest, **with a rotation overlap window**
   (`previous_signing_secret_ct`, added in `0018` because rotation without one
   is an outage). Outbound should sign **identically**, so a subscriber verifies
-  the same way memdog asks providers to, and rotation is already solved.
+  the same way open-mem asks providers to, and rotation is already solved.
 - **`fetching.validate_url`** — the SSRF refusal. See D11; it is not optional.
 
 ### D10 — Delivery is ordered per instance, and `caused_by` already does it
@@ -192,11 +192,11 @@ data exists" is made true across processes. So **chain each transition's event
 `caused_by` to the previous transition's event on the same instance**, and
 per-instance ordering falls out of the existing query.
 
-The rest of the delivery contract, mirroring what memdog already demands of
+The rest of the delivery contract, mirroring what open-mem already demands of
 inbound providers:
 
 - **Idempotency** — every delivery carries `x-delivery-id` and the
-  `(instance_id, seq)` pair, so a receiver can dedupe a retry. memdog requires
+  `(instance_id, seq)` pair, so a receiver can dedupe a retry. open-mem requires
   this of providers; it should not ship an outbound path that fails its own bar.
 - **At-least-once, with backoff**, capped at `MAX_ATTEMPTS`, then **dead-lettered
   to a visible `failed` row** — never dropped silently. A subscriber that has
@@ -211,7 +211,7 @@ inbound providers:
 ### D11 — Outbound webhooks are an SSRF hole aimed at this deployment specifically
 
 The most serious risk in this plan, and it is deployment-specific rather than
-theoretical. A subscription URL is **caller-supplied**, and memdog will POST to
+theoretical. A subscription URL is **caller-supplied**, and open-mem will POST to
 it from inside the VPC — where Cloud SQL sits at private IP `10.100.0.3`,
 reachable by direct VPC egress, and the GCP metadata server answers at
 `169.254.169.254`. A subscriber pointed at either is an authenticated request
@@ -294,7 +294,7 @@ between two states forever is not, and they look identical. Add
 loop that bills for it**. `usage.py`/`quota.py` already exist if metering is
 wanted later.
 
-### D9 — Why this belongs in memdog at all
+### D9 — Why this belongs in open-mem at all
 
 Worth stating in the docs, because a reviewer will ask. The value is not
 orchestration; it is that **the workflow's history becomes memory**. Each
@@ -309,7 +309,7 @@ is the reason to build this here rather than adopt one.
 
 ## 5 · Data model
 
-New migration **`api/src/memdog/migrations/0033_workflows.sql`** (next free
+New migration **`api/src/open_mem/migrations/0033_workflows.sql`** (next free
 number; `0032_item_metadata.sql` is current). Sketch, not final DDL:
 
 ```
@@ -449,7 +449,7 @@ Follows `app.py` conventions (`@app.post("/api/v1/…")`, capability via
 | `GET` | `/api/v1/workflow-subscriptions/{id}/deliveries` | `config:write` | Attempts, statuses, last error — mirrors `/producers/{id}/deliveries` |
 | `POST` | `/api/v1/workflow-subscriptions/{id}/replay` | `config:write` | Re-send a dead-lettered delivery after the endpoint is fixed |
 
-**The delivery memdog sends**, signed exactly as the inbound path expects
+**The delivery open-mem sends**, signed exactly as the inbound path expects
 providers to sign (D4), so a subscriber verifies the same way:
 
 ```http
@@ -476,7 +476,7 @@ way it reads everything else.
 ## 7 · Implementation steps
 
 1. **`0033_workflows.sql`** — the five tables above. Additive, no backfill.
-2. **`api/src/memdog/workflows.py`** — new module, the control plane and the
+2. **`api/src/open_mem/workflows.py`** — new module, the control plane and the
    fold: `upsert_definition`, `validate_config` (Pydantic, cycle-permitting),
    `start_instance`, `apply_input` (the conditional append), `get_state`,
    `history`, `verify_state`, `migrate_instance`. Mirrors `cases.py` in shape.
@@ -494,7 +494,7 @@ way it reads everything else.
    ordering from the existing dispatch query (D10). Note this is the opposite
    of the plan's earlier draft: the event now has a consumer, so it does *not*
    go in `NO_CONSUMER`.
-5b. **`api/src/memdog/workflow_delivery.py`** — new module, the sender:
+5b. **`api/src/open_mem/workflow_delivery.py`** — new module, the sender:
    fan a transition out to matching subscriptions, sign with HMAC-SHA256 as
    `0018` does inbound, `validate_url` on **every attempt**, `follow_redirects=
    False`, backoff, dead-letter at `MAX_ATTEMPTS` and release the chain (D10).
@@ -510,7 +510,7 @@ way it reads everything else.
 9b. **`crypto.py`** — reuse the existing envelope for `signing_secret_ct`;
    subscriptions store secrets exactly as producers do, no second scheme.
 10. **`__main__.py`** — a `workflow-tick` subcommand, alongside `crawl-tick`.
-11. **`api/deploy/cloudrun.sh`** — add `memdog-workflow-tick` to the job loop,
+11. **`api/deploy/cloudrun.sh`** — add `open-mem-workflow-tick` to the job loop,
     and a Cloud Scheduler entry. **This changes the deploy process, so
     `.claude/skills/deploy-gcp/` must be updated in the same commit** — new job
     in the inventory, new scheduler grant in `provision.md`.
@@ -618,7 +618,7 @@ templating — the delivery shape is fixed so a receiver can be written once.
 
 ## 11 · Open questions
 
-1. ~~Is D4 the right boundary?~~ **Resolved.** The engine is external, memdog
+1. ~~Is D4 the right boundary?~~ **Resolved.** The engine is external, open-mem
    notifies it, and does not interpret the reply.
 2. **Should a definition be per-project or per-org?** Plan assumes project,
    matching `cases`. Org-level shared definitions are a small change now and an

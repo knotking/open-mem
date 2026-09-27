@@ -13,8 +13,8 @@ import json
 import httpx
 import pytest
 
-from memdog import seed as seed_mod
-from memdog.seed import SeedError, reset_demo, seed_demo
+from open_mem import seed as seed_mod
+from open_mem.seed import SeedError, reset_demo, seed_demo
 
 pytestmark = pytest.mark.asyncio
 
@@ -27,7 +27,7 @@ async def app_client(pool):
     credential check, admission control and write verb. The only thing absent
     compared to an external client is the socket.
     """
-    from memdog.app import app
+    from open_mem.app import app
 
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(app=app)

@@ -20,12 +20,12 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from memdog import entities as entities_mod
-from memdog.graph import (
+from open_mem import entities as entities_mod
+from open_mem.graph import (
     PostgresGraph, assert_fact, conflicts, fact_history, record_edges,
     retract_fact,
 )
-from memdog.ids import new_id
+from open_mem.ids import new_id
 
 pytestmark = pytest.mark.asyncio
 
@@ -255,7 +255,7 @@ async def test_an_asserted_fact_is_visible_only_to_those_its_acl_allows(
         object_id=ids["Lisbon"], access_level="private",
     )
 
-    from memdog.graph import GraphError
+    from open_mem.graph import GraphError
     with pytest.raises(GraphError):
         # Not "no results" -- the entity itself must be unconfirmable.
         await PostgresGraph(pool).neighbourhood(
@@ -303,7 +303,7 @@ async def test_erasing_the_last_evidence_retracts_the_claim_rather_than_keeping_
     believed it, which is the one thing this table exists to preserve.
     """
     actor = await principal_for(tenant.api_key)
-    from memdog.deletion import verify_erasure
+    from open_mem.deletion import verify_erasure
 
     data_id = await _item(pool, tenant, "only-source")
     await _ingest(pool, tenant, data_id, PEOPLE, _lives_in("Lisbon"))

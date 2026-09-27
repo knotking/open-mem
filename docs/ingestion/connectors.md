@@ -2,7 +2,7 @@
 
 A connector is **not an adapter**. There is no per-source code in this repository and no plugin to
 write. A connector is a catalog entry — a row of knowledge about one API, stored as data in
-[`api/src/memdog/connectors.py`](../../api/src/memdog/connectors.py) — that renders into a
+[`api/src/open_mem/connectors.py`](../../api/src/open_mem/connectors.py) — that renders into a
 [crawler](crawlers.md) config the ordinary validator accepts.
 
 That distinction is the whole design. The crawler could already reach any REST API with a

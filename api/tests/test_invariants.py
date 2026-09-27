@@ -15,9 +15,9 @@ from __future__ import annotations
 
 import pytest
 
-from memdog.auth import DATA_READ, DATA_WRITE, issue_key
-from memdog.bootstrap import create_user
-from memdog.contracts import (
+from open_mem.auth import DATA_READ, DATA_WRITE, issue_key
+from open_mem.bootstrap import create_user
+from open_mem.contracts import (
     WriteOptions,
     Inline,
     ItemAccess,
@@ -26,12 +26,12 @@ from memdog.contracts import (
     WriteItem,
     WriteRequest,
 )
-from memdog.ids import new_id
-from memdog.inference import LocalHashEmbedder
-from memdog.queue import InProcessQueue
-from memdog.retrieval import NotFound, get_item, retrieve
-from memdog.workers import EmbedWorker, EventWorker
-from memdog.write import EMBED_TOPIC, write_items
+from open_mem.ids import new_id
+from open_mem.inference import LocalHashEmbedder
+from open_mem.queue import InProcessQueue
+from open_mem.retrieval import NotFound, get_item, retrieve
+from open_mem.workers import EmbedWorker, EventWorker
+from open_mem.write import EMBED_TOPIC, write_items
 
 pytestmark = pytest.mark.asyncio
 
@@ -177,7 +177,7 @@ async def test_a_shared_connection_writes_org_visible_items(
 ):
     """The ACL follows the connection scope, and nothing the caller sends
     reaches that decision."""
-    from memdog.bootstrap import bootstrap_tenant
+    from open_mem.bootstrap import bootstrap_tenant
 
     shared = await bootstrap_tenant(pool, org_name="shared-co", email="c@example.com",
                                     connection_scope="shared")
@@ -217,8 +217,8 @@ async def test_durable_after_2xx_even_if_enrichment_never_runs(
 
     # A worker started later picks it up from the durable *event*, not from a
     # message that died with the process.
-    from memdog.events import dispatch_pending
-    from memdog.workers import EventWorker
+    from open_mem.events import dispatch_pending
+    from open_mem.workers import EventWorker
 
     worker = EmbedWorker(pool, embedder, settings, queue=orphan_queue)
     await worker.ensure_generator()
@@ -250,7 +250,7 @@ async def test_index_holds_exactly_one_vector_space(
     other_worker = EmbedWorker(pool, other, settings)
     await other_worker.ensure_generator()
     await pool.execute("DELETE FROM chunks")  # simulate a rebuild under a second model
-    from memdog.queue import Message
+    from open_mem.queue import Message
 
     await other_worker.handle(Message(EMBED_TOPIC, {"data_id": (
         await pool.fetchval("SELECT data_id FROM data_items")
@@ -273,7 +273,7 @@ async def test_index_holds_exactly_one_vector_space(
 async def test_capabilities_are_enforced_separately_from_identity(
     pool, queue, blobs, settings, embedder, tenant, principal_for
 ):
-    from memdog.auth import AuthError
+    from open_mem.auth import AuthError
 
     _, read_only = await _second_member(pool, tenant, capabilities=[DATA_READ])
     reader = await principal_for(read_only)
@@ -287,7 +287,7 @@ async def test_capabilities_are_enforced_separately_from_identity(
 
 async def test_leaving_the_org_revokes_the_key(pool, tenant, principal_for):
     """Membership-coupled, or offboarding leaks through a key nobody deleted."""
-    from memdog.auth import AuthError
+    from open_mem.auth import AuthError
 
     await principal_for(tenant.api_key)  # works while a member
     await pool.execute("DELETE FROM memberships WHERE user_id = $1", tenant.user_id)
@@ -303,7 +303,7 @@ async def test_startup_refuses_an_index_it_cannot_write_to(pool, settings, embed
     was items that stayed `stored` forever, which looks exactly like ordinary
     enrichment lag.
     """
-    from memdog.workers import IndexDimensionMismatch, verify_index_dimension
+    from open_mem.workers import IndexDimensionMismatch, verify_index_dimension
 
     await verify_index_dimension(pool, embedder)  # matching: no complaint
 
@@ -349,8 +349,8 @@ async def test_an_item_is_owned_by_who_wrote_it_not_who_made_the_producer(
     cannot see their own private writes -- which looks exactly like the data
     never arriving.
     """
-    from memdog.auth import ADMIN
-    from memdog.retrieval import get_item
+    from open_mem.auth import ADMIN
+    from open_mem.retrieval import get_item
 
     colleague_id, colleague_key = await _second_member(
         pool, tenant, capabilities=[DATA_READ, DATA_WRITE, ADMIN]
@@ -376,7 +376,7 @@ async def test_a_personal_connections_producer_is_not_a_shared_entry_point(
     pool, queue, blobs, settings, connected_tenant, principal_for
 ):
     """Writing through it would attribute data to someone else's mailbox."""
-    from memdog.write import AdmissionError
+    from open_mem.write import AdmissionError
 
     _, colleague_key = await _second_member(pool, connected_tenant)
     colleague = await principal_for(colleague_key)
@@ -395,8 +395,8 @@ async def test_a_project_producer_is_usable_by_any_member(
 ):
     """Otherwise a shared entry point is unusable by everyone except whoever
     happened to register it."""
-    from memdog.bootstrap import bootstrap_tenant
-    from memdog.retrieval import get_item
+    from open_mem.bootstrap import bootstrap_tenant
+    from open_mem.retrieval import get_item
 
     # A producer with no connection: a project-level entry point.
     shared = await bootstrap_tenant(pool, org_name="shared-producer-co",
@@ -423,8 +423,8 @@ async def test_a_connection_is_a_ceiling_not_a_default(
     prevent. Rejected rather than quietly narrowed: a caller told their write
     succeeded would never discover it landed narrower than they asked.
     """
-    from memdog.contracts import Inline, ItemAccess, WriteItem, WriteOptions, WriteRequest
-    from memdog.write import write_items
+    from open_mem.contracts import Inline, ItemAccess, WriteItem, WriteOptions, WriteRequest
+    from open_mem.write import write_items
 
     actor = await principal_for(connected_tenant.api_key)
 
@@ -455,8 +455,8 @@ async def test_a_producer_with_no_connection_chooses_its_own_level(
     connection, so there is no scope to exceed -- the caller is the owner
     deciding what to do with their own record, which is what the console does
     every time somebody picks 'everyone in the organization'."""
-    from memdog.contracts import Inline, ItemAccess, WriteItem, WriteOptions, WriteRequest
-    from memdog.write import write_items
+    from open_mem.contracts import Inline, ItemAccess, WriteItem, WriteOptions, WriteRequest
+    from open_mem.write import write_items
 
     actor = await principal_for(tenant.api_key)
     response = await write_items(
@@ -483,7 +483,7 @@ async def test_the_console_ceiling_table_matches_this_one():
     This is the server half of that correspondence: the table below is exactly
     what `ceilingFor` returns. **If you change this, change `ui/lib/acl.ts`.**
     """
-    from memdog.acl import _RESTRICTIVENESS, PRIVATE, ORG, PUBLIC, acl_for_write
+    from open_mem.acl import _RESTRICTIVENESS, PRIVATE, ORG, PUBLIC, acl_for_write
 
     ceilings = {
         "personal": PRIVATE,

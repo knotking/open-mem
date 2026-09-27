@@ -4,7 +4,7 @@
 the corpus stops growing without bound, the way mem0 does — but without mem0's
 central move, which is to overwrite.
 
-Status: **shipped.** `api/src/memdog/compaction.py` (600 lines), 12 tests.
+Status: **shipped.** `api/src/open_mem/compaction.py` (600 lines), 12 tests.
 Folding, the job card, provenance as a source list, and owner-scoped summaries
 are live; a private summary is readable by its owner, which it once was not.
 
@@ -35,7 +35,7 @@ still never expires anything, which is the smaller half of the problem.
 **mem0 compacts by overwriting.** Its reconciliation decides ADD / UPDATE /
 DELETE against existing memories, and what it replaces is gone.
 
-memdog cannot do that, and not as a matter of taste. The temporal graph just
+open-mem cannot do that, and not as a matter of taste. The temporal graph just
 shipped on the opposite premise: a claim is **closed**, never replaced, so
 `as_of` can still answer what was believed in March. A compaction that destroys
 its inputs would make `as_of` lie about everything it touched.
@@ -99,7 +99,7 @@ tested before anything runs unattended.
 
 ## 5 · The sweep, and the ordering trap
 
-`memdog-alert-tick` already runs every minute and already carries an
+`open-mem-alert-tick` already runs every minute and already carries an
 absence-events step. Expiry belongs beside it rather than in a fourth job — but
 **it must emit before it destroys.**
 

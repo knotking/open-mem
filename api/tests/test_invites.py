@@ -12,11 +12,11 @@ import asyncio
 import httpx
 import pytest
 
-from memdog import invites
-from memdog.auth import ApiKeyVerifier, AuthError
-from memdog.bootstrap import AlreadyBootstrapped, bootstrap_tenant, refuse_if_occupied
-from memdog.invites import INVALID, InviteError
-from memdog.settings_store import put
+from open_mem import invites
+from open_mem.auth import ApiKeyVerifier, AuthError
+from open_mem.bootstrap import AlreadyBootstrapped, bootstrap_tenant, refuse_if_occupied
+from open_mem.invites import INVALID, InviteError
+from open_mem.settings_store import put
 
 pytestmark = pytest.mark.asyncio
 
@@ -318,7 +318,7 @@ async def test_bootstrap_refuses_once_anybody_exists(pool):
 
 @pytest.fixture
 async def client(pool, tenant):
-    from memdog.app import app
+    from open_mem.app import app
 
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(app=app)

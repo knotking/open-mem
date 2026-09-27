@@ -372,7 +372,7 @@ the audit record, costs a question that can never be answered.
 
 | Question | Settled as |
 |----------|-----------|
-| Team RBAC in mem-dog, or delegated? | **mem-dog enforces natively**; the host model is one broad service principal |
+| Team RBAC in open-mem, or delegated? | **open-mem enforces natively**; the host model is one broad service principal |
 | Global privacy default? | **None** — visibility is producer/connection-scoped |
 | Fixed search modes or composable? | **Composable** |
 | Can the delete cascade wait? | **Build late, design early** |

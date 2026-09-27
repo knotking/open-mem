@@ -14,7 +14,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from memdog import youtube  # noqa: E402
+from open_mem import youtube  # noqa: E402
 
 VID = "aircAruvnKk"
 

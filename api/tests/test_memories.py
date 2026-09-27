@@ -8,11 +8,11 @@ from __future__ import annotations
 
 import pytest
 
-from memdog.contracts import Inline, MemoryRef, WriteItem, WriteRequest, WriteOptions
-from memdog import memories
-from memdog.memories import effective_expiry, ensure_shipped_types
-from memdog.retrieval import item_memories, list_memories, memory_members
-from memdog.write import write_items
+from open_mem.contracts import Inline, MemoryRef, WriteItem, WriteRequest, WriteOptions
+from open_mem import memories
+from open_mem.memories import effective_expiry, ensure_shipped_types
+from open_mem.retrieval import item_memories, list_memories, memory_members
+from open_mem.write import write_items
 
 pytestmark = pytest.mark.asyncio
 
@@ -50,7 +50,7 @@ async def test_a_shared_connection_defaults_to_the_projects_memory(
 ):
     """The default memory follows the same scope as the ACL, so account
     deletion does not strand team data in a departed user's container."""
-    from memdog.bootstrap import bootstrap_tenant
+    from open_mem.bootstrap import bootstrap_tenant
 
     shared = await bootstrap_tenant(pool, org_name="team-co", email="team@example.com",
                                     connection_scope="shared")
@@ -93,8 +93,8 @@ async def test_effective_expiry_is_the_longest_ttl_not_the_shortest(
     not expire in an hour. Taking the earliest deletes data a permanent memory
     still depends on -- the orphan_delete bug in another form.
     """
-    from memdog.ids import new_id
-    from memdog.memories import add_member, upsert_memory
+    from open_mem.ids import new_id
+    from open_mem.memories import add_member, upsert_memory
 
     actor = await principal_for(tenant.api_key)
     written = await _write(
@@ -142,8 +142,8 @@ async def test_a_memory_you_can_see_may_hold_items_you_cannot(
 ):
     """The ACL applies to members, not the container, so counts must reflect
     what the caller could actually open."""
-    from memdog.auth import DATA_READ, issue_key
-    from memdog.bootstrap import create_user
+    from open_mem.auth import DATA_READ, issue_key
+    from open_mem.bootstrap import create_user
 
     owner = await principal_for(tenant.api_key)
     await _write(
@@ -195,7 +195,7 @@ async def test_a_memory_can_be_created_before_anything_is_in_it(
 ):
     """The producer's path is writing an item with a key. This is the person's
     path: make the container, then fill it deliberately."""
-    from memdog.memories import create_memory
+    from open_mem.memories import create_memory
 
     actor = await principal_for(tenant.api_key)
     memory = await create_memory(
@@ -212,7 +212,7 @@ async def test_a_memory_can_be_created_before_anything_is_in_it(
 
 
 async def test_an_unknown_type_is_refused(pool, tenant, principal_for):
-    from memdog.memories import MemoryError, create_memory
+    from open_mem.memories import MemoryError, create_memory
 
     actor = await principal_for(tenant.api_key)
     with pytest.raises(MemoryError) as exc:
@@ -226,7 +226,7 @@ async def test_existing_items_can_be_added_and_removed_after_the_write(
 ):
     """Membership is mutable after write -- the whole point of a container you
     can organise."""
-    from memdog.memories import add_members, create_memory, remove_member
+    from open_mem.memories import add_members, create_memory, remove_member
 
     actor = await principal_for(tenant.api_key)
     written = await _write(
@@ -262,7 +262,7 @@ async def test_removing_the_last_membership_lands_the_item_in_default(
 ):
     """An item in no memory is invisible from the memory side entirely, which
     is the hole `default` exists to close."""
-    from memdog.memories import add_members, create_memory, remove_member
+    from open_mem.memories import add_members, create_memory, remove_member
 
     actor = await principal_for(tenant.api_key)
     written = await _write(
@@ -289,9 +289,9 @@ async def test_adding_an_item_you_cannot_see_is_not_an_oracle(
 ):
     """Adding to a memory must not become a way to observe that something
     exists."""
-    from memdog.auth import DATA_READ, DATA_WRITE, issue_key
-    from memdog.bootstrap import create_user
-    from memdog.memories import add_members, create_memory
+    from open_mem.auth import DATA_READ, DATA_WRITE, issue_key
+    from open_mem.bootstrap import create_user
+    from open_mem.memories import add_members, create_memory
 
     owner = await principal_for(tenant.api_key)
     written = await _write(
@@ -323,7 +323,7 @@ async def test_retyping_previews_what_a_shorter_ttl_would_expire(
 ):
     """Moving to a shorter TTL can expire members, and finding that out
     afterwards is not acceptable."""
-    from memdog.memories import create_type, retype_memory
+    from open_mem.memories import create_type, retype_memory
 
     actor = await principal_for(tenant.api_key)
     await create_type(pool, actor, project_id=tenant.project_id, name="ephemeral",
@@ -352,7 +352,7 @@ async def test_retyping_previews_what_a_shorter_ttl_would_expire(
 
 
 async def test_a_custom_type_is_a_name_a_ttl_and_a_policy(pool, tenant, principal_for):
-    from memdog.memories import create_type, list_types
+    from open_mem.memories import create_type, list_types
 
     actor = await principal_for(tenant.api_key)
     await create_type(pool, actor, project_id=tenant.project_id, name="procedural",
@@ -370,7 +370,7 @@ async def test_deleting_a_memory_never_deletes_an_item_another_memory_holds(
 ):
     """Deleting a member because one of its containers went away destroys data
     a permanent memory still depends on."""
-    from memdog.memories import add_members, create_memory, delete_memory
+    from open_mem.memories import add_members, create_memory, delete_memory
 
     actor = await principal_for(tenant.api_key)
     written = await _write(
@@ -404,7 +404,7 @@ async def test_orphan_delete_erases_what_only_this_memory_held(
     pool, queue, blobs, settings, tenant, principal_for
 ):
     """And it goes through the ordinary cascade, not a second implementation."""
-    from memdog.memories import delete_memory
+    from open_mem.memories import delete_memory
 
     actor = await principal_for(tenant.api_key)
     written = await _write(
@@ -429,7 +429,7 @@ async def test_orphan_delete_erases_what_only_this_memory_held(
 async def test_keep_members_refiles_orphans_instead_of_deleting_them(
     pool, queue, blobs, settings, tenant, principal_for
 ):
-    from memdog.memories import create_memory, create_type, delete_memory
+    from open_mem.memories import create_memory, create_type, delete_memory
 
     actor = await principal_for(tenant.api_key)
     await create_type(pool, actor, project_id=tenant.project_id, name="kept",
@@ -457,7 +457,7 @@ async def test_the_default_memory_cannot_be_deleted(
 ):
     """Removing it would recreate the hole it exists to close on the very next
     write."""
-    from memdog.memories import MemoryError, delete_memory
+    from open_mem.memories import MemoryError, delete_memory
 
     actor = await principal_for(tenant.api_key)
     written = await _write(
@@ -477,7 +477,7 @@ async def test_the_default_memory_cannot_be_deleted(
 
 
 async def _two_memories(pool, tenant):
-    from memdog.auth import ApiKeyVerifier
+    from open_mem.auth import ApiKeyVerifier
 
     principal = await ApiKeyVerifier(pool).verify(tenant.api_key)
     a = await memories.create_memory(
@@ -566,7 +566,7 @@ async def test_an_unknown_relation_is_refused(pool, tenant):
 async def test_linking_across_organizations_is_not_found(pool, tenant, other_tenant):
     """"Not found" rather than "not yours": the second sentence confirms it
     exists."""
-    from memdog.auth import ApiKeyVerifier
+    from open_mem.auth import ApiKeyVerifier
 
     principal, mine, _ = await _two_memories(pool, tenant)
     theirs_principal = await ApiKeyVerifier(pool).verify(other_tenant.api_key)

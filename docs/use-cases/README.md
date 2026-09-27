@@ -31,7 +31,7 @@ expresses an ordered array of memories.**
 ## The five relations
 
 `memory_links.relation` is a closed vocabulary. Counted by what reads them in
-`src/memdog/`, excluding the validator that lists them.
+`src/open_mem/`, excluding the validator that lists them.
 
 | Relation | Means | Read by | State |
 |----------|-------|---------|-------|

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Exercise the milestone against a deployed instance.
 #
-#   ./deploy/smoke.sh https://memdog-api-xxxx.run.app <api_key> <producer_id> <project_id>
+#   ./deploy/smoke.sh https://open-mem-api-xxxx.run.app <api_key> <producer_id> <project_id>
 #
 # This is the same sentence the test suite proves locally, run against real
 # infrastructure: write -> the item is durable -> enrichment makes it findable

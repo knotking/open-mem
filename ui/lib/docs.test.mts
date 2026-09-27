@@ -40,7 +40,7 @@ test("anchors and absolute URLs pass through untouched", () => {
   assert.equal(linkFor(d, "#the-write-path"), "#the-write-path");
   assert.equal(linkFor(d, "https://example.com/spec"), "https://example.com/spec");
   // An image or a path into the source tree is not a document link.
-  assert.equal(linkFor(d, "../api/src/memdog/app.py"), null);
+  assert.equal(linkFor(d, "../api/src/open_mem/app.py"), null);
 });
 
 test("a fragment survives the rewrite", () => {

@@ -19,7 +19,7 @@ Normalization is its own stage, *before* enrichment — not inside the agents.
 classify → NORMALIZE → route → enrich (LLM) → embed → entities → graph
               ▲
               │ provider profile mapping + target schema
-              │ (mem-dog standard OR user standard)
+              │ (open-mem standard OR user standard)
 ```
 
 Three reasons it cannot live inside the agents:
@@ -46,7 +46,7 @@ creates permanent translation loss.
 | `Transaction` | Invoice, payment, charge, order |
 | `Activity` | Log, alert, incident, event |
 
-## Customization: mem-dog standard or user standard
+## Customization: open-mem standard or user standard
 
 Follow the pattern proven by `agent_configs` — schema in the record store, read per invocation,
 no redeploy.
@@ -64,7 +64,7 @@ FieldMapping                 per (provider, target_type)
   on_missing                 skip | null | fail
 ```
 
-**Precedence:** project → org → mem-dog standard. Most specific wins, consistent with the rest of
+**Precedence:** project → org → open-mem standard. Most specific wins, consistent with the rest of
 the tenancy model.
 
 Authoring path, increasing in power: use a standard type → extend it → define a custom type →

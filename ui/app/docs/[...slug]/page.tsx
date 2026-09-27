@@ -14,7 +14,7 @@ export async function generateMetadata(
   { params }: { params: Promise<{ slug: string[] }> },
 ) {
   const doc = BY_SLUG.get((await params).slug.join("/"));
-  return { title: doc ? `${doc.title} · mem-dog` : "Not found · mem-dog" };
+  return { title: doc ? `${doc.title} · open-mem` : "Not found · open-mem" };
 }
 
 export default async function DocPage({ params }: { params: Promise<{ slug: string[] }> }) {

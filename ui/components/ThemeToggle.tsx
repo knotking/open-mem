@@ -20,7 +20,7 @@ export default function ThemeToggle() {
   const [theme, setTheme] = useState<Theme>("system");
 
   useEffect(() => {
-    const stored = (localStorage.getItem("memdog-theme") as Theme | null) ?? "system";
+    const stored = (localStorage.getItem("open-mem-theme") as Theme | null) ?? "system";
     setTheme(stored);
     apply(stored);
   }, []);
@@ -34,7 +34,7 @@ export default function ThemeToggle() {
   function cycle() {
     const next = NEXT[theme];
     setTheme(next);
-    localStorage.setItem("memdog-theme", next);
+    localStorage.setItem("open-mem-theme", next);
     apply(next);
   }
 

@@ -157,7 +157,7 @@ async def test_config(
 
     if prompt and isinstance(extractor, GeminiExtractor):
         # Temporarily swap the block in without touching stored config.
-        import memdog.prompts as prompts_module
+        import open_mem.prompts as prompts_module
 
         original = prompts_module.BY_DATA_TYPE.get(data_type)
         prompts_module.BY_DATA_TYPE[data_type] = prompt

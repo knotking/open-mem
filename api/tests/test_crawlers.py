@@ -18,7 +18,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
-from memdog.crawlers import (
+from open_mem.crawlers import (
     CrawlerConfig,
     CrawlerError,
     Extract,
@@ -30,7 +30,7 @@ from memdog.crawlers import (
     in_scope,
     validate_config,
 )
-from memdog.crawling import (
+from open_mem.crawling import (
     CrawlWorker,
     control_run,
     create_crawler,
@@ -44,7 +44,7 @@ from memdog.crawling import (
     tick,
     update_crawler,
 )
-from memdog.retrieval import list_items
+from open_mem.retrieval import list_items
 
 pytestmark = pytest.mark.asyncio
 
@@ -133,8 +133,8 @@ def _allow_loopback(monkeypatch):
     loopback, so the guard is relaxed only for 127.0.0.1 and only here -- the
     guard itself is tested separately, and must keep refusing everything else.
     """
-    import memdog.crawlers as crawlers
-    import memdog.fetching as fetching
+    import open_mem.crawlers as crawlers
+    import open_mem.fetching as fetching
 
     real = fetching.validate_url
 
@@ -426,7 +426,7 @@ async def test_traverse_honours_robots_and_stays_in_the_allowlist(
 async def test_asset_urls_are_recognised_before_they_are_fetched():
     """Checked at both ends: the extension before fetching, so the budget is
     never spent, and the content type after, because an extension is a hint."""
-    from memdog.crawlers import looks_like_an_asset
+    from open_mem.crawlers import looks_like_an_asset
 
     for asset in ["https://x.test/a/style.css", "https://x.test/app.js",
                   "https://x.test/logo.SVG", "https://x.test/f.woff2"]:
@@ -606,7 +606,7 @@ async def test_a_manual_tick_cannot_start_another_orgs_crawls(
     """The advisory lock stops two ticks running at once; it does nothing about
     *whose* crawlers a tick picks up. A person triggering a pass from the
     console must not be able to start, or spend budget on, somebody else's."""
-    from memdog.crawling import tick_for
+    from open_mem.crawling import tick_for
 
     owner = await principal_for(tenant.api_key)
     created = await create_crawler(
@@ -693,7 +693,7 @@ async def test_a_crawl_run_id_is_distinguishable_from_a_deletion_run_id(
 async def test_the_routes_for_the_two_kinds_of_run_do_not_collide():
     """Registered paths are checked directly, because FastAPI resolves a
     duplicate by silently preferring whichever was registered first."""
-    from memdog.app import app
+    from open_mem.app import app
 
     paths = [r.path for r in app.routes if hasattr(r, "path")]
     assert paths.count("/api/v1/runs/{run_id}") == 1
@@ -748,7 +748,7 @@ async def test_a_run_emits_the_signals_that_detect_a_dead_crawler(
     is the only thing that catches it -- which makes the instrumentation itself
     worth a test, because nothing else would notice if it stopped firing.
     """
-    import memdog.crawling as crawling_mod
+    import open_mem.crawling as crawling_mod
 
     emitted: list[tuple] = []
     monkeypatch.setattr(crawling_mod, "record",
@@ -819,8 +819,8 @@ async def test_a_401_drops_the_cached_token_for_that_connection(
     like it had not worked."""
     import os
 
-    from memdog import connections, grants
-    from memdog.crypto import Envelope
+    from open_mem import connections, grants
+    from open_mem.crypto import Envelope
 
     actor = await principal_for(tenant.api_key)
     envelope = Envelope(os.urandom(32))
@@ -893,8 +893,8 @@ async def test_metadata_tags_are_lifted_for_a_producer_following_the_docs(
     """The write-api example has always shown `metadata: {tags: [...]}`, so an
     external producer sending that shape lost them exactly as the crawler did.
     Merged rather than substituted: a producer sending both keeps both."""
-    from memdog.contracts import Inline, WriteItem, WriteRequest
-    from memdog.write import write_items
+    from open_mem.contracts import Inline, WriteItem, WriteRequest
+    from open_mem.write import write_items
 
     actor = await principal_for(tenant.api_key)
     await write_items(
@@ -929,7 +929,7 @@ async def test_a_crawl_run_can_be_reprocessed_by_run_id_or_by_tag(
     corpus that default produces was the one corpus reprocess could not select.
     Enumerating ten thousand data_ids by hand is not the answer.
     """
-    from memdog.reprocess import request_reprocess
+    from open_mem.reprocess import request_reprocess
 
     actor = await principal_for(tenant.api_key)
     created = await create_crawler(
@@ -998,7 +998,7 @@ async def test_two_schedulers_do_not_both_start_the_same_crawl(
     *processes* — which is how the scheduler actually runs — and does **not**
     hold between two ticks sharing one connection inside a single process.
     """
-    from memdog import crawling
+    from open_mem import crawling
 
     class Idle:
         async def execute(self, run_id):
@@ -1008,7 +1008,7 @@ async def test_two_schedulers_do_not_both_start_the_same_crawl(
     # same session and cannot re-enter the lock.
     async with pool.acquire() as holder:
         taken = await holder.fetchval(
-            "SELECT pg_try_advisory_lock(hashtext('memdog.crawl'))"
+            "SELECT pg_try_advisory_lock(hashtext('open_mem.crawl'))"
         )
         assert taken, "the lock was already held — the test cannot mean anything"
         try:
@@ -1018,7 +1018,7 @@ async def test_two_schedulers_do_not_both_start_the_same_crawl(
                 "crawl becomes two nightly crawls"
             )
         finally:
-            await holder.execute("SELECT pg_advisory_unlock(hashtext('memdog.crawl'))")
+            await holder.execute("SELECT pg_advisory_unlock(hashtext('open_mem.crawl'))")
 
     # And once it is released, a pass runs again rather than being wedged shut.
     resumed = await crawling.tick(pool, Idle())
@@ -1040,9 +1040,9 @@ async def test_the_heartbeat_moves_during_emission(
     Driven through `_emit` directly, with the run's heartbeat backdated, so the
     only thing that can move it is the loop itself.
     """
-    from memdog import crawling
-    from memdog.crawlers import Discovered
-    from memdog.ids import new_id
+    from open_mem import crawling
+    from open_mem.crawlers import Discovered
+    from open_mem.ids import new_id
 
     crawler = await pool.fetchrow(
         """
@@ -1090,7 +1090,7 @@ async def test_the_heartbeat_moves_during_emission(
 
 
 async def _bare_crawler(pool, tenant, name="synced", connection_id=None):
-    from memdog.ids import new_id
+    from open_mem.ids import new_id
 
     return await pool.fetchrow(
         """
@@ -1111,7 +1111,7 @@ async def test_a_cursor_is_kept_per_scope(pool, tenant):
     are re-scanned from that point forever — or the reverse, and the busy one is
     skipped.
     """
-    from memdog.crawling import advance_cursor, cursor_for
+    from open_mem.crawling import advance_cursor, cursor_for
 
     crawler = await _bare_crawler(pool, tenant)
     cid = crawler["crawler_id"]
@@ -1125,7 +1125,7 @@ async def test_a_cursor_is_kept_per_scope(pool, tenant):
 
 async def test_a_crawler_without_scopes_keeps_the_position_it_had(pool, tenant):
     """`scope = ''` is today's behaviour, and it must not need migrating."""
-    from memdog.crawling import cursor_for
+    from open_mem.crawling import cursor_for
 
     crawler = await _bare_crawler(pool, tenant)
     await pool.execute("UPDATE crawlers SET watermark = $2 WHERE crawler_id = $1",
@@ -1136,7 +1136,7 @@ async def test_a_crawler_without_scopes_keeps_the_position_it_had(pool, tenant):
 async def test_a_failed_scope_keeps_its_cursor_and_says_why(pool, tenant):
     """The next run retries the same range rather than skipping it, and a reader
     can tell a failure from a quiet source."""
-    from memdog.crawling import advance_cursor, cursor_for, record_scope_failure
+    from open_mem.crawling import advance_cursor, cursor_for, record_scope_failure
 
     crawler = await _bare_crawler(pool, tenant)
     cid = crawler["crawler_id"]
@@ -1156,7 +1156,7 @@ async def test_a_cooling_credential_is_not_a_failed_crawl(pool, connected_tenant
     is cooling records that rather than burning a run — a throttled credential
     and a broken crawler must not look the same.
     """
-    from memdog.crawling import is_limited, mark_limited
+    from open_mem.crawling import is_limited, mark_limited
 
     connection_id = await pool.fetchval(
         "SELECT connection_id FROM connections LIMIT 1")
@@ -1172,7 +1172,7 @@ async def test_lag_per_source_is_reportable(pool, tenant):
     """Every project signal depends on it: one computed over a source that
     stopped syncing is confidently wrong, and "no activity for 7 days" is
     indistinguishable from "the connector broke 7 days ago"."""
-    from memdog.crawling import advance_cursor, source_lag
+    from open_mem.crawling import advance_cursor, source_lag
 
     crawler = await _bare_crawler(pool, tenant, name="lagging")
     await advance_cursor(pool, crawler["crawler_id"], "#eng", "x")
@@ -1195,7 +1195,7 @@ async def test_a_budget_capped_run_is_progress_not_failure(pool, tenant):
     source that had never once worked. That is the exact false alarm source lag
     exists to prevent, inverted.
     """
-    from memdog.crawling import record_scope_failure, record_scope_progress
+    from open_mem.crawling import record_scope_failure, record_scope_progress
 
     crawler = await _bare_crawler(pool, tenant)
     cid = crawler["crawler_id"]

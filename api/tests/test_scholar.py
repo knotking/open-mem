@@ -16,8 +16,8 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from memdog.crawlers import CrawlerConfig, _from_inverted_index, validate_config
-from memdog.scholar import (
+from open_mem.crawlers import CrawlerConfig, _from_inverted_index, validate_config
+from open_mem.scholar import (
     Author,
     Profile,
     ScholarError,
@@ -26,7 +26,7 @@ from memdog.scholar import (
     resolve_author,
     works_crawler,
 )
-from memdog.urlcontext import Read, UrlNotRead
+from open_mem.urlcontext import Read, UrlNotRead
 
 pytestmark = pytest.mark.asyncio
 
@@ -105,7 +105,7 @@ async def test_the_profile_is_asked_for_a_shape_not_for_prose():
     """Asked for prose this returned markdown headings, and the parser took
     `### Overview` for a person's name. A model asked for a shape produces the
     shape; parsing its prose is a guess at a format never promised."""
-    from memdog.scholar import PROFILE_SCHEMA
+    from open_mem.scholar import PROFILE_SCHEMA
 
     seen = {}
 
@@ -229,7 +229,7 @@ async def test_the_generated_crawler_is_a_valid_one():
 
 
 async def test_a_work_with_a_pdf_becomes_something_to_download():
-    from memdog.crawlers import _map_item
+    from open_mem.crawlers import _map_item
 
     author = Author(author_id="A222", display_name="Ada", works_count=1)
     config = CrawlerConfig(**works_crawler(author, memory_key="ada")["config"])
@@ -244,7 +244,7 @@ async def test_a_work_with_a_pdf_becomes_something_to_download():
 async def test_a_paywalled_work_is_still_a_record():
     """Most published work is not open access. A corpus that silently dropped it
     would answer questions about a body of work while missing most of it."""
-    from memdog.crawlers import _map_item
+    from open_mem.crawlers import _map_item
 
     author = Author(author_id="A222", display_name="Ada", works_count=1)
     config = CrawlerConfig(**works_crawler(author, memory_key="ada")["config"])
@@ -288,7 +288,7 @@ async def test_a_work_with_no_abstract_is_its_title_not_its_json():
     fallback dumped the whole API response as the record's text — a wall of
     metadata JSON that retrieval scores against and no reader can use, on
     exactly the records that were already thinnest."""
-    from memdog.crawlers import _map_item
+    from open_mem.crawlers import _map_item
 
     author = Author(author_id="A222", display_name="Ada", works_count=1)
     config = CrawlerConfig(**works_crawler(author, memory_key="ada")["config"])
@@ -309,7 +309,7 @@ async def test_the_affiliation_survives_the_field_rename():
     still on the record as null, so reading it returns None rather than raising
     — the affiliation silently disappears while everything else about the
     resolution looks correct."""
-    from memdog.scholar import _institution
+    from open_mem.scholar import _institution
 
     assert _institution({"last_known_institutions": [{"display_name": "Mila"}]}) == "Mila"
     assert _institution({"last_known_institution": {"display_name": "Older"}}) == "Older"
@@ -336,7 +336,7 @@ async def test_a_downloadable_paper_is_marked_as_a_file():
     """So the fetch path knows it is a document rather than a page. A memory
     that reads pages with the model would otherwise hand a PDF's URL to the
     model and store the reading instead of the paper."""
-    from memdog.crawlers import _map_item
+    from open_mem.crawlers import _map_item
 
     author = Author(author_id="A222", display_name="Ada", works_count=1)
     config = CrawlerConfig(**works_crawler(author, memory_key="ada")["config"])
@@ -349,7 +349,7 @@ async def test_a_downloadable_paper_is_marked_as_a_file():
 async def test_papers_do_not_land_in_a_memory_that_never_enriches():
     """`default` does not enrich, so every paper would sit at `stored` and the
     corpus would be unsearchable while looking complete."""
-    from memdog.scholar import PAPERS_TYPE
+    from open_mem.scholar import PAPERS_TYPE
 
     author = Author(author_id="A222", display_name="Ada", works_count=1)
     spec = works_crawler(author, memory_key="ada")

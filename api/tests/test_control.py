@@ -9,10 +9,10 @@ from __future__ import annotations
 
 import pytest
 
-from memdog import control
-from memdog.auth import ADMIN, CONFIG_WRITE, DATA_READ, DATA_WRITE, AuthError, issue_key
-from memdog.bootstrap import create_user
-from memdog.control import ControlError
+from open_mem import control
+from open_mem.auth import ADMIN, CONFIG_WRITE, DATA_READ, DATA_WRITE, AuthError, issue_key
+from open_mem.bootstrap import create_user
+from open_mem.control import ControlError
 
 pytestmark = pytest.mark.asyncio
 
@@ -71,7 +71,7 @@ async def test_removing_a_member_revokes_their_keys(pool, tenant, principal_for)
 
     # The credential stops working immediately, not at next rotation.
     row = await pool.fetchrow("SELECT prefix FROM api_keys WHERE user_id = $1", user_id)
-    from memdog.auth import ApiKeyVerifier
+    from open_mem.auth import ApiKeyVerifier
     assert row is not None
     revoked = await pool.fetchval(
         "SELECT revoked_at IS NOT NULL FROM api_keys WHERE user_id = $1", user_id
@@ -125,8 +125,8 @@ async def test_a_new_project_can_route_its_first_write(pool, tenant, principal_f
 async def test_producer_freshness_is_reported(pool, tenant, queue, blobs, settings, principal_for):
     """The highest-value detector: it catches a stopped webhook, a broken
     crawler selector and a dead client with one query."""
-    from memdog.contracts import Inline, WriteItem, WriteRequest, WriteOptions
-    from memdog.write import write_items
+    from open_mem.contracts import Inline, WriteItem, WriteRequest, WriteOptions
+    from open_mem.write import write_items
 
     owner = await principal_for(tenant.api_key)
     before = {p["producer_id"]: p for p in await control.list_producers(pool, owner)}
@@ -148,8 +148,8 @@ async def test_changing_a_connection_scope_does_not_rewrite_history(
 ):
     """Those items were assigned an ACL at write time; silently re-filing them
     would change who can see existing data."""
-    from memdog.contracts import Inline, WriteItem, WriteRequest, WriteOptions
-    from memdog.write import write_items
+    from open_mem.contracts import Inline, WriteItem, WriteRequest, WriteOptions
+    from open_mem.write import write_items
 
     owner = await principal_for(connected_tenant.api_key)
     written = await write_items(
@@ -174,7 +174,7 @@ async def test_changing_a_connection_scope_does_not_rewrite_history(
 async def test_membership_is_not_discoverable_by_probing(pool, other_tenant, principal_for):
     """An org you are not in answers the same as one that does not exist."""
     intruder = await principal_for(other_tenant.api_key)
-    from memdog.auth import Principal
+    from open_mem.auth import Principal
 
     elsewhere = Principal(
         user_id=intruder.user_id, org_id="org_does_not_exist",

@@ -15,13 +15,13 @@ from __future__ import annotations
 
 import pytest
 
-from memdog import models
-from memdog.auth import ApiKeyVerifier
-from memdog.crypto import Envelope
-from memdog.engines import EngineRegistry
-from memdog.extraction import LocalHeuristicExtractor, build_extractor
-from memdog.models import ModelError
-from memdog.settings_store import put
+from open_mem import models
+from open_mem.auth import ApiKeyVerifier
+from open_mem.crypto import Envelope
+from open_mem.engines import EngineRegistry
+from open_mem.extraction import LocalHeuristicExtractor, build_extractor
+from open_mem.models import ModelError
+from open_mem.settings_store import put
 
 pytestmark = pytest.mark.asyncio
 
@@ -31,7 +31,7 @@ async def _principal(pool, tenant):
 
 
 def _registry(settings, *, extractor=None, answerer=None):
-    from memdog.chat import ExtractiveAnswerer
+    from open_mem.chat import ExtractiveAnswerer
 
     return EngineRegistry(
         settings,
@@ -282,7 +282,7 @@ async def test_an_assigned_extractor_gets_its_own_generator_version(
     """Artifacts join `generators` for staleness, so an org's assigned model
     needs its own row — or the artifact claims to have come from the
     deployment's model and the reconciler believes it."""
-    from memdog.workers import EnrichWorker
+    from open_mem.workers import EnrichWorker
 
     await models.ensure_catalog(pool)
     await _card(pool, "qwen3-local", "ollama")

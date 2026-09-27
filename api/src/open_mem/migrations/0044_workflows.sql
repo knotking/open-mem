@@ -1,6 +1,6 @@
 -- Long-running state machine instances.
 --
--- The engine lives outside memdog: it calls in to record input and is told
+-- The engine lives outside open-mem: it calls in to record input and is told
 -- when state changes. So this is the **system of record** -- state, history,
 -- deadlines -- and not an executor. Every column below follows from that split.
 --

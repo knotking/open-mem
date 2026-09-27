@@ -15,9 +15,9 @@ from __future__ import annotations
 
 import pytest
 
-from memdog import entities
-from memdog.entities import EntityError, get_entity, list_entities, merge, normalize, unmerge
-from memdog.ids import new_id
+from open_mem import entities
+from open_mem.entities import EntityError, get_entity, list_entities, merge, normalize, unmerge
+from open_mem.ids import new_id
 
 pytestmark = pytest.mark.asyncio
 

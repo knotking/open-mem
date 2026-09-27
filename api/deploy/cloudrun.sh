@@ -9,13 +9,13 @@ set -euo pipefail
 
 PROJECT="${PROJECT:-memdog-dev-506718}"
 REGION="${REGION:-us-central1}"
-INSTANCE="${INSTANCE:-memdog-spine}"
-SERVICE="${SERVICE:-memdog-api}"
-DB_NAME="${DB_NAME:-memdog}"
-RAW_BUCKET="${RAW_BUCKET:-memdog-spine-raw-dev}"
+INSTANCE="${INSTANCE:-open-mem-spine}"
+SERVICE="${SERVICE:-open-mem-api}"
+DB_NAME="${DB_NAME:-open_mem}"
+RAW_BUCKET="${RAW_BUCKET:-open-mem-spine-raw-dev}"
 TAG="${1:-spine-1}"
-IMAGE="${REGION}-docker.pkg.dev/${PROJECT}/memdog/memdog-api:${TAG}"
-SA="memdog-api@${PROJECT}.iam.gserviceaccount.com"
+IMAGE="${REGION}-docker.pkg.dev/${PROJECT}/open-mem/open-mem-api:${TAG}"
+SA="open-mem-api@${PROJECT}.iam.gserviceaccount.com"
 
 step() { printf '\n\033[1m==> %s\033[0m\n' "$1"; }
 
@@ -92,7 +92,7 @@ for entry in container.get("env", []):
   [ -n "$PUBLIC_DEMOS" ] && echo "    carrying PUBLIC_DEMOS forward (${#PUBLIC_DEMOS} bytes)"
 fi
 
-ENV_FILE="$(mktemp -t memdog-env)"
+ENV_FILE="$(mktemp -t open-mem-env)"
 trap 'rm -f "$ENV_FILE"' EXIT
 DB_HOST="$DB_HOST" DB_NAME="$DB_NAME" RAW_BUCKET="$RAW_BUCKET" \
 TAG="$TAG" PROJECT="$PROJECT" REGION="$REGION" PUBLIC_DEMOS="$PUBLIC_DEMOS" \
@@ -127,7 +127,7 @@ env = {
     "PUBLIC_DAILY_CAP": get("PUBLIC_DAILY_CAP") or "500",
     "PUBLIC_RATE_PER_HOUR": get("PUBLIC_RATE_PER_HOUR") or "20",
     "REPO_ANALYSIS_JOB": get("REPO_ANALYSIS_JOB")
-        or f"projects/{project}/locations/{region}/jobs/memdog-repo-analysis",
+        or f"projects/{project}/locations/{region}/jobs/open-mem-repo-analysis",
     "URL_CONTEXT": get("URL_CONTEXT") or "true",
     "URL_CONTEXT_MODEL": get("URL_CONTEXT_MODEL") or "",
 }
@@ -148,12 +148,12 @@ ENVPY
 # console asks `GET /drive/share-address`, is told `configured: false`, and says
 # the feature is not switched on rather than showing a blank address. So the
 # absence has to survive a deploy rather than stop one.
-SECRETS="DB_PASSWORD=memdog-db-password:latest,MEMDOG_MASTER_KEY=memdog-master-key:latest,GEMINI_API_KEY=gemini-api-key:latest"
-if gcloud secrets describe memdog-drive-key --project "$PROJECT" >/dev/null 2>&1; then
-  SECRETS="${SECRETS},DRIVE_SERVICE_ACCOUNT=memdog-drive-key:latest"
-  echo "    Drive reader: memdog-drive-key"
+SECRETS="DB_PASSWORD=open-mem-db-password:latest,OPENMEM_MASTER_KEY=open-mem-master-key:latest,GEMINI_API_KEY=gemini-api-key:latest"
+if gcloud secrets describe open-mem-drive-key --project "$PROJECT" >/dev/null 2>&1; then
+  SECRETS="${SECRETS},DRIVE_SERVICE_ACCOUNT=open-mem-drive-key:latest"
+  echo "    Drive reader: open-mem-drive-key"
 else
-  echo "    no memdog-drive-key -- Drive folders will report themselves unconfigured"
+  echo "    no open-mem-drive-key -- Drive folders will report themselves unconfigured"
 fi
 
 gcloud run deploy "$SERVICE" \
@@ -179,9 +179,9 @@ gcloud run deploy "$SERVICE" \
 # what "current" means, or its idea of stale is the inverse of the truth.
 step "Deploying the reconcile job"
 JOB_ENV="DB_HOST=${DB_HOST},DB_NAME=${DB_NAME},DB_USER=postgres,EMBED_DIM=768,EMBED_ENGINE=${EMBED_ENGINE:-gemini},EMBED_MODEL=${EMBED_MODEL:-gemini-embedding-001},RAW_BUCKET=${RAW_BUCKET},MEDIA_INTERPRETATION=true,LARGE_MEDIA=${LARGE_MEDIA:-false},MAX_LARGE_MEDIA_BYTES=${MAX_LARGE_MEDIA_BYTES:-268435456},MAX_TEXT_CHARS=${MAX_TEXT_CHARS:-4000000},EXTRACT_ENGINE=gemini,MULTIMODAL_MODEL=${MULTIMODAL_MODEL:-gemini-3.7-flash},TRANSCRIBE_MODEL=${TRANSCRIBE_MODEL:-gemini-3.5-transcribe},OTEL_GCP_PROJECT=${PROJECT},IMAGE_TAG=${TAG}"
-JOB_SECRETS="DB_PASSWORD=memdog-db-password:latest,MEMDOG_MASTER_KEY=memdog-master-key:latest,GEMINI_API_KEY=gemini-api-key:latest"
+JOB_SECRETS="DB_PASSWORD=open-mem-db-password:latest,OPENMEM_MASTER_KEY=open-mem-master-key:latest,GEMINI_API_KEY=gemini-api-key:latest"
 
-# `memdog-seed` is here for the same reason the reconciler is: it was created by
+# `open-mem-seed` is here for the same reason the reconciler is: it was created by
 # hand against whatever image was current that day, and a job pinned to an image
 # nobody redeploys drifts until it runs code the service no longer has. The seed
 # drives the API in-process, so a stale one seeds a corpus the running service
@@ -190,7 +190,7 @@ JOB_SECRETS="DB_PASSWORD=memdog-db-password:latest,MEMDOG_MASTER_KEY=memdog-mast
 # Creating it costs nothing -- a job is not billed until executed -- and it is
 # the only way to seed at all, since Cloud SQL is private-IP and the seed needs
 # to be inside the VPC.
-# `memdog-bootstrap` is in here for the reason the others are, and it had drifted
+# `open-mem-bootstrap` is in here for the reason the others are, and it had drifted
 # furthest: created by hand, pinned to an image twenty tags old, and repurposed
 # along the way to run `grant-key` instead of a bootstrap. A job nobody
 # redeploys runs code the service no longer has, and this one issues the first
@@ -215,10 +215,10 @@ JOB_SECRETS="DB_PASSWORD=memdog-db-password:latest,MEMDOG_MASTER_KEY=memdog-mast
 # project needs exactly this. The secret *name* in the args is config; the
 # credential itself goes to Secret Manager and never to stdout, which on a Cloud
 # Run Job is Cloud Logging.
-for job_spec in "memdog-reconcile:reconcile" "memdog-crawl-tick:crawl-tick" \
-                "memdog-alert-tick:alert-tick" \
-                "memdog-bootstrap:bootstrap-to-secret,owner@memdog.dev,shared,${PROJECT},memdog-demo-key" \
-                "memdog-seed:seed,--demo"; do
+for job_spec in "open-mem-reconcile:reconcile" "open-mem-crawl-tick:crawl-tick" \
+                "open-mem-alert-tick:alert-tick" \
+                "open-mem-bootstrap:bootstrap-to-secret,owner@open-mem.dev,shared,${PROJECT},open-mem-demo-key" \
+                "open-mem-seed:seed,--demo"; do
   job="${job_spec%%:*}"
   command="${job_spec##*:}"
   # The seed is not like the other two. It enriches forty-odd records
@@ -234,10 +234,10 @@ for job_spec in "memdog-reconcile:reconcile" "memdog-crawl-tick:crawl-tick" \
   # thirty the task is killed partway and leaves a project written, partly
   # enriched, and published if anyone sets the registry from it.
   case "$job" in
-    memdog-seed) cpu=2; memory=2Gi; retries=0; timeout=10800 ;;
+    open-mem-seed) cpu=2; memory=2Gi; retries=0; timeout=10800 ;;
     # A retried bootstrap finds the tenant the first attempt created and fails
     # with that as its reason, which reads as a broken bootstrap.
-    memdog-bootstrap) cpu=1; memory=1Gi; retries=0; timeout=1800 ;;
+    open-mem-bootstrap) cpu=1; memory=1Gi; retries=0; timeout=1800 ;;
     *)           cpu=1; memory=1Gi; retries=1; timeout=1800 ;;
   esac
   if gcloud run jobs describe "$job" --project "$PROJECT" --region "$REGION" >/dev/null 2>&1; then
@@ -252,7 +252,7 @@ for job_spec in "memdog-reconcile:reconcile" "memdog-crawl-tick:crawl-tick" \
     --network default --subnet default --vpc-egress private-ranges-only \
     --set-env-vars "$JOB_ENV" \
     --set-secrets "$JOB_SECRETS" \
-    --command python --args="-m,memdog,$command" \
+    --command python --args="-m,open_mem,$command" \
     --max-retries "$retries" --task-timeout "$timeout" \
     --cpu "$cpu" --memory "$memory" \
     --quiet

@@ -121,7 +121,7 @@ health.
 ## Running it
 
 **The job is not on the API image and not in the job loop.** Every other Cloud
-Run job runs `memdog` and is redeployed with the API so it cannot drift. This
+Run job runs `open-mem` and is redeployed with the API so it cannot drift. This
 one carries `git`, `graphifyy` and 37 tree-sitter grammars — keeping that out of
 the API image is the entire reason it exists — so it has its own Dockerfile,
 tag, and deploy. See the [deploy skill](../../.claude/skills/deploy-gcp/SKILL.md).
@@ -145,7 +145,7 @@ admission, sniffing, parsing and the ACL.
 Named so they are decisions rather than omissions.
 
 - **No trend across snapshots.** See the constraint above.
-- **The code graph is not merged into the entity graph.** mem-dog's vocabulary
+- **The code graph is not merged into the entity graph.** open-mem's vocabulary
   is `person, organization, location, product, event, topic, other`; tens of
   thousands of code symbols forced into it produce exactly the graph that
   [templates](../ingestion/graph-templates.md) warns about — one that fills up

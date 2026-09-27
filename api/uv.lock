@@ -816,7 +816,7 @@ wheels = [
 ]
 
 [[package]]
-name = "memdog-api"
+name = "open-mem-api"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

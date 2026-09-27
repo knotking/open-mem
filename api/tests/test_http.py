@@ -15,7 +15,7 @@ pytestmark = pytest.mark.asyncio
 
 @pytest.fixture
 async def client(pool, tenant):
-    from memdog.app import app
+    from open_mem.app import app
 
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(app=app)
@@ -58,7 +58,7 @@ async def test_endpoints(client, tenant, pool):
     assert fetched.json()["is_downloaded"] is True
 
     # Enrichment is asynchronous; wait for the in-process worker to catch up.
-    from memdog.app import app as live_app
+    from open_mem.app import app as live_app
 
     await live_app.state.queue.drain()
 

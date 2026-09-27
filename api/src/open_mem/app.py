@@ -261,7 +261,7 @@ async def lifespan(app: FastAPI):
 
 log = logging.getLogger(__name__)
 
-app = FastAPI(title="mem-dog", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="open-mem", version="0.1.0", lifespan=lifespan)
 
 # How many claims the public graph read returns. Well under `graph.MAX_OVERVIEW`
 # and fixed rather than a parameter: an unauthenticated caller does not get to

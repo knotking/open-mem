@@ -21,8 +21,8 @@ import json
 
 import pytest
 
-from memdog.checkpoints import CheckpointError, run_check, timeline
-from memdog.extraction import Envelope
+from open_mem.checkpoints import CheckpointError, run_check, timeline
+from open_mem.extraction import Envelope
 
 pytestmark = pytest.mark.asyncio
 
@@ -71,7 +71,7 @@ class RefusesAtFakesVersion(Refuses):
 
 
 async def _timeline_type(pool, tenant, *, name="vendor_feed", checkpoints=True):
-    from memdog.ids import new_id
+    from open_mem.ids import new_id
 
     await pool.execute(
         """
@@ -86,8 +86,8 @@ async def _timeline_type(pool, tenant, *, name="vendor_feed", checkpoints=True):
 
 async def _write(pool, queue, blobs, settings, principal, tenant, *, type_name,
                  external_id, text):
-    from memdog.contracts import Inline, WriteItem, WriteRequest
-    from memdog.write import write_items
+    from open_mem.contracts import Inline, WriteItem, WriteRequest
+    from open_mem.write import write_items
 
     await write_items(pool, queue, blobs, settings, principal, WriteRequest(
         producer_id=tenant.producer_id,
@@ -377,7 +377,7 @@ async def test_another_organisation_sees_no_timeline(
 # ------------------------------------------------------------------ wiring
 
 async def test_the_change_generators_are_registered():
-    from memdog.derive import GENERATORS, validate
+    from open_mem.derive import GENERATORS, validate
 
     for name in ("checkpoint_state", "checkpoint_change"):
         assert validate(name)["label"]
@@ -391,7 +391,7 @@ async def test_the_change_schema_has_no_nullable_unions():
     """Gemini 400s the whole request on `{"type": ["string","null"]}`, and three
     of those trip the breaker -- after which every artifact records `circuit
     open` while ordinary enrichment keeps working."""
-    from memdog.extraction import changes_schema
+    from open_mem.extraction import changes_schema
 
     for spec in changes_schema()["items"]["properties"].values():
         assert not isinstance(spec.get("type"), list), spec
@@ -401,7 +401,7 @@ async def test_the_comparable_part_is_emitted_before_the_summary():
     """Property order is load-bearing: whatever is last is what gets clipped
     when the output budget runs out, and a summary already ate an entire graph
     once. The observations are the part that cannot be reconstructed."""
-    from memdog.extraction import _gemini_schema
+    from open_mem.extraction import _gemini_schema
 
     order = _gemini_schema(state=True, changes=True)["propertyOrdering"]
     assert order.index("state") < order.index("summary")
@@ -420,7 +420,7 @@ async def test_a_change_value_field_cannot_be_used_as_scratch_space():
     MAX_TOKENS, and returned truncated JSON. The names now match the labels in
     the prompt, both are required, and both are capped.
     """
-    from memdog.extraction import CHANGE_ORDER, CHANGE_REQUIRED, changes_schema
+    from open_mem.extraction import CHANGE_ORDER, CHANGE_REQUIRED, changes_schema
 
     props = changes_schema()["items"]["properties"]
     for name in ("earlier_value", "later_value"):
@@ -438,7 +438,7 @@ async def test_running_out_of_output_budget_says_so():
     `ExtractionFailed('')` -- which reads as a broken model."""
     import inspect
 
-    from memdog import extraction
+    from open_mem import extraction
 
     source = inspect.getsource(extraction.GeminiExtractor.extract)
     assert "MAX_TOKENS" in source, (
@@ -534,7 +534,7 @@ async def test_every_field_the_surface_declares_is_one_the_transition_emits(
     operator is decidable against None, and the alert simply never fires. So the
     two lists are compared directly rather than trusted to stay in step.
     """
-    from memdog.alerts import SURFACES
+    from open_mem.alerts import SURFACES
 
     principal = await principal_for(tenant.api_key)
     await _moved(pool, queue, blobs, settings, principal, tenant, changes=[
@@ -572,7 +572,7 @@ async def test_the_transition_carries_a_digest_a_selector_can_filter_on(
     # artifact to ask for.
     assert payload["change_artifact_id"] == result["change_artifact_id"]
 
-    from memdog.alerts import matches_selector
+    from open_mem.alerts import matches_selector
 
     assert matches_selector({"memory_type": ["vendor_feed"]}, payload)
     assert matches_selector({"highest_significance": ["high"]}, payload)
@@ -588,7 +588,7 @@ async def test_the_digest_is_bounded_however_large_the_delta_is(
     """A payload that grows with the document is a write-path regression nobody
     notices until `domain_events` is the largest table in the database. The
     count stays exact; only the sample is cut."""
-    from memdog.checkpoints import DIGEST_STATEMENTS, STATEMENT_CHARS
+    from open_mem.checkpoints import DIGEST_STATEMENTS, STATEMENT_CHARS
 
     principal = await principal_for(tenant.api_key)
     await _moved(pool, queue, blobs, settings, principal, tenant, changes=[
@@ -608,7 +608,7 @@ async def test_an_alert_on_the_memory_type_reaches_a_real_change(
     """End to end, because every layer of this passed on its own while the
     feature did not work: the check ran, the artifact stored, the event emitted,
     the alert evaluated — and matched nothing."""
-    from memdog.alerts import backtest, create_alert, evaluate_gap, set_enabled
+    from open_mem.alerts import backtest, create_alert, evaluate_gap, set_enabled
 
     principal = await principal_for(tenant.api_key)
     # Before the write. A new alert starts at the current head, so one created
@@ -745,7 +745,7 @@ async def test_a_change_is_announced_twice_on_purpose(
 async def test_the_checked_surface_declares_only_fields_it_emits(
     pool, queue, blobs, settings, tenant, principal_for
 ):
-    from memdog.alerts import SURFACES
+    from open_mem.alerts import SURFACES
 
     principal = await principal_for(tenant.api_key)
     await _moved(pool, queue, blobs, settings, principal, tenant, changes=[])
@@ -762,7 +762,7 @@ async def test_an_alert_can_watch_for_a_timeline_that_stopped_comparing(
 ):
     """The alert this surface exists for. A feed still accepting records while
     every comparison refuses is the failure that looks most like health."""
-    from memdog.alerts import backtest, create_alert, evaluate_gap, set_enabled
+    from open_mem.alerts import backtest, create_alert, evaluate_gap, set_enabled
 
     principal = await principal_for(tenant.api_key)
     alert = await create_alert(
@@ -827,7 +827,7 @@ def _change(statement, *, kind="changed", earlier="a", later="b", significance="
 async def test_a_range_composes_the_deltas_inside_it(
     pool, queue, blobs, settings, tenant, principal_for
 ):
-    from memdog.checkpoints import changes_between
+    from open_mem.checkpoints import changes_between
 
     principal = await principal_for(tenant.api_key)
     rows = await _built(pool, queue, blobs, settings, principal, tenant, [
@@ -854,7 +854,7 @@ async def test_a_range_reports_churn_and_says_that_is_what_it_did(
     """Green, red, green is two changes composed and none net. Both readings are
     defensible; answering with one while the caller assumed the other is not,
     which is why `basis` is a field rather than an assumption."""
-    from memdog.checkpoints import changes_between
+    from open_mem.checkpoints import changes_between
 
     principal = await principal_for(tenant.api_key)
     rows = await _built(pool, queue, blobs, settings, principal, tenant, [
@@ -873,7 +873,7 @@ async def test_the_window_is_exclusive_of_from_and_inclusive_of_to(
 ):
     """So two ranges chained together neither overlap nor skip — which is the
     whole of "what changed since I last synced" working more than once."""
-    from memdog.checkpoints import changes_between
+    from open_mem.checkpoints import changes_between
 
     principal = await principal_for(tenant.api_key)
     rows = await _built(pool, queue, blobs, settings, principal, tenant, [
@@ -901,7 +901,7 @@ async def test_a_hole_in_the_range_is_reported_rather_than_skipped(
     """A range that quietly omits what it could not read presents as complete.
     For a change detector that is the same lie as a failed check reading as
     "nothing changed"."""
-    from memdog.checkpoints import changes_between
+    from open_mem.checkpoints import changes_between
 
     principal = await principal_for(tenant.api_key)
     rows = await _built(pool, queue, blobs, settings, principal, tenant, [
@@ -926,7 +926,7 @@ async def test_a_hole_in_the_range_is_reported_rather_than_skipped(
 async def test_a_checkpoint_nobody_has_checked_is_a_hole_not_a_quiet_week(
     pool, queue, blobs, settings, tenant, principal_for
 ):
-    from memdog.checkpoints import changes_between
+    from open_mem.checkpoints import changes_between
 
     principal = await principal_for(tenant.api_key)
     rows = await _built(pool, queue, blobs, settings, principal, tenant, [
@@ -949,7 +949,7 @@ async def test_a_delta_the_reader_cannot_see_is_a_hole_too(
     """An artifact takes the strictest level among its sources, so a reader can
     legitimately be unable to see one change in a range they can otherwise read.
     Reporting that as no-change would be the same lie as any other hole."""
-    from memdog.checkpoints import changes_between
+    from open_mem.checkpoints import changes_between
 
     principal = await principal_for(tenant.api_key)
     rows = await _built(pool, queue, blobs, settings, principal, tenant, [
@@ -976,7 +976,7 @@ async def test_a_span_wider_than_the_limit_is_refused_not_truncated(
 ):
     """Silent truncation reads as "nothing else moved", which is the one answer
     a change detector must never give by accident."""
-    from memdog.checkpoints import RANGE_LIMIT, changes_between
+    from open_mem.checkpoints import RANGE_LIMIT, changes_between
 
     principal = await principal_for(tenant.api_key)
     rows = await _built(pool, queue, blobs, settings, principal, tenant, [
@@ -997,7 +997,7 @@ async def test_a_time_lands_on_the_last_checkpoint_at_or_before_it(
     Monday."""
     from datetime import timedelta
 
-    from memdog.checkpoints import changes_between
+    from open_mem.checkpoints import changes_between
 
     principal = await principal_for(tenant.api_key)
     rows = await _built(pool, queue, blobs, settings, principal, tenant, [
@@ -1023,7 +1023,7 @@ async def test_a_position_that_names_nothing_is_an_error_not_a_slide(
 ):
     """A sync resuming from a checkpoint that has been erased must hear about
     it rather than quietly re-reporting a month."""
-    from memdog.checkpoints import changes_between
+    from open_mem.checkpoints import changes_between
 
     principal = await principal_for(tenant.api_key)
     rows = await _built(pool, queue, blobs, settings, principal, tenant, [
@@ -1043,7 +1043,7 @@ async def test_a_memory_that_is_not_a_timeline_says_so(
     """Three different situations — no such memory, a memory that will never
     have a timeline, and one with nothing on it yet — must not share a
     rendering."""
-    from memdog.checkpoints import changes_between
+    from open_mem.checkpoints import changes_between
 
     principal = await principal_for(tenant.api_key)
     name = await _timeline_type(pool, tenant, name="plain", checkpoints=False)
@@ -1065,7 +1065,7 @@ async def test_a_memory_that_is_not_a_timeline_says_so(
 async def test_another_organisation_cannot_read_a_range(
     pool, queue, blobs, settings, tenant, other_tenant, principal_for
 ):
-    from memdog.checkpoints import changes_between
+    from open_mem.checkpoints import changes_between
 
     principal = await principal_for(tenant.api_key)
     rows = await _built(pool, queue, blobs, settings, principal, tenant, [
@@ -1083,7 +1083,7 @@ async def test_nothing_new_since_that_point_is_its_own_answer(
     """The ordinary result for a poller. A consumer asking "what has changed
     since the checkpoint I last saw" lands here every time nothing new has
     arrived, so it must not read as a malformed window."""
-    from memdog.checkpoints import changes_between
+    from open_mem.checkpoints import changes_between
 
     principal = await principal_for(tenant.api_key)
     rows = await _built(pool, queue, blobs, settings, principal, tenant, [
@@ -1105,7 +1105,7 @@ async def test_an_inverted_window_is_refused_not_answered_empty(
     """An empty answer here would report "nothing changed" about a span that was
     never examined — the lie every other guard in this file exists to prevent,
     arriving through the one door that looks like a valid answer."""
-    from memdog.checkpoints import changes_between
+    from open_mem.checkpoints import changes_between
 
     principal = await principal_for(tenant.api_key)
     rows = await _built(pool, queue, blobs, settings, principal, tenant, [
@@ -1123,7 +1123,7 @@ async def test_resolving_a_position_does_not_read_the_whole_timeline(
     """The span is capped; the timeline is not. A feed running for two years has
     thousands of entries that a range over last week has no business reading, so
     each endpoint is one indexed lookup rather than a walk."""
-    from memdog.checkpoints import _locate
+    from open_mem.checkpoints import _locate
 
     principal = await principal_for(tenant.api_key)
     rows = await _built(pool, queue, blobs, settings, principal, tenant, [
@@ -1152,7 +1152,7 @@ async def test_composed_and_net_disagree_and_both_say_which_they_are(
     """Green, red, green is two changes composed and none net. Neither is wrong.
     A caller handed one while assuming the other cannot tell, which is why
     neither answer is allowed to arrive unlabelled."""
-    from memdog.checkpoints import changes_between, net_between
+    from open_mem.checkpoints import changes_between, net_between
 
     principal = await principal_for(tenant.api_key)
     rows = await _built(pool, queue, blobs, settings, principal, tenant, [
@@ -1180,7 +1180,7 @@ async def test_a_net_answer_is_paid_for_once(
 ):
     """A polling consumer asks for the same range every time it wakes. Charging
     it a model call per poll is the cost failure this table exists to prevent."""
-    from memdog.checkpoints import net_between
+    from open_mem.checkpoints import net_between
 
     principal = await principal_for(tenant.api_key)
     rows = await _built(pool, queue, blobs, settings, principal, tenant, [
@@ -1209,7 +1209,7 @@ async def test_a_moved_generator_misses_the_cache_rather_than_answering_from_it(
     """The version is part of the key, not a column beside it. Serving an answer
     made by a prompt nobody can recover is the drift the per-step comparison
     already refuses to make."""
-    from memdog.checkpoints import net_between
+    from open_mem.checkpoints import net_between
 
     principal = await principal_for(tenant.api_key)
     rows = await _built(pool, queue, blobs, settings, principal, tenant, [
@@ -1235,7 +1235,7 @@ async def test_two_ends_from_different_generators_are_not_compared(
 ):
     """With more force than for an adjacent pair: the further apart two points
     are, the likelier a prompt moved between them."""
-    from memdog.checkpoints import net_between
+    from open_mem.checkpoints import net_between
 
     principal = await principal_for(tenant.api_key)
     rows = await _built(pool, queue, blobs, settings, principal, tenant, [
@@ -1255,7 +1255,7 @@ async def test_two_ends_from_different_generators_are_not_compared(
 async def test_an_end_with_no_description_has_no_net_answer(
     pool, queue, blobs, settings, tenant, principal_for
 ):
-    from memdog.checkpoints import net_between
+    from open_mem.checkpoints import net_between
 
     principal = await principal_for(tenant.api_key)
     rows = await _built(pool, queue, blobs, settings, principal, tenant, [
@@ -1277,7 +1277,7 @@ async def test_a_net_answer_needs_two_ends_to_compare(
 ):
     """"From the beginning" has no description to compare against. Quietly
     anchoring on the first checkpoint would answer a question nobody asked."""
-    from memdog.checkpoints import net_between
+    from open_mem.checkpoints import net_between
 
     principal = await principal_for(tenant.api_key)
     rows = await _built(pool, queue, blobs, settings, principal, tenant, [
@@ -1298,7 +1298,7 @@ async def test_a_net_answer_stands_on_the_records_not_the_descriptions(
 ):
     """Which is what makes erasing either record cascade onto the answer built
     from it, and what a citation has to be able to open."""
-    from memdog.checkpoints import net_between
+    from open_mem.checkpoints import net_between
 
     principal = await principal_for(tenant.api_key)
     rows = await _built(pool, queue, blobs, settings, principal, tenant, [
@@ -1320,7 +1320,7 @@ async def test_an_empty_answer_still_says_which_question_it_answered(
     """`basis` is the contract, and an empty response is not exempt from it. A
     caller that asked for the net reading and got `composed` back would be right
     to conclude it had been handed the other answer."""
-    from memdog.checkpoints import changes_between, net_between
+    from open_mem.checkpoints import changes_between, net_between
 
     principal = await principal_for(tenant.api_key)
     name = await _timeline_type(pool, tenant, name="plain", checkpoints=False)
@@ -1353,7 +1353,7 @@ class Busy:
     model_id = "fake-extractor-1"
 
     async def extract(self, *args, **kwargs):  # noqa: ANN002, ANN003
-        from memdog.quota import QuotaExceeded
+        from open_mem.quota import QuotaExceeded
 
         raise QuotaExceeded("slow down")
 
@@ -1409,7 +1409,7 @@ async def test_the_sweep_picks_a_deferred_check_back_up(
 ):
     """The queue message that would have retried it was already consumed, so
     without the sweep the work waits for a nudge that never comes."""
-    from memdog.checkpoints import pending
+    from open_mem.checkpoints import pending
 
     principal = await principal_for(tenant.api_key)
     name = await _timeline_type(pool, tenant)
@@ -1427,7 +1427,7 @@ async def test_the_sweep_picks_a_deferred_check_back_up(
 async def test_a_deferred_checkpoint_is_a_hole_not_a_failure_in_a_range(
     pool, queue, blobs, settings, tenant, principal_for
 ):
-    from memdog.checkpoints import changes_between
+    from open_mem.checkpoints import changes_between
 
     principal = await principal_for(tenant.api_key)
     rows = await _built(pool, queue, blobs, settings, principal, tenant, [

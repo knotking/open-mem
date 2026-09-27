@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from memdog.settings_store import SettingError, effective, put, resolve
+from open_mem.settings_store import SettingError, effective, put, resolve
 
 pytestmark = pytest.mark.asyncio
 

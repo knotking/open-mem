@@ -16,9 +16,9 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from memdog import fetching
-from memdog.crawlers import Auth, Budget, CrawlerConfig, Throttle, discover
-from memdog.fetching import FetchError, download_url
+from open_mem import fetching
+from open_mem.crawlers import Auth, Budget, CrawlerConfig, Throttle, discover
+from open_mem.fetching import FetchError, download_url
 
 def _config(**over) -> CrawlerConfig:
     base = {
@@ -136,7 +136,7 @@ async def test_a_tree_without_a_connection_says_so_rather_than_getting_a_401():
     """Neither API has an anonymous mode, so an unauthenticated walk is a
     configuration mistake — and reporting the source's 401 would send whoever
     debugs it at the source instead."""
-    from memdog.crawlers import CrawlerError
+    from open_mem.crawlers import CrawlerError
 
     with pytest.raises(CrawlerError) as exc:
         await discover(_config(), watermark=None, checkpoint={}, auth=None)
@@ -233,7 +233,7 @@ async def test_a_query_string_credential_is_refused_for_a_download(monkeypatch):
     async def authorize(*a, **kw):
         return {}, {"api_key": "secret"}
 
-    import memdog.connections as connections
+    import open_mem.connections as connections
     monkeypatch.setattr(connections, "authorize", authorize)
 
     with pytest.raises(FetchError) as exc:

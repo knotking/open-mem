@@ -31,19 +31,19 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from memdog.contracts import (Inline, WriteItem, WriteOptions,      # noqa: E402
+from open_mem.contracts import (Inline, WriteItem, WriteOptions,      # noqa: E402
                               WriteRequest)
-from memdog.extraction import Envelope                              # noqa: E402
-from memdog.gemini_files import GeminiFiles                         # noqa: E402
-from memdog.multimodal import MAX_INLINE_BYTES, GeminiMultimodal    # noqa: E402
-from memdog.queue import InProcessQueue                             # noqa: E402
-from memdog.retrieval import get_item                               # noqa: E402
-from memdog.settings_store import put                               # noqa: E402
-from memdog.contracts import RetrieveFilter, RetrieveRequest        # noqa: E402
-from memdog.retrieval import retrieve                               # noqa: E402
-from memdog.workers import (EmbedWorker, EnrichWorker, EventWorker,  # noqa: E402
+from open_mem.extraction import Envelope                              # noqa: E402
+from open_mem.gemini_files import GeminiFiles                         # noqa: E402
+from open_mem.multimodal import MAX_INLINE_BYTES, GeminiMultimodal    # noqa: E402
+from open_mem.queue import InProcessQueue                             # noqa: E402
+from open_mem.retrieval import get_item                               # noqa: E402
+from open_mem.settings_store import put                               # noqa: E402
+from open_mem.contracts import RetrieveFilter, RetrieveRequest        # noqa: E402
+from open_mem.retrieval import retrieve                               # noqa: E402
+from open_mem.workers import (EmbedWorker, EnrichWorker, EventWorker,  # noqa: E402
                             ParseWorker)
-from memdog.write import EMBED_TOPIC, write_items                   # noqa: E402
+from open_mem.write import EMBED_TOPIC, write_items                   # noqa: E402
 from tools import fake_gemini_files                                 # noqa: E402
 
 pytestmark = pytest.mark.asyncio
@@ -127,7 +127,7 @@ def files_api():
 
 @pytest.fixture(autouse=True)
 def _quick_polls(monkeypatch):
-    monkeypatch.setattr("memdog.gemini_files.POLL_SECONDS", 0.01)
+    monkeypatch.setattr("open_mem.gemini_files.POLL_SECONDS", 0.01)
 
 
 def _engine(base: str) -> GeminiMultimodal:

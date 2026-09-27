@@ -469,7 +469,7 @@ export default function Console({
       <nav className="side">
         <div className="brand">
           <span className="dot" aria-hidden="true" />
-          mem-dog
+          open-mem
         </div>
         <input
           className="navfilter"
@@ -1038,7 +1038,7 @@ function httpUrl(raw: string): string | null {
 
 /** The 11-character video id in a YouTube URL, or null.
  *
- * A deliberately small echo of the parser in `memdog/youtube.py`, and only for
+ * A deliberately small echo of the parser in `open_mem/youtube.py`, and only for
  * two cosmetic jobs: deciding whether the button is pressable, and building the
  * canonical URL used as the external id so one video pasted three ways is one
  * record. The server parses it again and refuses what it disagrees with, so
@@ -3902,7 +3902,7 @@ function AlertsSection({ projectId }: { projectId: string }) {
           <h2>Where events get sent</h2>
           <p className="hint">
             HTTPS only, and the address is re-checked on every send. Signed the
-            same way memdog asks providers to sign theirs. Retried, then held as
+            same way open-mem asks providers to sign theirs. Retried, then held as
             undeliverable rather than dropped — and replayable once fixed.
           </p>
           <div className="toolbar">
@@ -6145,13 +6145,13 @@ function GraphSection({ projectId }: { projectId: string }) {
   const [templates, setTemplates] = useState<GraphTemplate[]>([]);
   // **Which project, chosen here rather than at deploy time.**
   //
-  // The console is otherwise pinned to `MEMDOG_PROJECT_ID` — `page.tsx` reads
+  // The console is otherwise pinned to `OPENMEM_PROJECT_ID` — `page.tsx` reads
   // it from the environment and every section inherits it — which means the
   // only way to look at another project's graph is to redeploy the UI. That is
   // a strange thing to ask of somebody who is a member of seven.
   //
   // Scoped to this screen deliberately, and not lifted into the shell. A
-  // console-wide switcher would have to carry `MEMDOG_PRODUCER_ID` with it,
+  // console-wide switcher would have to carry `OPENMEM_PRODUCER_ID` with it,
   // because the producer is the identity every *write* goes through and it
   // belongs to one project: switching the shell would silently point Add data
   // at a producer that is not in the project on screen. Reading is safe to
@@ -9310,7 +9310,7 @@ function McpSection({ projectId }: { projectId: string }) {
   const config = JSON.stringify(
     {
       mcpServers: {
-        "mem-dog": {
+        "open-mem": {
           url: endpoint,
           headers: { Authorization: "Bearer YOUR_API_KEY" },
         },
@@ -9999,7 +9999,7 @@ function PlatformSection() {
             It is reachable with an API key that was granted the capability explicitly, which is an
             operator action taken at the terminal rather than in this console:
           </p>
-          <pre className="code">python -m memdog grant-key &lt;key-prefix&gt; &apos;admin:*&apos;</pre>
+          <pre className="code">python -m open_mem grant-key &lt;key-prefix&gt; &apos;admin:*&apos;</pre>
           <p className="empty">
             Everything else in Admin works without it — keys, invites, members and producers are all
             organization-scoped.

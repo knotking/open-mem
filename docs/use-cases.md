@@ -191,7 +191,7 @@ several use cases need other output schemas over the same member set.
 | Tension | Resolution |
 |---------|------------|
 | **Personal and team want opposite privacy defaults.** A wants everything indexed and surfaced; B must guarantee no teammate sees your personal mail. | **New mechanism** — data inherits its ACL from the *connection* that produced it, not the space it lands in. |
-| **Product vs platform RBAC.** B needs mem-dog to enforce; D delegates to the host. | **Unify** — one enforcement path. The host model becomes the case where a service identity is a single broad principal. |
+| **Product vs platform RBAC.** B needs open-mem to enforce; D delegates to the host. | **Unify** — one enforcement path. The host model becomes the case where a service identity is a single broad principal. |
 | **Breadth vs depth.** A wants 300 shallow connectors; B's customer 360 needs three handled deeply. | Already solved by the tier model — Tier 3 for breadth, Tier 1 for depth. An ordering, not a contradiction. |
 | **Cost profiles diverge.** A on local models is $0; D at 1k workspaces is a firehose. | Configuration — per-org budget caps plus tier policy. |
 | **Latency expectations diverge.** C needs sub-second in-loop; B tolerates ten seconds. | Already solved by the eager / deferred / adaptive index split. |
@@ -212,7 +212,7 @@ shared" rather than "authenticated to the org".
 
 1. **No single global privacy default** — visibility must be connection-scoped and space-aware.
 2. **No fixed five-mode retrieval API** — Family C requires composable primitives.
-3. **No host-delegated-only RBAC** — mem-dog must enforce natively.
+3. **No host-delegated-only RBAC** — open-mem must enforce natively.
 4. **The delete cascade cannot be deferred** — governance is table stakes for B and D.
 5. **The global unscoped `API_KEY` must go** — it voids every ACL the other families depend on.
 
@@ -238,7 +238,7 @@ summaries in production.
 |---|---|
 | Universal search | commodity |
 | RAG backend | commodity — mem0, Zep, LlamaIndex |
-| Temporal knowledge graph | contested — Zep owns the engine mem-dog runs |
+| Temporal knowledge graph | contested — Zep owns the engine open-mem runs |
 | Self-hosted, air-gapped, $0 | **table stakes** — Onyx does it under MIT |
 | **Messaging-channel ingestion** | **genuinely unique** |
 | **Connectors × memory × private** | the wedge — the intersection is unoccupied |

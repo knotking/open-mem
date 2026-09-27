@@ -15,8 +15,8 @@ from __future__ import annotations
 
 import pytest
 
-from memdog.engines import EngineRegistry
-from memdog.models import PURPOSES, SHIPPED_CARDS
+from open_mem.engines import EngineRegistry
+from open_mem.models import PURPOSES, SHIPPED_CARDS
 
 # Which builder kind serves which purpose. `answer` is deliberately absent from
 # PURPOSES: chat follows the org's extraction assignment so that

@@ -21,9 +21,9 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from memdog import multimodal                                     # noqa: E402
-from memdog.gemini_files import FileNotReady, GeminiFiles         # noqa: E402
-from memdog.multimodal import (MAX_INLINE_BYTES, GeminiMultimodal,  # noqa: E402
+from open_mem import multimodal                                     # noqa: E402
+from open_mem.gemini_files import FileNotReady, GeminiFiles         # noqa: E402
+from open_mem.multimodal import (MAX_INLINE_BYTES, GeminiMultimodal,  # noqa: E402
                                MediaBeyondModel, MediaTooLarge,
                                beyond_model)
 from tools import fake_gemini_files                               # noqa: E402
@@ -54,7 +54,7 @@ def _quick_polls(monkeypatch):
     PROCESSING for two of them -- so the interval is shortened and the count
     left alone.
     """
-    monkeypatch.setattr("memdog.gemini_files.POLL_SECONDS", 0.01)
+    monkeypatch.setattr("open_mem.gemini_files.POLL_SECONDS", 0.01)
 
 
 def _engine(base: str, *, large: bool = True, max_large: int = 0) -> GeminiMultimodal:

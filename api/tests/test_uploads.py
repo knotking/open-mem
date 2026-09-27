@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from memdog.uploads import UploadError, authorise, complete, create_session
+from open_mem.uploads import UploadError, authorise, complete, create_session
 
 pytestmark = pytest.mark.asyncio
 

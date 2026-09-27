@@ -1,4 +1,4 @@
-# mem-dog
+# open-mem
 
 **A memory layer that shows its work.**
 
@@ -46,7 +46,7 @@ read says so instead of arriving empty.
 ## Try it
 
 ```bash
-cd api && docker compose up -d && uv run uvicorn memdog.app:app --reload
+cd api && docker compose up -d && uv run uvicorn open_mem.app:app --reload
 cd ui  && npm install && npm run dev
 ```
 

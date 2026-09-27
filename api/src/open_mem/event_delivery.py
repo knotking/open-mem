@@ -1,7 +1,7 @@
 """Outbound delivery: telling something outside that an event happened.
 
-memdog has never had one. `webhooks.py` is inbound only by its own docstring,
-and `/producers/{id}/test-delivery` signs a payload and posts it to memdog's own
+open-mem has never had one. `webhooks.py` is inbound only by its own docstring,
+and `/producers/{id}/test-delivery` signs a payload and posts it to open-mem's own
 receive path -- a self-test, not delivery. So this is new surface, and it
 carries a control the inbound path never needed.
 
@@ -18,7 +18,7 @@ Unlike the crawler, deliveries **do not follow redirects at all**. Re-validating
 each hop is defensible for something whose job is following links; for a signed
 POST it is risk for no benefit, so a 3xx is a failed delivery.
 
-Signing mirrors what memdog already asks providers to do inbound -- HMAC-SHA256
+Signing mirrors what open-mem already asks providers to do inbound -- HMAC-SHA256
 over `{timestamp}.{raw body}` -- so a subscriber verifies the same way, and the
 rotation overlap means changing a secret is not an outage for everything in
 flight.

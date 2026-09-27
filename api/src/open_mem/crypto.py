@@ -49,7 +49,7 @@ class Envelope:
 
     def encrypt(self, plaintext: bytes, aad: bytes = b"") -> bytes:
         if self._master is None:
-            raise CryptoUnavailable("MEMDOG_MASTER_KEY is not set")
+            raise CryptoUnavailable("OPENMEM_MASTER_KEY is not set")
         data_key = os.urandom(32)
         dk_nonce, ct_nonce = os.urandom(12), os.urandom(12)
         wrapped = AESGCM(self._master).encrypt(dk_nonce, data_key, aad)
@@ -65,7 +65,7 @@ class Envelope:
 
     def decrypt(self, blob: bytes, aad: bytes = b"") -> bytes:
         if self._master is None:
-            raise CryptoUnavailable("MEMDOG_MASTER_KEY is not set")
+            raise CryptoUnavailable("OPENMEM_MASTER_KEY is not set")
         if not blob or blob[:1] != self.VERSION:
             raise ValueError("unrecognised ciphertext version")
         pos = 1

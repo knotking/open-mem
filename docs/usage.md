@@ -10,7 +10,7 @@ note at the bottom first, because a few of these paths are newer than the prose 
 > **Set these once.** Every example assumes them.
 >
 > ```bash
-> BASE=https://memdog-api-xxxx.run.app
+> BASE=https://open-mem-api-xxxx.run.app
 > KEY=mdk_...            # X-API-Key or Authorization: Bearer — both reach the same verifier
 > PRJ=prj_...
 > ```
@@ -471,11 +471,11 @@ and a wrong no is a silence nobody notices. The watermark does not move and the 
 
 ```bash
 curl -s -X POST "$BASE/api/v1/event-subscriptions" -H "X-API-Key: $KEY" -H "content-type: application/json" \
-     -d '{"project_id":"'"$PRJ"'","url":"https://your.app/hooks/memdog"}'
+     -d '{"project_id":"'"$PRJ"'","url":"https://your.app/hooks/open-mem"}'
 # {"signing_secret": "whsec_…", "note": "shown once; it cannot be retrieved later, only rotated"}
 ```
 
-Signed HMAC-SHA256 over `{timestamp}.{body}` — the same scheme memdog asks providers to use inbound,
+Signed HMAC-SHA256 over `{timestamp}.{body}` — the same scheme open-mem asks providers to use inbound,
 so you verify one way. `https` only, and the address is re-checked on every send, because a host
 that resolved publicly yesterday can resolve to a private one today.
 

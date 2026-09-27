@@ -75,7 +75,7 @@ class Politeness(BaseModel):
     """Traverse only. Ignoring robots is both rude and the fastest way to be
     blocked, so honouring it is not configurable off."""
 
-    user_agent: str = "mem-dog-crawler/1.0 (+https://mem-dog.dev/crawler)"
+    user_agent: str = "open-mem-crawler/1.0 (+https://open-mem.dev/crawler)"
     # Floor, not the whole story: a host's own crawl-delay wins when longer.
     min_delay_seconds: float = Field(default=0.5, ge=0, le=60)
 

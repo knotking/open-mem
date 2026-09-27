@@ -1,4 +1,4 @@
-# Building mem-dog: Notes on What AI Memory Actually Requires
+# Building open-mem: Notes on What AI Memory Actually Requires
 
 *A long read about ingestion pipelines, silent failures, vector spaces that don't line up,
 and why the interesting problems in AI memory are almost never the AI.*

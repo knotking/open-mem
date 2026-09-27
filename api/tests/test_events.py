@@ -9,17 +9,17 @@ from __future__ import annotations
 
 import pytest
 
-from memdog.contracts import (
+from open_mem.contracts import (
     EnrichmentOptions,
     Inline,
     WriteItem,
     WriteOptions,
     WriteRequest,
 )
-from memdog.events import dispatch_pending, list_events
-from memdog.queue import InProcessQueue
-from memdog.retrieval import get_item
-from memdog.write import write_items
+from open_mem.events import dispatch_pending, list_events
+from open_mem.queue import InProcessQueue
+from open_mem.retrieval import get_item
+from open_mem.write import write_items
 
 pytestmark = pytest.mark.asyncio
 
@@ -135,7 +135,7 @@ async def test_enrichment_can_be_requested_after_the_fact(
 ):
     """The normal path: record now, decide later whether it is worth spending
     on."""
-    from memdog.events import emit_audited
+    from open_mem.events import emit_audited
 
     actor = await principal_for(tenant.api_key)
     written = await _write(pool, queue, blobs, settings, actor, tenant.producer_id, "later-1")
@@ -186,7 +186,7 @@ async def test_a_prompt_override_applies_to_one_request_only(
 ):
     """An override that quietly became the default would change a project's
     behaviour with no audit trail on the setting that appears to control it."""
-    import memdog.prompts as prompts
+    import open_mem.prompts as prompts
 
     before = prompts.BY_DATA_TYPE.get("document_text")
     actor = await principal_for(tenant.api_key)
@@ -216,7 +216,7 @@ async def test_a_failed_enrichment_keeps_the_event_for_another_attempt(
 ):
     """A failed dispatch is not a lost intention -- which is the property the
     queue alone never had."""
-    from memdog.workers import EventWorker
+    from open_mem.workers import EventWorker
 
     class Broken:
         model_id = "broken-v1"
@@ -247,8 +247,8 @@ async def test_a_provider_quota_defers_without_spending_an_attempt(
     Counting these would walk a perfectly good request to `failed` in seconds
     and need a human to notice, when the right behaviour is to try later.
     """
-    from memdog.multimodal import QuotaExhausted
-    from memdog.workers import EventWorker
+    from open_mem.multimodal import QuotaExhausted
+    from open_mem.workers import EventWorker
 
     class OutOfQuota:
         model_id = "quota-v1"

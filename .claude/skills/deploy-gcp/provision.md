@@ -1,4 +1,4 @@
-# Standing mem-dog up in an empty GCP project
+# Standing open-mem up in an empty GCP project
 
 The order below is not a preference. Private services access must exist before
 a private-IP Cloud SQL instance can be created, the instance must exist before
@@ -34,13 +34,13 @@ SQL instance **with a public IP is rejected at creation**. Private IP requires a
 peered range allocated to `servicenetworking`, and it has to exist first.
 
 ```bash
-gcloud compute addresses create memdog-sql-range --project $PROJECT \
+gcloud compute addresses create open-mem-sql-range --project $PROJECT \
   --global --purpose=VPC_PEERING --addresses=10.100.0.0 --prefix-length=16 \
   --network=default
 
 gcloud services vpc-peerings connect --project $PROJECT \
   --service=servicenetworking.googleapis.com \
-  --ranges=memdog-sql-range --network=default
+  --ranges=open-mem-sql-range --network=default
 ```
 
 **The range cannot live inside `10.128.0.0/9`.** The `default` network is
@@ -49,13 +49,13 @@ auto-mode and reserves that whole block for its own subnets. Hence `10.100.0.0/1
 ## 3. Cloud SQL
 
 ```bash
-gcloud sql instances create memdog-spine --project $PROJECT \
+gcloud sql instances create open-mem-spine --project $PROJECT \
   --database-version=POSTGRES_16 --tier=db-f1-micro --edition=ENTERPRISE \
   --region=$REGION --network=default --no-assign-ip \
   --storage-size=10GB --no-backup
 
-gcloud sql databases create memdog --instance=memdog-spine --project $PROJECT
-gcloud sql users set-password postgres --instance=memdog-spine --project $PROJECT \
+gcloud sql databases create open_mem --instance=open-mem-spine --project $PROJECT
+gcloud sql users set-password postgres --instance=open-mem-spine --project $PROJECT \
   --password="$(openssl rand -base64 32)"     # same value goes into step 5
 ```
 
@@ -68,7 +68,7 @@ Note the private address — `cloudrun.sh` resolves it on every run, so it does
 not need to be recorded anywhere:
 
 ```bash
-gcloud sql instances describe memdog-spine --project $PROJECT \
+gcloud sql instances describe open-mem-spine --project $PROJECT \
   --format='value(ipAddresses[0].ipAddress)'
 ```
 
@@ -78,14 +78,14 @@ migrations run on API startup.
 ## 4. Registry, bucket, service account
 
 ```bash
-gcloud artifacts repositories create memdog --project $PROJECT \
+gcloud artifacts repositories create open-mem --project $PROJECT \
   --repository-format=docker --location=$REGION
 gcloud auth configure-docker ${REGION}-docker.pkg.dev
 
-gcloud storage buckets create gs://memdog-spine-raw-dev --project $PROJECT --location=$REGION
+gcloud storage buckets create gs://open-mem-spine-raw-dev --project $PROJECT --location=$REGION
 
-gcloud iam service-accounts create memdog-api --project $PROJECT
-SA=memdog-api@${PROJECT}.iam.gserviceaccount.com
+gcloud iam service-accounts create open-mem-api --project $PROJECT
+SA=open-mem-api@${PROJECT}.iam.gserviceaccount.com
 
 # Project level.
 for role in roles/secretmanager.secretAccessor roles/run.developer \
@@ -94,7 +94,7 @@ for role in roles/secretmanager.secretAccessor roles/run.developer \
 done
 
 # Bucket level, not project level -- object access is scoped to the one bucket.
-gcloud storage buckets add-iam-policy-binding gs://memdog-spine-raw-dev \
+gcloud storage buckets add-iam-policy-binding gs://open-mem-spine-raw-dev \
   --member="serviceAccount:$SA" --role=roles/storage.objectAdmin --project $PROJECT
 ```
 
@@ -112,23 +112,23 @@ you never run that job, `secretAccessor` is enough and is the better grant.
 ## 5. Secrets
 
 ```bash
-for s in memdog-db-password memdog-master-key memdog-demo-key \
-         memdog-web-api-key gemini-api-key; do
+for s in open-mem-db-password open-mem-master-key open-mem-demo-key \
+         open-mem-web-api-key gemini-api-key; do
   gcloud secrets create $s --project $PROJECT --replication-policy=automatic
 done
 ```
 
 Then add a version to each:
 
-- `memdog-db-password` — the password set in step 3.
-- `memdog-master-key` — `openssl rand -base64 32`. Encrypts stored credentials;
+- `open-mem-db-password` — the password set in step 3.
+- `open-mem-master-key` — `openssl rand -base64 32`. Encrypts stored credentials;
   **losing it is unrecoverable, and rotating it orphans everything encrypted
   under the old one.**
 - `gemini-api-key` — from AI Studio. Required: `EMBED_ENGINE=gemini` and
   `EXTRACT_ENGINE=gemini` are the deployed defaults, so without it the service
   starts and then fails every enrichment.
-- `memdog-demo-key` — written by the bootstrap job in step 8, not by hand.
-- `memdog-web-api-key` — the Firebase Web API key (step 7).
+- `open-mem-demo-key` — written by the bootstrap job in step 8, not by hand.
+- `open-mem-web-api-key` — the Firebase Web API key (step 7).
 
 Pipe values in; never pass a credential on a command line where it lands in
 shell history.
@@ -139,7 +139,7 @@ shell history.
 cd api && ./deploy/cloudrun.sh spine-1
 ```
 
-This builds `linux/amd64`, pushes, deploys `memdog-api`, and creates the three
+This builds `linux/amd64`, pushes, deploys `open-mem-api`, and creates the three
 managed jobs. Migrations apply on first start, so the schema arrives with the
 service.
 
@@ -157,19 +157,19 @@ Two choices inside it worth understanding before changing them:
 
 ## 7. Firebase Auth
 
-Auth is Firebase, behind the `TokenVerifier` seam in `api/src/memdog/auth.py`
+Auth is Firebase, behind the `TokenVerifier` seam in `api/src/open_mem/auth.py`
 (`FirebaseVerifier` in `firebase.py`, `CompositeVerifier` resolving either an
 API key or a Firebase token to one `Principal`). Supabase is entirely gone.
 
 Add Firebase to the same GCP project, enable the sign-in providers, and put the
-Web API key into `memdog-web-api-key`. The API needs only
+Web API key into `open-mem-web-api-key`. The API needs only
 `FIREBASE_PROJECT_ID`, which `cloudrun.sh` already sets to `$PROJECT`; it
 verifies RS256 against cached Google certificates and needs no service-account
 JSON.
 
 ## 8. First credential — without logging it
 
-`python -m memdog bootstrap` prints the API key, which is right for a human at a
+`python -m open_mem bootstrap` prints the API key, which is right for a human at a
 terminal and **wrong for a Cloud Run Job, whose stdout is Cloud Logging** — a
 durable, widely readable store. Same command, very different blast radius.
 
@@ -177,24 +177,24 @@ So the job runs `bootstrap-to-secret`, which writes the credential straight into
 Secret Manager and prints only ids. Create it once (it is not in `cloudrun.sh`):
 
 ```bash
-gcloud run jobs create memdog-bootstrap --project $PROJECT --region $REGION \
-  --image ${REGION}-docker.pkg.dev/${PROJECT}/memdog/memdog-api:spine-1 \
+gcloud run jobs create open-mem-bootstrap --project $PROJECT --region $REGION \
+  --image ${REGION}-docker.pkg.dev/${PROJECT}/open-mem/open-mem-api:spine-1 \
   --service-account $SA \
   --network default --subnet default --vpc-egress private-ranges-only \
-  --set-env-vars "DB_HOST=<private-ip>,DB_NAME=memdog,DB_USER=postgres,EMBED_DIM=768" \
-  --set-secrets "DB_PASSWORD=memdog-db-password:latest,MEMDOG_MASTER_KEY=memdog-master-key:latest" \
+  --set-env-vars "DB_HOST=<private-ip>,DB_NAME=open_mem,DB_USER=postgres,EMBED_DIM=768" \
+  --set-secrets "DB_PASSWORD=open-mem-db-password:latest,OPENMEM_MASTER_KEY=open-mem-master-key:latest" \
   --command python \
-  --args="-m,memdog,bootstrap-to-secret,owner@example.com,personal,${PROJECT},memdog-demo-key" \
+  --args="-m,open_mem,bootstrap-to-secret,owner@example.com,personal,${PROJECT},open-mem-demo-key" \
   --max-retries 0
 
-gcloud run jobs execute memdog-bootstrap --project $PROJECT --region $REGION
-gcloud secrets versions access latest --secret memdog-demo-key --project $PROJECT
+gcloud run jobs execute open-mem-bootstrap --project $PROJECT --region $REGION
+gcloud secrets versions access latest --secret open-mem-demo-key --project $PROJECT
 ```
 
 **Never put a credential in a job's `--args`.** That is config: readable by
 anyone who can describe the job, and it outlives the run.
 
-`python -m memdog revoke-key <prefix>` retires one — which is how the very first
+`python -m open_mem revoke-key <prefix>` retires one — which is how the very first
 key, issued before `bootstrap-to-secret` existed and therefore logged, was
 retired.
 
@@ -207,9 +207,9 @@ that is merely behind. So **the rows are the record of outstanding work**, and a
 sweep republishes what is missing.
 
 ```bash
-gcloud scheduler jobs create http memdog-reconcile-tick --project $PROJECT \
+gcloud scheduler jobs create http open-mem-reconcile-tick --project $PROJECT \
   --location $REGION --schedule="*/10 * * * *" \
-  --uri="https://${REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT}/jobs/memdog-reconcile:run" \
+  --uri="https://${REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT}/jobs/open-mem-reconcile:run" \
   --http-method=POST --oauth-service-account-email=$SA
 
 gcloud iam service-accounts add-iam-policy-binding $SA --project $PROJECT \
@@ -237,9 +237,9 @@ sees; an alert ten minutes late is a different product, and for a deadline it
 may be worthless.
 
 ```bash
-gcloud scheduler jobs create http memdog-alert-sweep --project $PROJECT \
+gcloud scheduler jobs create http open-mem-alert-sweep --project $PROJECT \
   --location $REGION --schedule="* * * * *" \
-  --uri="https://${REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT}/jobs/memdog-alert-tick:run" \
+  --uri="https://${REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT}/jobs/open-mem-alert-tick:run" \
   --http-method=POST --oauth-service-account-email=$SA
 ```
 
@@ -251,11 +251,11 @@ and this re-derives the rest.
 ## 10. Seed and UI
 
 ```bash
-gcloud run jobs execute memdog-seed --project $PROJECT --region $REGION
+gcloud run jobs execute open-mem-seed --project $PROJECT --region $REGION
 cd ui && ./deploy.sh ui-1
 ```
 
-`memdog-seed` runs `seed --demo` with `--max-retries 0`, because it enriches
+`open-mem-seed` runs `seed --demo` with `--max-retries 0`, because it enriches
 forty-odd records synchronously in one shot and must not be retried: a second
 attempt finds the org the first one created and fails with that as its reason,
 which reads as a broken seed rather than a duplicate run. It exists as a job at
@@ -263,8 +263,8 @@ all because Cloud SQL is private-IP and the seed has to run inside the VPC.
 
 The UI holds both credentials **server-side** and is the only thing the browser
 talks to — `ui/Dockerfile` deliberately takes no `NEXT_PUBLIC_*` build args.
-Its four runtime vars are `MEMDOG_API_URL`, `MEMDOG_API_KEY`,
-`MEMDOG_PROJECT_ID`, `MEMDOG_PRODUCER_ID`, plus `FIREBASE_WEB_API_KEY`.
+Its four runtime vars are `OPENMEM_API_URL`, `OPENMEM_API_KEY`,
+`OPENMEM_PROJECT_ID`, `OPENMEM_PRODUCER_ID`, plus `FIREBASE_WEB_API_KEY`.
 `ui/deploy.sh` hardcodes `API_URL` — override it with `API_URL=…` in a new
 project, or the UI silently points at the old one.
 
@@ -274,7 +274,7 @@ Roughly **$8–10/month**, almost all of it the `db-f1-micro` instance with 10 G
 Cloud Run scales to zero and costs nothing idle.
 
 ```bash
-gcloud sql instances delete memdog-spine --project $PROJECT   # the expensive part
+gcloud sql instances delete open-mem-spine --project $PROJECT   # the expensive part
 ```
 
 ## Not production-shaped yet

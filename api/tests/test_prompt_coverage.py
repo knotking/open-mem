@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import pytest
 
-from memdog.classify import _EXTENSION_MAP, _MIME_MAP, classify
-from memdog.prompts import BY_DATA_TYPE, GENERIC, for_data_type
+from open_mem.classify import _EXTENSION_MAP, _MIME_MAP, classify
+from open_mem.prompts import BY_DATA_TYPE, GENERIC, for_data_type
 
 # The families that must never share the document prompt, and why. Each earns
 # its own because a reader asks something different of it -- not because it is

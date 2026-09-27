@@ -20,11 +20,11 @@ from __future__ import annotations
 
 import pytest
 
-from memdog.contracts import Pending, WriteItem, WriteOptions, WriteRequest
-from memdog.fetching import FetchError, FetchWorker
-from memdog.ids import new_id
-from memdog.urlcontext import Read, UrlNotRead
-from memdog.write import write_items
+from open_mem.contracts import Pending, WriteItem, WriteOptions, WriteRequest
+from open_mem.fetching import FetchError, FetchWorker
+from open_mem.ids import new_id
+from open_mem.urlcontext import Read, UrlNotRead
+from open_mem.write import write_items
 
 pytestmark = pytest.mark.asyncio
 
@@ -106,7 +106,7 @@ async def test_a_context_type_reads_with_the_model_and_never_fetches(
     async def refuse(*args, **kwargs):  # noqa: ANN002, ANN003
         raise AssertionError("an HTTP GET was made where the model should have read")
 
-    monkeypatch.setattr("memdog.fetching.fetch_url", refuse)
+    monkeypatch.setattr("open_mem.fetching.fetch_url", refuse)
     worker = FetchWorker(pool, blobs, settings)
     reader = Reader()
     worker._url_reader = reader
@@ -121,7 +121,7 @@ async def test_an_ordinary_type_never_asks_the_model(
 ):
     """Unchanged by default. A model call behind every URL in the project is
     exactly the cost this column exists to keep opt-in."""
-    from memdog.fetching import Fetched
+    from open_mem.fetching import Fetched
 
     actor = await principal_for(tenant.api_key)
     name = await _type(pool, tenant, name="inbox", url_reader="fetch")
@@ -132,7 +132,7 @@ async def test_an_ordinary_type_never_asks_the_model(
         return Fetched(payload=b"<html>real bytes</html>",
                        mime_type="text/html", final_url=url, redirects=0)
 
-    monkeypatch.setattr("memdog.fetching.fetch_url", ok)
+    monkeypatch.setattr("open_mem.fetching.fetch_url", ok)
     worker = FetchWorker(pool, blobs, settings)
     worker._url_reader = NeverReads()
     await worker.fetch(data_id)
@@ -145,7 +145,7 @@ async def test_a_refusal_falls_through_to_an_ordinary_get(
 ):
     """The backup is the reason inverting the order is safe: a model that will
     not read the page costs a slower path, not an empty record."""
-    from memdog.fetching import Fetched
+    from open_mem.fetching import Fetched
 
     actor = await principal_for(tenant.api_key)
     name = await _type(pool, tenant, name="research", url_reader="context")
@@ -156,7 +156,7 @@ async def test_a_refusal_falls_through_to_an_ordinary_get(
         return Fetched(payload=b"fetched anyway", mime_type="text/plain",
                        final_url=url, redirects=0)
 
-    monkeypatch.setattr("memdog.fetching.fetch_url", ok)
+    monkeypatch.setattr("open_mem.fetching.fetch_url", ok)
     worker = FetchWorker(pool, blobs, settings)
     worker._url_reader = Reader(account=None)
     await worker.fetch(data_id)
@@ -177,7 +177,7 @@ async def test_the_model_is_not_asked_twice(
     async def refuse(*args, **kwargs):  # noqa: ANN002, ANN003
         raise FetchError("403 from the site")
 
-    monkeypatch.setattr("memdog.fetching.fetch_url", refuse)
+    monkeypatch.setattr("open_mem.fetching.fetch_url", refuse)
     worker = FetchWorker(pool, blobs, settings)
     reader = Reader(account=None)
     worker._url_reader = reader
@@ -198,7 +198,7 @@ async def test_one_memory_asking_is_enough(
     data_id = await _add_page(pool, queue, blobs, settings, actor, tenant,
                               type_name=plain)
 
-    from memdog.memories import add_member, upsert_memory
+    from open_mem.memories import add_member, upsert_memory
 
     async with pool.acquire() as conn, conn.transaction():
         other = await upsert_memory(
@@ -209,7 +209,7 @@ async def test_one_memory_asking_is_enough(
     async def refuse(*args, **kwargs):  # noqa: ANN002, ANN003
         raise AssertionError("a GET was made though one memory asked for the model")
 
-    monkeypatch.setattr("memdog.fetching.fetch_url", refuse)
+    monkeypatch.setattr("open_mem.fetching.fetch_url", refuse)
     worker = FetchWorker(pool, blobs, settings)
     worker._url_reader = Reader()
     await worker.fetch(data_id)
@@ -229,7 +229,7 @@ async def test_the_header_never_claims_bytes_were_unavailable(
     data_id = await _add_page(pool, queue, blobs, settings, actor, tenant,
                               type_name=name)
 
-    monkeypatch.setattr("memdog.fetching.fetch_url", NeverReads().read)
+    monkeypatch.setattr("open_mem.fetching.fetch_url", NeverReads().read)
     worker = FetchWorker(pool, blobs, settings)
     worker._url_reader = Reader()
     await worker.fetch(data_id)
@@ -251,7 +251,7 @@ async def test_the_fallback_header_still_says_the_bytes_were_unavailable(
     async def refuse(*args, **kwargs):  # noqa: ANN002, ANN003
         raise FetchError("403 from the site")
 
-    monkeypatch.setattr("memdog.fetching.fetch_url", refuse)
+    monkeypatch.setattr("open_mem.fetching.fetch_url", refuse)
     worker = FetchWorker(pool, blobs, settings)
     worker._url_reader = Reader()
     await worker.fetch(data_id)
@@ -317,7 +317,7 @@ async def test_a_file_the_source_named_is_downloaded_not_read(
     keep a summary of it — and the summary cannot be re-parsed, re-chunked, or
     quoted from. The reference says which it is; the extension would be a guess.
     """
-    from memdog.fetching import Fetched
+    from open_mem.fetching import Fetched
 
     actor = await principal_for(tenant.api_key)
     name = await _type(pool, tenant, name="research", url_reader="context")
@@ -335,7 +335,7 @@ async def test_a_file_the_source_named_is_downloaded_not_read(
         return Fetched(payload=b"%PDF-1.4 the actual paper",
                        mime_type="application/pdf", final_url=url, redirects=0)
 
-    monkeypatch.setattr("memdog.fetching.fetch_url", ok)
+    monkeypatch.setattr("open_mem.fetching.fetch_url", ok)
     worker = FetchWorker(pool, blobs, settings)
     worker._url_reader = NeverReads()
     await worker.fetch(data_id)
@@ -354,8 +354,8 @@ async def test_a_crawler_that_never_chose_lets_the_memory_decide(
     entirely at `stored`, and the rule that did it is the one protecting a
     stated "no" from being overridden. The crawler had not stated anything.
     """
-    from memdog.contracts import Inline
-    from memdog.crawlers import CrawlerConfig
+    from open_mem.contracts import Inline
+    from open_mem.crawlers import CrawlerConfig
 
     # Unset, not false: the distinction this test exists for.
     assert CrawlerConfig(name="c", strategy="http").enrich is None

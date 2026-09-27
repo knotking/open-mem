@@ -5,7 +5,7 @@
  *
  * - `Authorization` carries a Google identity token for Cloud Run IAM, because
  *   the API sits behind it.
- * - `X-API-Key` carries the mem-dog credential. When a person is signed in this
+ * - `X-API-Key` carries the open-mem credential. When a person is signed in this
  *   is *their* identity token, so the API attributes the action to them; only
  *   an unauthenticated deployment falls back to the service key.
  *
@@ -21,8 +21,8 @@ export class SessionExpired extends Error {
   }
 }
 
-const API_URL = process.env.MEMDOG_API_URL ?? "";
-const SERVICE_KEY = process.env.MEMDOG_API_KEY ?? "";
+const API_URL = process.env.OPENMEM_API_URL ?? "";
+const SERVICE_KEY = process.env.OPENMEM_API_KEY ?? "";
 
 let cachedRunToken: { value: string; expires: number } | null = null;
 
@@ -81,7 +81,7 @@ export async function apiFetch(path: string, init: ApiInit = {}): Promise<Respon
 }
 
 export const config = {
-  projectId: process.env.MEMDOG_PROJECT_ID ?? "",
-  producerId: process.env.MEMDOG_PRODUCER_ID ?? "",
+  projectId: process.env.OPENMEM_PROJECT_ID ?? "",
+  producerId: process.env.OPENMEM_PRODUCER_ID ?? "",
   apiUrl: API_URL,
 };

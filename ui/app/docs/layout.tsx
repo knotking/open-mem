@@ -22,7 +22,7 @@ export default function DocsLayout({ children }: { children: React.ReactNode }) 
       <header className="docs-bar">
         <Link className="wordmark" href="/">
           <span className="dot" aria-hidden="true" />
-          mem-dog
+          open-mem
         </Link>
         <Link className="docs-bar-title" href="/docs">Documentation</Link>
         <div className="docs-bar-end">

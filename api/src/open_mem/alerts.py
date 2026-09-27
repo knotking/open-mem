@@ -541,7 +541,7 @@ def _public(row) -> dict:
 # One function, called by the async consumer and by the tick. A reconciler that
 # re-implements the thing it repairs drifts from it, and the drift shows up as a
 # repair that quietly does something other than the work it stands in for --
-# which is how `memdog-reconcile` once re-embedded with a stale model and
+# which is how `open-mem-reconcile` once re-embedded with a stale model and
 # concluded nothing was stale.
 
 
@@ -879,7 +879,7 @@ class AlertWorker:
     Nothing here is the record. The alert watermark in Postgres is, so a message
     lost between publish and handler -- or a window lost with the instance that
     was holding it, which Cloud Run's scale-to-zero makes routine -- costs
-    latency rather than an alert. `memdog-alert-tick` picks it up.
+    latency rather than an alert. `open-mem-alert-tick` picks it up.
     """
 
     def __init__(self, pool: asyncpg.Pool, *, debounce_seconds: float = 5.0) -> None:

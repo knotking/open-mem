@@ -12,7 +12,7 @@
 
 import { cookies } from "next/headers";
 
-const REFRESH_COOKIE = "memdog_rt";
+const REFRESH_COOKIE = "open_mem_rt";
 const IDENTITY = "https://identitytoolkit.googleapis.com/v1";
 const SECURE_TOKEN = "https://securetoken.googleapis.com/v1";
 

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from memdog.contracts import (
+from open_mem.contracts import (
     WriteOptions,
     Inline,
     RetrieveFilter,
@@ -19,11 +19,11 @@ from memdog.contracts import (
     WriteItem,
     WriteRequest,
 )
-from memdog.queue import InProcessQueue
-from memdog.retrieval import retrieve, staircase
-from memdog.events import dispatch_pending, emit_audited
-from memdog.workers import EmbedWorker, EnrichWorker, EventWorker, EventWorker
-from memdog.write import EMBED_TOPIC, write_items
+from open_mem.queue import InProcessQueue
+from open_mem.retrieval import retrieve, staircase
+from open_mem.events import dispatch_pending, emit_audited
+from open_mem.workers import EmbedWorker, EnrichWorker, EventWorker, EventWorker
+from open_mem.write import EMBED_TOPIC, write_items
 
 pytestmark = pytest.mark.asyncio
 
@@ -156,8 +156,8 @@ async def test_acl_exclusions_are_not_reported_and_cannot_be(
     """Reporting 'three records were hidden from you' discloses their
     existence, which is the thing the ACL is for. The predicate runs inside the
     query, so the count does not exist to be reported."""
-    from memdog.auth import DATA_READ, issue_key
-    from memdog.bootstrap import create_user
+    from open_mem.auth import DATA_READ, issue_key
+    from open_mem.bootstrap import create_user
 
     owner = await principal_for(tenant.api_key)
     await _write(

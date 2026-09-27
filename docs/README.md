@@ -1,4 +1,4 @@
-# mem-dog Documentation
+# open-mem Documentation
 
 A self-hosted AI memory platform: ingests from hundreds of sources, enriches with typed agents,
 builds retrieval indexes over a temporal knowledge graph, and serves teams under per-item privacy.

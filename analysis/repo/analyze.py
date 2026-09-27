@@ -1,6 +1,6 @@
 """Clone a repository at one commit, graph it, and write the result back.
 
-This runs as a Cloud Run Job and talks to mem-dog only through the public write
+This runs as a Cloud Run Job and talks to open-mem only through the public write
 API, exactly as any other producer does. It has no database credentials and no
 privileged path: everything it stores goes through admission, sniffing, parsing
 and the ACL like a write from anywhere else. That is the property worth
@@ -41,9 +41,9 @@ import httpx
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 log = logging.getLogger("repo-analysis")
 
-API_URL = os.environ.get("MEMDOG_API_URL", "").rstrip("/")
-API_KEY = os.environ.get("MEMDOG_API_KEY", "")
-PRODUCER_ID = os.environ.get("MEMDOG_PRODUCER_ID", "")
+API_URL = os.environ.get("OPENMEM_API_URL", "").rstrip("/")
+API_KEY = os.environ.get("OPENMEM_API_KEY", "")
+PRODUCER_ID = os.environ.get("OPENMEM_PRODUCER_ID", "")
 
 CLONE_ROOT = os.environ.get("CLONE_ROOT", "/work/clones")
 GRAPHIFY_VERSION = os.environ.get("GRAPHIFY_VERSION", "unknown")
@@ -506,7 +506,7 @@ class Api:
     def __init__(self, base: str, key: str, producer_id: str) -> None:
         if not base or not key or not producer_id:
             raise AnalysisFailed(
-                "MEMDOG_API_URL, MEMDOG_API_KEY and MEMDOG_PRODUCER_ID are all required"
+                "OPENMEM_API_URL, OPENMEM_API_KEY and OPENMEM_PRODUCER_ID are all required"
             )
         self._base, self._producer = base, producer_id
         self._client = httpx.Client(

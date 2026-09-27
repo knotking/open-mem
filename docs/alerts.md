@@ -88,7 +88,7 @@ document inside a window are one candidate.
 
 **The queue is not the record.** Cloud Run scales to zero, so a window in flight
 dies with its instance — the watermark in Postgres is what has actually been
-evaluated, and `memdog-alert-tick` re-derives the rest every minute. A lost
+evaluated, and `open-mem-alert-tick` re-derives the rest every minute. A lost
 message costs latency, never an alert.
 
 Two rules follow, both borrowed from crawlers:
@@ -152,7 +152,7 @@ POST /api/v1/event-subscriptions   { "project_id": "…", "url": "https://…" }
   private one today, and this service reaches Cloud SQL over the VPC.
 - **Redirects are not followed.** A 3xx is a failed delivery.
 - **Signed** with HMAC-SHA256 over `{timestamp}.{raw body}`, the same scheme
-  memdog asks providers to use inbound, so a subscriber verifies one way.
+  open-mem asks providers to use inbound, so a subscriber verifies one way.
 - **The signing secret is shown once.** It can be rotated, never read back, and
   the previous secret keeps verifying for an overlap so a rotation is not an
   outage for deliveries in flight.

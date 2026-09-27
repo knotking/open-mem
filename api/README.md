@@ -19,8 +19,8 @@ That sentence is `tests/test_spine.py::test_write_then_retrieve_cites_the_item`.
 docker compose up -d                      # Postgres 16 + pgvector on :54329
 uv venv --python 3.12 .venv && uv pip install -e ".[dev]"
 .venv/bin/python -m pytest                # 24 tests, real database, no mocks
-.venv/bin/python -m memdog bootstrap      # prints an org, project, producer and key
-.venv/bin/uvicorn memdog.app:app --port 8200
+.venv/bin/python -m open_mem bootstrap      # prints an org, project, producer and key
+.venv/bin/uvicorn open_mem.app:app --port 8200
 ```
 
 Three endpoints: `POST /api/v1/write`, `GET /api/v1/data/{id}`, `POST /api/v1/retrieve`.

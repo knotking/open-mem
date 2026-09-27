@@ -26,7 +26,7 @@ pipeline problem. The third is not a problem at all — it is the system working
 The fourth is a conversation, not a change.
 
 A ranked list cannot tell these apart, which is why the standard debugging
-procedure is a person opening a database console. mem-dog is largely an argument
+procedure is a person opening a database console. open-mem is largely an argument
 that this information belongs in the response.
 
 ---
@@ -230,7 +230,7 @@ whether you can tell what happened when it doesn't.
 
 | | |
 |---|---|
-| [Building mem-dog: Notes on What AI Memory Actually Requires](../presentation/blog.md) | The long read — ingestion pipelines, silent failures, vector spaces that don't line up, and what we'd tell someone starting over |
+| [Building open-mem: Notes on What AI Memory Actually Requires](../presentation/blog.md) | The long read — ingestion pipelines, silent failures, vector spaces that don't line up, and what we'd tell someone starting over |
 | [`docs/usage.md`](../usage.md) | Six scenarios against a running system — write and ask, pull from an app, receive a webhook, build the graph, backfill a cold crawl, erase with proof |
 | [`docs/graph.md`](../graph.md) | Why the graph is not a graph database, what it costs, and what was true when |
 | [`docs/operations/deletion.md`](../operations/deletion.md) | Cleanup versus erasure, the cascade, legal hold, and verifying rather than claiming |

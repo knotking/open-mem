@@ -15,11 +15,11 @@ from __future__ import annotations
 
 import pytest
 
-from memdog import graph_templates, predicates as predicates_mod
-from memdog.auth import ApiKeyVerifier
-from memdog.entities import resolve_mentions
-from memdog.graph import PostgresGraph, record_edges
-from memdog.ids import new_id
+from open_mem import graph_templates, predicates as predicates_mod
+from open_mem.auth import ApiKeyVerifier
+from open_mem.entities import resolve_mentions
+from open_mem.graph import PostgresGraph, record_edges
+from open_mem.ids import new_id
 
 pytestmark = pytest.mark.asyncio
 
@@ -104,7 +104,7 @@ def test_no_template_means_the_whole_vocabulary():
 def test_a_template_narrows_the_offered_predicates():
     """Most of what a template *does*: the model cannot answer with a predicate
     that was never in the enum."""
-    from memdog.extraction import envelope_schema
+    from open_mem.extraction import envelope_schema
 
     offered = graph_templates.predicates_for("scripture")
     assert "works_for" not in offered and "teaches" in offered
@@ -271,7 +271,7 @@ async def test_a_named_anchor_replaces_the_one_parsed_from_the_question(pool, te
     for "what did Krishna teach" and not for a question that never names its
     subject. Naming the anchor is the difference between hoping the graph arm
     keys off the right thing and saying where to start."""
-    from memdog.retrieval import graph_seeds, seeds_for_ids
+    from open_mem.retrieval import graph_seeds, seeds_for_ids
 
     ids, _ = await _ingest(
         pool, tenant, "anchor-1",
@@ -299,8 +299,8 @@ async def test_a_named_anchor_replaces_the_one_parsed_from_the_question(pool, te
 async def test_an_entity_you_cannot_see_is_not_a_usable_anchor(pool, tenant):
     """An id is far easier to enumerate than a name, so passing one must not
     confirm the entity exists to somebody who can see no record naming it."""
-    from memdog.bootstrap import create_user
-    from memdog.retrieval import seeds_for_ids
+    from open_mem.bootstrap import create_user
+    from open_mem.retrieval import seeds_for_ids
 
     other = await create_user(pool, f"outsider-{new_id('x')}@example.com")
     data_id = await _item(pool, tenant, f"private-{new_id('x')}", template="scripture")
@@ -325,7 +325,7 @@ async def test_an_entity_you_cannot_see_is_not_a_usable_anchor(pool, tenant):
 async def test_an_unresolvable_anchor_narrows_rather_than_fails(pool, tenant):
     """The caller is a scope picker sending what it last loaded. One stale id
     should narrow the answer, not turn the question into an error."""
-    from memdog.retrieval import seeds_for_ids
+    from open_mem.retrieval import seeds_for_ids
 
     seeds = await seeds_for_ids(
         pool, await _principal(pool, tenant), project_id=tenant.project_id,

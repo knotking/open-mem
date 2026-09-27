@@ -9,12 +9,12 @@ from __future__ import annotations
 
 import pytest
 
-from memdog.contracts import Inline, WriteItem, WriteRequest, WriteOptions
-from memdog.queue import InProcessQueue
-from memdog.reconcile import reconcile
-from memdog.retrieval import get_item
-from memdog.workers import EmbedWorker, EventWorker, EnrichWorker, EventWorker
-from memdog.write import EMBED_TOPIC, write_items
+from open_mem.contracts import Inline, WriteItem, WriteRequest, WriteOptions
+from open_mem.queue import InProcessQueue
+from open_mem.reconcile import reconcile
+from open_mem.retrieval import get_item
+from open_mem.workers import EmbedWorker, EventWorker, EnrichWorker, EventWorker
+from open_mem.write import EMBED_TOPIC, write_items
 
 pytestmark = pytest.mark.asyncio
 
@@ -127,7 +127,7 @@ async def test_a_pending_item_is_never_swept(
 ):
     """An item awaiting a fetch is not behind -- it is waiting for a worker this
     slice does not have. Re-enqueueing it forever would be a busy loop."""
-    from memdog.contracts import Pending, WriteOptions
+    from open_mem.contracts import Pending, WriteOptions
 
     actor = await principal_for(tenant.api_key)
     queue = InProcessQueue()
@@ -161,8 +161,8 @@ async def test_it_recovers_bytes_that_were_never_parsed(
     """
     import base64
 
-    from memdog.contracts import Inline, WriteOptions
-    from memdog.workers import EnrichWorker, ParseWorker
+    from open_mem.contracts import Inline, WriteOptions
+    from open_mem.workers import EnrichWorker, ParseWorker
 
     actor = await principal_for(tenant.api_key)
     lost = InProcessQueue()          # nothing consumes: the parse job is dropped
@@ -213,8 +213,8 @@ async def test_an_item_already_examined_is_not_swept_again(
     declined'. Without it the sweep would retry an unsupported file forever."""
     import base64
 
-    from memdog.contracts import Inline, WriteOptions
-    from memdog.workers import EventWorker, ParseWorker
+    from open_mem.contracts import Inline, WriteOptions
+    from open_mem.workers import EventWorker, ParseWorker
 
     actor = await principal_for(tenant.api_key)
     queue = InProcessQueue()
@@ -252,9 +252,9 @@ async def test_an_artifact_produced_by_a_fallback_is_enriched_again(
     makes it invisible to every other staleness check, so without this tier an
     item enriched during a provider outage keeps its worse summary forever.
     """
-    from memdog.contracts import Inline, WriteItem, WriteOptions, WriteRequest
-    from memdog.workers import EnrichWorker, EventWorker
-    from memdog.write import write_items
+    from open_mem.contracts import Inline, WriteItem, WriteOptions, WriteRequest
+    from open_mem.workers import EnrichWorker, EventWorker
+    from open_mem.write import write_items
 
     actor = await principal_for(tenant.api_key)
     queue = InProcessQueue()
@@ -296,9 +296,9 @@ async def test_a_clean_artifact_is_not_enriched_again(
 ):
     """The tier must not become a permanent re-enrichment loop over the whole
     corpus -- that would be an expensive way to change nothing."""
-    from memdog.contracts import Inline, WriteItem, WriteOptions, WriteRequest
-    from memdog.workers import EnrichWorker, EventWorker
-    from memdog.write import write_items
+    from open_mem.contracts import Inline, WriteItem, WriteOptions, WriteRequest
+    from open_mem.workers import EnrichWorker, EventWorker
+    from open_mem.write import write_items
 
     actor = await principal_for(tenant.api_key)
     queue = InProcessQueue()
@@ -331,9 +331,9 @@ async def test_a_failure_is_classified_by_type_not_by_its_message(pool):
     whether its failure was retried or recorded. It presented as a test that
     failed once and passed on every re-run.
     """
-    from memdog.multimodal import QuotaExhausted
-    from memdog.quota import BudgetExhausted
-    from memdog.workers import _is_capacity
+    from open_mem.multimodal import QuotaExhausted
+    from open_mem.quota import BudgetExhausted
+    from open_mem.workers import _is_capacity
 
     # Genuinely "come back later".
     assert _is_capacity(QuotaExhausted("out of quota"))
@@ -351,7 +351,7 @@ async def test_a_failure_is_classified_by_type_not_by_its_message(pool):
 async def test_an_http_429_is_capacity_and_a_400_is_not(pool):
     import httpx
 
-    from memdog.workers import _is_capacity
+    from open_mem.workers import _is_capacity
 
     def failure(status: int) -> httpx.HTTPStatusError:
         request = httpx.Request("GET", "https://example.test")

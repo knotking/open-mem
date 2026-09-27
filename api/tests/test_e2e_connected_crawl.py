@@ -30,13 +30,13 @@ import os
 import httpx
 import pytest
 
-from memdog import connections
-from memdog.contracts import RetrieveFilter, RetrieveRequest
-from memdog.crawlers import CrawlerConfig
-from memdog.crawling import CrawlWorker, create_crawler, set_enabled, start_run
-from memdog.crypto import Envelope
-from memdog.fetching import FetchWorker
-from memdog.retrieval import retrieve
+from open_mem import connections
+from open_mem.contracts import RetrieveFilter, RetrieveRequest
+from open_mem.crawlers import CrawlerConfig
+from open_mem.crawling import CrawlWorker, create_crawler, set_enabled, start_run
+from open_mem.crypto import Envelope
+from open_mem.fetching import FetchWorker
+from open_mem.retrieval import retrieve
 
 pytestmark = pytest.mark.asyncio
 
@@ -115,9 +115,9 @@ def drive(monkeypatch) -> Drive:
     # The download host is not caller-controlled, which is deliberate and
     # tested elsewhere. Here it only has to reach the fake, so the path is
     # preserved and the host is the one the transport answers on.
-    monkeypatch.setattr("memdog.fetching._address_is_private", lambda host: False)
+    monkeypatch.setattr("open_mem.fetching._address_is_private", lambda host: False)
 
-    from memdog import grants
+    from open_mem import grants
     grants._cache.clear()
     yield handler
     grants._cache.clear()

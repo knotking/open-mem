@@ -1,7 +1,7 @@
 """Long-running state machine instances, as a system of record.
 
-The engine lives outside memdog. It calls in to record input and is told when
-state changes; memdog holds the state, the history and the deadlines and never
+The engine lives outside open_mem. It calls in to record input and is told when
+state changes; open-mem holds the state, the history and the deadlines and never
 executes anything. Every decision here follows from that split.
 
 **A directed state graph that may contain cycles**, not a DAG — the A in DAG is

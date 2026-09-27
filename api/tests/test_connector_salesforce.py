@@ -20,8 +20,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from memdog import connectors                                    # noqa: E402
-from memdog.crawlers import (Auth, CrawlerConfig, discover,      # noqa: E402
+from open_mem import connectors                                    # noqa: E402
+from open_mem.crawlers import (Auth, CrawlerConfig, discover,      # noqa: E402
                              next_watermark)
 from tools.fake_salesforce import serve                          # noqa: E402
 
@@ -36,8 +36,8 @@ def _allow_loopback(monkeypatch):
     a caller-supplied URL reaching inside the deployment, and it is tested on
     its own -- a simulator is not worth weakening it for.
     """
-    import memdog.crawlers as crawlers_mod
-    import memdog.fetching as fetching
+    import open_mem.crawlers as crawlers_mod
+    import open_mem.fetching as fetching
 
     real = fetching.validate_url
     monkeypatch.setattr(
@@ -169,7 +169,7 @@ async def test_a_next_url_pointing_off_origin_is_refused():
     source names -- so the resolve refuses, and the run fails loudly rather than
     paging somewhere else quietly.
     """
-    from memdog.crawlers import CrawlerError, _next_url
+    from open_mem.crawlers import CrawlerError, _next_url
 
     here = "https://acme.my.salesforce.com/services/data/v61.0/query"
 

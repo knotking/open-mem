@@ -10,9 +10,9 @@ Every assertion below is one clause of that sentence.
 from __future__ import annotations
 
 import pytest
-from memdog.ids import new_id
+from open_mem.ids import new_id
 
-from memdog.contracts import (
+from open_mem.contracts import (
     WriteOptions,
     Inline,
     ItemAccess,
@@ -22,9 +22,9 @@ from memdog.contracts import (
     WriteItem,
     WriteRequest,
 )
-from memdog.retrieval import NotFound, get_item, retrieve
-from memdog.events import dispatch_pending, emit_audited
-from memdog.write import EMBED_TOPIC, AdmissionError, write_items
+from open_mem.retrieval import NotFound, get_item, retrieve
+from open_mem.events import dispatch_pending, emit_audited
+from open_mem.write import EMBED_TOPIC, AdmissionError, write_items
 
 
 async def _request_enrichment(pool, actor, tenant, data_id):
@@ -108,8 +108,8 @@ async def test_state_is_a_staircase(
     observable because embedding and summarising are separate steps of one
     enrichment event: an item is searchable whether or not the summary lands.
     """
-    from memdog.queue import InProcessQueue
-    from memdog.workers import EmbedWorker, EnrichWorker, EventWorker
+    from open_mem.queue import InProcessQueue
+    from open_mem.workers import EmbedWorker, EnrichWorker, EventWorker
 
     actor = await principal_for(tenant.api_key)
     queue = InProcessQueue()
@@ -295,8 +295,8 @@ async def test_a_revision_reads_in_full_only_when_it_is_asked_for(
     full text is a second request, and it carries its own access record because
     unlike the listing it discloses content.
     """
-    from memdog.retrieval import get_versions, one_version
-    from memdog.workers import record_version
+    from open_mem.retrieval import get_versions, one_version
+    from open_mem.workers import record_version
 
     owner = await principal_for(tenant.api_key)
     long_text = "x" * 900
@@ -324,8 +324,8 @@ async def test_a_second_tenant_cannot_read_a_revision(
 ):
     """404, not 403 — a revision of a record you cannot read must not be
     confirmable."""
-    from memdog.retrieval import get_versions, one_version
-    from memdog.workers import record_version
+    from open_mem.retrieval import get_versions, one_version
+    from open_mem.workers import record_version
 
     owner = await principal_for(tenant.api_key)
     stranger = await principal_for(other_tenant.api_key)

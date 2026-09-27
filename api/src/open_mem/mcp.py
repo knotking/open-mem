@@ -34,7 +34,7 @@ written against the requirement still resolves.
 
 Every schema below names its required arguments, and every description says what
 the tool is *for* rather than what it wraps. An assistant choosing between
-`mem_dog_search` and `mem_dog_chat` needs to know that the first returns records
+`open_mem_search` and `open_mem_chat` needs to know that the first returns records
 and the second returns prose with citations -- calling that "search the corpus"
 twice would make the choice arbitrary.
 """
@@ -55,7 +55,7 @@ log = logging.getLogger(__name__)
 # the specification asks for.
 PROTOCOL_VERSION = "2025-03-26"
 
-SERVER_INFO = {"name": "mem-dog", "version": "0.1.0"}
+SERVER_INFO = {"name": "open-mem", "version": "0.1.0"}
 
 # JSON-RPC error codes. The three the specification uses, and no invented ones:
 # a client cannot act on a code it has never heard of.
@@ -93,11 +93,11 @@ def _failed(message: str) -> dict:
 
 TOOLS: list[dict] = [
     {
-        "name": "mem_dog_search",
+        "name": "open_mem_search",
         "description": (
             "Search a project's records and return the passages that matched, "
             "each with the record it came from and why it matched. Returns "
-            "evidence, not an answer -- use mem_dog_chat for prose. Add 'graph' "
+            "evidence, not an answer -- use open_mem_chat for prose. Add 'graph' "
             "to match to also reach records connected to an entity the query "
             "names, which will not contain the query's words."
         ),
@@ -117,7 +117,7 @@ TOOLS: list[dict] = [
         },
     },
     {
-        "name": "mem_dog_chat",
+        "name": "open_mem_chat",
         "description": (
             "Ask a question of a project's records and get a written answer "
             "with citations. Every factual sentence carries the passage it came "
@@ -138,7 +138,7 @@ TOOLS: list[dict] = [
         },
     },
     {
-        "name": "mem_dog_add",
+        "name": "open_mem_add",
         "description": (
             "Write a record into a project. Recording is immediate; enrichment "
             "-- summarising, embedding, entity extraction -- is opt-in through "
@@ -161,7 +161,7 @@ TOOLS: list[dict] = [
         },
     },
     {
-        "name": "mem_dog_get",
+        "name": "open_mem_get",
         "description": "Fetch one record by its id, with its state and provenance.",
         "inputSchema": {
             "type": "object",
@@ -170,7 +170,7 @@ TOOLS: list[dict] = [
         },
     },
     {
-        "name": "mem_dog_list",
+        "name": "open_mem_list",
         "description": (
             "Browse a project's records, newest first. Filter by state to find "
             "what is stored but not yet searchable."
@@ -187,7 +187,7 @@ TOOLS: list[dict] = [
         },
     },
     {
-        "name": "mem_dog_delete",
+        "name": "open_mem_delete",
         "description": (
             "Delete one record and everything derived from it -- chunks, "
             "vectors, artifacts. The deletion is audited and the audit record "
@@ -200,7 +200,7 @@ TOOLS: list[dict] = [
         },
     },
     {
-        "name": "mem_dog_entities",
+        "name": "open_mem_entities",
         "description": (
             "The people, organizations and things a project's records mention, "
             "with how many records evidence each. An entity nobody can see a "
@@ -219,7 +219,7 @@ TOOLS: list[dict] = [
         },
     },
     {
-        "name": "mem_dog_memories",
+        "name": "open_mem_memories",
         "description": (
             "The project's memories -- lifecycle containers that group records "
             "and decide when they expire -- with live member counts."
@@ -255,7 +255,7 @@ async def call_tool(state, principal: Principal, name: str, arguments: dict) -> 
 
     pool = state.pool
 
-    if name == "mem_dog_search":
+    if name == "open_mem_search":
         found = await retrieve(
             pool, state.embedder, principal,
             RetrieveRequest(
@@ -269,7 +269,7 @@ async def call_tool(state, principal: Principal, name: str, arguments: dict) -> 
         )
         return _text(found.model_dump(mode="json"))
 
-    if name == "mem_dog_chat":
+    if name == "open_mem_chat":
         answered = await ask(
             pool, state.embedder,
             await state.engines.answerer_for(pool, org_id=principal.org_id),
@@ -284,7 +284,7 @@ async def call_tool(state, principal: Principal, name: str, arguments: dict) -> 
         )
         return _text(answered.model_dump(mode="json"))
 
-    if name == "mem_dog_add":
+    if name == "open_mem_add":
         written = await write_items(
             pool, state.queue, state.blobs, state.settings, principal,
             WriteRequest(
@@ -301,17 +301,17 @@ async def call_tool(state, principal: Principal, name: str, arguments: dict) -> 
         )
         return _text(written.model_dump(mode="json"))
 
-    if name == "mem_dog_get":
+    if name == "open_mem_get":
         return _text(dict(await get_item(pool, principal, arguments["data_id"])))
 
-    if name == "mem_dog_list":
+    if name == "open_mem_list":
         return _text(await list_items(
             pool, principal, arguments["project_id"],
             limit=int(arguments.get("limit") or 25),
             state=arguments.get("state"),
         ))
 
-    if name == "mem_dog_delete":
+    if name == "open_mem_delete":
         principal.require(DATA_WRITE)
         result = await request_deletion(
             pool, state.queue, principal,
@@ -324,13 +324,13 @@ async def call_tool(state, principal: Principal, name: str, arguments: dict) -> 
             "retained": [{"data_id": d, "reason": r} for d, r in result.retained],
         })
 
-    if name == "mem_dog_entities":
+    if name == "open_mem_entities":
         return _text(await entities_mod.list_entities(
             pool, principal, arguments["project_id"],
             kind=arguments.get("type"), query=arguments.get("query"),
         ))
 
-    if name == "mem_dog_memories":
+    if name == "open_mem_memories":
         return _text(await list_memories(pool, principal, arguments["project_id"]))
 
     return _failed(f"no such tool: {name}")

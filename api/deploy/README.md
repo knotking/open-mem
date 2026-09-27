@@ -4,14 +4,14 @@ Target: **`memdog-dev-506718`**, `us-central1`. Cloud Run in front of a
 private-IP Cloud SQL Postgres 16.
 
 ```
-  Cloud Run (memdog-api)                     Cloud SQL (memdog-spine)
+  Cloud Run (open-mem-api)                     Cloud SQL (open-mem-spine)
   ┌────────────────────┐   direct VPC egress ┌──────────────────────┐
   │ uvicorn :8080      │────────────────────▶│ POSTGRES_16          │
   │ in-process queue   │   private ranges    │ private IP only      │
   │ embed worker       │                     │ pgvector + tsvector  │
   │ filesystem blobs   │                     └──────────────────────┘
   └────────────────────┘
-        ▲ secrets: memdog-db-password, memdog-master-key
+        ▲ secrets: open-mem-db-password, open-mem-master-key
 ```
 
 ```bash
@@ -62,7 +62,7 @@ nothing while idle. Backups are off (`--no-backup`); this is a dev target.
 Tear the expensive part down with:
 
 ```bash
-gcloud sql instances delete memdog-spine --project memdog-dev-506718
+gcloud sql instances delete open-mem-spine --project memdog-dev-506718
 ```
 
 ## Not production-shaped yet
@@ -81,7 +81,7 @@ behind the `Queue` seam is the Phase 4 answer.
 
 ## Issuing the first credential, without putting it in the log
 
-`python -m memdog bootstrap` prints the API key. That is right for a human at a
+`python -m open_mem bootstrap` prints the API key. That is right for a human at a
 terminal and **wrong for a Cloud Run Job**, whose stdout is Cloud Logging — a
 durable, widely-readable store. Same command, very different blast radius.
 
@@ -89,11 +89,11 @@ So the job runs `bootstrap-to-secret`, which writes the credential straight into
 Secret Manager and prints only the ids:
 
 ```bash
-gcloud run jobs execute memdog-bootstrap --region us-central1
-gcloud secrets versions access latest --secret memdog-demo-key
+gcloud run jobs execute open-mem-bootstrap --region us-central1
+gcloud secrets versions access latest --secret open-mem-demo-key
 ```
 
-`python -m memdog revoke-key <prefix>` revokes one, which is how the first key —
+`python -m open_mem revoke-key <prefix>` revokes one, which is how the first key —
 issued before this existed, and therefore logged — was retired.
 
 **Do not put a credential in a job's `--args` either.** That is config, it is
@@ -107,9 +107,9 @@ request cannot carry two credentials — hence `X-API-Key`, which reaches the sa
 verifier as the bearer path.
 
 ```bash
-URL=https://memdog-api-266276359448.us-central1.run.app
+URL=https://open-mem-api-266276359448.us-central1.run.app
 TOKEN=$(gcloud auth print-identity-token \
-  --impersonate-service-account=memdog-api@memdog-dev-506718.iam.gserviceaccount.com \
+  --impersonate-service-account=open-mem-api@memdog-dev-506718.iam.gserviceaccount.com \
   --audiences="$URL" --include-email)
 curl -H "Authorization: Bearer $TOKEN" -H "X-API-Key: $KEY" "$URL/api/v1/health"
 ```
@@ -129,10 +129,10 @@ So the **rows are the record of outstanding work**, and a scheduled sweep
 republishes what is missing:
 
 ```bash
-gcloud run jobs execute memdog-reconcile --region us-central1   # one sweep
+gcloud run jobs execute open-mem-reconcile --region us-central1   # one sweep
 ```
 
-`memdog-reconcile-tick` (Cloud Scheduler, every 10 minutes) drives it. Two
+`open-mem-reconcile-tick` (Cloud Scheduler, every 10 minutes) drives it. Two
 grants are needed and neither is obvious:
 
 - the invoking service account needs `roles/run.developer`

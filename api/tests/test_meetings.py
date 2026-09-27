@@ -11,10 +11,10 @@ import json
 
 import pytest
 
-from memdog import meetings
-from memdog.contracts import Inline, ItemAccess, WriteItem, WriteOptions, WriteRequest
-from memdog.parsers import parse
-from memdog.write import write_items
+from open_mem import meetings
+from open_mem.contracts import Inline, ItemAccess, WriteItem, WriteOptions, WriteRequest
+from open_mem.parsers import parse
+from open_mem.write import write_items
 
 pytestmark = pytest.mark.asyncio
 
@@ -60,7 +60,7 @@ async def test_a_transcript_with_no_attribution_is_still_worth_having():
 async def test_a_sentence_containing_a_colon_is_not_a_speaker():
     """The heuristic that turns half a sentence into a speaker reads as data
     corruption rather than as a guess."""
-    from memdog.parsers import _voice
+    from open_mem.parsers import _voice
 
     assert _voice("Dana: it shipped") == ("Dana", "it shipped")
     assert _voice("Priya Sharma: it shipped")[0] == "Priya Sharma"
@@ -92,7 +92,7 @@ async def test_a_meeting_is_restricted_to_its_attendees_not_to_the_org(
     """The failure that matters. A shared connection makes a Jira ticket
     org-visible, which is right; the same default on a performance conversation
     is a disclosure nothing downstream would flag."""
-    from memdog.retrieval import get_item
+    from open_mem.retrieval import get_item
 
     actor = await principal_for(tenant.api_key)
     access = await meetings.meeting_access(pool, tenant.org_id, ["a@example.com"])
@@ -134,7 +134,7 @@ async def test_narrowing_below_a_shared_connection_is_honoured(
     """The interaction the plan said to verify before building any of this: a
     connection is a ceiling, so a *narrower* request must be honoured while a
     wider one is refused. A meeting on a shared connection depends on it."""
-    from memdog.acl import acl_for_write
+    from open_mem.acl import acl_for_write
 
     narrowed = acl_for_write(
         connection_scope="shared", requested_level="restricted",
@@ -166,10 +166,10 @@ async def test_a_meeting_delivery_is_restricted_to_the_room(
     """
     import os
 
-    from memdog.crypto import Envelope
-    from memdog.ids import new_id
-    from memdog.retrieval import get_item
-    from memdog.webhooks import receive
+    from open_mem.crypto import Envelope
+    from open_mem.ids import new_id
+    from open_mem.retrieval import get_item
+    from open_mem.webhooks import receive
 
     envelope = Envelope(os.urandom(32))
     producer_id = new_id("whk")
@@ -224,9 +224,9 @@ async def test_a_delivery_with_no_attendees_path_is_untouched(
     project's whole ingestion."""
     import os
 
-    from memdog.crypto import Envelope
-    from memdog.ids import new_id
-    from memdog.webhooks import receive
+    from open_mem.crypto import Envelope
+    from open_mem.ids import new_id
+    from open_mem.webhooks import receive
 
     envelope = Envelope(os.urandom(32))
     producer_id = new_id("whk")
@@ -262,9 +262,9 @@ async def test_a_meeting_mapping_with_no_attendees_in_the_payload_is_private(
     """
     import os
 
-    from memdog.crypto import Envelope
-    from memdog.ids import new_id
-    from memdog.webhooks import receive
+    from open_mem.crypto import Envelope
+    from open_mem.ids import new_id
+    from open_mem.webhooks import receive
 
     envelope = Envelope(os.urandom(32))
     producer_id = new_id("whk")

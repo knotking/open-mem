@@ -1765,7 +1765,7 @@ export default function Landing({ authEnabled }: { authEnabled: boolean }) {
             open-in-new-tab affordances a wordmark is expected to have. */}
         <a className="wordmark" href="#top" aria-label="Back to the top">
           <span className="dot" aria-hidden="true" />
-          mem-dog
+          open-mem
         </a>
         {/* Docs only. The comparison moved down into the tab strip, where it
             sits beside the demo and the diagrams — it is one of the three

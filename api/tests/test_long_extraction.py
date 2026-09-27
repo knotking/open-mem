@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import pytest
 
-from memdog.extraction import (
+from open_mem.extraction import (
     Envelope, extract_long, merge_envelopes, split_windows,
 )
 
@@ -183,7 +183,7 @@ async def test_the_extraction_window_applies_even_without_a_declared_limit():
     40,000 produced twelve entities and six edges. The model was not running out
     of room; it was answering a different question.
     """
-    from memdog.extraction import EXTRACT_WINDOW
+    from open_mem.extraction import EXTRACT_WINDOW
 
     class _Unbounded(_Recording):
         def __init__(self):
@@ -219,11 +219,11 @@ def test_the_chain_reports_the_narrowest_window_of_its_steps():
     fails, and handing it a window its own context cannot hold turns a degraded
     answer into no answer.
     """
-    from memdog.extraction import (
+    from open_mem.extraction import (
         ChainedExtractor, GeminiExtractor, LocalHeuristicExtractor, OLLAMA_WINDOW,
         OllamaExtractor,
     )
-    from memdog.routing import Chain, Step
+    from open_mem.routing import Chain, Step
 
     gemini = GeminiExtractor("key", "gemini-3.7-flash")
     ollama = OllamaExtractor("llama", "http://localhost:11434")

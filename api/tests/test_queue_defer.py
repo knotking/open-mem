@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from memdog.queue import InProcessQueue, Message
+from open_mem.queue import InProcessQueue, Message
 
 pytestmark = pytest.mark.asyncio
 

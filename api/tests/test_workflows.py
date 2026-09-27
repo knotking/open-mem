@@ -11,8 +11,8 @@ import asyncio
 
 import pytest
 
-from memdog import workflows
-from memdog.workflows import Conflict, WorkflowError
+from open_mem import workflows
+from open_mem.workflows import Conflict, WorkflowError
 
 pytestmark = pytest.mark.asyncio
 
@@ -316,7 +316,7 @@ async def test_a_transition_is_announced_in_the_same_transaction(
 ):
     """"Transitioned but never announced" is the failure the outside engine
     cannot recover from, since it is waiting to be told."""
-    from memdog.events import list_events
+    from open_mem.events import list_events
 
     actor = await principal_for(tenant.api_key)
     definition = await _define(pool, actor, tenant)

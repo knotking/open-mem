@@ -17,14 +17,14 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from memdog import mcp
+from open_mem import mcp
 
 pytestmark = pytest.mark.asyncio
 
 
 @pytest.fixture
 async def client(pool, tenant):
-    from memdog.app import app
+    from open_mem.app import app
 
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(app=app)
@@ -62,7 +62,7 @@ async def test_initialize_announces_only_what_is_implemented(client, tenant):
     result = response.json()["result"]
 
     assert result["protocolVersion"] == mcp.PROTOCOL_VERSION
-    assert result["serverInfo"]["name"] == "mem-dog"
+    assert result["serverInfo"]["name"] == "open-mem"
     assert set(result["capabilities"]) == {"tools"}
 
 
@@ -71,8 +71,8 @@ async def test_the_eight_tools_are_listed_with_schemas(client, tenant):
     tools = listed["result"]["tools"]
 
     assert {t["name"] for t in tools} == {
-        "mem_dog_add", "mem_dog_search", "mem_dog_get", "mem_dog_list",
-        "mem_dog_delete", "mem_dog_entities", "mem_dog_memories", "mem_dog_chat",
+        "open_mem_add", "open_mem_search", "open_mem_get", "open_mem_list",
+        "open_mem_delete", "open_mem_entities", "open_mem_memories", "open_mem_chat",
     }
     for tool in tools:
         # A tool whose arguments are undescribed is a tool a model calls wrongly
@@ -111,7 +111,7 @@ async def test_a_client_demanding_sse_gets_the_same_object(client, tenant):
     )
     assert response.headers["content-type"].startswith("text/event-stream")
     assert response.text.startswith("event: message\ndata: ")
-    assert "mem_dog_search" in response.text
+    assert "open_mem_search" in response.text
 
 
 async def test_the_sse_path_from_the_requirement_resolves(client, tenant):
@@ -156,14 +156,14 @@ async def test_a_tool_refusal_is_readable_rather_than_a_transport_failure(
     """The call succeeded; the model asked for something it may not have. It
     needs to read that and choose again, which a JSON-RPC error would not let
     it do."""
-    result = await _tool(client, tenant.api_key, "mem_dog_get",
+    result = await _tool(client, tenant.api_key, "open_mem_get",
                          {"data_id": "dat_does_not_exist"})
     assert result["isError"] is True
     assert result["content"][0]["type"] == "text"
 
 
 async def test_a_missing_argument_says_which(client, tenant):
-    result = await _tool(client, tenant.api_key, "mem_dog_search",
+    result = await _tool(client, tenant.api_key, "open_mem_search",
                          {"project_id": "prj_x"})
     assert result["isError"] is True
     assert "query" in result["content"][0]["text"]
@@ -174,7 +174,7 @@ async def test_a_missing_argument_says_which(client, tenant):
 
 async def test_write_then_search_through_the_tools(client, tenant, pool):
     """The round trip that proves the tools reach the real pipeline."""
-    written = await _tool(client, tenant.api_key, "mem_dog_add", {
+    written = await _tool(client, tenant.api_key, "open_mem_add", {
         "producer_id": tenant.producer_id,
         "external_id": "mcp-round-trip",
         "text": "The kestrel returned to the same ledge every evening.",
@@ -185,10 +185,10 @@ async def test_write_then_search_through_the_tools(client, tenant, pool):
     assert payload["accepted"] == 1
 
     # Drain the queue the way the service does, then search for it.
-    from memdog.app import app
+    from open_mem.app import app
     await app.state.queue.drain(timeout=60)
 
-    found = _json.loads((await _tool(client, tenant.api_key, "mem_dog_search", {
+    found = _json.loads((await _tool(client, tenant.api_key, "open_mem_search", {
         "project_id": tenant.project_id, "query": "kestrel ledge evening",
     }))["content"][0]["text"])
     assert any("kestrel" in hit["text"] for hit in found["results"])
@@ -200,7 +200,7 @@ async def test_a_tool_cannot_reach_what_its_credential_cannot(
     """The property that makes FR-MCP-4 free rather than a second thing to get
     right: the tools call the same functions, so the ACL predicate inside those
     queries is the one that runs."""
-    from memdog.ids import new_id
+    from open_mem.ids import new_id
 
     hidden = new_id("data")
     await pool.execute(
@@ -214,12 +214,12 @@ async def test_a_tool_cannot_reach_what_its_credential_cannot(
         other_tenant.producer_id, other_tenant.user_id,
     )
 
-    result = await _tool(client, tenant.api_key, "mem_dog_get", {"data_id": hidden})
+    result = await _tool(client, tenant.api_key, "open_mem_get", {"data_id": hidden})
     assert result["isError"] is True
     # Word for word what an id that never existed gets. Distinguishing the two
     # would confirm the hidden record exists, which is precisely what its ACL is
     # for — and the id itself must not come back in the message either.
-    invented = await _tool(client, tenant.api_key, "mem_dog_get",
+    invented = await _tool(client, tenant.api_key, "open_mem_get",
                            {"data_id": "dat_invented"})
     assert result["content"][0]["text"] == invented["content"][0]["text"]
     assert hidden not in result["content"][0]["text"]
@@ -229,12 +229,12 @@ async def test_a_tool_cannot_reach_what_its_credential_cannot(
 async def test_listing_and_entities_are_scoped_to_the_caller(client, tenant, pool):
     import json as _json
 
-    listed = _json.loads((await _tool(client, tenant.api_key, "mem_dog_list", {
+    listed = _json.loads((await _tool(client, tenant.api_key, "open_mem_list", {
         "project_id": tenant.project_id,
     }))["content"][0]["text"])
     assert "items" in listed
 
-    entities = _json.loads((await _tool(client, tenant.api_key, "mem_dog_entities", {
+    entities = _json.loads((await _tool(client, tenant.api_key, "open_mem_entities", {
         "project_id": tenant.project_id,
     }))["content"][0]["text"])
     assert isinstance(entities, list)

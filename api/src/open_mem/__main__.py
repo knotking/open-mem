@@ -1,4 +1,4 @@
-"""`python -m memdog bootstrap` -- create a tenant and print a credential."""
+"""`python -m open_mem bootstrap` -- create a tenant and print a credential."""
 
 from __future__ import annotations
 
@@ -588,7 +588,7 @@ async def _seed(*, reset: bool, demo: bool) -> int:
     from .seed import SeedError, reset_demo, seed_demo
 
     if not demo:
-        print("usage: python -m memdog seed --demo [--reset]", file=sys.stderr)
+        print("usage: python -m open_mem seed --demo [--reset]", file=sys.stderr)
         return 2
 
     async with app.router.lifespan_context(app):
@@ -643,20 +643,20 @@ def main() -> int:
         "crawl-tick", "seed", "seed-demos", "alert-tick",
         "grant-key", "add-member",
     ):
-        print("usage: python -m memdog bootstrap [email] [personal|shared] "
+        print("usage: python -m open_mem bootstrap [email] [personal|shared] "
               "(default: no connection)",
               file=sys.stderr)
-        print("       python -m memdog smoke <url> <key> <producer_id> <project_id>",
+        print("       python -m open_mem smoke <url> <key> <producer_id> <project_id>",
               file=sys.stderr)
-        print("       python -m memdog revoke-key <prefix>", file=sys.stderr)
-        print("       python -m memdog reconcile [grace_seconds]", file=sys.stderr)
-        print("       python -m memdog crawl-tick [max_crawlers]", file=sys.stderr)
-        print("       python -m memdog alert-tick [max_alerts]", file=sys.stderr)
-        print("       python -m memdog seed --demo [--reset]", file=sys.stderr)
-        print("       python -m memdog seed-demos [org_id] [--only=key,key]"
+        print("       python -m open_mem revoke-key <prefix>", file=sys.stderr)
+        print("       python -m open_mem reconcile [grace_seconds]", file=sys.stderr)
+        print("       python -m open_mem crawl-tick [max_crawlers]", file=sys.stderr)
+        print("       python -m open_mem alert-tick [max_alerts]", file=sys.stderr)
+        print("       python -m open_mem seed --demo [--reset]", file=sys.stderr)
+        print("       python -m open_mem seed-demos [org_id] [--only=key,key]"
               "   # gallery corpora; prints the PUBLIC_DEMOS to set",
               file=sys.stderr)
-        print("       python -m memdog bootstrap-to-secret <email> <scope> "
+        print("       python -m open_mem bootstrap-to-secret <email> <scope> "
               "<project> <secret_name>   # for jobs: stdout is Cloud Logging",
               file=sys.stderr)
         return 2

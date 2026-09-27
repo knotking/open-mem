@@ -69,9 +69,9 @@ Three sub-problems, in increasing difficulty:
 
 1. **Users.** Usually resolvable by verified email. `users` has one; most
    providers expose one. The failure mode is a source account with no matching
-   mem-dog user — which must resolve to *nobody*, never to everybody.
+   open-mem user — which must resolve to *nobody*, never to everybody.
 2. **Groups.** `groups.managed_by = 'scim'` and `'idp_claim'` exist for this.
-   A source group becomes a mem-dog group with external provenance, and
+   A source group becomes a open-mem group with external provenance, and
    membership is synced rather than asserted. Two sources naming a group
    `engineering` must not collide into one.
 3. **Inherited and computed permissions.** A Drive file inherits from its folder;
@@ -92,7 +92,7 @@ Permissions change after the sync. The two directions are not symmetric:
 
 So the re-sync policy is not "eventually" — it needs a bound the deployment can
 state, and a query-time check on the *caller's* group membership (already
-resolved per query, so removal from a mem-dog group is instant). What is not
+resolved per query, so removal from a open-mem group is instant). What is not
 instant is removal at the source, and the honest answer is a documented sync
 interval rather than a claim of live enforcement.
 
@@ -140,7 +140,7 @@ The ones that matter are all about the permissive direction:
    through `retrieve`, not by inspecting a row.
 2. An unresolvable source identity resolves to **nobody**, never to `org`.
 3. A connector that cannot fetch permissions writes `private` and says so.
-4. Removing a user from a mem-dog group takes effect on the **next query**, with
+4. Removing a user from a open-mem group takes effect on the **next query**, with
    no re-index — the property `acl_principals()` already claims.
 5. Two providers with a group of the same name do not collide.
 6. A crawler cannot write `org` or `public` under the new rule, even if asked.

@@ -10,11 +10,11 @@ from __future__ import annotations
 
 import pytest
 
-from memdog.contracts import Inline, WriteItem, WriteRequest, WriteOptions
-from memdog.queue import InProcessQueue
-from memdog.retrieval import NotFound, get_versions
-from memdog.workers import EventWorker, ParseWorker
-from memdog.write import write_items
+from open_mem.contracts import Inline, WriteItem, WriteRequest, WriteOptions
+from open_mem.queue import InProcessQueue
+from open_mem.retrieval import NotFound, get_versions
+from open_mem.workers import EventWorker, ParseWorker
+from open_mem.write import write_items
 
 pytestmark = pytest.mark.asyncio
 
@@ -141,7 +141,7 @@ async def test_revisions_are_dense_and_ordered_under_concurrency(
     workers racing produce two revisions rather than one lost update."""
     import asyncio
 
-    from memdog.workers import record_version
+    from open_mem.workers import record_version
 
     actor = await principal_for(tenant.api_key)
     written = await _write(pool, queue, blobs, settings, actor, tenant.producer_id,

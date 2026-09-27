@@ -8,13 +8,13 @@ the thing worth looking at.
 
 ```bash
 npm install && npm run build
-MEMDOG_API_URL=http://localhost:8300 MEMDOG_API_KEY=... \
-MEMDOG_PROJECT_ID=prj_... MEMDOG_PRODUCER_ID=key_... npm start
+OPENMEM_API_URL=http://localhost:8300 OPENMEM_API_KEY=... \
+OPENMEM_PROJECT_ID=prj_... OPENMEM_PRODUCER_ID=key_... npm start
 
 ./deploy.sh [tag]      # Cloud Run
 ```
 
-Live: `https://memdog-sandbox-266276359448.us-central1.run.app`
+Live: `https://open-mem-sandbox-266276359448.us-central1.run.app`
 
 ## Diagrams are rendered ahead of time, not in the browser
 
@@ -36,7 +36,7 @@ neither is ever sent to the client:
 
 - **`Authorization`** — a Google identity token minted from the metadata server,
   because the API is behind Cloud Run IAM.
-- **`X-API-Key`** — the mem-dog credential, read from Secret Manager at runtime.
+- **`X-API-Key`** — the open-mem credential, read from Secret Manager at runtime.
 
 An API key in a browser is a key you have published, and the design says so
 plainly: *never in a browser, enforced rather than documented.* There are no

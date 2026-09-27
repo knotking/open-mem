@@ -9,13 +9,13 @@ from __future__ import annotations
 
 import pytest
 
-from memdog.acl import Acl, strictest
-from memdog.contracts import Inline, ItemAccess, WriteItem, WriteRequest, WriteOptions
-from memdog.extraction import ExtractionFailed, LocalHeuristicExtractor, build_prompt
-from memdog.queue import InProcessQueue, Message
-from memdog.retrieval import get_artifacts, stale_artifacts
-from memdog.workers import ENRICH_TOPIC, EnrichWorker, EventWorker
-from memdog.write import write_items
+from open_mem.acl import Acl, strictest
+from open_mem.contracts import Inline, ItemAccess, WriteItem, WriteRequest, WriteOptions
+from open_mem.extraction import ExtractionFailed, LocalHeuristicExtractor, build_prompt
+from open_mem.queue import InProcessQueue, Message
+from open_mem.retrieval import get_artifacts, stale_artifacts
+from open_mem.workers import ENRICH_TOPIC, EnrichWorker, EventWorker
+from open_mem.write import write_items
 
 pytestmark = pytest.mark.asyncio
 
@@ -73,8 +73,8 @@ async def test_a_derived_artifact_is_not_a_new_unencumbered_object(
     Sharing an item must not publish what was derived from it, and a private
     item's summary must not become visible because a model wrote it.
     """
-    from memdog.auth import DATA_READ, DATA_WRITE, issue_key
-    from memdog.bootstrap import create_user
+    from open_mem.auth import DATA_READ, DATA_WRITE, issue_key
+    from open_mem.bootstrap import create_user
 
     owner = await principal_for(tenant.api_key)
     written = await _write(
@@ -185,8 +185,8 @@ async def test_a_failed_extraction_leaves_the_item_searchable(
     pool, blobs, settings, embedder, tenant, principal_for
 ):
     """Enrichment failing must not cost the rung the item already reached."""
-    from memdog.workers import EmbedWorker
-    from memdog.write import EMBED_TOPIC
+    from open_mem.workers import EmbedWorker
+    from open_mem.write import EMBED_TOPIC
 
     class Broken:
         model_id = "broken-v1"

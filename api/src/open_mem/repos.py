@@ -127,7 +127,7 @@ async def resolve_commit(owner: str, repo: str, ref: str | None = None) -> dict:
         raise RepoError(f"not a valid git ref: {ref[:100]!r}")
 
     headers = {"Accept": "application/vnd.github+json",
-               "User-Agent": "mem-dog-repo-analysis"}
+               "User-Agent": "open-mem-repo-analysis"}
     try:
         async with httpx.AsyncClient(timeout=RESOLVE_TIMEOUT_SECONDS) as client:
             meta = await client.get(f"{GITHUB_API}/repos/{owner}/{repo}", headers=headers)

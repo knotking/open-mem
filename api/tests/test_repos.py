@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import pytest
 
-from memdog.repos import (
+from open_mem.repos import (
     RepoError,
     canonical_url,
     parse_repo_url,
@@ -101,7 +101,7 @@ async def _snapshot(pool, tenant, *, sha: str, url: str = "https://github.com/ps
     GitHub, and a test suite that reaches the network is a test suite that fails
     when somebody else's service is down.
     """
-    from memdog.ids import new_id
+    from open_mem.ids import new_id
 
     case_id = await pool.fetchval(
         """
@@ -222,7 +222,7 @@ async def test_deleting_the_memory_takes_the_snapshot_with_it(pool, tenant):
 # ---------------------------------------------------------------- reporting
 
 async def test_the_four_reports_are_registered_generators():
-    from memdog.derive import GENERATORS, validate
+    from open_mem.derive import GENERATORS, validate
 
     for name in ("repo_design", "repo_quality", "repo_bugs", "repo_deps"):
         assert validate(name)["label"]
@@ -238,7 +238,7 @@ async def test_the_dependency_report_may_not_invent_an_advisory():
     wrong CVE numbers. The facts come from OSV in the job; the prompt is what
     stops the model adding to them, so the prompt is what is asserted here.
     """
-    from memdog.derive import GENERATORS
+    from open_mem.derive import GENERATORS
 
     prompt = GENERATORS["repo_deps"]["prompt"].lower()
     assert "only if it appears in the supplied vulnerability data" in prompt
@@ -250,7 +250,7 @@ async def test_the_dependency_report_may_not_invent_an_advisory():
 async def test_the_bug_report_omits_what_it_cannot_locate():
     """An unlocatable finding reads exactly like a located one and cannot be
     checked, so the prompt requires omission rather than hedging."""
-    from memdog.derive import GENERATORS
+    from open_mem.derive import GENERATORS
 
     prompt = GENERATORS["repo_bugs"]["prompt"].lower()
     assert "omit it entirely" in prompt
@@ -267,8 +267,8 @@ async def test_without_a_job_the_snapshot_fails_rather_than_waiting(pool, tenant
     rather than an edge case -- and the sentence on the row is the only thing
     that distinguishes it from a run that is genuinely in progress.
     """
-    from memdog.config import Settings
-    from memdog.repos import RepoAnalysisWorker
+    from open_mem.config import Settings
+    from open_mem.repos import RepoAnalysisWorker
 
     snapshot_id, case_id, memory_id = await _snapshot(
         pool, tenant, sha="2" * 40, status="pending")
@@ -300,8 +300,8 @@ async def test_the_repo_reports_ask_for_findings_not_a_summary():
     summary-shaped. This asserts the shape, because the wording never was the
     problem.
     """
-    from memdog.derive import GENERATORS
-    from memdog.extraction import REVIEWED, envelope_schema
+    from open_mem.derive import GENERATORS
+    from open_mem.extraction import REVIEWED, envelope_schema
 
     for name in ("repo_design", "repo_quality", "repo_bugs", "repo_deps"):
         assert GENERATORS[name]["data_type"] == "code_review"
@@ -326,7 +326,7 @@ async def test_a_review_that_found_nothing_is_stored_as_nothing():
     "never reviewed" is not, and rendering them the same is how a report that
     did not run reads as a clean bill of health.
     """
-    from memdog.extraction import Envelope
+    from open_mem.extraction import Envelope
 
     envelope = Envelope(title="t")
     parsed = {"findings": []}
@@ -347,7 +347,7 @@ async def test_the_gemini_findings_schema_has_no_nullable_unions():
     cause. Ordinary enrichment kept working throughout, because its schema has
     no such field, so the model looked healthy while the review path was dead.
     """
-    from memdog.extraction import _gemini_schema, envelope_schema
+    from open_mem.extraction import _gemini_schema, envelope_schema
 
     findings = _gemini_schema(findings=True)["properties"]["findings"]
     nullable = [name for name, spec in findings["items"]["properties"].items()
@@ -412,7 +412,7 @@ async def test_an_empty_transcript_from_an_overridden_model_is_retried():
     """
     import inspect
 
-    from memdog.multimodal import GeminiMultimodal, NullMultimodal
+    from open_mem.multimodal import GeminiMultimodal, NullMultimodal
 
     # The retry needs to name a model for one call without changing assignment.
     for engine in (GeminiMultimodal, NullMultimodal):
@@ -420,7 +420,7 @@ async def test_an_empty_transcript_from_an_overridden_model_is_retried():
         assert "model" in params, f"{engine.__name__} cannot be asked for a specific model"
         assert params["model"].default is None
 
-    source = inspect.getsource(__import__("memdog.workers", fromlist=["x"]))
+    source = inspect.getsource(__import__("open_mem.workers", fromlist=["x"]))
     # Retried against the engine's own base model, not a hardcoded name.
     assert 'result.model_id != base' in source
     # And the second emptiness is still recorded, so a silent recording stays
@@ -440,7 +440,7 @@ async def test_a_failed_snapshot_is_retried_rather_than_handed_back(pool, tenant
     """
     import inspect
 
-    from memdog import repos
+    from open_mem import repos
 
     source = inspect.getsource(repos.request_snapshot)
     # Re-use is conditional on having succeeded.
@@ -458,7 +458,7 @@ async def test_a_completed_snapshot_is_still_reused(pool, tenant, principal_for)
     """The other half: a successful analysis must not be paid for twice."""
     import inspect
 
-    from memdog import repos
+    from open_mem import repos
 
     source = inspect.getsource(repos.request_snapshot)
     assert '"reused": True' in source
@@ -482,9 +482,9 @@ async def test_the_raw_graph_is_stored_with_the_snapshot_but_never_read(
     `derive:skip` buys the same protection without the cost, so this asserts
     both halves: the record is a member, and `derive` does not read it.
     """
-    from memdog.contracts import Inline, WriteItem, WriteRequest
-    from memdog.derive import SKIP_TAG
-    from memdog.write import write_items
+    from open_mem.contracts import Inline, WriteItem, WriteRequest
+    from open_mem.derive import SKIP_TAG
+    from open_mem.write import write_items
 
     principal = await principal_for(tenant.api_key)
     memory = {"key": "acme/widget@" + "a" * 40, "type": "default"}
@@ -503,8 +503,8 @@ async def test_the_raw_graph_is_stored_with_the_snapshot_but_never_read(
         "SELECT memory_id FROM memories WHERE project_id = $1 AND memory_key = $2",
         tenant.project_id, memory["key"])
 
-    from memdog.compaction import _members
-    from memdog.derive import derive
+    from open_mem.compaction import _members
+    from open_mem.derive import derive
 
     # Both are members: the graph is stored with its snapshot, not hidden.
     everything = await _members(pool, principal, memory_id)
@@ -523,7 +523,7 @@ async def test_removing_a_repository_takes_its_snapshots(pool, tenant, queue,
     """Analysis is the one thing here that creates containers from a button, and
     it had no way back: a repository added by mistake stayed on the list for
     good."""
-    from memdog.repos import delete_repo
+    from open_mem.repos import delete_repo
 
     _, case_id, first = await _snapshot(pool, tenant, sha="a" * 40)
     _, _, second = await _snapshot(pool, tenant, sha="b" * 40)
@@ -549,7 +549,7 @@ async def test_a_repository_of_another_organisation_cannot_be_removed(
     pool, tenant, other_tenant, principal_for
 ):
     """The delete must not reach further than the read does."""
-    from memdog.repos import delete_repo
+    from open_mem.repos import delete_repo
 
     _, case_id, _ = await _snapshot(pool, tenant, sha="c" * 40)
     intruder = await principal_for(other_tenant.api_key)

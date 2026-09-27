@@ -10,12 +10,12 @@ from __future__ import annotations
 
 import pytest
 
-from memdog.contracts import Pending, WriteItem, WriteOptions, WriteRequest
-from memdog.events import list_events
-from memdog.fetching import FetchError, FetchWorker, validate_url
-from memdog.queue import InProcessQueue
-from memdog.retrieval import get_item
-from memdog.write import write_items
+from open_mem.contracts import Pending, WriteItem, WriteOptions, WriteRequest
+from open_mem.events import list_events
+from open_mem.fetching import FetchError, FetchWorker, validate_url
+from open_mem.queue import InProcessQueue
+from open_mem.retrieval import get_item
+from open_mem.write import write_items
 
 pytestmark = pytest.mark.asyncio
 
@@ -49,7 +49,7 @@ async def test_an_ordinary_public_url_is_allowed():
 async def test_the_check_runs_on_every_resolved_address():
     """A name with one public and one private record would otherwise pass the
     check and then connect to the private one."""
-    import memdog.fetching as fetching
+    import open_mem.fetching as fetching
 
     real = fetching.socket.getaddrinfo
     try:
@@ -162,7 +162,7 @@ async def test_a_refused_url_records_why_on_the_item(
 ):
     """Retrying a refused URL never succeeds, so the reason belongs on the row
     rather than in a retry loop."""
-    from memdog.queue import Message
+    from open_mem.queue import Message
 
     actor = await principal_for(tenant.api_key)
     written = await write_items(

@@ -10,16 +10,16 @@ from __future__ import annotations
 
 import pytest
 
-from memdog import derive as derive_mod
-from memdog.contracts import Inline, WriteItem, WriteOptions, WriteRequest
-from memdog.derive import DeriveError, derive
-from memdog.write import write_items
+from open_mem import derive as derive_mod
+from open_mem.contracts import Inline, WriteItem, WriteOptions, WriteRequest
+from open_mem.derive import DeriveError, derive
+from open_mem.write import write_items
 
 pytestmark = pytest.mark.asyncio
 
 
 async def _course(pool, queue, blobs, settings, actor, tenant, n=3):
-    from memdog import memories
+    from open_mem import memories
 
     await memories.create_type(pool, actor, project_id=tenant.project_id,
                                name="course", ttl_seconds=None)
@@ -161,7 +161,7 @@ async def test_deriving_clears_the_stale_flag(
     pool, queue, blobs, settings, tenant, principal_for, extractor
 ):
     """A rollup is current again once it has been rebuilt, whatever marked it."""
-    from memdog import memories
+    from open_mem import memories
 
     actor = await principal_for(tenant.api_key)
     memory_id, _ = await _course(pool, queue, blobs, settings, actor, tenant)

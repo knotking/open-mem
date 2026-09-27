@@ -31,7 +31,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from memdog.crawlers import (Auth, CrawlerConfig, Extract, HttpRequest,  # noqa: E402
+from open_mem.crawlers import (Auth, CrawlerConfig, Extract, HttpRequest,  # noqa: E402
                              Limits, Pagination, discover, next_watermark)
 from tools.fake_sources import REQUESTS, reset, serve                    # noqa: E402
 
@@ -52,8 +52,8 @@ def _allow_loopback(monkeypatch):
     a caller-supplied URL reaching inside the deployment, it is tested on its
     own, and a simulator is not worth weakening it for.
     """
-    import memdog.crawlers as crawlers_mod
-    import memdog.fetching as fetching
+    import open_mem.crawlers as crawlers_mod
+    import open_mem.fetching as fetching
 
     real = fetching.validate_url
     monkeypatch.setattr(
@@ -238,7 +238,7 @@ async def test_a_graph_entry_pages_rather_than_reading_only_the_first(
     and then stored a watermark as though it had read all five: no error, no
     warning, just a source that looks smaller than it is.
     """
-    from memdog import connectors
+    from open_mem import connectors
 
     built = connectors.build(key, scope)
     built["request"]["url"] = f"{sources}/graph/v1.0/messages"
@@ -301,7 +301,7 @@ async def test_every_source_refuses_an_unauthenticated_crawl(sources):
     against somebody's account, and it should fail as 401 — which the crawler
     treats as fatal, because a quiet completion advances the watermark past
     records it never read."""
-    from memdog.crawlers import CrawlerError
+    from open_mem.crawlers import CrawlerError
 
     config = CrawlerConfig(
         name="issues", strategy="http",

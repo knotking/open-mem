@@ -1,6 +1,6 @@
--- Outbound delivery. memdog has never had one: `webhooks.py` is inbound only,
+-- Outbound delivery. open-mem has never had one: `webhooks.py` is inbound only,
 -- by its own docstring, and `/producers/{id}/test-delivery` signs a payload and
--- posts it to memdog's *own* receive path, which is a self-test.
+-- posts it to open-mem's *own* receive path, which is a self-test.
 --
 -- Recording an event and delivering it are two commitments, and conflating them
 -- is how a notification system starts losing things. `observed_events` is the

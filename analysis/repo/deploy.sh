@@ -8,11 +8,11 @@ set -euo pipefail
 
 PROJECT="${PROJECT:-memdog-dev-506718}"
 REGION="${REGION:-us-central1}"
-JOB="${JOB:-memdog-repo-analysis}"
+JOB="${JOB:-open-mem-repo-analysis}"
 TAG="${1:-repo-analysis-1}"
-IMAGE="${REGION}-docker.pkg.dev/${PROJECT}/memdog/memdog-repo-analysis:${TAG}"
-SA="memdog-api@${PROJECT}.iam.gserviceaccount.com"
-API_URL="${API_URL:-https://memdog-api-r5ifa3vgqq-uc.a.run.app}"
+IMAGE="${REGION}-docker.pkg.dev/${PROJECT}/open-mem/open-mem-repo-analysis:${TAG}"
+SA="open-mem-api@${PROJECT}.iam.gserviceaccount.com"
+API_URL="${API_URL:-https://open-mem-api-r5ifa3vgqq-uc.a.run.app}"
 PRODUCER_ID="${PRODUCER_ID:?set PRODUCER_ID to the producer this job writes through}"
 
 step() { printf '\n\033[1m==> %s\033[0m\n' "$1"; }
@@ -41,8 +41,8 @@ gcloud run jobs deploy "$JOB" \
   --max-retries 0 \
   --task-timeout 3600s \
   --memory 4Gi --cpu 2 \
-  --set-env-vars "MEMDOG_API_URL=${API_URL},MEMDOG_PRODUCER_ID=${PRODUCER_ID},IMAGE_TAG=${TAG}" \
-  --set-secrets "MEMDOG_API_KEY=memdog-repo-analysis-key:latest"
+  --set-env-vars "OPENMEM_API_URL=${API_URL},OPENMEM_PRODUCER_ID=${PRODUCER_ID},IMAGE_TAG=${TAG}" \
+  --set-secrets "OPENMEM_API_KEY=open-mem-repo-analysis-key:latest"
 
 step "Granting the API permission to start it"
 # The API's service account starts executions; it does not need to be able to

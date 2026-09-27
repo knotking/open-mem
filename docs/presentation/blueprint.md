@@ -1,4 +1,4 @@
-# mem-dog — Platform Blueprint
+# open-mem — Platform Blueprint
 
 *A design document that a running system has caught up with.* When this was written most of it was
 designed and unbuilt; that is no longer the honest framing, and the correction matters more than
@@ -142,8 +142,8 @@ ending in a test rather than a demo.
 
 - [Roadmap](#roadmap)
 - [Competitive Landscape](#competitive-landscape)
-- [mem-dog vs Onyx: Detailed Comparison](#mem-dog-vs-onyx-detailed-comparison)
-- [mem-dog vs Glean](#mem-dog-vs-glean)
+- [open-mem vs Onyx: Detailed Comparison](#open-mem-vs-onyx-detailed-comparison)
+- [open-mem vs Glean](#open-mem-vs-glean)
 
 # Part I · Why this exists
 
@@ -331,7 +331,7 @@ it out and the scenarios stop working in ways nobody notices until someone acts 
 | Tension | Resolution |
 |---------|------------|
 | **Personal and team want opposite privacy defaults.** A wants everything indexed and surfaced; B must guarantee no teammate sees your personal mail. | **New mechanism** — data inherits its ACL from the *connection* that produced it, not the space it lands in. |
-| **Product vs platform RBAC.** B needs mem-dog to enforce; D delegates to the host. | **Unify** — one enforcement path. The host model becomes the case where a service identity is a single broad principal. |
+| **Product vs platform RBAC.** B needs open-mem to enforce; D delegates to the host. | **Unify** — one enforcement path. The host model becomes the case where a service identity is a single broad principal. |
 | **Breadth vs depth.** A wants 300 shallow connectors; B's customer 360 needs three handled deeply. | Already solved by the tier model — Tier 3 for breadth, Tier 1 for depth. An ordering, not a contradiction. |
 | **Cost profiles diverge.** A on local models is $0; D at 1k workspaces is a firehose. | Configuration — per-org budget caps plus tier policy. |
 | **Latency expectations diverge.** C needs sub-second in-loop; B tolerates ten seconds. | Already solved by the eager / deferred / adaptive index split. |
@@ -352,7 +352,7 @@ shared" rather than "authenticated to the org".
 
 1. **No single global privacy default** — visibility must be connection-scoped and space-aware.
 2. **No fixed five-mode retrieval API** — Family C requires composable primitives.
-3. **No host-delegated-only RBAC** — mem-dog must enforce natively.
+3. **No host-delegated-only RBAC** — open-mem must enforce natively.
 4. **The delete cascade cannot be deferred** — governance is table stakes for B and D.
 5. **The global unscoped `API_KEY` must go** — it voids every ACL the other families depend on.
 
@@ -378,7 +378,7 @@ summaries in production.
 |---|---|
 | Universal search | commodity |
 | RAG backend | commodity — mem0, Zep, LlamaIndex |
-| Temporal knowledge graph | contested — Zep owns the engine mem-dog runs |
+| Temporal knowledge graph | contested — Zep owns the engine open-mem runs |
 | Self-hosted, air-gapped, $0 | **table stakes** — Onyx does it under MIT |
 | **Messaging-channel ingestion** | **genuinely unique** |
 | **Connectors × memory × private** | the wedge — the intersection is unoccupied |
@@ -1881,7 +1881,7 @@ Normalization is its own stage, *before* enrichment — not inside the agents.
 classify → NORMALIZE → route → enrich (LLM) → embed → entities → graph
               ▲
               │ provider profile mapping + target schema
-              │ (mem-dog standard OR user standard)
+              │ (open-mem standard OR user standard)
 ```
 
 Three reasons it cannot live inside the agents:
@@ -1908,7 +1908,7 @@ creates permanent translation loss.
 | `Transaction` | Invoice, payment, charge, order |
 | `Activity` | Log, alert, incident, event |
 
-### Customization: mem-dog standard or user standard
+### Customization: open-mem standard or user standard
 
 Follow the pattern proven by `agent_configs` — schema in the record store, read per invocation,
 no redeploy.
@@ -1926,7 +1926,7 @@ FieldMapping                 per (provider, target_type)
   on_missing                 skip | null | fail
 ```
 
-**Precedence:** project → org → mem-dog standard. Most specific wins, consistent with the rest of
+**Precedence:** project → org → open-mem standard. Most specific wins, consistent with the rest of
 the tenancy model.
 
 Authoring path, increasing in power: use a standard type → extend it → define a custom type →
@@ -3123,7 +3123,7 @@ So four things are overridable per data type:
 Same model as normalization schemas and settings — one mechanism, not a third:
 
 ```
-project override  →  org override  →  mem-dog standard
+project override  →  org override  →  open-mem standard
 ```
 
 Most specific wins, **except where an admin has locked it**. A regulated deployment that must not
@@ -4861,7 +4861,7 @@ Each catalog entry declares:
 | `status` | `recommended` · `available` · `deprecated` · `superseded_by: <id>` |
 | `card_url` | Link to the upstream model card |
 
-`status` matters more than it looks. mem-dog's defaults currently reference a model generation
+`status` matters more than it looks. open-mem's defaults currently reference a model generation
 that has been superseded — without a `superseded_by` field there is no mechanism to tell users
 that, and defaults silently rot.
 
@@ -4965,7 +4965,7 @@ General-purpose model size is the wrong axis for some of this pipeline's work. G
 family in particular ships **task-specific open variants**, and four of them land directly on
 constraints these documents already record as unresolved.
 
-| Variant | What it is | The mem-dog problem it addresses |
+| Variant | What it is | The open-mem problem it addresses |
 |---------|-----------|----------------------------------|
 | **MedGemma** / **MedGemma 1.5** | Medical text and imaging interpretation | **The HIPAA constraint** — see below. Also the one credible route to DICOM interpretation, currently out of v1 |
 | **TranslateGemma** | Translation across 55 languages | Multilingual ingestion without routing foreign-language content to a frontier API |
@@ -5399,7 +5399,7 @@ the integration proxy, after which no worker holds a secret of either class.
 
 Upload a dataset, watch it get enriched, chat against it, and see exactly what the chat retrieved.
 
-The sandbox is where someone decides whether mem-dog works for *their* data. Nothing else in the
+The sandbox is where someone decides whether open-mem works for *their* data. Nothing else in the
 product answers that question — a connector list does not, and a benchmark on someone else's corpus
 certainly does not.
 
@@ -5713,16 +5713,16 @@ language label is worse than an absent one, because it silently mis-stems.
 ### Two tenancy models are in play
 
 The host-SaaS contract states that end-user RBAC is *enforced by the host*. That is coherent when
-mem-dog is a backend behind someone else's product. It is **not** what a team model needs.
+open-mem is a backend behind someone else's product. It is **not** what a team model needs.
 
 | | Host-SaaS model | Team model |
 |---|---|---|
-| Who enforces RBAC | the host application | **mem-dog** |
+| Who enforces RBAC | the host application | **open-mem** |
 | Keys held by | host backend | per user |
 | `project` means | host workspace | team space |
 | Privacy unit | project boundary | **per item, per member** |
 
-**Resolution: one enforcement path.** mem-dog always enforces; the host model becomes the case
+**Resolution: one enforcement path.** open-mem always enforces; the host model becomes the case
 where a service identity is a single broad principal. Two implementations kept in sync is the
 failure mode to avoid.
 
@@ -7111,7 +7111,7 @@ describe a *corpus*, and a corpus belongs to a project.
 | Memory types — name, TTL, `on_expiry` | **P** O PL 🔒 | 4 shipped types | memories.md |
 | Memory routing rules | **P** O | thread-key routing | Must be bounded |
 | Default memory scope | — | per (project, user) | `shared`-scope items go to the project default |
-| Normalization schema | **P** O PL 🔒 ⚡ | mem-dog canonical types | normalization.md |
+| Normalization schema | **P** O PL 🔒 ⚡ | open-mem canonical types | normalization.md |
 | Field mappings | **P** O ⚡ | per provider | |
 | Validation policy | **P** O 🔒 | `accept_raw` | `reject` refused for webhook producers |
 | Redaction rules | **P** O 🔒 ⚡ | none | Post-MVP. Narrowing one is irreversible |
@@ -8056,7 +8056,7 @@ answers exactly one question: *give me the bytes for this reference.*
 ```
 
 ```
-memdog-raw-prod/org_01J8.../prj_01J9.../data_01JQRS.../raw/9f2c8e….pdf
+open-mem-raw-prod/org_01J8.../prj_01J9.../data_01JQRS.../raw/9f2c8e….pdf
                                                       /text/4a17bb….txt
                                                       /derived/c81d02….webp
 ```
@@ -10531,7 +10531,7 @@ the audit record, costs a question that can never be answered.
 
 | Question | Settled as |
 |----------|-----------|
-| Team RBAC in mem-dog, or delegated? | **mem-dog enforces natively**; the host model is one broad service principal |
+| Team RBAC in open-mem, or delegated? | **open-mem enforces natively**; the host model is one broad service principal |
 | Global privacy default? | **None** — visibility is producer/connection-scoped |
 | Fixed search modes or composable? | **Composable** |
 | Can the delete cascade wait? | **Build late, design early** |
@@ -10568,13 +10568,13 @@ operations/implementation.md.
 **Researched:** August 2026 · **Status:** current
 
 This supersedes the framing in the existing `docs/comparisons/` set (last updated March 2026),
-which compares mem-dog only against the agent-memory category — mem0, Zep, BerryDB — plus one
+which compares open-mem only against the agent-memory category — mem0, Zep, BerryDB — plus one
 connector platform and two data warehouses.
 
 That framing has a structural problem: **it omits the two categories that compete most directly
-for mem-dog's team and personal use cases.** Enterprise search (Onyx, Glean) and local-first
+for open-mem's team and personal use cases.** Enterprise search (Onyx, Glean) and local-first
 personal AI (Khoj, OpenClaw) are absent entirely, and Onyx in particular is the closest competitor
-mem-dog has.
+open-mem has.
 
 ---
 
@@ -10584,7 +10584,7 @@ Three claims in current documentation do not survive research.
 
 #### 1. "Self-hosted and air-gapped" is not a differentiator
 
-Repeated positioning treats private, air-gapped, $0 deployment as mem-dog's strongest moat.
+Repeated positioning treats private, air-gapped, $0 deployment as open-mem's strongest moat.
 It is table stakes in this category.
 
 **Onyx** is MIT-licensed, ships 40+ connectors, and supports fully air-gapped deployment with
@@ -10599,15 +10599,15 @@ Private-first is the price of entry, not the advantage.
 
 #### 2. The connector ceiling is understated, not overstated
 
-Documentation claims **300+ integrations**. Nango — the platform mem-dog delegates OAuth and the
+Documentation claims **300+ integrations**. Nango — the platform open-mem delegates OAuth and the
 provider catalog to — supports **900+ APIs**. The reachable ceiling is roughly triple what is
-claimed, on what is arguably mem-dog's strongest axis. This is worth correcting in `index.mdx`,
+claimed, on what is arguably open-mem's strongest axis. This is worth correcting in `index.mdx`,
 `platform-overview.mdx` and the comparison set.
 
 #### 3. Onyx is missing from the comparison set
 
 For the team-memory use case, Onyx is the most directly competitive product in the market and
-appears in no comparison document. See [comparison-onyx.md](#mem-dog-vs-onyx-detailed-comparison).
+appears in no comparison document. See [comparison-onyx.md](#open-mem-vs-onyx-detailed-comparison).
 
 ---
 
@@ -10627,7 +10627,7 @@ appears in no comparison document. See [comparison-onyx.md](#mem-dog-vs-onyx-det
 
 `●` strong · `○` partial · `—` absent. Figures as researched August 2026; this category moves fast.
 
-| Factor | mem-dog | Onyx | Glean | Mem0 | Zep | Cognee | Khoj |
+| Factor | open-mem | Onyx | Glean | Mem0 | Zep | Cognee | Khoj |
 |--------|---------|------|-------|------|-----|--------|------|
 | Category | memory + search | ent. search | ent. search | agent memory | agent memory | agent memory | personal |
 | **License** | proprietary | MIT | closed | Apache 2.0 | OSS core | OSS | OSS |
@@ -10664,7 +10664,7 @@ appears in no comparison document. See [comparison-onyx.md](#mem-dog-vs-onyx-det
 | Factor | Against whom |
 |--------|-------------|
 | Self-hosting and air-gap | Onyx and Khoj — both permissively licensed |
-| Temporal knowledge graph | Zep — mem-dog runs Zep's own Graphiti engine |
+| Temporal knowledge graph | Zep — open-mem runs Zep's own Graphiti engine |
 | Search modes and reranking | Zep matches mode-for-mode and reranker-for-reranker |
 | MCP tool surface | Everyone ships one now |
 
@@ -10672,8 +10672,8 @@ appears in no comparison document. See [comparison-onyx.md](#mem-dog-vs-onyx-det
 
 | Factor | Against whom |
 |--------|-------------|
-| **Permission-aware retrieval** | Onyx syncs ACLs from source systems and filters pre-retrieval — shipped, while mem-dog's is designed |
-| **Enterprise compliance** — SOC 2, SSO, SCIM, audit | Onyx and Glean both ship it; mem-dog has none |
+| **Permission-aware retrieval** | Onyx syncs ACLs from source systems and filters pre-retrieval — shipped, while open-mem's is designed |
+| **Enterprise compliance** — SOC 2, SSO, SCIM, audit | Onyx and Glean both ship it; open-mem has none |
 | **License** | Proprietary against MIT and Apache incumbents in every adjacent category |
 | Ecosystem surface | Mem0 aligns with LangChain, CrewAI, AWS Agent SDK |
 | Maturity and community | Mem0 ~50k GitHub stars; Onyx MIT with an active install base |
@@ -10682,16 +10682,16 @@ appears in no comparison document. See [comparison-onyx.md](#mem-dog-vs-onyx-det
 
 ### Strategic read
 
-mem-dog competes on **three fronts simultaneously** — personal memory, team search, agent memory —
+open-mem competes on **three fronts simultaneously** — personal memory, team search, agent memory —
 against a specialist incumbent on each, while being **proprietary against permissively licensed
 rivals**.
 
 No single axis is defensible:
 
 - Onyx matches the privacy and air-gap story under a more permissive license
-- Zep owns the temporal graph engine mem-dog runs
+- Zep owns the temporal graph engine open-mem runs
 - Mem0 owns the agent-integration surface
-- Nango owns the connector catalog mem-dog delegates to
+- Nango owns the connector catalog open-mem delegates to
 
 The defensible position is the **intersection**: connector breadth *and* memory semantics *and*
 private deployment *and* conversational channel access. That combination is genuinely unoccupied.
@@ -10705,7 +10705,7 @@ at a time, the intersection reads as three half-products competing with four ful
 
 Per the v1 architecture decision, DigiMe/openclaw-node is removed from the serverless production
 topology, and Graphiti/Neo4j is deferred. Cloud v1 therefore ships without *either* capability
-that distinguishes mem-dog, landing it in the most crowded quadrant of the market with no
+that distinguishes open-mem, landing it in the most crowded quadrant of the market with no
 differentiation and a proprietary license.
 
 Two further considerations:
@@ -10732,8 +10732,8 @@ Two further considerations:
 
 | Document | Covers |
 |----------|--------|
-| [comparison-onyx.md](#mem-dog-vs-onyx-detailed-comparison) | Onyx — the closest competitor; previously undocumented |
-| [comparison-glean.md](#mem-dog-vs-glean) | Glean — the category leader, and the market it structurally cannot serve |
+| [comparison-onyx.md](#open-mem-vs-onyx-detailed-comparison) | Onyx — the closest competitor; previously undocumented |
+| [comparison-glean.md](#open-mem-vs-glean) | Glean — the category leader, and the market it structurally cannot serve |
 
 Existing comparisons live in `docs/comparisons/` (mem0, Zep, BerryDB, Nango, Snowflake/Databricks)
 and are dated March 2026. They need a refresh pass and the corrections listed above.
@@ -10759,7 +10759,7 @@ and are dated March 2026. They need a refresh pass and the corrections listed ab
 
 ---
 
-## mem-dog vs Onyx: Detailed Comparison
+## open-mem vs Onyx: Detailed Comparison
 
 **Last updated:** August 2026
 
@@ -10767,16 +10767,16 @@ Onyx (formerly Danswer) is an MIT-licensed enterprise AI platform bundling 40+ c
 search over an OpenSearch-backed vector index, permission-aware retrieval, AI chat, multi-step deep
 research and custom agents. It is the leading open-source alternative to Glean.
 
-**Onyx is the most directly competitive product mem-dog faces for the team-memory use case, and
+**Onyx is the most directly competitive product open-mem faces for the team-memory use case, and
 until now it appeared in no comparison document.** It is also the product that most directly
-contests mem-dog's privacy positioning — it is self-hostable, air-gapped-capable, and permissively
+contests open-mem's privacy positioning — it is self-hostable, air-gapped-capable, and permissively
 licensed.
 
 ---
 
 ### At a Glance
 
-| | mem-dog | Onyx |
+| | open-mem | Onyx |
 |-|---------|------|
 | **What it is** | Private AI memory platform — multi-channel ingestion, 40-agent enrichment, RAG query engine | Enterprise AI search and assistant over connected company data |
 | **Focus** | End-to-end data lifecycle with a typed memory model | Search, chat and agents grounded in company knowledge |
@@ -10792,7 +10792,7 @@ licensed.
 
 #### Data ingestion
 
-| Feature | mem-dog | Onyx |
+| Feature | open-mem | Onyx |
 |---------|---------|------|
 | Connectors | 300+ documented, 900+ reachable via Nango | 40+ |
 | **Messaging channels** | 25+ (WhatsApp, Telegram, Signal, Discord, Slack…) via DigiMe | None |
@@ -10801,34 +10801,34 @@ licensed.
 | Data types | 60+ including IoT, medical, geospatial, sensor | Documents and text |
 | Enrichment | 40 typed sub-agents, 6-layer classification, tiered model routing | Indexing, chunking, embedding, LLM knowledge graph |
 
-**Verdict: mem-dog leads clearly.** Onyx ingests documents from business systems. mem-dog ingests
+**Verdict: open-mem leads clearly.** Onyx ingests documents from business systems. open-mem ingests
 from business systems *and* messaging channels *and* arbitrary data types, with typed analysis per
 type. The connector gap is roughly 7× before counting the untapped Nango catalog.
 
 #### Permissions and access control
 
-| Feature | mem-dog | Onyx |
+| Feature | open-mem | Onyx |
 |---------|---------|------|
 | Per-item ACL | 4 levels + `shared_with` | Inherited from source systems |
-| **Source ACL sync** | None — permissions set in mem-dog only | **Pulls ACLs from source**: private Slack channels, ACL'd Confluence spaces, private repos |
+| **Source ACL sync** | None — permissions set in open-mem only | **Pulls ACLs from source**: private Slack channels, ACL'd Confluence spaces, private repos |
 | Filter point | Designed for query-time; currently varies | **Pre-retrieval**, not at the chat layer |
 | RBAC | 4 org roles | RBAC + SCIM provisioning |
 | SSO | None | OIDC/SAML — Okta, Entra ID, AWS IAM |
 | Audit | Tracing memories | Full audit trails |
 
 **Verdict: Onyx leads decisively.** This is the sharpest gap in the comparison. Onyx solved a
-problem mem-dog has not started: **when you ingest a private Slack channel, who should see it?**
-Onyx answers by syncing the source system's ACLs and filtering before retrieval. mem-dog requires
+problem open-mem has not started: **when you ingest a private Slack channel, who should see it?**
+Onyx answers by syncing the source system's ACLs and filtering before retrieval. open-mem requires
 permissions to be managed separately, which does not survive contact with real corpora — a
 connector that ingests everything a user can see, and then exposes it to everyone in the org, is
 a data leak by construction.
 
-mem-dog's designed answer — connection-scoped ACL inheritance with query-time filtering — is the
+open-mem's designed answer — connection-scoped ACL inheritance with query-time filtering — is the
 right shape, but it is a design and theirs is shipped.
 
 #### Memory model
 
-| Feature | mem-dog | Onyx |
+| Feature | open-mem | Onyx |
 |---------|---------|------|
 | Typed memories | Open type set — name + TTL + expiry policy, re-typable | None — it is a search index |
 | TTL / expiry | Per-type defaults, overridable | None |
@@ -10836,14 +10836,14 @@ right shape, but it is a design and theirs is shipped.
 | Compression | LLM summarization with archive | None |
 | Temporal facts | `valid_at` / `invalid_at` via Graphiti | LLM knowledge graph, non-temporal |
 
-**Verdict: mem-dog leads.** Onyx has no memory abstraction — it indexes documents and searches
+**Verdict: open-mem leads.** Onyx has no memory abstraction — it indexes documents and searches
 them. Conversation state, session scoping, decaying context and point-in-time queries have no
 equivalent. For agent memory, Onyx is not a competitor at all; for team *knowledge*, the memory
 model may matter less than search quality.
 
 #### Search and retrieval
 
-| Feature | mem-dog | Onyx |
+| Feature | open-mem | Onyx |
 |---------|---------|------|
 | Vector search | pgvector | OpenSearch-backed |
 | Keyword | Postgres `tsvector` BM25 | Hybrid built in |
@@ -10854,13 +10854,13 @@ model may matter less than search quality.
 | Deep research | No | **Multi-step deep research** |
 | Custom agents | Per-agent pipeline configs | **Custom agents with MCP tool use** |
 
-**Verdict: roughly comparable, different strengths.** mem-dog has more retrieval modes and
+**Verdict: roughly comparable, different strengths.** open-mem has more retrieval modes and
 temporal filtering. Onyx has multi-step deep research and user-definable agents — capabilities
-mem-dog lacks entirely, and which are increasingly what buyers evaluate.
+open-mem lacks entirely, and which are increasingly what buyers evaluate.
 
 #### Deployment and operations
 
-| Feature | mem-dog | Onyx |
+| Feature | open-mem | Onyx |
 |---------|---------|------|
 | Docker Compose | Yes | Yes |
 | Kubernetes | GKE manifests | **Official Helm chart** |
@@ -10877,7 +10877,7 @@ target — the team that wants to self-host.
 
 ### Where each wins
 
-#### Choose mem-dog when
+#### Choose open-mem when
 
 - Data arrives from **messaging channels**, not just business systems
 - You need a **typed memory model** — sessions, TTL, decaying context, point-in-time queries
@@ -10897,12 +10897,12 @@ target — the team that wants to self-host.
 
 ### Assessment
 
-Onyx is not a memory platform, and mem-dog is not an enterprise search product. They collide on the
+Onyx is not a memory platform, and open-mem is not an enterprise search product. They collide on the
 team-memory use case, and on that ground **Onyx is currently stronger**: permission-aware retrieval,
 compliance, licensing and deployment tooling all favour it, and those are precisely the criteria a
 team evaluating self-hosted knowledge tooling applies.
 
-mem-dog's advantages — channels, typed memory, data-type breadth, connector count — are real but
+open-mem's advantages — channels, typed memory, data-type breadth, connector count — are real but
 sit *outside* the evaluation criteria for that buyer. They matter enormously for personal memory
 and agent infrastructure, where Onyx does not compete at all.
 
@@ -10926,7 +10926,7 @@ the permission gap because that one is a correctness issue regardless of competi
 
 ---
 
-## mem-dog vs Glean
+## open-mem vs Glean
 
 **Last updated:** August 2026
 
@@ -10940,7 +10940,7 @@ different problems.
 
 ### At a glance
 
-| | mem-dog | Glean |
+| | open-mem | Glean |
 |-|---------|-------|
 | **What it is** | A memory platform — ingest, enrich, remember, retrieve | Enterprise workplace search and agents |
 | **Shape** | A backend you build on | A destination you go to |
@@ -10954,13 +10954,13 @@ different problems.
 
 ### The structural difference
 
-**Glean is a product. mem-dog is a platform.**
+**Glean is a product. open-mem is a platform.**
 
 Glean is where a knowledge worker goes to find something. It has an API, but the API is an
 extension of the application. You cannot build your own product on Glean and have your users never
 know it is there.
 
-mem-dog is the opposite: the API *is* the product, the UI is a [reference client](#api-contract-surfaces), and
+open-mem is the opposite: the API *is* the product, the UI is a [reference client](#api-contract-surfaces), and
 the host-embedding contract exists so somebody else's application can use it as a private memory
 backend invisibly.
 
@@ -10980,7 +10980,7 @@ That leaves, entirely uncontested by Glean:
   sovereignty-constrained public sector
 - Anyone who wants to own the corpus rather than rent access to it
 
-**That is where mem-dog competes**, and Glean's absence there is by design rather than oversight.
+**That is where open-mem competes**, and Glean's absence there is by design rather than oversight.
 
 ### Where Glean genuinely wins
 
@@ -10988,26 +10988,26 @@ Stated plainly, because a comparison that finds no losses is marketing.
 
 | Factor | Why |
 |--------|-----|
-| **Permission-aware retrieval** | Glean mirrors source-system ACLs and filters on them. mem-dog's equivalent is designed and unbuilt — the single sharpest gap |
+| **Permission-aware retrieval** | Glean mirrors source-system ACLs and filters on them. open-mem's equivalent is designed and unbuilt — the single sharpest gap |
 | **Connector depth** | 100 deep, permission-aware connectors beat 900 shallow ones for workplace search. Different bets, and theirs is right for their buyer |
-| **Enterprise compliance** | SOC 2 Type II, SSO/SAML, RBAC shipped. mem-dog has none |
+| **Enterprise compliance** | SOC 2 Type II, SSO/SAML, RBAC shipped. open-mem has none |
 | **Agents for workflows** | Multi-step autonomous agents over enterprise data, in production |
 | **Maturity** | Install base, references, an enterprise sales motion, and the ability to answer a security questionnaire |
 
-### Where mem-dog is genuinely different
+### Where open-mem is genuinely different
 
 | Factor | Why it matters — and to whom |
 |--------|------------------------------|
-| **Self-hosting and air-gap** | A real differentiator here, unlike against [Onyx](#mem-dog-vs-onyx-detailed-comparison). Glean is cloud-only, so sovereignty-constrained buyers have no Glean option at all |
+| **Self-hosting and air-gap** | A real differentiator here, unlike against [Onyx](#open-mem-vs-onyx-detailed-comparison). Glean is cloud-only, so sovereignty-constrained buyers have no Glean option at all |
 | **Embeddable** | A backend others build on. Glean cannot be white-labelled into someone's product |
 | **Typed memory with lifecycle** | TTL, expiry policy, compression, promotion. Glean indexes documents; it does not *remember* with a lifecycle |
 | **Temporal facts** | "What was true in March" as a first-class query, not a search over documents that happen to mention March |
 | **Non-document data** | Sensor, medical, geospatial, structured records, messaging channels |
-| **Cost at scale** | 500 seats is ~$300,000/year of Glean and hardware for mem-dog |
+| **Cost at scale** | 500 seats is ~$300,000/year of Glean and hardware for open-mem |
 
 ### One differentiator that does not apply here
 
-**Messaging-channel ingestion is mem-dog's most distinctive capability and is close to irrelevant
+**Messaging-channel ingestion is open-mem's most distinctive capability and is close to irrelevant
 to Glean's buyer.**
 
 An enterprise does not want WhatsApp and Signal indexed — that is a compliance liability, not a
@@ -11021,7 +11021,7 @@ whether the buyer wants it.
 
 **Do not compete for Glean's buyer.** They are ahead on the criteria that decide those deals —
 permission-aware retrieval, compliance, connector depth, references — and they have a sales motion
-mem-dog does not.
+open-mem does not.
 
 Compete for the buyer Glean structurally cannot serve: **under 100 seats, sovereignty-constrained,
 or building a product rather than buying a tool.** That is a large market and Glean has ceded it by

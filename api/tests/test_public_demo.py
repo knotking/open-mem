@@ -12,7 +12,7 @@ import json
 
 import pytest
 
-from memdog.public_demo import (
+from open_mem.public_demo import (
     ANSWER_TTL_SECONDS, DemoUnavailable, cached_answer, check_and_count,
     client_ip, hash_ip, question_key, release, store_answer,
 )
@@ -146,7 +146,7 @@ async def test_the_stored_question_is_truncated(pool):
 def _settings(**over):
     import dataclasses
 
-    from memdog.config import Settings
+    from open_mem.config import Settings
 
     return dataclasses.replace(Settings(), **over)
 
@@ -154,14 +154,14 @@ def _settings(**over):
 def test_no_configuration_publishes_nothing():
     """The default, and the only correct one: an unauthenticated endpoint that
     spends money per request is never inherited."""
-    from memdog.public_demo import registry
+    from open_mem.public_demo import registry
 
     assert registry(_settings()) == {}
 
 
 def test_the_single_corpus_configuration_still_works():
     """A deployment set up before the gallery existed must be unaffected by it."""
-    from memdog.public_demo import registry, resolve
+    from open_mem.public_demo import registry, resolve
 
     settings = _settings(public_project_id="prj_one", public_memory_id="mem_one",
                          public_title="Ask the corpus")
@@ -177,7 +177,7 @@ def test_a_key_the_deployment_never_published_reaches_nothing():
     Not "the project is empty" and not "you may not read it" -- the name does
     not resolve, so there is nothing to escalate to.
     """
-    from memdog.public_demo import DemoUnavailable, resolve
+    from open_mem.public_demo import DemoUnavailable, resolve
 
     settings = _settings(public_demos=json.dumps([
         {"key": "legal", "title": "A matter", "project_id": "prj_legal"},
@@ -191,7 +191,7 @@ def test_a_key_the_deployment_never_published_reaches_nothing():
 
 def test_an_absent_key_takes_the_first_entry():
     """So a caller written against the single-corpus endpoint keeps working."""
-    from memdog.public_demo import resolve
+    from open_mem.public_demo import resolve
 
     settings = _settings(public_demos=json.dumps([
         {"key": "sales", "title": "Acme", "project_id": "prj_sales"},
@@ -203,7 +203,7 @@ def test_an_absent_key_takes_the_first_entry():
 def test_a_malformed_registry_publishes_nothing_rather_than_guessing():
     """A typo in the configuration closes the gallery. It must not open a
     different one, and it must not raise on a page nobody has signed in to."""
-    from memdog.public_demo import registry
+    from open_mem.public_demo import registry
 
     assert registry(_settings(public_demos="{not json")) == {}
     # An entry missing the project cannot answer; one missing the key cannot be
@@ -218,7 +218,7 @@ def test_a_malformed_registry_publishes_nothing_rather_than_guessing():
 def test_the_registry_carries_what_the_gallery_needs_to_say():
     """An entry that cannot say what it demonstrates is an entry that teaches
     the same thing as the one beside it."""
-    from memdog.public_demo import resolve
+    from open_mem.public_demo import resolve
 
     settings = _settings(public_demos=json.dumps([{
         "key": "sensors", "title": "A sensor fleet",

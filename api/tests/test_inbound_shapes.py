@@ -28,8 +28,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from memdog import providers                                   # noqa: E402
-from memdog.providers import SIGNATURE_WINDOW_SECONDS          # noqa: E402
+from open_mem import providers                                   # noqa: E402
+from open_mem.providers import SIGNATURE_WINDOW_SECONDS          # noqa: E402
 from tools.fake_inbound import body_for, handshake_body, sign  # noqa: E402
 
 SECRET = "s3cret-provider-signing-key"
@@ -52,7 +52,7 @@ def test_a_signature_this_provider_would_send_verifies(name):
     algorithms — and every one of them fails closed when wrong, which means a
     mistake here is indistinguishable from a bad secret at three in the morning.
     """
-    url = "https://memdog.example/hooks/prd_test"
+    url = "https://open-mem.example/hooks/prd_test"
     raw = body_for(name, SECRET)
     headers = sign(name, SECRET, raw, url=url)
     if name == "twilio":
@@ -76,7 +76,7 @@ def test_what_we_sign_is_what_this_provider_verifies(name):
     secret, which is the one distinction that button exists to make. Run over
     the whole registry so a provider added later cannot reintroduce it.
     """
-    url = "https://memdog.example/hooks/prd_test"
+    url = "https://open-mem.example/hooks/prd_test"
     raw = body_for(name, SECRET)
     provider = providers.get(name)
     headers = providers.sign(
@@ -96,7 +96,7 @@ def test_the_wrong_secret_is_refused(name):
     """The check that stops the test above passing vacuously. If `verify`
     returned True regardless, both tests would look identical from the outside
     and only this one would fail."""
-    url = "https://memdog.example/hooks/prd_test"
+    url = "https://open-mem.example/hooks/prd_test"
     raw = body_for(name, SECRET)
     headers = sign(name, "not-the-secret", raw, url=url)
     if name == "twilio":
@@ -224,7 +224,7 @@ def test_the_signed_url_is_the_one_the_provider_sent_to():
     signer and the verifier. It was found by firing `tools/fake_inbound.py` at
     the deployed service, where the two URLs are not the same.
     """
-    from memdog.app import _public_url
+    from open_mem.app import _public_url
 
     class _Req:
         def __init__(self, url, headers):
@@ -232,12 +232,12 @@ def test_the_signed_url_is_the_one_the_provider_sent_to():
             self.url = URL(url)
             self.headers = headers
 
-    behind_proxy = _Req("http://memdog.internal/webhooks/whk_1",
+    behind_proxy = _Req("http://open-mem.internal/webhooks/whk_1",
                         {"x-forwarded-proto": "https"})
-    assert _public_url(behind_proxy) == "https://memdog.internal/webhooks/whk_1"
+    assert _public_url(behind_proxy) == "https://open-mem.internal/webhooks/whk_1"
 
     # A proxy chain sends a list, and the first entry is the original client.
-    chained = _Req("http://memdog.internal/webhooks/whk_1",
+    chained = _Req("http://open-mem.internal/webhooks/whk_1",
                    {"x-forwarded-proto": "https, http"})
     assert _public_url(chained).startswith("https://")
 

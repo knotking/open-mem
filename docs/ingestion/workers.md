@@ -185,7 +185,7 @@ So four things are overridable per data type:
 Same model as normalization schemas and settings — one mechanism, not a third:
 
 ```
-project override  →  org override  →  mem-dog standard
+project override  →  org override  →  open-mem standard
 ```
 
 Most specific wins, **except where an admin has locked it**. A regulated deployment that must not

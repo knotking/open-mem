@@ -10,7 +10,7 @@ including that it is down.
 
 from __future__ import annotations
 
-from memdog import telemetry
+from open_mem import telemetry
 
 
 class Recorder:

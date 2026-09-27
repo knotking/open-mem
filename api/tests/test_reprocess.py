@@ -10,11 +10,11 @@ from __future__ import annotations
 
 import pytest
 
-from memdog.contracts import Inline, WriteItem, WriteOptions, WriteRequest
-from memdog.events import list_events
-from memdog.reprocess import ReprocessWorker, request_reprocess
-from memdog.retrieval import get_item
-from memdog.write import write_items
+from open_mem.contracts import Inline, WriteItem, WriteOptions, WriteRequest
+from open_mem.events import list_events
+from open_mem.reprocess import ReprocessWorker, request_reprocess
+from open_mem.retrieval import get_item
+from open_mem.write import write_items
 
 pytestmark = pytest.mark.asyncio
 

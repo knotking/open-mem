@@ -3,13 +3,13 @@
 **Researched:** August 2026 · **Status:** current
 
 This supersedes the framing in the existing `docs/comparisons/` set (last updated March 2026),
-which compares mem-dog only against the agent-memory category — mem0, Zep, BerryDB — plus one
+which compares open-mem only against the agent-memory category — mem0, Zep, BerryDB — plus one
 connector platform and two data warehouses.
 
 That framing has a structural problem: **it omits the two categories that compete most directly
-for mem-dog's team and personal use cases.** Enterprise search (Onyx, Glean) and local-first
+for open-mem's team and personal use cases.** Enterprise search (Onyx, Glean) and local-first
 personal AI (Khoj, OpenClaw) are absent entirely, and Onyx in particular is the closest competitor
-mem-dog has.
+open-mem has.
 
 ---
 
@@ -19,7 +19,7 @@ Three claims in current documentation do not survive research.
 
 ### 1. "Self-hosted and air-gapped" is not a differentiator
 
-Repeated positioning treats private, air-gapped, $0 deployment as mem-dog's strongest moat.
+Repeated positioning treats private, air-gapped, $0 deployment as open-mem's strongest moat.
 It is table stakes in this category.
 
 **Onyx** is MIT-licensed, ships 40+ connectors, and supports fully air-gapped deployment with
@@ -34,9 +34,9 @@ Private-first is the price of entry, not the advantage.
 
 ### 2. The connector ceiling is understated, not overstated
 
-Documentation claims **300+ integrations**. Nango — the platform mem-dog delegates OAuth and the
+Documentation claims **300+ integrations**. Nango — the platform open-mem delegates OAuth and the
 provider catalog to — supports **900+ APIs**. The reachable ceiling is roughly triple what is
-claimed, on what is arguably mem-dog's strongest axis. This is worth correcting in `index.mdx`,
+claimed, on what is arguably open-mem's strongest axis. This is worth correcting in `index.mdx`,
 `platform-overview.mdx` and the comparison set.
 
 ### 3. Onyx is missing from the comparison set
@@ -62,7 +62,7 @@ appears in no comparison document. See [comparison-onyx.md](comparison-onyx.md).
 
 `●` strong · `○` partial · `—` absent. Figures as researched August 2026; this category moves fast.
 
-| Factor | mem-dog | Onyx | Glean | Mem0 | Zep | Cognee | Khoj |
+| Factor | open-mem | Onyx | Glean | Mem0 | Zep | Cognee | Khoj |
 |--------|---------|------|-------|------|-----|--------|------|
 | Category | memory + search | ent. search | ent. search | agent memory | agent memory | agent memory | personal |
 | **License** | proprietary | MIT | closed | Apache 2.0 | OSS core | OSS | OSS |
@@ -99,7 +99,7 @@ appears in no comparison document. See [comparison-onyx.md](comparison-onyx.md).
 | Factor | Against whom |
 |--------|-------------|
 | Self-hosting and air-gap | Onyx and Khoj — both permissively licensed |
-| Temporal knowledge graph | Zep — mem-dog runs Zep's own Graphiti engine |
+| Temporal knowledge graph | Zep — open-mem runs Zep's own Graphiti engine |
 | Search modes and reranking | Zep matches mode-for-mode and reranker-for-reranker |
 | MCP tool surface | Everyone ships one now |
 
@@ -107,8 +107,8 @@ appears in no comparison document. See [comparison-onyx.md](comparison-onyx.md).
 
 | Factor | Against whom |
 |--------|-------------|
-| **Permission-aware retrieval** | Onyx syncs ACLs from source systems and filters pre-retrieval — shipped, while mem-dog's is designed |
-| **Enterprise compliance** — SOC 2, SSO, SCIM, audit | Onyx and Glean both ship it; mem-dog has none |
+| **Permission-aware retrieval** | Onyx syncs ACLs from source systems and filters pre-retrieval — shipped, while open-mem's is designed |
+| **Enterprise compliance** — SOC 2, SSO, SCIM, audit | Onyx and Glean both ship it; open-mem has none |
 | **License** | Proprietary against MIT and Apache incumbents in every adjacent category |
 | Ecosystem surface | Mem0 aligns with LangChain, CrewAI, AWS Agent SDK |
 | Maturity and community | Mem0 ~50k GitHub stars; Onyx MIT with an active install base |
@@ -117,16 +117,16 @@ appears in no comparison document. See [comparison-onyx.md](comparison-onyx.md).
 
 ## Strategic read
 
-mem-dog competes on **three fronts simultaneously** — personal memory, team search, agent memory —
+open-mem competes on **three fronts simultaneously** — personal memory, team search, agent memory —
 against a specialist incumbent on each, while being **proprietary against permissively licensed
 rivals**.
 
 No single axis is defensible:
 
 - Onyx matches the privacy and air-gap story under a more permissive license
-- Zep owns the temporal graph engine mem-dog runs
+- Zep owns the temporal graph engine open-mem runs
 - Mem0 owns the agent-integration surface
-- Nango owns the connector catalog mem-dog delegates to
+- Nango owns the connector catalog open-mem delegates to
 
 The defensible position is the **intersection**: connector breadth *and* memory semantics *and*
 private deployment *and* conversational channel access. That combination is genuinely unoccupied.
@@ -140,7 +140,7 @@ at a time, the intersection reads as three half-products competing with four ful
 
 Per the v1 architecture decision, DigiMe/openclaw-node is removed from the serverless production
 topology, and Graphiti/Neo4j is deferred. Cloud v1 therefore ships without *either* capability
-that distinguishes mem-dog, landing it in the most crowded quadrant of the market with no
+that distinguishes open-mem, landing it in the most crowded quadrant of the market with no
 differentiation and a proprietary license.
 
 Two further considerations:

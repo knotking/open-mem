@@ -6,7 +6,7 @@ growing — **without losing anything**.
 ## The one thing that decides the design
 
 mem0 reconciles by overwriting: when a new memory contradicts an old one, the
-old one is replaced and gone. memdog cannot do that, and not as a matter of
+old one is replaced and gone. open-mem cannot do that, and not as a matter of
 taste. The [temporal graph](graph.md) shipped on the opposite premise — a claim
 is **closed**, never replaced, so `as_of` can still answer what was believed in
 March. A compaction that destroyed its inputs would make `as_of` lie about

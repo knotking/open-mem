@@ -38,7 +38,7 @@ AFFILIATION = "Indian Institute of Technology Kanpur"
 OPENALEX = "https://api.openalex.org/works"
 # OpenAlex asks for a contact in the query so heavy callers can be reached
 # rather than blocked. Theirs is the polite pool.
-MAILTO = "demo@memdog.dev"
+MAILTO = "demo@open-mem.dev"
 
 
 def _abstract(inverted: dict | None) -> str:

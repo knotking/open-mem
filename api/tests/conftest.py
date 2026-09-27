@@ -10,7 +10,7 @@ os.environ.setdefault("EMBED_DIM", "64")
 
 # The local compose instance, and the only database this suite will touch
 # without being told otherwise in as many words.
-TEST_DATABASE_URL = "postgresql://memdog:memdog@localhost:54329/memdog"
+TEST_DATABASE_URL = "postgresql://open_mem:open_mem@localhost:54329/open_mem"
 
 # Hosts a test database can live on. Everything else is somebody's data.
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "postgres", "db"}
@@ -59,19 +59,19 @@ os.environ["DATABASE_URL"] = _guard(
     os.environ.get("DATABASE_URL") or TEST_DATABASE_URL
 )
 
-from memdog.bootstrap import bootstrap_tenant  # noqa: E402
-from memdog.config import load_settings  # noqa: E402
-from memdog.db import create_pool, migrate  # noqa: E402
-from memdog.inference import build_embedder  # noqa: E402
-from memdog.queue import InProcessQueue  # noqa: E402
-from memdog.extraction import build_extractor  # noqa: E402
-from memdog.workers import (  # noqa: E402
+from open_mem.bootstrap import bootstrap_tenant  # noqa: E402
+from open_mem.config import load_settings  # noqa: E402
+from open_mem.db import create_pool, migrate  # noqa: E402
+from open_mem.inference import build_embedder  # noqa: E402
+from open_mem.queue import InProcessQueue  # noqa: E402
+from open_mem.extraction import build_extractor  # noqa: E402
+from open_mem.workers import (  # noqa: E402
     EmbedWorker,
     EnrichWorker,
     EventWorker,
     ParseWorker,
 )
-from memdog.write import EMBED_TOPIC  # noqa: E402
+from open_mem.write import EMBED_TOPIC  # noqa: E402
 
 
 @pytest.fixture(scope="session")
@@ -137,7 +137,7 @@ async def queue(pool, embedder, extractor, settings, blobs):
 
 @pytest.fixture
 def blobs(tmp_path):
-    from memdog.blobs import FilesystemBlobStore
+    from open_mem.blobs import FilesystemBlobStore
 
     return FilesystemBlobStore(tmp_path / "blobs")
 
@@ -157,7 +157,7 @@ async def connected_tenant(pool):
     default silently capped every test's writes at `private`. The tests whose
     subject is the connection itself ask for it here.
     """
-    from memdog.bootstrap import bootstrap_tenant
+    from open_mem.bootstrap import bootstrap_tenant
 
     return await bootstrap_tenant(
         pool, org_name="connected", email="c@example.com", connection_scope="personal")
@@ -170,7 +170,7 @@ async def other_tenant(pool):
 
 @pytest.fixture
 async def principal_for(pool):
-    from memdog.auth import ApiKeyVerifier
+    from open_mem.auth import ApiKeyVerifier
 
     verifier = ApiKeyVerifier(pool)
 

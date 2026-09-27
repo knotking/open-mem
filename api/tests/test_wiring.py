@@ -26,7 +26,7 @@ from pathlib import Path
 
 import pytest
 
-from memdog import settings_store
+from open_mem import settings_store
 
 SRC = Path(settings_store.__file__).parent
 MODULES = sorted(p for p in SRC.glob("*.py") if p.name != "__init__.py")
@@ -242,7 +242,7 @@ def test_the_test_database_guard_refuses_a_remote_host():
     import conftest
 
     with pytest.raises(pytest.UsageError) as exc:
-        conftest._guard("postgresql://postgres:secret@10.100.0.3:5432/memdog")
+        conftest._guard("postgresql://postgres:secret@10.100.0.3:5432/open_mem")
     # The message has to name the host, or the reader cannot tell which
     # database they nearly dropped.
     assert "10.100.0.3" in str(exc.value)
@@ -252,9 +252,9 @@ def test_the_test_database_guard_refuses_a_remote_host():
 @pytest.mark.parametrize(
     "url",
     [
-        "postgresql://memdog:memdog@localhost:54329/memdog",
-        "postgresql://memdog:memdog@127.0.0.1:5432/memdog",
-        "postgresql://memdog:memdog@postgres:5432/memdog",   # docker compose
+        "postgresql://open_mem:open_mem@localhost:54329/open_mem",
+        "postgresql://open_mem:open_mem@127.0.0.1:5432/open_mem",
+        "postgresql://open_mem:open_mem@postgres:5432/open_mem",   # docker compose
     ],
 )
 def test_the_guard_allows_a_local_database(url):
@@ -271,7 +271,7 @@ def test_the_escape_hatch_cannot_be_tripped_by_accident(monkeypatch):
     """
     import conftest
 
-    remote = "postgresql://postgres:secret@10.100.0.3:5432/memdog"
+    remote = "postgresql://postgres:secret@10.100.0.3:5432/open_mem"
     for value in ("1", "true", "TRUE", "on", ""):
         monkeypatch.setenv("I_KNOW_THIS_DATABASE_IS_DISPOSABLE", value)
         with pytest.raises(pytest.UsageError):

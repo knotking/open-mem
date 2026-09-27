@@ -11,9 +11,9 @@ import base64
 
 import pytest
 
-from memdog.contracts import Inline, MemoryRef, WriteItem, WriteRequest, WriteOptions
-from memdog.retrieval import project_overview
-from memdog.write import write_items
+from open_mem.contracts import Inline, MemoryRef, WriteItem, WriteRequest, WriteOptions
+from open_mem.retrieval import project_overview
+from open_mem.write import write_items
 
 pytestmark = pytest.mark.asyncio
 
@@ -54,8 +54,8 @@ async def test_the_totals_are_what_the_caller_can_see(
     pool, queue, blobs, settings, tenant, principal_for
 ):
     """Not the project's true size -- the caller's view of it."""
-    from memdog.auth import DATA_READ, issue_key
-    from memdog.bootstrap import create_user
+    from open_mem.auth import DATA_READ, issue_key
+    from open_mem.bootstrap import create_user
 
     owner = await principal_for(tenant.api_key)
     await write_items(

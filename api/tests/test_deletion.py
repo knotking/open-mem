@@ -12,12 +12,12 @@ import base64
 
 import pytest
 
-from memdog.contracts import Inline, RetrieveFilter, RetrieveRequest, WriteItem, WriteRequest, WriteOptions
-from memdog.deletion import DELETE_TOPIC, DeleteWorker, request_deletion, unpurged_tombstones
-from memdog.queue import InProcessQueue
-from memdog.retrieval import NotFound, get_item, retrieve
-from memdog.workers import EventWorker, ParseWorker
-from memdog.write import write_items
+from open_mem.contracts import Inline, RetrieveFilter, RetrieveRequest, WriteItem, WriteRequest, WriteOptions
+from open_mem.deletion import DELETE_TOPIC, DeleteWorker, request_deletion, unpurged_tombstones
+from open_mem.queue import InProcessQueue
+from open_mem.retrieval import NotFound, get_item, retrieve
+from open_mem.workers import EventWorker, ParseWorker
+from open_mem.write import write_items
 
 pytestmark = pytest.mark.asyncio
 
@@ -76,8 +76,8 @@ async def test_the_cascade_reclaims_and_the_root_row_goes_last(
     queue = InProcessQueue()
     ParseWorker(pool, blobs, queue=queue).register(queue)
     DeleteWorker(pool, blobs).register(queue)
-    from memdog.workers import EmbedWorker, EventWorker
-    from memdog.write import EMBED_TOPIC
+    from open_mem.workers import EmbedWorker, EventWorker
+    from open_mem.write import EMBED_TOPIC
 
     embed = EmbedWorker(pool, embedder, settings, queue=queue)
     await embed.ensure_generator()
@@ -311,8 +311,8 @@ async def test_the_projection_is_erased_with_the_record(
     This was a real gap: purge cleared the item's own columns and left the
     projection intact.
     """
-    from memdog import normalize
-    from memdog.deletion import DeleteWorker, verify_erasure
+    from open_mem import normalize
+    from open_mem.deletion import DeleteWorker, verify_erasure
 
     actor = await principal_for(tenant.api_key)
     payload = '{"id": "MRN-A12345", "name": "Dana Ruiz", "amount": 4200}'
@@ -354,9 +354,9 @@ async def test_a_purged_item_leaves_no_case_membership(
 ):
     """Hidden by the ACL predicate is not the same as erased -- the row was
     still listed as a member of a patient's timeline."""
-    from memdog import cases
-    from memdog.contracts import CaseRef
-    from memdog.deletion import DeleteWorker
+    from open_mem import cases
+    from open_mem.contracts import CaseRef
+    from open_mem.deletion import DeleteWorker
 
     actor = await principal_for(tenant.api_key)
     await cases.create_case(pool, actor, project_id=tenant.project_id,
@@ -384,7 +384,7 @@ async def test_the_certificate_reports_what_survived(
     pool, queue, blobs, settings, tenant, principal_for
 ):
     """An erasure certificate issued without looking is a claim, not evidence."""
-    from memdog.deletion import verify_erasure
+    from open_mem.deletion import verify_erasure
 
     actor = await principal_for(tenant.api_key)
     written = await _write(pool, queue, blobs, settings, actor, tenant.producer_id, "live-1")

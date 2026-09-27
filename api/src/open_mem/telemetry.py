@@ -53,7 +53,7 @@ UNBOUNDED_LABELS = frozenset({
 })
 
 
-def setup(service_name: str = "memdog-api") -> None:
+def setup(service_name: str = "open-mem-api") -> None:
     """Configure once at startup. Safe to call twice."""
     global _tracer
     if _tracer is not None:
@@ -124,21 +124,21 @@ def setup(service_name: str = "memdog-api") -> None:
     # `ingested_at`, not from when a worker happened to pick the job up --
     # queue latency is part of the number a user experiences.
     _metrics["ingest_to_searchable"] = meter.create_histogram(
-        "memdog.ingest_to_searchable", unit="s",
+        "open_mem.ingest_to_searchable", unit="s",
         description="Write commit to retrievable",
     )
     _metrics["ingest_to_enriched"] = meter.create_histogram(
-        "memdog.ingest_to_enriched", unit="s",
+        "open_mem.ingest_to_enriched", unit="s",
         description="Write commit to enriched",
     )
     _metrics["items_written"] = meter.create_counter(
-        "memdog.items_written", description="Items accepted by the write endpoint"
+        "open_mem.items_written", description="Items accepted by the write endpoint"
     )
     _metrics["parse_failures"] = meter.create_counter(
-        "memdog.parse_failures", description="Items that could not be turned into text"
+        "open_mem.parse_failures", description="Items that could not be turned into text"
     )
     _metrics["model_tokens"] = meter.create_counter(
-        "memdog.model_tokens", description="Tokens spent, by model and purpose"
+        "open_mem.model_tokens", description="Tokens spent, by model and purpose"
     )
 
     # `resolved_by` is the label that earns this counter: an entity layer that
@@ -146,7 +146,7 @@ def setup(service_name: str = "memdog-api") -> None:
     # merging people, and it looks identical to one that is working until
     # somebody breaks the two apart.
     _metrics["entity_mentions"] = meter.create_counter(
-        "memdog.entity.mentions",
+        "open_mem.entity.mentions",
         description="Entity mentions resolved, by type and by what resolved them",
     )
 
@@ -156,7 +156,7 @@ def setup(service_name: str = "memdog-api") -> None:
     # means a predicate's declared types are wrong and real claims are being
     # dropped. Labelled by predicate, because that is the unit you would fix.
     _metrics["graph_edge_refused"] = meter.create_counter(
-        "memdog.graph.edge.refused",
+        "open_mem.graph.edge.refused",
         description="Extracted edges refused because the predicate does not "
                     "permit those endpoint types",
     )
@@ -168,29 +168,29 @@ def setup(service_name: str = "memdog-api") -> None:
     # be dropped under load, which is fine for "is spend climbing" and
     # disqualifying for "what does this tenant owe".
     _metrics["usage_credits"] = meter.create_counter(
-        "memdog.usage.credits",
+        "open_mem.usage.credits",
         description="Cost-weighted credits consumed, by purpose, engine and status",
     )
     _metrics["usage_crossed_to_paid"] = meter.create_counter(
-        "memdog.usage.crossed_to_paid",
+        "open_mem.usage.crossed_to_paid",
         description="Fallbacks that moved a call from a free engine to a paid one",
     )
     # A model call with nobody to bill. Its own counter because the alternative
     # is spend that simply does not appear anywhere -- which looks identical to
     # spend that did not happen.
     _metrics["usage_unattributed"] = meter.create_counter(
-        "memdog.usage.unattributed",
+        "open_mem.usage.unattributed",
         description="Inference calls made with no attribution to charge",
     )
     _metrics["usage_write_failures"] = meter.create_counter(
-        "memdog.usage.write_failures",
+        "open_mem.usage.write_failures",
         description="Usage rows the meter could not persist",
     )
     # Enrichment withheld by a sensitivity policy. Not a failure and not a
     # success: an operator who does not know this is firing sees clinical
     # records that never get summaries and no reason anywhere.
     _metrics["enrich_refused"] = meter.create_counter(
-        "memdog.enrich.refused",
+        "open_mem.enrich.refused",
         description="Records not enriched because no permitted engine was available",
     )
 
@@ -201,15 +201,15 @@ def setup(service_name: str = "memdog-api") -> None:
     # dropped is its own counter rather than a status label on a failure
     # metric: the thing you need to alert on does not look like an error.
     _metrics["ingest_dropped"] = meter.create_counter(
-        "memdog.ingest.dropped",
+        "open_mem.ingest.dropped",
         description="Payloads accepted and deliberately not stored, by reason",
     )
     _metrics["inbound_deliveries"] = meter.create_counter(
-        "memdog.inbound.deliveries",
+        "open_mem.inbound.deliveries",
         description="Webhook deliveries, by provider and outcome",
     )
     _metrics["inbound_rejected"] = meter.create_counter(
-        "memdog.inbound.rejected",
+        "open_mem.inbound.rejected",
         description="Deliveries refused, by reason: auth, signature, body_size, unknown",
     )
 
@@ -219,42 +219,42 @@ def setup(service_name: str = "memdog-api") -> None:
     # unless something says so: the answers keep arriving, they are just worse
     # and cheaper than the ones being paid for.
     _metrics["inference_fallback_depth"] = meter.create_histogram(
-        "memdog.inference.fallback_depth",
+        "open_mem.inference.fallback_depth",
         description="How far down the chain the engine that answered was; 0 is the primary",
     )
     _metrics["inference_attempts"] = meter.create_counter(
-        "memdog.inference.attempts",
+        "open_mem.inference.attempts",
         description="Engine attempts by outcome: served, unavailable, rejected, skipped",
     )
 
     # ----------------------------------------------------------------- crawl
     _metrics["crawl_discovered"] = meter.create_counter(
-        "memdog.crawl.discovered",
+        "open_mem.crawl.discovered",
         description="Items discovered, per crawler. Trending to zero is the "
                     "crawler equivalent of a dead connection",
     )
     _metrics["crawl_emitted"] = meter.create_counter(
-        "memdog.crawl.emitted", description="Items written, per crawler"
+        "open_mem.crawl.emitted", description="Items written, per crawler"
     )
     _metrics["crawl_dedupe_hits"] = meter.create_counter(
-        "memdog.crawl.dedupe_hits",
+        "open_mem.crawl.dedupe_hits",
         description="Items skipped as unchanged -- the work that was avoided",
     )
     _metrics["crawl_runs"] = meter.create_counter(
-        "memdog.crawl.runs", description="Runs, by terminal status"
+        "open_mem.crawl.runs", description="Runs, by terminal status"
     )
     _metrics["crawl_robots_denied"] = meter.create_counter(
-        "memdog.crawl.robots_denied", description="URLs robots.txt disallowed"
+        "open_mem.crawl.robots_denied", description="URLs robots.txt disallowed"
     )
     _metrics["crawl_duration"] = meter.create_histogram(
-        "memdog.crawl.duration", unit="s", description="Wall clock per run"
+        "open_mem.crawl.duration", unit="s", description="Wall clock per run"
     )
     # A ratio, not a duration: above 1.0 means a run takes longer than the
     # interval it is scheduled on, so the next tick always overlaps and the
     # crawler falls permanently behind. That is invisible in the duration alone
     # because whether it is too slow depends on the schedule.
     _metrics["crawl_duration_vs_interval"] = meter.create_histogram(
-        "memdog.crawl.duration_vs_interval",
+        "open_mem.crawl.duration_vs_interval",
         description="Run duration over its schedule interval; above 1.0 overlaps forever",
     )
 
@@ -262,7 +262,7 @@ def setup(service_name: str = "memdog-api") -> None:
 def tracer() -> trace.Tracer:
     if _tracer is None:
         setup()
-    return trace.get_tracer("memdog-api")
+    return trace.get_tracer("open-mem-api")
 
 
 @contextmanager

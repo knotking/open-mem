@@ -1,11 +1,11 @@
 ---
 name: deploy-gcp
-description: Deploy mem-dog to GCP (Cloud Run + private-IP Cloud SQL in memdog-dev-506718) — routine redeploys, from-scratch provisioning, and post-deploy verification. Invoke when asked to deploy, redeploy, ship, or release the API or UI; when a deploy fails; when standing the project up in a fresh GCP project; and whenever the deployment process itself changes, so this skill stays the record of how it is actually done.
+description: Deploy open-mem to GCP (Cloud Run + private-IP Cloud SQL in memdog-dev-506718) — routine redeploys, from-scratch provisioning, and post-deploy verification. Invoke when asked to deploy, redeploy, ship, or release the API or UI; when a deploy fails; when standing the project up in a fresh GCP project; and whenever the deployment process itself changes, so this skill stays the record of how it is actually done.
 ---
 
-# Deploying mem-dog to GCP
+# Deploying open-mem to GCP
 
-This skill is the **record of how mem-dog is actually deployed**, kept accurate
+This skill is the **record of how open-mem is actually deployed**, kept accurate
 by being rewritten every time the process changes. It has one job beyond running
 a deploy: a deploy that is done differently than what is written here is a
 deploy that is only half finished — see [Keeping this skill true](#keeping-this-skill-true).
@@ -23,18 +23,18 @@ have full access to Cloud Run, Cloud SQL and Secret Manager here.
 
 | Piece | Name | Notes |
 |---|---|---|
-| API | Cloud Run `memdog-api` | `https://memdog-api-r5ifa3vgqq-uc.a.run.app` |
-| UI | Cloud Run `memdog-sandbox` | `https://memdog-sandbox-r5ifa3vgqq-uc.a.run.app` |
-| Database | Cloud SQL `memdog-spine` | PG16 + pgvector, **private IP `10.100.0.3` only** |
-| Raw bytes | GCS `gs://memdog-spine-raw-dev` | |
-| Images | Artifact Registry `memdog` | `us-central1-docker.pkg.dev/memdog-dev-506718/memdog` |
-| Identity | `memdog-api@memdog-dev-506718.iam.gserviceaccount.com` | both services and all jobs |
-| Jobs | `memdog-reconcile`, `memdog-crawl-tick`, `memdog-alert-tick`, `memdog-seed`, `memdog-bootstrap` | |
-| Repo analysis | Cloud Run Job `memdog-repo-analysis` | **Not on the API image** — own Dockerfile, own tag, own deploy. Off unless `REPO_ANALYSIS_JOB` is set. |
-| Schedules | `memdog-reconcile-tick` every 10 min → `memdog-reconcile`; `memdog-alert-sweep` every 1 min → `memdog-alert-tick` | |
-| Secrets | `memdog-db-password`, `memdog-master-key`, `memdog-demo-key`, `memdog-web-api-key`, `gemini-api-key` | |
-| Drive reader | `memdog-drive-key` | **Optional.** A service-account JSON key, mounted as `DRIVE_SERVICE_ACCOUNT`. Absent, Drive folders report themselves unconfigured — see [Connecting a Drive folder](#connecting-a-drive-folder). |
-| Console sign-in | `owner@memdog.dev` (owner), `demo@memdog.dev` (admin) | Identity Platform; passwords in `memdog-owner-password` / `memdog-demo-password` |
+| API | Cloud Run `open-mem-api` | `https://open-mem-api-r5ifa3vgqq-uc.a.run.app` |
+| UI | Cloud Run `open-mem-sandbox` | `https://open-mem-sandbox-r5ifa3vgqq-uc.a.run.app` |
+| Database | Cloud SQL `open-mem-spine` | PG16 + pgvector, **private IP `10.100.0.3` only** |
+| Raw bytes | GCS `gs://open-mem-spine-raw-dev` | |
+| Images | Artifact Registry `open-mem` | `us-central1-docker.pkg.dev/memdog-dev-506718/open-mem` |
+| Identity | `open-mem-api@memdog-dev-506718.iam.gserviceaccount.com` | both services and all jobs |
+| Jobs | `open-mem-reconcile`, `open-mem-crawl-tick`, `open-mem-alert-tick`, `open-mem-seed`, `open-mem-bootstrap` | |
+| Repo analysis | Cloud Run Job `open-mem-repo-analysis` | **Not on the API image** — own Dockerfile, own tag, own deploy. Off unless `REPO_ANALYSIS_JOB` is set. |
+| Schedules | `open-mem-reconcile-tick` every 10 min → `open-mem-reconcile`; `open-mem-alert-sweep` every 1 min → `open-mem-alert-tick` | |
+| Secrets | `open-mem-db-password`, `open-mem-master-key`, `open-mem-demo-key`, `open-mem-web-api-key`, `gemini-api-key` | |
+| Drive reader | `open-mem-drive-key` | **Optional.** A service-account JSON key, mounted as `DRIVE_SERVICE_ACCOUNT`. Absent, Drive folders report themselves unconfigured — see [Connecting a Drive folder](#connecting-a-drive-folder). |
+| Console sign-in | `owner@open-mem.dev` (owner), `demo@open-mem.dev` (admin) | Identity Platform; passwords in `open-mem-owner-password` / `open-mem-demo-password` |
 
 **There is no GKE, no Kubernetes and no Supabase.** If a doc or an old memory
 says otherwise it is describing `memdog-dev` (project `204556389124`), which is
@@ -45,8 +45,8 @@ the previous generation and whose owning account has a dead refresh token.
 ```bash
 cd api && ./deploy/cloudrun.sh <tag>     # e.g. spine-13
 
-cd ui && MEMDOG_PROJECT_ID=<prj_...> MEMDOG_PRODUCER_ID=<key_...> \
-         API_URL=https://memdog-api-r5ifa3vgqq-uc.a.run.app \
+cd ui && OPENMEM_PROJECT_ID=<prj_...> OPENMEM_PRODUCER_ID=<key_...> \
+         API_URL=https://open-mem-api-r5ifa3vgqq-uc.a.run.app \
          ./deploy.sh <tag>               # e.g. ui-4, only if the UI changed
 ```
 
@@ -58,9 +58,9 @@ passing the `r5ifa3vgqq` one keeps it consistent with what is already set. Read
 the current values off the running service rather than remembering them:
 
 ```bash
-gcloud run services describe memdog-sandbox --project memdog-dev-506718 \
+gcloud run services describe open-mem-sandbox --project memdog-dev-506718 \
   --region us-central1 --format='value(spec.template.spec.containers[0].env)' \
-  | tr ';' '\n' | grep -E 'MEMDOG_(PROJECT|PRODUCER)_ID'
+  | tr ';' '\n' | grep -E 'OPENMEM_(PROJECT|PRODUCER)_ID'
 ```
 
 **Tags are descriptive, not monotonic.** The registry holds both — `spine-1`
@@ -74,12 +74,12 @@ Check what is deployed before picking a tag — the running service reports its
 own as `IMAGE_TAG`, and the image tag is in the revision:
 
 ```bash
-gcloud run services describe memdog-api --project memdog-dev-506718 \
+gcloud run services describe open-mem-api --project memdog-dev-506718 \
   --region us-central1 --format='value(spec.template.spec.containers[0].image)'
 ```
 
-Deploying the API also redeploys `memdog-reconcile`, `memdog-crawl-tick`,
-`memdog-alert-tick` and `memdog-seed` onto the same image and the same
+Deploying the API also redeploys `open-mem-reconcile`, `open-mem-crawl-tick`,
+`open-mem-alert-tick` and `open-mem-seed` onto the same image and the same
 environment. That coupling is
 deliberate and load-bearing: **the reconciler once drifted twenty tags behind
 and lost `EMBED_ENGINE`, so it re-embedded with the old model, concluded nothing
@@ -108,7 +108,7 @@ service about what "current" means. Never deploy a job by hand.
   settles it:
 
   ```bash
-  gcloud run services describe memdog-sandbox --project memdog-dev-506718 \
+  gcloud run services describe open-mem-sandbox --project memdog-dev-506718 \
     --region us-central1 --format='value(spec.template.spec.containers[0].image)'
   ```
 
@@ -138,8 +138,8 @@ service about what "current" means. Never deploy a job by hand.
   Seed one corpus, not all of them:
 
   ```bash
-  gcloud run jobs execute memdog-seed --project memdog-dev-506718 --region us-central1 \
-    --args="-m,memdog,seed-demos,--only=gita" --wait
+  gcloud run jobs execute open-mem-seed --project memdog-dev-506718 --region us-central1 \
+    --args="-m,open_mem,seed-demos,--only=gita" --wait
   ```
 
   **`--only` exists because seeding is destructive.** `seed_corpus` deletes the
@@ -158,7 +158,7 @@ service about what "current" means. Never deploy a job by hand.
   Three things sized for a hundred records that seven hundred broke, all fixed
   and all worth recognising if they come back:
 
-  - **`--task-timeout` is now per job**, 3 hours for `memdog-seed` against 30
+  - **`--task-timeout` is now per job**, 3 hours for `open-mem-seed` against 30
     minutes for the ticks. Enrichment is one worker per topic, so it is serial —
     a model call per record, one after the next. Under the shared thirty the
     task is killed partway and leaves a project written and half-enriched.
@@ -196,7 +196,7 @@ service about what "current" means. Never deploy a job by hand.
   found.
 
   ```bash
-  gcloud run services describe memdog-api --project memdog-dev-506718 \
+  gcloud run services describe open-mem-api --project memdog-dev-506718 \
     --region us-central1 --format='value(spec.template.spec.containers[0].env)' \
     | tr ';' '\n' | grep -oE "'name': '[A-Z_]+'"
   ```
@@ -270,10 +270,10 @@ plain account, no roles needed on this project — its power comes entirely from
 what people share with it), enable the Drive API on the key's own project, then:
 
 ```bash
-gcloud secrets create memdog-drive-key --project memdog-dev-506718 --replication-policy automatic
-gcloud secrets versions add memdog-drive-key --project memdog-dev-506718 --data-file=key.json
-gcloud secrets add-iam-policy-binding memdog-drive-key --project memdog-dev-506718 \
-  --member serviceAccount:memdog-api@memdog-dev-506718.iam.gserviceaccount.com \
+gcloud secrets create open-mem-drive-key --project memdog-dev-506718 --replication-policy automatic
+gcloud secrets versions add open-mem-drive-key --project memdog-dev-506718 --data-file=key.json
+gcloud secrets add-iam-policy-binding open-mem-drive-key --project memdog-dev-506718 \
+  --member serviceAccount:open-mem-api@memdog-dev-506718.iam.gserviceaccount.com \
   --role roles/secretmanager.secretAccessor
 cd api && ./deploy/cloudrun.sh <tag>     # the secret only binds on a new revision
 rm key.json
@@ -299,7 +299,7 @@ curl -sf -H "X-API-Key: $KEY" $URL/api/v1/drive/share-address
 ### The repo analysis job
 
 **It is not on the API image and is not in the job loop.** Every other job runs
-`memdog` and is redeployed with the API precisely so it cannot drift. This one
+`open-mem` and is redeployed with the API precisely so it cannot drift. This one
 carries `git`, `graphifyy` and 37 tree-sitter grammars — the reason it exists at
 all is to keep that out of the API image — so it has its own Dockerfile, its own
 tag, and its own deploy:
@@ -312,8 +312,8 @@ cd analysis/repo && PRODUCER_ID=<prd_...> ./deploy.sh <tag>   # e.g. repo-analys
 its own; `REPO_ANALYSIS_JOB` has to name it, fully qualified:
 
 ```bash
-gcloud run services update memdog-api --project memdog-dev-506718 --region us-central1 \
-  --update-env-vars REPO_ANALYSIS_JOB=projects/memdog-dev-506718/locations/us-central1/jobs/memdog-repo-analysis
+gcloud run services update open-mem-api --project memdog-dev-506718 --region us-central1 \
+  --update-env-vars REPO_ANALYSIS_JOB=projects/memdog-dev-506718/locations/us-central1/jobs/open-mem-repo-analysis
 ```
 
 Empty is the correct default — the job clones arbitrary public repositories and
@@ -322,14 +322,14 @@ snapshot requested with it unset is not lost and does not hang**: it is recorded
 and immediately marked `failed` with that as its reason, because a snapshot left
 `pending` reads as one still running.
 
-It needs its own write credential (`memdog-repo-analysis-key`) and a producer to
-write through, because it reaches mem-dog only through the public write API — it
+It needs its own write credential (`open-mem-repo-analysis-key`) and a producer to
+write through, because it reaches open-mem only through the public write API — it
 holds no database credential and has no privileged path. `deploy.sh` grants the
 API's service account `roles/run.invoker` on the job, which is the whole
 permission needed to start an execution.
 
 **Database migrations need no step.** `app.py` runs `migrate()` on startup, so
-a new `api/src/memdog/migrations/*.sql` applies itself the first time the new
+a new `api/src/open_mem/migrations/*.sql` applies itself the first time the new
 revision serves. It follows that a migration that fails takes the revision down
 with it — a deploy that ends in a revision that will not become ready is
 usually a migration, not the app.
@@ -337,7 +337,7 @@ usually a migration, not the app.
 ## Verify
 
 ```bash
-URL=https://memdog-api-r5ifa3vgqq-uc.a.run.app
+URL=https://open-mem-api-r5ifa3vgqq-uc.a.run.app
 curl -sf $URL/api/v1/health        # {"status":"ok", ...}
 cd api && ./deploy/smoke.sh $URL <api_key> <producer_id> <project_id>
 ```
@@ -354,8 +354,8 @@ recorded when the accounts were made, so both were reset on 1 Sep 2026 and are
 now in Secret Manager — that is the only copy:
 
 ```bash
-gcloud secrets versions access latest --secret memdog-owner-password --project memdog-dev-506718
-gcloud secrets versions access latest --secret memdog-demo-password  --project memdog-dev-506718
+gcloud secrets versions access latest --secret open-mem-owner-password --project memdog-dev-506718
+gcloud secrets versions access latest --secret open-mem-demo-password  --project memdog-dev-506718
 ```
 
 Three things have to line up or sign-in fails in a way that does not name the
@@ -366,7 +366,7 @@ cause, because two of them are deliberately quiet:
    nothing, and the address is what an admin invites against.
 2. **The address is admitted.** Registration is `invite_only` by default, which
    admits an address holding a live invite *or* one that is already a `users`
-   row. `python -m memdog add-member <email> <role>` creates that row.
+   row. `python -m open_mem add-member <email> <role>` creates that row.
 3. **A membership exists.** Auto-provisioning creates a user and an identity but
    **never a membership**, so a brand-new account authenticates cleanly and then
    gets `403 this account is not a member of any organization`.
@@ -387,12 +387,12 @@ cause, because two of them are deliberately quiet:
 
    ```bash
    curl -X POST -H "X-API-Key: $KEY" -H 'content-type: application/json' \
-     -d '{"email":"demo@memdog.dev","role":"admin"}' \
+     -d '{"email":"demo@open-mem.dev","role":"admin"}' \
      "$URL/api/v1/organizations/members"
    ```
 
    It restores the same `user_id`, so everything the account already owned is
-   still its own. Prefer this to `python -m memdog add-member`, which attaches
+   still its own. Prefer this to `python -m open_mem add-member`, which attaches
    to *"the first organization"* (`ORDER BY created_at LIMIT 1`) and is the
    cause of the wrong-org failure described below.
 
@@ -413,7 +413,7 @@ cause, because two of them are deliberately quiet:
    for one person should pass `personal` deliberately.
 
 5. **The membership is in the org the console is configured for.** Found
-   2026-09-03. `MEMDOG_PRODUCER_ID` and `MEMDOG_PROJECT_ID` are baked in at
+   2026-09-03. `OPENMEM_PRODUCER_ID` and `OPENMEM_PROJECT_ID` are baked in at
    deploy time and name one org; the console serves whoever signs in. When those
    disagree, every write fails with `404 unknown producer` — *for signed-in
    users only*.
@@ -428,7 +428,7 @@ cause, because two of them are deliberately quiet:
    organization"* (`ORDER BY created_at LIMIT 1`), which is the oldest org and
    not necessarily the configured one. Checking that `/api/v1/projects` returns
    200 does not catch it — the account is a member of *an* org, just the wrong
-   one. Check the project id matches `MEMDOG_PROJECT_ID`.
+   one. Check the project id matches `OPENMEM_PROJECT_ID`.
 
    Moving somebody between orgs is not one call. Resolution takes the **oldest**
    membership, so the old row has to be deleted, not merely outranked — and
@@ -441,7 +441,7 @@ Reset a password without touching the rest (the body goes in a file — a passwo
 in a command line is a password in the process table):
 
 ```bash
-gcloud secrets versions access latest --secret memdog-web-api-key --project memdog-dev-506718  # for testing sign-in
+gcloud secrets versions access latest --secret open-mem-web-api-key --project memdog-dev-506718  # for testing sign-in
 curl -X POST "https://identitytoolkit.googleapis.com/v1/projects/memdog-dev-506718/accounts:update" \
   -H "Authorization: Bearer $(gcloud auth print-access-token)" \
   -H "x-goog-user-project: memdog-dev-506718" -H 'content-type: application/json' \
@@ -481,7 +481,7 @@ item's detail rather than on a time window.
 The demo credential is in Secret Manager, never in a log:
 
 ```bash
-gcloud secrets versions access latest --secret memdog-demo-key --project memdog-dev-506718
+gcloud secrets versions access latest --secret open-mem-demo-key --project memdog-dev-506718
 ```
 
 ## When it fails
@@ -509,7 +509,7 @@ Each of these presents as a different bug than it is.
   `X-API-Key`. Both reach the same verifier.
 - **`gcloud auth print-identity-token --audiences=...` refuses.** A user account
   cannot mint a custom-audience token; it needs
-  `--impersonate-service-account=memdog-api@memdog-dev-506718.iam.gserviceaccount.com`
+  `--impersonate-service-account=open-mem-api@memdog-dev-506718.iam.gserviceaccount.com`
   plus `roles/iam.serviceAccountTokenCreator`.
 - **`Reauthentication failed` from any gcloud command.** Ask Parag to run
   `gcloud auth login` and wait. Do not attempt it — it needs a browser.
@@ -525,7 +525,7 @@ Each of these presents as a different bug than it is.
   is not optional; dev machines are arm64 and the failure is silent until deploy.
 - **The scheduled reconcile never fires, with no error on the scheduler job.**
   The Cloud Scheduler service agent needs `roles/iam.serviceAccountTokenCreator`
-  on `memdog-api@…`, because Scheduler impersonates it to mint the OAuth token.
+  on `open-mem-api@…`, because Scheduler impersonates it to mint the OAuth token.
 - **`smoke.sh` ends in `FAIL: nothing retrievable`, and nothing is wrong.**
   Fixed 2026-08-30 by sending `options.enrich`; kept here because the symptom
   will recur wherever the flag is missing. The items are written and durable,
@@ -548,15 +548,15 @@ Each of these presents as a different bug than it is.
   the jobs.** `--set-secrets NAME=secret:latest` resolves **at deploy time, not
   at run time**, so adding a secret version changes nothing until a new revision
   is created. Worse, the four deployments rotate independently: roll the service
-  alone and `memdog-reconcile` keeps the old value, so the reconciler silently
+  alone and `open-mem-reconcile` keeps the old value, so the reconciler silently
   degrades while the service looks fine — the same drift the job-coupling rule
   above exists to prevent. Rotate all four together:
 
   ```bash
   printf '%s' "$NEW" | gcloud secrets versions add <secret> --project memdog-dev-506718 --data-file=-
-  gcloud run services update memdog-api --region us-central1 \
+  gcloud run services update open-mem-api --region us-central1 \
     --update-secrets GEMINI_API_KEY=gemini-api-key:latest --quiet
-  for J in memdog-reconcile memdog-crawl-tick memdog-seed; do
+  for J in open-mem-reconcile open-mem-crawl-tick open-mem-seed; do
     gcloud run jobs update $J --region us-central1 \
       --update-secrets GEMINI_API_KEY=gemini-api-key:latest --quiet
   done
@@ -632,7 +632,7 @@ Each of these presents as a different bug than it is.
 
 ## Known drift
 
-None outstanding. `memdog-bootstrap` was the last of it — created by hand,
+None outstanding. `open-mem-bootstrap` was the last of it — created by hand,
 pinned twenty tags behind, and repurposed to run `grant-key` instead of a
 bootstrap. It is in the job loop as of 30 Aug 2026, so it is redeployed with
 everything else and cannot drift again. `refuse_if_occupied` makes it a no-op
@@ -647,7 +647,7 @@ created, and the database before the service can start. See
 
 ## Keeping this skill true
 
-**Every change to how mem-dog is deployed lands here in the same session it is
+**Every change to how open-mem is deployed lands here in the same session it is
 discovered.** That is the point of the skill; a runbook that lags reality is
 worse than none, because it is trusted.
 

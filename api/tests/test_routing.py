@@ -11,7 +11,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from memdog.routing import Breaker, Chain, Step, Unavailable, is_transient
+from open_mem.routing import Breaker, Chain, Step, Unavailable, is_transient
 
 pytestmark = pytest.mark.asyncio
 

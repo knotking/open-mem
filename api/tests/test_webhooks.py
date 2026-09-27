@@ -14,9 +14,9 @@ import time
 
 import pytest
 
-from memdog.crypto import Envelope
-from memdog.retrieval import get_item
-from memdog.webhooks import WebhookError, map_payload, receive
+from open_mem.crypto import Envelope
+from open_mem.retrieval import get_item
+from open_mem.webhooks import WebhookError, map_payload, receive
 
 pytestmark = pytest.mark.asyncio
 
@@ -28,7 +28,7 @@ def envelope():
 
 async def _webhook_producer(pool, tenant, envelope, *, auth="signature", mapping=None,
                             secret="shh-very-secret", defaults=None):
-    from memdog.ids import new_id
+    from open_mem.ids import new_id
 
     producer_id = new_id("whk")
     await pool.execute(
@@ -135,7 +135,7 @@ async def test_signature_comparison_tolerates_provider_prefixes():
     over dead code is worse than no test, because it reports on a scheme the
     service does not use.
     """
-    from memdog import providers
+    from open_mem import providers
 
     body = b"payload"
     digest = hmac.new(b"k", body, hashlib.sha256).hexdigest()
@@ -164,7 +164,7 @@ async def test_signature_comparison_tolerates_provider_prefixes():
 async def test_an_api_key_producer_checks_the_configured_key(
     pool, queue, blobs, settings, tenant, envelope
 ):
-    from memdog.auth import DATA_WRITE, issue_key
+    from open_mem.auth import DATA_WRITE, issue_key
 
     producer_id = await _webhook_producer(pool, tenant, envelope, auth="api_key", secret=None)
     token = await issue_key(pool, user_id=tenant.user_id, org_id=tenant.org_id,
@@ -306,7 +306,7 @@ async def test_a_non_json_body_is_kept_as_text(pool, queue, blobs, settings, ten
                            raw_body=b"plain text, not json at all", headers={})
     assert result.status == "accepted" and result.items == 1
 
-    from memdog.auth import Principal
+    from open_mem.auth import Principal
 
     principal = Principal(user_id=tenant.user_id, org_id=tenant.org_id,
                           capabilities=frozenset({"data:read"}))
@@ -322,7 +322,7 @@ async def test_webhook_writes_go_through_the_ordinary_write_path(
     result = await receive(pool, queue, blobs, settings, envelope, producer_id=producer_id,
                            raw_body=b'{"id": "traced"}', headers={})
 
-    from memdog.events import list_events
+    from open_mem.events import list_events
 
     events = await list_events(pool, tenant.org_id, data_id=result.data_ids[0])
     assert "data.recorded" in {e["event_type"] for e in events}
@@ -449,7 +449,7 @@ async def test_a_slack_thread_becomes_a_conversation_memory(
     import json as jsonlib
     import time as timelib
 
-    from memdog.retrieval import item_memories
+    from open_mem.retrieval import item_memories
 
     producer_id = await _webhook_producer(
         pool, tenant, envelope, secret="s", mapping={"provider": "slack"}
@@ -598,8 +598,8 @@ async def test_twilio_signs_the_url_and_posts_a_form(
     )
     assert result.status == "accepted" and result.items == 1
 
-    from memdog.auth import Principal
-    from memdog.retrieval import get_item
+    from open_mem.auth import Principal
+    from open_mem.retrieval import get_item
 
     principal = Principal(user_id=tenant.user_id, org_id=tenant.org_id,
                           capabilities=frozenset({"data:read"}))
@@ -685,7 +685,7 @@ async def test_a_dropped_delivery_is_counted_separately_from_a_failure(
     correctly zero while data goes nowhere, so `ingest.dropped` has to be its
     own counter -- the thing worth alerting on does not look like a failure.
     """
-    import memdog.webhooks as webhooks_mod
+    import open_mem.webhooks as webhooks_mod
 
     emitted: list[tuple] = []
     monkeypatch.setattr(webhooks_mod, "record",
@@ -713,7 +713,7 @@ async def test_a_signature_failure_is_counted_even_though_it_never_reaches_a_del
     the clearest sign of a rotated secret or someone probing the endpoint, and
     it would otherwise appear in no metric at all.
     """
-    import memdog.webhooks as webhooks_mod
+    import open_mem.webhooks as webhooks_mod
 
     emitted: list[tuple] = []
     monkeypatch.setattr(webhooks_mod, "record",
@@ -747,8 +747,8 @@ async def test_a_delivered_webhook_is_stored_but_not_searchable_by_default(
     support ticket. Asserted here so it is a decision on the record rather than
     a property of the wiring.
     """
-    from memdog.contracts import RetrieveFilter, RetrieveRequest
-    from memdog.retrieval import retrieve
+    from open_mem.contracts import RetrieveFilter, RetrieveRequest
+    from open_mem.retrieval import retrieve
 
     producer_id = await _webhook_producer(
         pool, tenant, envelope,
@@ -802,8 +802,8 @@ async def test_a_webhook_with_enrichment_on_becomes_a_record_a_search_can_find(
     the premise of one write path, and it was asserted for the crawler, for the
     SDK and for MCP — never for the producer that delivers the most.
     """
-    from memdog.contracts import RetrieveFilter, RetrieveRequest
-    from memdog.retrieval import retrieve
+    from open_mem.contracts import RetrieveFilter, RetrieveRequest
+    from open_mem.retrieval import retrieve
 
     producer_id = await _webhook_producer(
         pool, tenant, envelope,
@@ -862,7 +862,7 @@ async def test_a_producer_can_ask_for_enrichment_and_for_half_of_it(
     -- one model call per item, unbounded -- and being unsearchable, because
     the embedding lives on the same flag.
     """
-    from memdog.events import list_events
+    from open_mem.events import list_events
 
     producer_id = await _webhook_producer(
         pool, tenant, envelope, auth="url_secret", secret=None,
@@ -892,8 +892,8 @@ async def test_a_providers_own_signing_secret_can_be_stored(
     import hashlib
     import hmac as hmac_module
 
-    from memdog.crypto import Envelope
-    from memdog.ids import new_id
+    from open_mem.crypto import Envelope
+    from open_mem.ids import new_id
 
     theirs = "zoom-gave-us-this-one"
     producer_id = new_id("whk")

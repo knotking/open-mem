@@ -135,7 +135,7 @@ something discovered** by a prospect who read the self-hosted claim.
 
 **The question.** Proprietary, or permissive?
 
-**Why it is here.** mem-dog competes **proprietary against MIT and Apache incumbents in every
+**Why it is here.** open-mem competes **proprietary against MIT and Apache incumbents in every
 adjacent category** — Onyx is MIT with SOC 2 and permission-aware retrieval; Mem0 is Apache 2.0.
 
 **No recommendation.** Competing proprietary in a developer-tools category is a legitimate choice

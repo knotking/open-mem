@@ -67,7 +67,7 @@ describe a *corpus*, and a corpus belongs to a project.
 | Memory types — name, TTL, `on_expiry` | **P** O PL 🔒 | 4 shipped types | [memories.md](memories.md) |
 | Memory routing rules | **P** O | thread-key routing | Must be bounded |
 | Default memory scope | — | per (project, user) | `shared`-scope items go to the project default |
-| Normalization schema | **P** O PL 🔒 ⚡ | mem-dog canonical types | [normalization.md](ingestion/normalization.md) |
+| Normalization schema | **P** O PL 🔒 ⚡ | open-mem canonical types | [normalization.md](ingestion/normalization.md) |
 | Field mappings | **P** O ⚡ | per provider | |
 | Validation policy | **P** O 🔒 | `accept_raw` | `reject` refused for webhook producers |
 | Redaction rules | **P** O 🔒 ⚡ | none | Post-MVP. Narrowing one is irreversible |

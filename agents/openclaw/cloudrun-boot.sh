@@ -17,7 +17,7 @@ PORT="${PORT:-8080}"
 # on 127.0.0.1 inside the container -- which on Cloud Run means the port never
 # answers and the revision fails its startup probe for no visible reason.
 # Written to a temp file and moved into place. The heredoc below is unquoted --
-# it has to be, for ${PORT} and ${MEMDOG_API_URL} to expand -- which means the
+# it has to be, for ${PORT} and ${OPENMEM_API_URL} to expand -- which means the
 # shell also evaluates anything else it recognises. A backtick inside a JSON
 # comment here executed `openclaw config validate` as a command substitution
 # while this very file sat truncated, logging a JSON5 parse failure 107ms before
@@ -39,12 +39,12 @@ cat > "$OPENCLAW_CONFIG_DIR/openclaw.json.tmp" <<EOF
 
   "mcp": {
     "servers": {
-      "mem_dog": {
-        "url": "${MEMDOG_API_URL%/}/api/v1/mcp",
+      "open_mem": {
+        "url": "${OPENMEM_API_URL%/}/api/v1/mcp",
         "transport": "streamable-http",
         "requestTimeoutMs": 30000,
         "connectionTimeoutMs": 10000,
-        "headers": { "Authorization": "Bearer \${MEMDOG_API_KEY}" }
+        "headers": { "Authorization": "Bearer \${OPENMEM_API_KEY}" }
       }
     }
   },
@@ -71,6 +71,6 @@ cat > "$OPENCLAW_CONFIG_DIR/openclaw.json.tmp" <<EOF
 EOF
 mv "$OPENCLAW_CONFIG_DIR/openclaw.json.tmp" "$OPENCLAW_CONFIG_DIR/openclaw.json"
 
-echo "openclaw-boot: seeded ${OPENCLAW_CONFIG_DIR} (port ${PORT}, bind lan, model ${OPENCLAW_MODEL:-google/gemini-3.5-flash}, mcp=$([ -n "${MEMDOG_API_URL:-}" ] && echo mem_dog || echo none), terminal off)"
+echo "openclaw-boot: seeded ${OPENCLAW_CONFIG_DIR} (port ${PORT}, bind lan, model ${OPENCLAW_MODEL:-google/gemini-3.5-flash}, mcp=$([ -n "${OPENMEM_API_URL:-}" ] && echo open_mem || echo none), terminal off)"
 
 exec tini -s -- "$@"

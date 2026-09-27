@@ -15,9 +15,9 @@ from __future__ import annotations
 
 import pytest
 
-from memdog import entities as entities_mod
-from memdog.graph import GraphError, PostgresGraph, record_edges
-from memdog.ids import new_id
+from open_mem import entities as entities_mod
+from open_mem.graph import GraphError, PostgresGraph, record_edges
+from open_mem.ids import new_id
 
 pytestmark = pytest.mark.asyncio
 
@@ -183,7 +183,7 @@ async def test_a_path_does_not_run_through_a_record_the_caller_cannot_read(
         lisbon, tenant.org_id, tenant.project_id,
     )
     async with pool.acquire() as conn, conn.transaction():
-        from memdog.graph import _upsert_fact
+        from open_mem.graph import _upsert_fact
         fact_id = await _upsert_fact(
             conn, org_id=tenant.org_id, project_id=tenant.project_id,
             subject_id=ids["Northwind Trading"], predicate="located_in",
@@ -388,7 +388,7 @@ async def test_a_claim_only_a_hidden_record_makes_is_not_in_the_overview(
         lisbon, tenant.org_id, tenant.project_id,
     )
     async with pool.acquire() as conn, conn.transaction():
-        from memdog.graph import _upsert_fact
+        from open_mem.graph import _upsert_fact
         fact_id = await _upsert_fact(
             conn, org_id=tenant.org_id, project_id=tenant.project_id,
             subject_id=ids["Northwind Trading"], predicate="located_in",
@@ -458,7 +458,7 @@ async def test_an_entity_with_no_readable_mention_is_not_named(
     )
     # ...asserted by a record the caller CAN read.
     async with pool.acquire() as conn, conn.transaction():
-        from memdog.graph import _upsert_fact
+        from open_mem.graph import _upsert_fact
         fact_id = await _upsert_fact(
             conn, org_id=tenant.org_id, project_id=tenant.project_id,
             subject_id=ids["Priya Raman"], predicate="works_for",
@@ -485,7 +485,7 @@ async def test_an_entity_with_no_readable_mention_is_not_named(
 async def test_the_overview_limit_is_bounded(pool, tenant, principal_for):
     """`overview` is reachable from an unauthenticated endpoint, so the ceiling
     belongs here rather than at the call site."""
-    from memdog.graph import MAX_OVERVIEW
+    from open_mem.graph import MAX_OVERVIEW
 
     actor = await principal_for(tenant.api_key)
     graph = PostgresGraph(pool)
@@ -510,7 +510,7 @@ async def test_the_overview_limit_is_bounded(pool, tenant, principal_for):
 async def http(pool, tenant):
     import httpx
 
-    from memdog.app import app
+    from open_mem.app import app
 
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(app=app)
@@ -560,7 +560,7 @@ async def test_the_project_graph_route_refuses_a_bad_limit(pool, tenant, http):
     the demo surface, so its bound is enforced in the store; a route that
     quietly rounded a caller's number down would be reporting a different
     query than the one it ran."""
-    from memdog.graph import MAX_OVERVIEW
+    from open_mem.graph import MAX_OVERVIEW
 
     response = await http.get(
         f"/api/v1/projects/{tenant.project_id}/graph?limit={MAX_OVERVIEW + 1}",
@@ -663,7 +663,7 @@ async def test_narrowing_by_memory_cannot_confirm_a_hidden_record(
         lisbon, tenant.org_id, tenant.project_id,
     )
     async with pool.acquire() as conn, conn.transaction():
-        from memdog.graph import _upsert_fact
+        from open_mem.graph import _upsert_fact
         fact_id = await _upsert_fact(
             conn, org_id=tenant.org_id, project_id=tenant.project_id,
             subject_id=ids["Northwind Trading"], predicate="located_in",

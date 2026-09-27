@@ -20,9 +20,9 @@ async def test_writing_again_after_an_erasure_brings_the_item_back(
     file was, precisely as reported, never saved -- written into a row nothing
     could see, with no error anywhere.
     """
-    from memdog.contracts import Inline, WriteItem, WriteRequest
-    from memdog.deletion import request_deletion
-    from memdog.write import write_items
+    from open_mem.contracts import Inline, WriteItem, WriteRequest
+    from open_mem.deletion import request_deletion
+    from open_mem.write import write_items
 
     principal = await principal_for(tenant.api_key)
 

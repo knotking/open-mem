@@ -15,10 +15,10 @@ from __future__ import annotations
 
 import pytest
 
-from memdog import memories
-from memdog.contracts import Inline, MemoryRef, WriteItem, WriteOptions, WriteRequest
-from memdog.memories import MemoryError, contained_memories, link, tree
-from memdog.write import write_items
+from open_mem import memories
+from open_mem.contracts import Inline, MemoryRef, WriteItem, WriteOptions, WriteRequest
+from open_mem.memories import MemoryError, contained_memories, link, tree
+from open_mem.write import write_items
 
 pytestmark = pytest.mark.asyncio
 
@@ -95,7 +95,7 @@ async def test_an_alert_on_the_parent_sees_a_write_to_a_child(
 ):
     """The behaviour the whole slice exists for, asserted end to end: two
     memories converge into a third, and a change in either is visible above."""
-    from memdog.alerts import in_scope
+    from open_mem.alerts import in_scope
 
     actor = await principal_for(tenant.api_key)
     await _seed_types(pool, actor, tenant)
@@ -152,7 +152,7 @@ async def test_a_child_changing_marks_the_rollup_stale(
     """Deterministic before probabilistic: the mark costs nothing and cannot be
     wrong, and recomputing is a decision somebody makes rather than something a
     write triggers -- the correction the alert system already had to make."""
-    from memdog.retrieval import list_memories
+    from open_mem.retrieval import list_memories
 
     actor = await principal_for(tenant.api_key)
     await _seed_types(pool, actor, tenant)
@@ -221,7 +221,7 @@ async def test_a_diamond_marks_the_shared_ancestor_once(
     await link(pool, actor, from_memory=parent, to_memory=left, relation="derived_from")
     await link(pool, actor, from_memory=parent, to_memory=right, relation="derived_from")
 
-    from memdog.memories import mark_ancestors_stale
+    from open_mem.memories import mark_ancestors_stale
 
     async with pool.acquire() as conn:
         assert await mark_ancestors_stale(conn, left, reason="a member was added") == 1
@@ -232,7 +232,7 @@ async def test_a_diamond_marks_the_shared_ancestor_once(
 async def test_part_of_never_goes_stale(pool, tenant, principal_for):
     """A container has no separate state to keep in sync: its members *are* its
     children's members. Marking it would be a badge nothing can clear."""
-    from memdog.memories import mark_ancestors_stale
+    from open_mem.memories import mark_ancestors_stale
 
     actor = await principal_for(tenant.api_key)
     await _seed_types(pool, actor, tenant)
@@ -249,7 +249,7 @@ async def test_compacting_a_parent_folds_what_its_children_hold(
 ):
     """A `part_of` parent has no members of its own, so compacting one used to
     consider nothing and report a successful run over zero records."""
-    from memdog.compaction import run
+    from open_mem.compaction import run
 
     actor = await principal_for(tenant.api_key)
     await _seed_types(pool, actor, tenant)
@@ -277,7 +277,7 @@ async def test_a_recompute_clears_the_flag_and_a_preview_does_not(
 ):
     """A preview reports what *would* happen. One that marked the rollup fresh
     would be a preview with a side effect."""
-    from memdog.compaction import run
+    from open_mem.compaction import run
 
     actor = await principal_for(tenant.api_key)
     await _seed_types(pool, actor, tenant)
@@ -311,7 +311,7 @@ async def test_a_compaction_job_on_a_parent_counts_what_it_would_fold(
     A count next to a job that disagrees with what the job does is worse than
     no count: the card is what people read before deciding whether to run it.
     """
-    from memdog.compaction import create_job, list_jobs
+    from open_mem.compaction import create_job, list_jobs
 
     actor = await principal_for(tenant.api_key)
     await _seed_types(pool, actor, tenant)

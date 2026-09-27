@@ -8,10 +8,10 @@ from __future__ import annotations
 
 import pytest
 
-from memdog import standing
-from memdog.contracts import Inline, ItemAccess, WriteItem, WriteOptions, WriteRequest
-from memdog.standing import StandingError
-from memdog.write import write_items
+from open_mem import standing
+from open_mem.contracts import Inline, ItemAccess, WriteItem, WriteOptions, WriteRequest
+from open_mem.standing import StandingError
+from open_mem.write import write_items
 
 pytestmark = pytest.mark.asyncio
 
@@ -20,7 +20,7 @@ pytestmark = pytest.mark.asyncio
 def envelope():
     import os
 
-    from memdog.crypto import Envelope
+    from open_mem.crypto import Envelope
 
     return Envelope(os.urandom(32))
 
@@ -187,7 +187,7 @@ async def test_delivery_into_a_memory_needs_no_network(
 ):
     """The delivery target with no URL, no secret and no retry -- and it
     composes with everything already built."""
-    from memdog.retrieval import memory_members
+    from open_mem.retrieval import memory_members
 
     actor = await principal_for(tenant.api_key)
     query_id = await _query(
@@ -229,7 +229,7 @@ async def test_a_match_is_queued_for_a_standing_subscription(
     A second pipeline would need its own version of each, and four controls are
     only worth something when they are the same four everywhere.
     """
-    from memdog.event_delivery import create_subscription
+    from open_mem.event_delivery import create_subscription
 
     actor = await principal_for(tenant.api_key)
     query_id = await _query(pool, actor, tenant, {"query": "outage"})
@@ -253,7 +253,7 @@ async def test_an_alert_subscription_does_not_receive_standing_matches(
     Letting it also mean *and every standing query* would start posting a
     payload shape a subscriber registered last month has never seen.
     """
-    from memdog.event_delivery import create_subscription
+    from open_mem.event_delivery import create_subscription
 
     actor = await principal_for(tenant.api_key)
     query_id = await _query(pool, actor, tenant, {"query": "outage"})
@@ -273,7 +273,7 @@ async def test_a_withheld_match_is_never_queued(
 ):
     """A subscriber cannot be told about something the query itself was not
     entitled to see."""
-    from memdog.event_delivery import create_subscription
+    from open_mem.event_delivery import create_subscription
 
     actor = await principal_for(tenant.api_key)
     query_id = await _query(pool, actor, tenant, {"query": "confidential"})
@@ -297,7 +297,7 @@ async def test_the_payload_is_rebuilt_against_the_subscriber_rights_now(
     """Visibility at match time belongs to the query's owner; the subscription's
     owner is a different person whose rights may have changed since. A match
     they can no longer see is not owed, and sending it anyway is the leak."""
-    from memdog.event_delivery import _match_payload
+    from open_mem.event_delivery import _match_payload
 
     actor = await principal_for(tenant.api_key)
     query_id = await _query(pool, actor, tenant, {"query": "outage"})

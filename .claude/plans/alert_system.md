@@ -4,7 +4,7 @@
 them as data is written. Record every match as a durable event. Make each event
 reachable two ways — **pushed** to a subscriber, or **polled** from a cursor.
 
-Status: **shipped.** `api/src/memdog/alerts.py` (862 lines), 44 tests in
+Status: **shipped.** `api/src/open_mem/alerts.py` (862 lines), 44 tests in
 `tests/test_alerts.py`, and an Alerts section in the console. Surfaces, the
 condition builder, backtest-before-enable and delivery state are all live.
 
@@ -204,7 +204,7 @@ ordered by the sequence and not by luck.
 
 **Push** — subscriptions deliver signed HTTP, at-least-once, ordered per alert,
 dead-lettered after `MAX_ATTEMPTS`. **This is the same outbound machinery the
-workflow plan needs, and it should be built once.** memdog has no outbound path
+workflow plan needs, and it should be built once.** open-mem has no outbound path
 today — `webhooks.py` is inbound only, by its own docstring — so whichever
 feature lands first builds it, including the SSRF control (`validate_url` at
 registration *and* at every send; no redirects; https only).
@@ -289,12 +289,12 @@ on this deployment the floor carries real weight:
 The rows are the record of outstanding work, and a sweep re-derives what is
 missing rather than trusting a message to have survived.
 
-### `memdog-alert-tick`
+### `open-mem-alert-tick`
 
-A Cloud Run Job on Cloud Scheduler beside `memdog-reconcile-tick`, every minute:
+A Cloud Run Job on Cloud Scheduler beside `open-mem-reconcile-tick`, every minute:
 
 ```
-python -m memdog alert-tick
+python -m open_mem alert-tick
   1. select alerts whose watermark is behind          FOR UPDATE SKIP LOCKED
   2. evaluate the gap in batches, up to batch_cap
   3. deliver what is owed by next_attempt_at
@@ -304,7 +304,7 @@ python -m memdog alert-tick
 Steps 1–2 run **the same code** the async consumer runs. A reconciler that
 re-implements the thing it repairs drifts from it, and the drift shows up as a
 repair that quietly does something different from the work it stands in for —
-which is exactly how `memdog-reconcile` once re-embedded with a stale model and
+which is exactly how `open-mem-reconcile` once re-embedded with a stale model and
 concluded nothing was stale.
 
 ### Four rules carried over from crawlers, each already earned there
@@ -328,10 +328,10 @@ invalidates its dry run.
 
 ### This changes the deployment
 
-`memdog-alert-tick` joins the job loop in `api/deploy/cloudrun.sh` so it cannot
+`open-mem-alert-tick` joins the job loop in `api/deploy/cloudrun.sh` so it cannot
 drift onto a stale image, and `provision.md` gains a second scheduler entry —
 with the grant that is easy to miss: **the Cloud Scheduler service agent needs
-`roles/iam.serviceAccountTokenCreator`** on `memdog-api@…`. Without it the job
+`roles/iam.serviceAccountTokenCreator`** on `open-mem-api@…`. Without it the job
 never fires and the scheduler surfaces no error, which for an alert system is
 silence indistinguishable from "nothing happened". `.claude/skills/deploy-gcp/`
 is updated in the same commit, per its own rule.
@@ -345,7 +345,7 @@ is updated in the same commit, per its own rule.
 2. **Transition capture** — emit `*.changed` domain events carrying before/after
    at each of the eight sites, inside the existing transactions. Small, and the
    only synchronous work.
-3. **`api/src/memdog/alerts.py`** — alert CRUD with `config_version` bumping and
+3. **`api/src/open_mem/alerts.py`** — alert CRUD with `config_version` bumping and
    backtest invalidation, selector validation against a closed per-surface
    vocabulary, and `evaluate_batch()` implementing the §3 ladder — one batched
    model call in `llm` mode, none in `rule` mode.
@@ -355,7 +355,7 @@ is updated in the same commit, per its own rule.
 4b. **`alert-tick`** — a `__main__.py` subcommand and a Cloud Run Job calling the
    **same** `evaluate_gap()`, plus owed deliveries and the absence sweeps.
    `FOR UPDATE SKIP LOCKED` throughout. Not optional (§7b).
-5. **`api/src/memdog/event_delivery.py`** — the outbound sender: HMAC signing as
+5. **`api/src/open_mem/event_delivery.py`** — the outbound sender: HMAC signing as
    `0018` does inbound, `validate_url` per attempt, no redirects, backoff,
    dead-letter. **Shared with the workflow plan.**
 6. **`app.py`** — alert CRUD, `GET /api/v1/events`, subscription CRUD + rotate +

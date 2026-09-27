@@ -1,4 +1,4 @@
-# mem-dog vs Glean
+# open-mem vs Glean
 
 **Last updated:** August 2026
 
@@ -12,7 +12,7 @@ different problems.
 
 ## At a glance
 
-| | mem-dog | Glean |
+| | open-mem | Glean |
 |-|---------|-------|
 | **What it is** | A memory platform — ingest, enrich, remember, retrieve | Enterprise workplace search and agents |
 | **Shape** | A backend you build on | A destination you go to |
@@ -26,13 +26,13 @@ different problems.
 
 ## The structural difference
 
-**Glean is a product. mem-dog is a platform.**
+**Glean is a product. open-mem is a platform.**
 
 Glean is where a knowledge worker goes to find something. It has an API, but the API is an
 extension of the application. You cannot build your own product on Glean and have your users never
 know it is there.
 
-mem-dog is the opposite: the API *is* the product, the UI is a [reference client](../api.md), and
+open-mem is the opposite: the API *is* the product, the UI is a [reference client](../api.md), and
 the host-embedding contract exists so somebody else's application can use it as a private memory
 backend invisibly.
 
@@ -52,7 +52,7 @@ That leaves, entirely uncontested by Glean:
   sovereignty-constrained public sector
 - Anyone who wants to own the corpus rather than rent access to it
 
-**That is where mem-dog competes**, and Glean's absence there is by design rather than oversight.
+**That is where open-mem competes**, and Glean's absence there is by design rather than oversight.
 
 ## Where Glean genuinely wins
 
@@ -60,13 +60,13 @@ Stated plainly, because a comparison that finds no losses is marketing.
 
 | Factor | Why |
 |--------|-----|
-| **Permission-aware retrieval** | Glean mirrors source-system ACLs and filters on them. mem-dog's equivalent is designed and unbuilt — the single sharpest gap |
+| **Permission-aware retrieval** | Glean mirrors source-system ACLs and filters on them. open-mem's equivalent is designed and unbuilt — the single sharpest gap |
 | **Connector depth** | 100 deep, permission-aware connectors beat 900 shallow ones for workplace search. Different bets, and theirs is right for their buyer |
-| **Enterprise compliance** | SOC 2 Type II, SSO/SAML, RBAC shipped. mem-dog has none |
+| **Enterprise compliance** | SOC 2 Type II, SSO/SAML, RBAC shipped. open-mem has none |
 | **Agents for workflows** | Multi-step autonomous agents over enterprise data, in production |
 | **Maturity** | Install base, references, an enterprise sales motion, and the ability to answer a security questionnaire |
 
-## Where mem-dog is genuinely different
+## Where open-mem is genuinely different
 
 | Factor | Why it matters — and to whom |
 |--------|------------------------------|
@@ -75,11 +75,11 @@ Stated plainly, because a comparison that finds no losses is marketing.
 | **Typed memory with lifecycle** | TTL, expiry policy, compression, promotion. Glean indexes documents; it does not *remember* with a lifecycle |
 | **Temporal facts** | "What was true in March" as a first-class query, not a search over documents that happen to mention March |
 | **Non-document data** | Sensor, medical, geospatial, structured records, messaging channels |
-| **Cost at scale** | 500 seats is ~$300,000/year of Glean and hardware for mem-dog |
+| **Cost at scale** | 500 seats is ~$300,000/year of Glean and hardware for open-mem |
 
 ## One differentiator that does not apply here
 
-**Messaging-channel ingestion is mem-dog's most distinctive capability and is close to irrelevant
+**Messaging-channel ingestion is open-mem's most distinctive capability and is close to irrelevant
 to Glean's buyer.**
 
 An enterprise does not want WhatsApp and Signal indexed — that is a compliance liability, not a
@@ -93,7 +93,7 @@ whether the buyer wants it.
 
 **Do not compete for Glean's buyer.** They are ahead on the criteria that decide those deals —
 permission-aware retrieval, compliance, connector depth, references — and they have a sales motion
-mem-dog does not.
+open-mem does not.
 
 Compete for the buyer Glean structurally cannot serve: **under 100 seats, sovereignty-constrained,
 or building a product rather than buying a tool.** That is a large market and Glean has ceded it by

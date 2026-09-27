@@ -8,13 +8,13 @@ from __future__ import annotations
 
 import pytest
 
-from memdog import account
-from memdog.account import AccountError
-from memdog.auth import CONFIG_WRITE, DATA_READ, DATA_WRITE, issue_key
-from memdog.bootstrap import bootstrap_tenant, create_user
-from memdog.contracts import Inline, ItemAccess, WriteItem, WriteOptions, WriteRequest
-from memdog.retrieval import NotFound, get_item
-from memdog.write import write_items
+from open_mem import account
+from open_mem.account import AccountError
+from open_mem.auth import CONFIG_WRITE, DATA_READ, DATA_WRITE, issue_key
+from open_mem.bootstrap import bootstrap_tenant, create_user
+from open_mem.contracts import Inline, ItemAccess, WriteItem, WriteOptions, WriteRequest
+from open_mem.retrieval import NotFound, get_item
+from open_mem.write import write_items
 
 pytestmark = pytest.mark.asyncio
 
@@ -42,7 +42,7 @@ async def test_personal_data_goes_and_shared_data_stays(
     await _write(pool, queue, blobs, settings, actor, shared.producer_id, "team-1")
 
     # A personal producer for the same user.
-    from memdog.ids import new_id
+    from open_mem.ids import new_id
 
     personal_conn, personal_prod = new_id("conn"), new_id("key")
     await pool.execute(
@@ -154,7 +154,7 @@ async def test_deleting_someone_elses_account_needs_the_capability(
                             capabilities=[DATA_READ, DATA_WRITE])
     member = await principal_for(token)
 
-    from memdog.auth import AuthError
+    from open_mem.auth import AuthError
 
     with pytest.raises((AccountError, AuthError)):
         await account.delete_account(pool, queue, member, user_id=tenant.user_id)

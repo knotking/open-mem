@@ -16,11 +16,11 @@ from __future__ import annotations
 
 import pytest
 
-from memdog import memories
-from memdog.contracts import Inline, MemoryRef, WriteItem, WriteOptions, WriteRequest
-from memdog.memories import due_for_expiry, sweep_all, sweep_expired
-from memdog.retrieval import get_item
-from memdog.write import write_items
+from open_mem import memories
+from open_mem.contracts import Inline, MemoryRef, WriteItem, WriteOptions, WriteRequest
+from open_mem.memories import due_for_expiry, sweep_all, sweep_expired
+from open_mem.retrieval import get_item
+from open_mem.write import write_items
 
 pytestmark = pytest.mark.asyncio
 

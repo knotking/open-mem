@@ -30,8 +30,8 @@ export default async function Page() {
       <main className="content">
         <h1>Not configured</h1>
         <p className="empty">
-          Set <code>MEMDOG_API_URL</code>, <code>MEMDOG_PROJECT_ID</code> and{" "}
-          <code>MEMDOG_PRODUCER_ID</code> on the service.
+          Set <code>OPENMEM_API_URL</code>, <code>OPENMEM_PROJECT_ID</code> and{" "}
+          <code>OPENMEM_PRODUCER_ID</code> on the service.
         </p>
       </main>
     );

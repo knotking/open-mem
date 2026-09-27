@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import pytest
 
-from memdog import quota, usage
-from memdog.routing import Chain, Step, Unavailable
+from open_mem import quota, usage
+from open_mem.routing import Chain, Step, Unavailable
 
 pytestmark = pytest.mark.asyncio
 
@@ -231,9 +231,9 @@ async def test_spend_is_attributed_to_the_run_that_produced_the_record(
     enrichment spent money the connection was gone, so a dry run's estimate
     could never be checked against what the run actually cost.
     """
-    from memdog.auth import ApiKeyVerifier
-    from memdog.contracts import Inline, WriteItem, WriteOptions, WriteRequest
-    from memdog.write import write_items
+    from open_mem.auth import ApiKeyVerifier
+    from open_mem.contracts import Inline, WriteItem, WriteOptions, WriteRequest
+    from open_mem.write import write_items
 
     principal = await ApiKeyVerifier(metered).verify(tenant.api_key)
     written = await write_items(
@@ -277,8 +277,8 @@ async def test_a_caller_cannot_claim_a_run(metered, tenant, queue, blobs, settin
     against an actual, which a claimable field would make meaningless."""
     import inspect
 
-    from memdog.contracts import WriteItem, WriteRequest
-    from memdog.write import write_items
+    from open_mem.contracts import WriteItem, WriteRequest
+    from open_mem.write import write_items
 
     assert "run_id" in inspect.signature(write_items).parameters
     assert "run_id" not in WriteItem.model_fields

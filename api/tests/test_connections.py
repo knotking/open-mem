@@ -18,10 +18,10 @@ import os
 
 import pytest
 
-from memdog import connections
-from memdog.auth import ApiKeyVerifier
-from memdog.connections import ConnectionError_
-from memdog.crypto import Envelope
+from open_mem import connections
+from open_mem.auth import ApiKeyVerifier
+from open_mem.connections import ConnectionError_
+from open_mem.crypto import Envelope
 
 pytestmark = pytest.mark.asyncio
 
@@ -30,7 +30,7 @@ pytestmark = pytest.mark.asyncio
 def envelope():
     """A real key, the way the webhook tests do it.
 
-    Not `Envelope.from_settings`: the suite runs without `MEMDOG_MASTER_KEY`,
+    Not `Envelope.from_settings`: the suite runs without `OPENMEM_MASTER_KEY`,
     and every call here would refuse — which is the fail-closed rule working,
     and useless for testing what happens once a deployment has one.
     """
@@ -160,7 +160,7 @@ async def test_a_connection_from_another_org_is_not_reachable(
 async def test_a_config_cannot_override_the_credential(pool, settings, envelope, tenant):
     """A template that could set `Authorization` would be somewhere to put a
     secret in the clear, which is what the connection exists to prevent."""
-    from memdog.crawlers import Auth
+    from open_mem.crawlers import Auth
 
     auth = Auth(headers={"Authorization": "Bearer from-connection"}, query={})
     headers = {"Authorization": "Bearer from-config", "User-Agent": "x"}
@@ -172,8 +172,8 @@ async def test_a_config_cannot_override_the_credential(pool, settings, envelope,
 async def test_a_public_crawler_gets_no_auth_at_all(pool, settings, envelope, tenant, blobs):
     """A sitemap needs nobody's permission, and treating that as a missing
     credential is the difference between working and confusingly broken."""
-    from memdog.crawling import CrawlWorker
-    from memdog.queue import InProcessQueue
+    from open_mem.crawling import CrawlWorker
+    from open_mem.queue import InProcessQueue
 
     worker = CrawlWorker(pool, InProcessQueue(), blobs, settings,
                          envelope=envelope)
@@ -183,8 +183,8 @@ async def test_a_public_crawler_gets_no_auth_at_all(pool, settings, envelope, te
 async def test_an_authenticated_crawler_resolves_its_credential(
     pool, settings, envelope, tenant, blobs
 ):
-    from memdog.crawling import CrawlWorker
-    from memdog.queue import InProcessQueue
+    from open_mem.crawling import CrawlWorker
+    from open_mem.queue import InProcessQueue
 
     made = await _make(pool, envelope, tenant)
     worker = CrawlWorker(pool, InProcessQueue(), blobs, settings,
@@ -201,9 +201,9 @@ async def test_a_missing_connection_fails_as_a_configuration_problem(
     """Not as a 401 from the source. A run that carried on unauthenticated
     would report the source's refusal and send whoever debugs it in exactly the
     wrong direction."""
-    from memdog.crawlers import CrawlerError
-    from memdog.crawling import CrawlWorker
-    from memdog.queue import InProcessQueue
+    from open_mem.crawlers import CrawlerError
+    from open_mem.crawling import CrawlWorker
+    from open_mem.queue import InProcessQueue
 
     worker = CrawlWorker(pool, InProcessQueue(), blobs, settings,
                          envelope=envelope)
@@ -217,8 +217,8 @@ async def test_a_missing_connection_fails_as_a_configuration_problem(
 
 
 async def test_attaching_and_detaching_a_crawler(pool, settings, envelope, tenant):
-    from memdog.crawlers import CrawlerConfig
-    from memdog.crawling import create_crawler
+    from open_mem.crawlers import CrawlerConfig
+    from open_mem.crawling import create_crawler
 
     made = await _make(pool, envelope, tenant)
     actor = await _principal(pool, tenant)
@@ -240,8 +240,8 @@ async def test_attaching_and_detaching_a_crawler(pool, settings, envelope, tenan
 async def test_a_crawler_cannot_borrow_another_orgs_connection(
     pool, settings, envelope, tenant, other_tenant
 ):
-    from memdog.crawlers import CrawlerConfig
-    from memdog.crawling import create_crawler
+    from open_mem.crawlers import CrawlerConfig
+    from open_mem.crawling import create_crawler
 
     theirs = await _make(pool, envelope, other_tenant)
     actor = await _principal(pool, tenant)
@@ -265,8 +265,8 @@ async def test_a_connection_in_use_cannot_be_deleted_from_under_a_crawler(
     simply stops arriving."""
     import asyncpg
 
-    from memdog.crawlers import CrawlerConfig
-    from memdog.crawling import create_crawler
+    from open_mem.crawlers import CrawlerConfig
+    from open_mem.crawling import create_crawler
 
     made = await _make(pool, envelope, tenant)
     actor = await _principal(pool, tenant)

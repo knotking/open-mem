@@ -16,10 +16,10 @@ from __future__ import annotations
 
 import pytest
 
-from memdog.auth import ApiKeyVerifier
-from memdog.cases import upsert_case  # noqa: F401  (kept: exercises the same pool)
-from memdog.contracts import RetrieveFilter, RetrieveRequest
-from memdog.retrieval import graph_seeds, retrieve
+from open_mem.auth import ApiKeyVerifier
+from open_mem.cases import upsert_case  # noqa: F401  (kept: exercises the same pool)
+from open_mem.contracts import RetrieveFilter, RetrieveRequest
+from open_mem.retrieval import graph_seeds, retrieve
 
 pytestmark = pytest.mark.asyncio
 
@@ -31,7 +31,7 @@ async def _principal(pool, tenant):
 async def _somebody_else(pool):
     """A real second user. `owner_id` is a foreign key, so "private to someone
     who is not you" has to be an actual person."""
-    from memdog.bootstrap import create_user
+    from open_mem.bootstrap import create_user
 
     return await create_user(pool, "someone.else@example.com")
 
@@ -43,7 +43,7 @@ async def _item(pool, tenant, external_id, text, *, access="org", owner=None):
     path — but the chunk is not optional: every arm reads `chunks`, so a record
     without one is invisible to all three and the test would prove nothing.
     """
-    from memdog.ids import new_id
+    from open_mem.ids import new_id
 
     data_id = new_id("data")
     await pool.execute(
@@ -67,8 +67,8 @@ async def _item(pool, tenant, external_id, text, *, access="org", owner=None):
 
 
 async def _entity(pool, tenant, name, kind="person"):
-    from memdog.entities import normalize
-    from memdog.ids import new_id
+    from open_mem.entities import normalize
+    from open_mem.ids import new_id
 
     entity_id = new_id("ent")
     await pool.execute(
@@ -83,7 +83,7 @@ async def _entity(pool, tenant, name, kind="person"):
 
 
 async def _mention(pool, tenant, entity_id, data_id, surface):
-    from memdog.ids import new_id
+    from open_mem.ids import new_id
 
     await pool.execute(
         """
@@ -96,8 +96,8 @@ async def _mention(pool, tenant, entity_id, data_id, surface):
 
 
 async def _edge(pool, tenant, subject, predicate, obj, source_data_id):
-    from memdog.graph import _upsert_fact
-    from memdog.ids import new_id
+    from open_mem.graph import _upsert_fact
+    from open_mem.ids import new_id
 
     # Through `_upsert_fact` rather than a second INSERT: the fixture should
     # exercise the invariant the traversal relies on, not simulate it.
@@ -307,7 +307,7 @@ async def test_a_short_name_does_not_seed_an_expansion(pool, embedder, tenant):
 
 
 async def test_seeds_do_not_cross_a_project_boundary(pool, embedder, tenant):
-    from memdog import control
+    from open_mem import control
 
     other = await control.create_project(
         pool, await _principal(pool, tenant), name="elsewhere"
@@ -380,7 +380,7 @@ async def test_retrieval_traverses_through_the_graph_store(pool, embedder, tenan
     search reading Postgres directly. Nothing then in the suite could tell the
     difference — so this asserts the call, not the result.
     """
-    from memdog.graph import PostgresGraph
+    from open_mem.graph import PostgresGraph
 
     world = await _world(pool, tenant)
     calls: list[str] = []
@@ -414,7 +414,7 @@ async def test_a_store_that_reaches_nothing_yields_no_graph_hits(
 ):
     """A different store is a different answer, which is the point of the seam
     being real. Search must follow it rather than reading the tables itself."""
-    from memdog.graph import Neighbourhood, Node
+    from open_mem.graph import Neighbourhood, Node
 
     await _world(pool, tenant)
 

@@ -3,16 +3,16 @@
 ## Two tenancy models are in play
 
 The host-SaaS contract states that end-user RBAC is *enforced by the host*. That is coherent when
-mem-dog is a backend behind someone else's product. It is **not** what a team model needs.
+open-mem is a backend behind someone else's product. It is **not** what a team model needs.
 
 | | Host-SaaS model | Team model |
 |---|---|---|
-| Who enforces RBAC | the host application | **mem-dog** |
+| Who enforces RBAC | the host application | **open-mem** |
 | Keys held by | host backend | per user |
 | `project` means | host workspace | team space |
 | Privacy unit | project boundary | **per item, per member** |
 
-**Resolution: one enforcement path.** mem-dog always enforces; the host model becomes the case
+**Resolution: one enforcement path.** open-mem always enforces; the host model becomes the case
 where a service identity is a single broad principal. Two implementations kept in sync is the
 failure mode to avoid.
 

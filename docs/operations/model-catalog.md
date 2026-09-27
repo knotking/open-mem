@@ -67,7 +67,7 @@ Each catalog entry declares:
 | `status` | `recommended` · `available` · `deprecated` · `superseded_by: <id>` |
 | `card_url` | Link to the upstream model card |
 
-`status` matters more than it looks. mem-dog's defaults currently reference a model generation
+`status` matters more than it looks. open-mem's defaults currently reference a model generation
 that has been superseded — without a `superseded_by` field there is no mechanism to tell users
 that, and defaults silently rot.
 
@@ -171,7 +171,7 @@ General-purpose model size is the wrong axis for some of this pipeline's work. G
 family in particular ships **task-specific open variants**, and four of them land directly on
 constraints these documents already record as unresolved.
 
-| Variant | What it is | The mem-dog problem it addresses |
+| Variant | What it is | The open-mem problem it addresses |
 |---------|-----------|----------------------------------|
 | **MedGemma** / **MedGemma 1.5** | Medical text and imaging interpretation | **The HIPAA constraint** — see below. Also the one credible route to DICOM interpretation, currently out of v1 |
 | **TranslateGemma** | Translation across 55 languages | [Multilingual](../multilingual.md) ingestion without routing foreign-language content to a frontier API |
